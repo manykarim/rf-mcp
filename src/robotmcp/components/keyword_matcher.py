@@ -79,35 +79,50 @@ class KeywordMatcher:
         
         # Common keyword patterns for different actions
         self.action_keyword_mapping = {
+            'setup_browser': {
+                'patterns': ['create browser', 'new browser', 'open browser', 'start browser'],
+                'libraries': ['Browser'],
+                'keywords': ['New Browser', 'New Context', 'New Page']
+            },
             'navigate': {
-                'patterns': ['open', 'go to', 'navigate', 'visit'],
+                'patterns': ['open', 'go to', 'navigate', 'visit', 'new page'],
                 'libraries': ['SeleniumLibrary', 'Browser'],
                 'keywords': ['Open Browser', 'Go To', 'New Page', 'Navigate To']
             },
             'click': {
                 'patterns': ['click', 'press', 'select', 'tap'],
                 'libraries': ['SeleniumLibrary', 'Browser', 'AppiumLibrary'],
-                'keywords': ['Click Element', 'Click Button', 'Click Link', 'Tap']
+                'keywords': ['Click Element', 'Click Button', 'Click Link', 'Click', 'Tap']
             },
             'input': {
                 'patterns': ['type', 'enter', 'input', 'fill', 'set'],
                 'libraries': ['SeleniumLibrary', 'Browser', 'AppiumLibrary'],
-                'keywords': ['Input Text', 'Type Text', 'Fill Text', 'Set Text']
+                'keywords': ['Input Text', 'Type Text', 'Fill', 'Fill Text', 'Set Text']
             },
             'verify': {
-                'patterns': ['verify', 'check', 'assert', 'should', 'expect'],
+                'patterns': ['verify', 'check', 'assert', 'should', 'expect', 'get text'],
                 'libraries': ['SeleniumLibrary', 'Browser', 'BuiltIn'],
-                'keywords': ['Page Should Contain', 'Element Should Be Visible', 'Should Be Equal']
+                'keywords': ['Page Should Contain', 'Element Should Be Visible', 'Get Text', 'Should Be Equal']
             },
             'wait': {
                 'patterns': ['wait', 'pause', 'sleep', 'delay'],
                 'libraries': ['SeleniumLibrary', 'Browser', 'BuiltIn'],
-                'keywords': ['Wait Until Element Is Visible', 'Sleep', 'Wait For Condition']
+                'keywords': ['Wait Until Element Is Visible', 'Wait For Elements State', 'Sleep', 'Wait For Condition']
             },
             'search': {
-                'patterns': ['search', 'find', 'look for', 'locate'],
+                'patterns': ['search', 'find', 'look for', 'locate', 'get element'],
                 'libraries': ['SeleniumLibrary', 'Browser'],
-                'keywords': ['Get Element', 'Find Element', 'Locate Element']
+                'keywords': ['Get Element', 'Find Element', 'Locate Element', 'Get Elements']
+            },
+            'property': {
+                'patterns': ['get property', 'property', 'attribute'],
+                'libraries': ['Browser'],
+                'keywords': ['Get Property', 'Get Attribute', 'Get Element Attribute']
+            },
+            'cleanup': {
+                'patterns': ['close', 'cleanup', 'teardown', 'quit'],
+                'libraries': ['SeleniumLibrary', 'Browser'],
+                'keywords': ['Close Browser', 'Close All Browsers', 'Quit']
             }
         }
 
@@ -135,6 +150,7 @@ class KeywordMatcher:
             
             # Load commonly used external libraries if available
             external_libraries = [
+                'Browser',  # Prioritize Browser library
                 'SeleniumLibrary',
                 'RequestsLibrary', 
                 'DatabaseLibrary',

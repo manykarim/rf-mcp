@@ -151,23 +151,27 @@ class StateManager:
     async def _get_dom_state(self, session_id: str, elements_of_interest: List[str]) -> Dict[str, Any]:
         """Get DOM state for web applications."""
         try:
-            # In a real implementation, this would interface with Selenium/Browser library
-            # For now, we'll simulate DOM state
+            # Try to get Browser Library state from execution engine if available
+            browser_state = await self._get_browser_library_state(session_id)
             
-            # Simulate getting page info from browser
-            mock_page_state = await self._simulate_page_state(session_id)
+            if browser_state:
+                # Use actual browser state if available
+                page_state = await self._convert_browser_state_to_page_state(browser_state)
+            else:
+                # Fall back to simulation
+                page_state = await self._simulate_page_state(session_id)
             
             # Filter elements if specific ones are requested
             if elements_of_interest:
                 filtered_elements = []
-                for element in mock_page_state.elements:
+                for element in page_state.elements:
                     if self._element_matches_interest(element, elements_of_interest):
                         filtered_elements.append(element)
-                mock_page_state.elements = filtered_elements
+                page_state.elements = filtered_elements
             
-            return {
-                "url": mock_page_state.url,
-                "title": mock_page_state.title,
+            result = {
+                "url": page_state.url,
+                "title": page_state.title,
                 "elements": [
                     {
                         "tag": elem.tag,
@@ -179,13 +183,30 @@ class StateManager:
                         "css_selector": elem.css_selector,
                         "visible": elem.visible,
                         "clickable": elem.clickable
-                    } for elem in mock_page_state.elements
+                    } for elem in page_state.elements
                 ],
-                "forms": mock_page_state.forms,
-                "links": mock_page_state.links,
-                "element_count": len(mock_page_state.elements),
-                "interactive_elements": len([e for e in mock_page_state.elements if e.clickable])
+                "forms": page_state.forms,
+                "links": page_state.links,
+                "element_count": len(page_state.elements),
+                "interactive_elements": len([e for e in page_state.elements if e.clickable])
             }
+            
+            # Add Browser Library specific state if available
+            if browser_state:
+                result.update({
+                    "browser_state": {
+                        "browser_id": browser_state.get("browser_id"),
+                        "browser_type": browser_state.get("browser_type"),
+                        "context_id": browser_state.get("context_id"),
+                        "page_id": browser_state.get("page_id"),
+                        "viewport": browser_state.get("viewport", {}),
+                        "page_source": page_state.page_source,
+                        "cookies": page_state.cookies,
+                        "local_storage": page_state.local_storage
+                    }
+                })
+            
+            return result
             
         except Exception as e:
             logger.error(f"Error getting DOM state: {e}")
@@ -594,3 +615,266 @@ class StateManager:
             "removed": removed,
             "changed": changed
         }
+
+    async def _get_browser_library_state(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get Browser Library state from execution engine if available."""
+        try:
+            # This would integrate with the execution engine to get real Browser Library state
+            # For now, check if we have browser-related variables that suggest Browser Library usage
+            current_state = self.current_states.get(session_id)
+            
+            if current_state and current_state.variables:
+                browser_vars = current_state.variables
+                
+                # Check for Browser Library specific variables
+                if any(key in browser_vars for key in ['browser_id', 'context_id', 'page_id']):
+                    return {
+                        "browser_id": browser_vars.get("browser_id"),
+                        "browser_type": browser_vars.get("browser_type", "chromium"),
+                        "context_id": browser_vars.get("context_id"),
+                        "page_id": browser_vars.get("page_id"),
+                        "current_url": browser_vars.get("current_url", "about:blank"),
+                        "page_title": browser_vars.get("page_title", ""),
+                        "viewport": browser_vars.get("viewport", {"width": 1280, "height": 720}),
+                        "headless": browser_vars.get("headless", "True")
+                    }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting Browser Library state: {e}")
+            return None
+
+    async def _convert_browser_state_to_page_state(self, browser_state: Dict[str, Any]) -> PageState:
+        """Convert Browser Library state to PageState format."""
+        try:
+            url = browser_state.get("current_url", "about:blank")
+            title = browser_state.get("page_title", "Untitled")
+            
+            # Create elements based on Browser Library state
+            elements = []
+            
+            # Add viewport information as a virtual element
+            viewport = browser_state.get("viewport", {})
+            if viewport:
+                elements.append(DOMElement(
+                    tag="meta",
+                    id="viewport-info",
+                    attributes={
+                        "name": "viewport",
+                        "content": f"width={viewport.get('width', 1280)}, height={viewport.get('height', 720)}"
+                    },
+                    xpath="//meta[@name='viewport']",
+                    css_selector="meta[name='viewport']",
+                    visible=False
+                ))
+            
+            # Simulate page-specific elements based on URL
+            if "login" in url.lower():
+                elements.extend(self._create_login_elements())
+            elif "dashboard" in url.lower():
+                elements.extend(self._create_dashboard_elements())
+            else:
+                elements.extend(self._create_generic_elements(url))
+            
+            # Extract cookies and storage if available in browser state
+            cookies = browser_state.get("cookies", {})
+            local_storage = browser_state.get("local_storage", {})
+            
+            return PageState(
+                url=url,
+                title=title,
+                elements=elements,
+                forms=self._extract_forms_from_elements(elements),
+                links=self._extract_links_from_elements(elements),
+                cookies=cookies,
+                local_storage=local_storage,
+                page_source=f"<!-- Browser Library Page: {title} -->\n<html><head><title>{title}</title></head><body><!-- Elements: {len(elements)} --></body></html>"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error converting browser state: {e}")
+            return PageState(url="about:blank", title="Error Page", elements=[])
+
+    def _create_login_elements(self) -> List[DOMElement]:
+        """Create login page elements for Browser Library state."""
+        return [
+            DOMElement(
+                tag="input",
+                id="username",
+                attributes={"type": "text", "name": "username", "placeholder": "Username", "data-testid": "username-input"},
+                xpath="//input[@data-testid='username-input']",
+                css_selector="input[data-testid='username-input']",
+                visible=True,
+                clickable=True
+            ),
+            DOMElement(
+                tag="input", 
+                id="password",
+                attributes={"type": "password", "name": "password", "placeholder": "Password", "data-testid": "password-input"},
+                xpath="//input[@data-testid='password-input']",
+                css_selector="input[data-testid='password-input']",
+                visible=True,
+                clickable=True
+            ),
+            DOMElement(
+                tag="button",
+                id="login-btn",
+                text="Sign In",
+                attributes={"type": "submit", "class": "btn btn-primary", "data-testid": "login-button"},
+                xpath="//button[@data-testid='login-button']",
+                css_selector="button[data-testid='login-button']",
+                visible=True,
+                clickable=True
+            )
+        ]
+
+    def _create_dashboard_elements(self) -> List[DOMElement]:
+        """Create dashboard page elements for Browser Library state."""
+        return [
+            DOMElement(
+                tag="h1",
+                text="User Dashboard",
+                class_name="page-header",
+                attributes={"data-testid": "dashboard-title"},
+                xpath="//h1[@data-testid='dashboard-title']",
+                css_selector="h1[data-testid='dashboard-title']",
+                visible=True
+            ),
+            DOMElement(
+                tag="nav",
+                class_name="main-navigation",
+                attributes={"role": "navigation", "data-testid": "main-nav"},
+                xpath="//nav[@data-testid='main-nav']",
+                css_selector="nav[data-testid='main-nav']",
+                visible=True
+            ),
+            DOMElement(
+                tag="button",
+                id="profile-menu",
+                text="Profile",
+                class_name="btn btn-outline-primary",
+                attributes={"data-testid": "profile-button"},
+                xpath="//button[@data-testid='profile-button']",
+                css_selector="button[data-testid='profile-button']",
+                visible=True,
+                clickable=True
+            )
+        ]
+
+    def _create_generic_elements(self, url: str) -> List[DOMElement]:
+        """Create generic page elements for Browser Library state."""
+        return [
+            DOMElement(
+                tag="html",
+                attributes={"lang": "en"},
+                xpath="//html",
+                css_selector="html",
+                visible=True
+            ),
+            DOMElement(
+                tag="head",
+                xpath="//head",
+                css_selector="head",
+                visible=False
+            ),
+            DOMElement(
+                tag="body",
+                xpath="//body",
+                css_selector="body",
+                visible=True
+            ),
+            DOMElement(
+                tag="main",
+                class_name="main-content",
+                attributes={"role": "main"},
+                xpath="//main[@role='main']",
+                css_selector="main[role='main']",
+                visible=True
+            )
+        ]
+
+    def _extract_forms_from_elements(self, elements: List[DOMElement]) -> List[Dict[str, Any]]:
+        """Extract form information from elements."""
+        forms = []
+        form_fields = []
+        
+        for element in elements:
+            if element.tag == "input" and element.id:
+                form_fields.append({
+                    "id": element.id,
+                    "name": element.attributes.get("name", element.id),
+                    "type": element.attributes.get("type", "text"),
+                    "required": "required" in element.attributes
+                })
+        
+        if form_fields:
+            forms.append({
+                "id": "main-form",
+                "method": "POST",
+                "fields": form_fields
+            })
+        
+        return forms
+
+    def _extract_links_from_elements(self, elements: List[DOMElement]) -> List[Dict[str, str]]:
+        """Extract link information from elements."""
+        links = []
+        
+        for element in elements:
+            if element.tag == "a" and "href" in element.attributes:
+                links.append({
+                    "text": element.text or "Link",
+                    "href": element.attributes["href"],
+                    "id": element.id or ""
+                })
+        
+        return links
+
+    async def capture_browser_state_snapshot(
+        self,
+        session_id: str,
+        execution_engine = None
+    ) -> Dict[str, Any]:
+        """Capture a detailed Browser Library state snapshot."""
+        try:
+            if execution_engine:
+                # Get the session from execution engine
+                session = execution_engine._get_or_create_session(session_id)
+                browser_state = await execution_engine._capture_browser_state(session)
+                
+                # Update our state manager with the captured state
+                await self.update_variables(session_id, {
+                    "browser_id": browser_state.get("browser_id"),
+                    "browser_type": browser_state.get("browser_type"),
+                    "context_id": browser_state.get("context_id"),
+                    "page_id": browser_state.get("page_id"),
+                    "current_url": browser_state.get("current_url"),
+                    "page_title": browser_state.get("page_title"),
+                    "viewport": browser_state.get("viewport")
+                })
+                
+                return {
+                    "success": True,
+                    "session_id": session_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "browser_state": browser_state,
+                    "webpage_state": await self._get_dom_state(session_id, [])
+                }
+            else:
+                # Fall back to getting current state
+                dom_state = await self._get_dom_state(session_id, [])
+                return {
+                    "success": True,
+                    "session_id": session_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "webpage_state": dom_state
+                }
+                
+        except Exception as e:
+            logger.error(f"Error capturing browser state snapshot: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "session_id": session_id
+            }

@@ -394,7 +394,8 @@ class LibraryRecommender:
         """Extract relevant keywords from scenario text."""
         # Common testing keywords and patterns
         testing_keywords = {
-            'web': ['web', 'browser', 'page', 'click', 'form', 'element', 'html', 'javascript'],
+            'web': ['web', 'browser', 'page', 'click', 'form', 'element', 'html', 'javascript', 
+                   'playwright', 'modern', 'fill', 'locator', 'wait', 'viewport', 'headless'],
             'api': ['api', 'rest', 'http', 'json', 'request', 'response', 'endpoint', 'service'],
             'mobile': ['mobile', 'app', 'android', 'ios', 'touch', 'swipe', 'device'],
             'database': ['database', 'sql', 'query', 'table', 'data', 'record'],
@@ -473,7 +474,7 @@ class LibraryRecommender:
     def _match_by_context(self, context: str) -> List[LibraryRecommendation]:
         """Match libraries based on testing context."""
         context_libraries = {
-            'web': ['SeleniumLibrary', 'Browser', 'RequestsLibrary'],
+            'web': ['Browser', 'SeleniumLibrary', 'RequestsLibrary'],  # Browser Library prioritized
             'mobile': ['AppiumLibrary'],
             'api': ['RequestsLibrary', 'REST'],
             'database': ['DatabaseLibrary'],
@@ -484,16 +485,37 @@ class LibraryRecommender:
             'data': ['DataDriver', 'FakerLibrary']
         }
         
+        # Priority weighting for web context libraries
+        web_priority = {
+            'Browser': 0.95,         # Highest priority for modern web testing
+            'SeleniumLibrary': 0.85, # Lower priority (legacy)
+            'RequestsLibrary': 0.75  # Lowest for pure web UI testing
+        }
+        
         matches = []
         if context in context_libraries:
-            for lib_name in context_libraries[context]:
+            for i, lib_name in enumerate(context_libraries[context]):
                 if lib_name in self.libraries_registry:
                     library = self.libraries_registry[lib_name]
+                    
+                    # Apply priority-based confidence for web context
+                    if context == 'web' and lib_name in web_priority:
+                        confidence = web_priority[lib_name]
+                        if lib_name == 'Browser':
+                            rationale = "Modern Playwright-based web testing library (recommended)"
+                        elif lib_name == 'SeleniumLibrary':
+                            rationale = "Traditional Selenium-based web testing library"
+                        else:
+                            rationale = f"Primary library for {context} testing"
+                    else:
+                        confidence = max(0.9 - (i * 0.1), 0.7)  # Decreasing confidence by order
+                        rationale = f"Primary library for {context} testing"
+                    
                     matches.append(LibraryRecommendation(
                         library=library,
-                        confidence=0.9,
+                        confidence=confidence,
                         matching_keywords=[context],
-                        rationale=f"Primary library for {context} testing"
+                        rationale=rationale
                     ))
         
         return matches

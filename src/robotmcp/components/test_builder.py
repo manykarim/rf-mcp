@@ -407,9 +407,17 @@ class TestBuilder:
         has_browser_actions = any(
             "browser" in step.keyword.lower() or 
             "click" in step.keyword.lower() or
+            "fill" in step.keyword.lower() or
+            "get text" in step.keyword.lower() or
             "input" in step.keyword.lower()
             for step in steps
         )
+        
+        # Determine if using Browser Library or SeleniumLibrary
+        has_browser_lib = any("new browser" in step.keyword.lower() or 
+                             "new page" in step.keyword.lower() or
+                             "fill" in step.keyword.lower() 
+                             for step in steps)
         
         if has_browser_actions:
             # Check if we already have close browser
@@ -429,9 +437,16 @@ class TestBuilder:
         
         keyword_lower = keyword.lower()
         
-        # Web automation keywords
+        # Browser Library keywords (prioritized)
         if any(kw in keyword_lower for kw in [
-            'open browser', 'close browser', 'go to', 'click element', 
+            'new browser', 'new context', 'new page', 'fill', 'get text',
+            'get property', 'wait for elements state', 'close browser'
+        ]):
+            return "Browser"
+        
+        # SeleniumLibrary keywords (legacy support)
+        elif any(kw in keyword_lower for kw in [
+            'open browser', 'go to', 'click element', 
             'click button', 'input text', 'page should contain'
         ]):
             return "SeleniumLibrary"
