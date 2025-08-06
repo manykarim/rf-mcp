@@ -9,6 +9,7 @@ from fastmcp import FastMCP
 
 from robotmcp.components.execution_engine import ExecutionEngine
 from robotmcp.components.keyword_matcher import KeywordMatcher
+from robotmcp.components.library_recommender import LibraryRecommender
 from robotmcp.components.nlp_processor import NaturalLanguageProcessor
 from robotmcp.components.state_manager import StateManager
 from robotmcp.components.test_builder import TestBuilder
@@ -22,6 +23,7 @@ mcp = FastMCP("Robot Framework MCP Server")
 # Initialize components
 nlp_processor = NaturalLanguageProcessor()
 keyword_matcher = KeywordMatcher()
+library_recommender = LibraryRecommender()
 execution_engine = ExecutionEngine()
 state_manager = StateManager()
 test_builder = TestBuilder()
@@ -133,6 +135,21 @@ async def validate_scenario(
     if available_libraries is None:
         available_libraries = []
     return await nlp_processor.validate_scenario(parsed_scenario, available_libraries)
+
+@mcp.tool
+async def recommend_libraries(
+    scenario: str,
+    context: str = "web",
+    max_recommendations: int = 5
+) -> Dict[str, Any]:
+    """Recommend Robot Framework libraries based on test scenario.
+    
+    Args:
+        scenario: Natural language description of the test scenario
+        context: Testing context (web, mobile, api, database, desktop, system, visual)
+        max_recommendations: Maximum number of library recommendations to return
+    """
+    return library_recommender.recommend_libraries(scenario, context, max_recommendations)
 
 
 
