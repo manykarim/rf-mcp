@@ -151,6 +151,19 @@ async def recommend_libraries(
     """
     return library_recommender.recommend_libraries(scenario, context, max_recommendations)
 
+@mcp.tool
+async def get_page_source(
+    session_id: str = "default",
+    full_source: bool = False
+) -> Dict[str, Any]:
+    """Get page source and context for a browser session.
+    
+    Args:
+        session_id: Session identifier
+        full_source: If True, returns complete page source. If False, returns preview only.
+    """
+    return await execution_engine.get_page_source(session_id, full_source)
+
 
 
 if __name__ == "__main__":
