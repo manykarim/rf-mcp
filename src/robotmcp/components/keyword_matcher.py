@@ -25,6 +25,13 @@ try:
 except ImportError:
     get_model = None
 
+try:
+    from robot.libdoc import LibraryDocumentation
+    LIBDOC_AVAILABLE = True
+except ImportError:
+    LIBDOC_AVAILABLE = False
+    LibraryDocumentation = None
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -47,6 +54,10 @@ class KeywordInfo:
     argument_types: List[str]
     documentation: str
     tags: List[str]
+    source: Optional[str] = None
+    lineno: Optional[int] = None
+    deprecated: bool = False
+    private: bool = False
 
 class KeywordMatcher:
     """Matches natural language actions to Robot Framework keywords using semantic similarity."""
@@ -142,50 +153,79 @@ class KeywordMatcher:
             logger.error(f"Error initializing keyword registry: {e}")
 
     async def _load_library_keywords(self, library_name: str) -> None:
-        """Load keywords from a specific library."""
+        """Load keywords from a specific library using robot.libdoc."""
         try:
-            # Import the library to get its keywords
-            if library_name in STDLIBS:
-                # Handle standard libraries
-                lib_module = STDLIBS[library_name]
-            else:
-                # Try to import external library
-                import importlib
-                lib_module = importlib.import_module(library_name)
+            if not LIBDOC_AVAILABLE:
+                logger.warning("robot.libdoc not available, falling back to manual loading")
+                await self._load_library_keywords_fallback(library_name)
+                return
+            
+            # Use LibraryDocumentation for comprehensive keyword extraction
+            try:
+                lib_doc = LibraryDocumentation(library_name)
+            except Exception as e:
+                logger.debug(f"LibraryDocumentation failed for {library_name}, trying fallback: {e}")
+                await self._load_library_keywords_fallback(library_name)
+                return
             
             keywords = []
             
-            # Extract keywords from library
-            if hasattr(lib_module, 'get_keyword_names'):
-                keyword_names = lib_module.get_keyword_names()
-                for kw_name in keyword_names:
-                    try:
-                        # Get keyword documentation and arguments
-                        doc = ""
-                        args = []
-                        arg_types = []
-                        
-                        if hasattr(lib_module, 'get_keyword_documentation'):
-                            doc = lib_module.get_keyword_documentation(kw_name) or ""
-                        
-                        if hasattr(lib_module, 'get_keyword_arguments'):
-                            args = lib_module.get_keyword_arguments(kw_name) or []
-                            arg_types = ['str'] * len(args)  # Default to string
-                        
-                        keyword_info = KeywordInfo(
-                            name=kw_name,
-                            library=library_name,
-                            arguments=args,
-                            argument_types=arg_types,
-                            documentation=doc,
-                            tags=self._extract_tags_from_doc(doc)
-                        )
+            # Extract keywords with full metadata
+            for kw in lib_doc.keywords:
+                try:
+                    # Parse arguments with proper types
+                    arguments = []
+                    argument_types = []
+                    
+                    if hasattr(kw, 'args') and kw.args:
+                        for arg in kw.args:
+                            if isinstance(arg, str):
+                                # Simple string argument
+                                arguments.append(arg)
+                                argument_types.append('str')
+                            elif hasattr(arg, 'name'):
+                                # Argument object with metadata
+                                arguments.append(arg.name)
+                                arg_type = getattr(arg, 'type', 'str') or 'str'
+                                argument_types.append(str(arg_type))
+                            else:
+                                arguments.append(str(arg))
+                                argument_types.append('str')
+                    
+                    # Extract tags
+                    tags = []
+                    if hasattr(kw, 'tags') and kw.tags:
+                        tags = list(kw.tags)
+                    else:
+                        # Fallback to documentation-based tag extraction
+                        tags = self._extract_tags_from_doc(kw.doc or "")
+                    
+                    # Check for deprecated/private status
+                    deprecated = 'robot:deprecated' in tags or 'deprecated' in (kw.doc or "").lower()
+                    private = 'robot:private' in tags or kw.name.startswith('_')
+                    
+                    keyword_info = KeywordInfo(
+                        name=kw.name,
+                        library=library_name,
+                        arguments=arguments,
+                        argument_types=argument_types,
+                        documentation=kw.doc or "",
+                        tags=tags,
+                        source=getattr(kw, 'source', None),
+                        lineno=getattr(kw, 'lineno', None),
+                        deprecated=deprecated,
+                        private=private
+                    )
+                    
+                    # Skip private keywords unless explicitly requested
+                    if not private:
                         keywords.append(keyword_info)
                         
-                    except Exception as e:
-                        logger.debug(f"Could not process keyword {kw_name}: {e}")
+                except Exception as e:
+                    logger.debug(f"Could not process keyword {kw.name}: {e}")
             
             self.keyword_registry[library_name] = keywords
+            logger.debug(f"Loaded {len(keywords)} keywords from {library_name} using LibraryDocumentation")
             
             # Generate embeddings for keywords if model is available
             if self.embeddings_model and keywords:
@@ -193,6 +233,8 @@ class KeywordMatcher:
                 
         except Exception as e:
             logger.warning(f"Could not load library {library_name}: {e}")
+            # Try fallback method
+            await self._load_library_keywords_fallback(library_name)
 
     async def _generate_keyword_embeddings(self, library_name: str, keywords: List[KeywordInfo]) -> None:
         """Generate embeddings for keywords for semantic matching."""
@@ -407,7 +449,7 @@ class KeywordMatcher:
         context: str,
         current_state: Dict[str, Any]
     ) -> List[KeywordMatch]:
-        """Match keywords based on current context and state."""
+        """Match keywords based on current context and state using tags."""
         matches = []
         
         # Priority libraries based on context
@@ -418,27 +460,51 @@ class KeywordMatcher:
             'database': ['DatabaseLibrary']
         }
         
-        priority_libraries = context_libraries.get(context, ['BuiltIn'])
+        # Context-to-tag mapping for better filtering
+        context_tags = {
+            'web': ['web', 'browser', 'selenium', 'html'],
+            'mobile': ['mobile', 'app', 'appium', 'touch'],
+            'api': ['api', 'http', 'request', 'rest'],
+            'database': ['database', 'sql', 'db', 'query']
+        }
         
-        # Look for keywords in priority libraries
-        for library_name in priority_libraries:
-            if library_name in self.keyword_registry:
-                for keyword_info in self.keyword_registry[library_name]:
-                    # Calculate relevance based on documentation and context
-                    relevance = self._calculate_context_relevance(
-                        keyword_info, action, context, current_state
-                    )
+        priority_libraries = context_libraries.get(context, ['BuiltIn'])
+        relevant_tags = context_tags.get(context, [])
+        
+        # Look for keywords in all libraries, with priority weighting
+        for library_name in self.keyword_registry:
+            library_priority = 1.0 if library_name in priority_libraries else 0.7
+            
+            for keyword_info in self.keyword_registry[library_name]:
+                # Skip deprecated keywords unless specifically requested
+                if keyword_info.deprecated:
+                    continue
                     
-                    if relevance > 0.4:
-                        matches.append(KeywordMatch(
-                            keyword_name=keyword_info.name,
-                            library=keyword_info.library,
-                            confidence=relevance,
-                            arguments=keyword_info.arguments,
-                            argument_types=keyword_info.argument_types,
-                            documentation=keyword_info.documentation,
-                            usage_example=self._generate_usage_example(keyword_info, action)
-                        ))
+                # Calculate relevance based on documentation, context, and tags
+                relevance = self._calculate_context_relevance(
+                    keyword_info, action, context, current_state
+                )
+                
+                # Boost relevance for keywords with matching tags
+                tag_boost = 0.0
+                if keyword_info.tags:
+                    matching_tags = set(keyword_info.tags).intersection(set(relevant_tags))
+                    if matching_tags:
+                        tag_boost = min(len(matching_tags) * 0.15, 0.3)
+                
+                # Apply library priority and tag boost
+                final_relevance = (relevance + tag_boost) * library_priority
+                
+                if final_relevance > 0.3:  # Lower threshold due to better matching
+                    matches.append(KeywordMatch(
+                        keyword_name=keyword_info.name,
+                        library=keyword_info.library,
+                        confidence=final_relevance,
+                        arguments=keyword_info.arguments,
+                        argument_types=keyword_info.argument_types,
+                        documentation=keyword_info.documentation,
+                        usage_example=self._generate_usage_example(keyword_info, action)
+                    ))
         
         return matches
 
@@ -498,10 +564,70 @@ class KeywordMatcher:
         """Rank matches by confidence and relevance."""
         return sorted(matches, key=lambda x: x.confidence, reverse=True)
 
+    async def _load_library_keywords_fallback(self, library_name: str) -> None:
+        """Fallback method for loading keywords without LibraryDocumentation."""
+        try:
+            # Import the library to get its keywords
+            if library_name in STDLIBS:
+                # Handle standard libraries
+                lib_module = STDLIBS[library_name]
+            else:
+                # Try to import external library
+                import importlib
+                lib_module = importlib.import_module(library_name)
+            
+            keywords = []
+            
+            # Extract keywords from library
+            if hasattr(lib_module, 'get_keyword_names'):
+                keyword_names = lib_module.get_keyword_names()
+                for kw_name in keyword_names:
+                    try:
+                        # Get keyword documentation and arguments
+                        doc = ""
+                        args = []
+                        arg_types = []
+                        tags = []
+                        
+                        if hasattr(lib_module, 'get_keyword_documentation'):
+                            doc = lib_module.get_keyword_documentation(kw_name) or ""
+                        
+                        if hasattr(lib_module, 'get_keyword_arguments'):
+                            args = lib_module.get_keyword_arguments(kw_name) or []
+                            arg_types = ['str'] * len(args)  # Default to string
+                        
+                        if hasattr(lib_module, 'get_keyword_tags'):
+                            tags = lib_module.get_keyword_tags(kw_name) or []
+                        else:
+                            tags = self._extract_tags_from_doc(doc)
+                        
+                        keyword_info = KeywordInfo(
+                            name=kw_name,
+                            library=library_name,
+                            arguments=args,
+                            argument_types=arg_types,
+                            documentation=doc,
+                            tags=tags
+                        )
+                        keywords.append(keyword_info)
+                        
+                    except Exception as e:
+                        logger.debug(f"Could not process keyword {kw_name}: {e}")
+            
+            self.keyword_registry[library_name] = keywords
+            logger.debug(f"Loaded {len(keywords)} keywords from {library_name} using fallback method")
+            
+            # Generate embeddings for keywords if model is available
+            if self.embeddings_model and keywords:
+                await self._generate_keyword_embeddings(library_name, keywords)
+                
+        except Exception as e:
+            logger.warning(f"Fallback loading failed for library {library_name}: {e}")
+    
     def _generate_usage_example(self, keyword_info: KeywordInfo, action: str) -> str:
         """Generate a usage example for a keyword."""
         if not keyword_info.arguments:
-            return f"{keyword_info.keyword_name}"
+            return f"{keyword_info.name}"
         
         # Generate placeholder arguments based on action
         example_args = []
@@ -518,7 +644,7 @@ class KeywordMatcher:
                 example_args.append(f"arg{i+1}")
         
         args_str = "    ".join(example_args)
-        return f"{keyword_info.keyword_name}    {args_str}"
+        return f"{keyword_info.name}    {args_str}"
 
     def _generate_usage_recommendations(
         self,
