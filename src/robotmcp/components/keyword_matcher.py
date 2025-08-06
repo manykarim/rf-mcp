@@ -1,0 +1,568 @@
+"""Keyword Matcher component for semantic matching of Robot Framework keywords."""
+
+import re
+import logging
+from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+import asyncio
+from difflib import SequenceMatcher
+
+try:
+    from sentence_transformers import SentenceTransformer
+    import numpy as np
+    from scipy.spatial.distance import cosine
+    EMBEDDINGS_AVAILABLE = True
+except ImportError:
+    EMBEDDINGS_AVAILABLE = False
+
+try:
+    from robot.libraries import STDLIBS
+except ImportError:
+    STDLIBS = {}
+
+try:
+    from robot.api import get_model
+except ImportError:
+    get_model = None
+
+logger = logging.getLogger(__name__)
+
+@dataclass
+class KeywordMatch:
+    """Represents a matched keyword with metadata."""
+    keyword_name: str
+    library: str
+    confidence: float
+    arguments: List[str]
+    argument_types: List[str]
+    documentation: str
+    usage_example: Optional[str] = None
+
+@dataclass
+class KeywordInfo:
+    """Information about a Robot Framework keyword."""
+    name: str
+    library: str
+    arguments: List[str]
+    argument_types: List[str]
+    documentation: str
+    tags: List[str]
+
+class KeywordMatcher:
+    """Matches natural language actions to Robot Framework keywords using semantic similarity."""
+    
+    def __init__(self):
+        self.keyword_registry: Dict[str, List[KeywordInfo]] = {}
+        self.embeddings_model = None
+        self.keyword_embeddings: Dict[str, np.ndarray] = {}
+        self._initialized = False
+        
+        # Initialize embeddings model if available
+        if EMBEDDINGS_AVAILABLE:
+            try:
+                self.embeddings_model = SentenceTransformer('all-MiniLM-L6-v2')
+                logger.info("Loaded sentence transformer model for semantic matching")
+            except Exception as e:
+                logger.warning(f"Could not load embeddings model: {e}")
+                self.embeddings_model = None
+        
+        # Common keyword patterns for different actions
+        self.action_keyword_mapping = {
+            'navigate': {
+                'patterns': ['open', 'go to', 'navigate', 'visit'],
+                'libraries': ['SeleniumLibrary', 'Browser'],
+                'keywords': ['Open Browser', 'Go To', 'New Page', 'Navigate To']
+            },
+            'click': {
+                'patterns': ['click', 'press', 'select', 'tap'],
+                'libraries': ['SeleniumLibrary', 'Browser', 'AppiumLibrary'],
+                'keywords': ['Click Element', 'Click Button', 'Click Link', 'Tap']
+            },
+            'input': {
+                'patterns': ['type', 'enter', 'input', 'fill', 'set'],
+                'libraries': ['SeleniumLibrary', 'Browser', 'AppiumLibrary'],
+                'keywords': ['Input Text', 'Type Text', 'Fill Text', 'Set Text']
+            },
+            'verify': {
+                'patterns': ['verify', 'check', 'assert', 'should', 'expect'],
+                'libraries': ['SeleniumLibrary', 'Browser', 'BuiltIn'],
+                'keywords': ['Page Should Contain', 'Element Should Be Visible', 'Should Be Equal']
+            },
+            'wait': {
+                'patterns': ['wait', 'pause', 'sleep', 'delay'],
+                'libraries': ['SeleniumLibrary', 'Browser', 'BuiltIn'],
+                'keywords': ['Wait Until Element Is Visible', 'Sleep', 'Wait For Condition']
+            },
+            'search': {
+                'patterns': ['search', 'find', 'look for', 'locate'],
+                'libraries': ['SeleniumLibrary', 'Browser'],
+                'keywords': ['Get Element', 'Find Element', 'Locate Element']
+            }
+        }
+
+    async def _ensure_initialized(self) -> None:
+        """Ensure the keyword registry is initialized."""
+        if not self._initialized:
+            await self._initialize_keyword_registry()
+            self._initialized = True
+
+    async def _initialize_keyword_registry(self) -> None:
+        """Initialize the keyword registry with standard libraries."""
+        try:
+            # Load common Robot Framework libraries
+            standard_libraries = [
+                'BuiltIn',
+                'Collections', 
+                'DateTime',
+                'OperatingSystem',
+                'Process',
+                'String'
+            ]
+            
+            for lib_name in standard_libraries:
+                await self._load_library_keywords(lib_name)
+            
+            # Load commonly used external libraries if available
+            external_libraries = [
+                'SeleniumLibrary',
+                'RequestsLibrary', 
+                'DatabaseLibrary',
+                'AppiumLibrary'
+            ]
+            
+            for lib_name in external_libraries:
+                try:
+                    await self._load_library_keywords(lib_name)
+                except Exception as e:
+                    logger.debug(f"Could not load {lib_name}: {e}")
+            
+            logger.info(f"Loaded {len(self.keyword_registry)} libraries into keyword registry")
+            
+        except Exception as e:
+            logger.error(f"Error initializing keyword registry: {e}")
+
+    async def _load_library_keywords(self, library_name: str) -> None:
+        """Load keywords from a specific library."""
+        try:
+            # Import the library to get its keywords
+            if library_name in STDLIBS:
+                # Handle standard libraries
+                lib_module = STDLIBS[library_name]
+            else:
+                # Try to import external library
+                import importlib
+                lib_module = importlib.import_module(library_name)
+            
+            keywords = []
+            
+            # Extract keywords from library
+            if hasattr(lib_module, 'get_keyword_names'):
+                keyword_names = lib_module.get_keyword_names()
+                for kw_name in keyword_names:
+                    try:
+                        # Get keyword documentation and arguments
+                        doc = ""
+                        args = []
+                        arg_types = []
+                        
+                        if hasattr(lib_module, 'get_keyword_documentation'):
+                            doc = lib_module.get_keyword_documentation(kw_name) or ""
+                        
+                        if hasattr(lib_module, 'get_keyword_arguments'):
+                            args = lib_module.get_keyword_arguments(kw_name) or []
+                            arg_types = ['str'] * len(args)  # Default to string
+                        
+                        keyword_info = KeywordInfo(
+                            name=kw_name,
+                            library=library_name,
+                            arguments=args,
+                            argument_types=arg_types,
+                            documentation=doc,
+                            tags=self._extract_tags_from_doc(doc)
+                        )
+                        keywords.append(keyword_info)
+                        
+                    except Exception as e:
+                        logger.debug(f"Could not process keyword {kw_name}: {e}")
+            
+            self.keyword_registry[library_name] = keywords
+            
+            # Generate embeddings for keywords if model is available
+            if self.embeddings_model and keywords:
+                await self._generate_keyword_embeddings(library_name, keywords)
+                
+        except Exception as e:
+            logger.warning(f"Could not load library {library_name}: {e}")
+
+    async def _generate_keyword_embeddings(self, library_name: str, keywords: List[KeywordInfo]) -> None:
+        """Generate embeddings for keywords for semantic matching."""
+        try:
+            for keyword in keywords:
+                # Create text for embedding: keyword name + documentation
+                embedding_text = f"{keyword.name} {keyword.documentation}"
+                embedding = self.embeddings_model.encode(embedding_text)
+                self.keyword_embeddings[f"{library_name}.{keyword.name}"] = embedding
+                
+        except Exception as e:
+            logger.warning(f"Could not generate embeddings for {library_name}: {e}")
+
+    async def discover_keywords(
+        self,
+        action_description: str,
+        context: str = "web",
+        current_state: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Discover matching Robot Framework keywords for an action description.
+        
+        Args:
+            action_description: Natural language description of the action
+            context: Application context (web, mobile, api, database)
+            current_state: Current application state
+            
+        Returns:
+            Dictionary containing ranked keyword matches
+        """
+        try:
+            # Ensure initialization is complete
+            await self._ensure_initialized()
+            
+            if current_state is None:
+                current_state = {}
+            
+            # Normalize action description
+            normalized_action = self._normalize_action(action_description)
+            
+            # Extract action type from description
+            action_type = self._classify_action(normalized_action)
+            
+            # Get keyword matches using multiple strategies
+            matches = []
+            
+            # Strategy 1: Pattern-based matching
+            pattern_matches = await self._pattern_based_matching(normalized_action, action_type, context)
+            matches.extend(pattern_matches)
+            
+            # Strategy 2: Semantic similarity matching (if embeddings available)
+            if self.embeddings_model:
+                semantic_matches = await self._semantic_matching(normalized_action, context)
+                matches.extend(semantic_matches)
+            
+            # Strategy 3: Context-aware matching
+            context_matches = await self._context_aware_matching(
+                normalized_action, context, current_state
+            )
+            matches.extend(context_matches)
+            
+            # Remove duplicates and rank by confidence
+            unique_matches = self._deduplicate_matches(matches)
+            ranked_matches = self._rank_matches(unique_matches, normalized_action, context)
+            
+            # Limit to top 10 matches
+            top_matches = ranked_matches[:10]
+            
+            return {
+                "success": True,
+                "action_description": action_description,
+                "action_type": action_type,
+                "matches": [
+                    {
+                        "keyword_name": match.keyword_name,
+                        "library": match.library,
+                        "confidence": match.confidence,
+                        "arguments": match.arguments,
+                        "argument_types": match.argument_types,
+                        "documentation": match.documentation[:200] + "..." if len(match.documentation) > 200 else match.documentation,
+                        "usage_example": match.usage_example
+                    } for match in top_matches
+                ],
+                "total_matches": len(unique_matches),
+                "recommendations": self._generate_usage_recommendations(top_matches, normalized_action)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error discovering keywords: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "matches": []
+            }
+
+    def _normalize_action(self, action: str) -> str:
+        """Normalize action description for matching."""
+        # Convert to lowercase and remove extra whitespace
+        normalized = re.sub(r'\s+', ' ', action.lower().strip())
+        
+        # Remove quotes and common filler words
+        normalized = re.sub(r'["\']', '', normalized)
+        normalized = re.sub(r'\b(the|a|an|on|in|at|to|for|with|by)\b', ' ', normalized)
+        normalized = re.sub(r'\s+', ' ', normalized).strip()
+        
+        return normalized
+
+    def _classify_action(self, action: str) -> str:
+        """Classify the type of action based on description."""
+        action_lower = action.lower()
+        
+        # Check against known action patterns
+        for action_type, config in self.action_keyword_mapping.items():
+            for pattern in config['patterns']:
+                if pattern in action_lower:
+                    return action_type
+        
+        # Default classification based on common verbs
+        if any(word in action_lower for word in ['open', 'go', 'navigate', 'visit']):
+            return 'navigate'
+        elif any(word in action_lower for word in ['click', 'press', 'select', 'tap']):
+            return 'click'
+        elif any(word in action_lower for word in ['type', 'enter', 'input', 'fill']):
+            return 'input'
+        elif any(word in action_lower for word in ['verify', 'check', 'assert', 'should']):
+            return 'verify'
+        elif any(word in action_lower for word in ['wait', 'pause', 'sleep']):
+            return 'wait'
+        else:
+            return 'unknown'
+
+    async def _pattern_based_matching(
+        self,
+        action: str,
+        action_type: str,
+        context: str
+    ) -> List[KeywordMatch]:
+        """Match keywords using predefined patterns."""
+        matches = []
+        
+        if action_type in self.action_keyword_mapping:
+            config = self.action_keyword_mapping[action_type]
+            
+            # Look for keywords in relevant libraries
+            for library_name in config['libraries']:
+                if library_name in self.keyword_registry:
+                    for keyword_info in self.keyword_registry[library_name]:
+                        # Check if keyword name matches expected patterns
+                        for expected_keyword in config['keywords']:
+                            similarity = self._calculate_string_similarity(
+                                keyword_info.name, expected_keyword
+                            )
+                            
+                            if similarity > 0.6:  # Threshold for pattern matching
+                                matches.append(KeywordMatch(
+                                    keyword_name=keyword_info.name,
+                                    library=keyword_info.library,
+                                    confidence=similarity * 0.8,  # Pattern matching gets lower confidence
+                                    arguments=keyword_info.arguments,
+                                    argument_types=keyword_info.argument_types,
+                                    documentation=keyword_info.documentation,
+                                    usage_example=self._generate_usage_example(keyword_info, action)
+                                ))
+        
+        return matches
+
+    async def _semantic_matching(self, action: str, context: str) -> List[KeywordMatch]:
+        """Match keywords using semantic similarity."""
+        matches = []
+        
+        if not self.embeddings_model or not self.keyword_embeddings:
+            return matches
+        
+        try:
+            # Generate embedding for the action
+            action_embedding = self.embeddings_model.encode(action)
+            
+            # Calculate similarity with all keyword embeddings
+            for keyword_key, keyword_embedding in self.keyword_embeddings.items():
+                similarity = 1 - cosine(action_embedding, keyword_embedding)
+                
+                if similarity > 0.3:  # Minimum similarity threshold
+                    library_name, keyword_name = keyword_key.split('.', 1)
+                    
+                    # Find keyword info
+                    keyword_info = None
+                    if library_name in self.keyword_registry:
+                        for kw in self.keyword_registry[library_name]:
+                            if kw.name == keyword_name:
+                                keyword_info = kw
+                                break
+                    
+                    if keyword_info:
+                        matches.append(KeywordMatch(
+                            keyword_name=keyword_info.name,
+                            library=keyword_info.library,
+                            confidence=similarity,
+                            arguments=keyword_info.arguments,
+                            argument_types=keyword_info.argument_types,
+                            documentation=keyword_info.documentation,
+                            usage_example=self._generate_usage_example(keyword_info, action)
+                        ))
+        
+        except Exception as e:
+            logger.warning(f"Error in semantic matching: {e}")
+        
+        return matches
+
+    async def _context_aware_matching(
+        self,
+        action: str,
+        context: str,
+        current_state: Dict[str, Any]
+    ) -> List[KeywordMatch]:
+        """Match keywords based on current context and state."""
+        matches = []
+        
+        # Priority libraries based on context
+        context_libraries = {
+            'web': ['SeleniumLibrary', 'Browser'],
+            'mobile': ['AppiumLibrary'],
+            'api': ['RequestsLibrary'],
+            'database': ['DatabaseLibrary']
+        }
+        
+        priority_libraries = context_libraries.get(context, ['BuiltIn'])
+        
+        # Look for keywords in priority libraries
+        for library_name in priority_libraries:
+            if library_name in self.keyword_registry:
+                for keyword_info in self.keyword_registry[library_name]:
+                    # Calculate relevance based on documentation and context
+                    relevance = self._calculate_context_relevance(
+                        keyword_info, action, context, current_state
+                    )
+                    
+                    if relevance > 0.4:
+                        matches.append(KeywordMatch(
+                            keyword_name=keyword_info.name,
+                            library=keyword_info.library,
+                            confidence=relevance,
+                            arguments=keyword_info.arguments,
+                            argument_types=keyword_info.argument_types,
+                            documentation=keyword_info.documentation,
+                            usage_example=self._generate_usage_example(keyword_info, action)
+                        ))
+        
+        return matches
+
+    def _calculate_string_similarity(self, str1: str, str2: str) -> float:
+        """Calculate similarity between two strings."""
+        return SequenceMatcher(None, str1.lower(), str2.lower()).ratio()
+
+    def _calculate_context_relevance(
+        self,
+        keyword_info: KeywordInfo,
+        action: str,
+        context: str,
+        current_state: Dict[str, Any]
+    ) -> float:
+        """Calculate how relevant a keyword is for the current context."""
+        relevance = 0.0
+        
+        # Base similarity with action
+        name_similarity = self._calculate_string_similarity(keyword_info.name, action)
+        doc_similarity = self._calculate_string_similarity(keyword_info.documentation, action)
+        relevance += max(name_similarity, doc_similarity * 0.5)
+        
+        # Context bonus
+        if context == 'web' and any(term in keyword_info.documentation.lower() 
+                                   for term in ['browser', 'element', 'page', 'web']):
+            relevance += 0.2
+        elif context == 'api' and any(term in keyword_info.documentation.lower()
+                                     for term in ['request', 'response', 'http', 'api']):
+            relevance += 0.2
+        elif context == 'mobile' and any(term in keyword_info.documentation.lower()
+                                        for term in ['mobile', 'app', 'touch', 'device']):
+            relevance += 0.2
+        
+        # State-based relevance
+        if current_state.get('dom') and 'element' in keyword_info.name.lower():
+            relevance += 0.1
+        
+        return min(relevance, 1.0)
+
+    def _deduplicate_matches(self, matches: List[KeywordMatch]) -> List[KeywordMatch]:
+        """Remove duplicate matches, keeping the highest confidence."""
+        unique_matches = {}
+        
+        for match in matches:
+            key = f"{match.library}.{match.keyword_name}"
+            if key not in unique_matches or match.confidence > unique_matches[key].confidence:
+                unique_matches[key] = match
+        
+        return list(unique_matches.values())
+
+    def _rank_matches(
+        self,
+        matches: List[KeywordMatch],
+        action: str,
+        context: str
+    ) -> List[KeywordMatch]:
+        """Rank matches by confidence and relevance."""
+        return sorted(matches, key=lambda x: x.confidence, reverse=True)
+
+    def _generate_usage_example(self, keyword_info: KeywordInfo, action: str) -> str:
+        """Generate a usage example for a keyword."""
+        if not keyword_info.arguments:
+            return f"{keyword_info.keyword_name}"
+        
+        # Generate placeholder arguments based on action
+        example_args = []
+        for i, arg in enumerate(keyword_info.arguments):
+            if 'locator' in arg.lower() or 'element' in arg.lower():
+                example_args.append("id=my-element")
+            elif 'text' in arg.lower() or 'value' in arg.lower():
+                example_args.append("example text")
+            elif 'url' in arg.lower():
+                example_args.append("https://example.com")
+            elif 'timeout' in arg.lower():
+                example_args.append("10s")
+            else:
+                example_args.append(f"arg{i+1}")
+        
+        args_str = "    ".join(example_args)
+        return f"{keyword_info.keyword_name}    {args_str}"
+
+    def _generate_usage_recommendations(
+        self,
+        matches: List[KeywordMatch],
+        action: str
+    ) -> List[str]:
+        """Generate usage recommendations based on matches."""
+        recommendations = []
+        
+        if not matches:
+            recommendations.append("No matching keywords found. Consider:")
+            recommendations.append("- Check if required libraries are imported")
+            recommendations.append("- Rephrase the action description")
+            recommendations.append("- Use more specific terms")
+        else:
+            top_match = matches[0]
+            recommendations.append(f"Best match: {top_match.keyword_name} (confidence: {top_match.confidence:.2f})")
+            
+            if top_match.arguments:
+                recommendations.append(f"Required arguments: {', '.join(top_match.arguments)}")
+            
+            if len(matches) > 1:
+                recommendations.append(f"Alternative options: {', '.join([m.keyword_name for m in matches[1:4]])}")
+
+        return recommendations
+
+    def _extract_tags_from_doc(self, documentation: str) -> List[str]:
+        """Extract tags from keyword documentation."""
+        tags = []
+        
+        # Look for common patterns in documentation
+        doc_lower = documentation.lower()
+        
+        if any(term in doc_lower for term in ['browser', 'web', 'html', 'dom']):
+            tags.append('web')
+        if any(term in doc_lower for term in ['mobile', 'app', 'touch']):
+            tags.append('mobile')
+        if any(term in doc_lower for term in ['api', 'http', 'request', 'response']):
+            tags.append('api')
+        if any(term in doc_lower for term in ['database', 'sql', 'query']):
+            tags.append('database')
+        if any(term in doc_lower for term in ['click', 'button', 'link']):
+            tags.append('interaction')
+        if any(term in doc_lower for term in ['verify', 'assert', 'check', 'should']):
+            tags.append('verification')
+        
+        return tags
