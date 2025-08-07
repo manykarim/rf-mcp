@@ -14,6 +14,9 @@ from robotmcp.utils.library_checker import LibraryAvailabilityChecker, check_and
 # Import dynamic keyword discovery
 from robotmcp.utils.dynamic_keywords import get_keyword_discovery
 
+# Import hybrid execution system
+from .keyword_overrides import KeywordOverrideRegistry, DynamicExecutionHandler, setup_default_overrides
+
 try:
     from robot.api import TestSuite
     from robot.running.model import TestCase, Keyword
@@ -103,6 +106,11 @@ class ExecutionEngine:
         
         # Initialize dynamic keyword discovery
         self.keyword_discovery = get_keyword_discovery()
+        
+        # Initialize hybrid execution system
+        self.override_registry = KeywordOverrideRegistry()
+        self.dynamic_handler = DynamicExecutionHandler(self)
+        setup_default_overrides(self.override_registry, self)
         
         # Initialize Robot Framework
         self._initialize_robot_framework()
@@ -266,10 +274,10 @@ class ExecutionEngine:
                 
         return locator
     
-    async def _try_dynamic_keyword(self, session: ExecutionSession, keyword_name: str, args: List[str]) -> Optional[Dict[str, Any]]:
-        """Try to execute a keyword using dynamic keyword discovery."""
+    async def _execute_hybrid_keyword(self, session: ExecutionSession, keyword_name: str, args: List[str]) -> Optional[Dict[str, Any]]:
+        """Execute a keyword using hybrid approach: overrides first, then dynamic."""
         try:
-            # Check if keyword exists in dynamic discovery
+            # First, check if keyword exists in dynamic discovery to get library info
             keyword_info = self.keyword_discovery.find_keyword(keyword_name)
             if not keyword_info:
                 # Try to find similar keywords and provide suggestions
@@ -281,11 +289,15 @@ class ExecutionEngine:
                         "error": f"Keyword '{keyword_name}' not found. Did you mean: {', '.join(suggestion_names)}?",
                         "suggestions": suggestion_names
                     }
-                return None
+                # If no suggestions either, this keyword really doesn't exist
+                return {
+                    "success": False,
+                    "error": f"Keyword '{keyword_name}' not found in any loaded libraries"
+                }
             
-            logger.info(f"Executing dynamic keyword: {keyword_info.library}.{keyword_info.name}")
+            logger.info(f"Executing hybrid keyword: {keyword_info.library}.{keyword_info.name}")
             
-            # Convert locators if needed for consistency
+            # Convert locators if needed for consistency (before override handling)
             converted_args = args.copy()
             if keyword_info.library == "Browser" and args:
                 # Convert first argument (usually a selector) for Browser Library keywords
@@ -294,43 +306,62 @@ class ExecutionEngine:
                     if converted_args[0] != args[0]:
                         logger.info(f"Converted locator: '{args[0]}' -> '{converted_args[0]}'")
             
-            args = converted_args
+            # Check for override handler
+            override_handler = self.override_registry.get_override(keyword_name, keyword_info.library)
             
-            # Execute using dynamic discovery
-            result = await self.keyword_discovery.execute_keyword(
-                keyword_name, 
-                args, 
-                session.variables
-            )
-            
-            if result["success"]:
-                # Update session variables if the keyword returns any
-                if "result" in result and hasattr(result["result"], "__dict__"):
-                    # Some keywords might return objects with useful data
-                    pass
+            if override_handler:
+                # Use override handler
+                logger.info(f"Using override handler for {keyword_name}")
+                override_result = await override_handler.execute(session, keyword_name, converted_args, keyword_info)
+                
+                # Apply state updates if any
+                if override_result.state_updates:
+                    self._apply_state_updates(session, override_result.state_updates)
                 
                 return {
-                    "success": True,
-                    "output": result["output"],
-                    "variables": {},  # Dynamic keywords handle their own variable management
-                    "keyword_info": result.get("keyword_info", {})
+                    "success": override_result.success,
+                    "output": override_result.output,
+                    "error": override_result.error,
+                    "variables": override_result.variables or {},
+                    "keyword_info": {
+                        **(keyword_info.__dict__ if keyword_info else {}),
+                        "override_used": True,
+                        "override_metadata": override_result.metadata
+                    }
                 }
             else:
+                # Use default dynamic handler
+                logger.info(f"Using dynamic handler for {keyword_name}")
+                dynamic_result = await self.dynamic_handler.execute(session, keyword_name, converted_args, keyword_info)
+                
                 return {
-                    "success": False,
-                    "error": result["error"],
-                    "output": None,
-                    "keyword_info": result.get("keyword_info", {}),
-                    "suggestions": result.get("suggestions", [])
+                    "success": dynamic_result.success,
+                    "output": dynamic_result.output,
+                    "error": dynamic_result.error,
+                    "variables": dynamic_result.variables or {},
+                    "keyword_info": {
+                        **(keyword_info.__dict__ if keyword_info else {}),
+                        "override_used": False,
+                        "override_metadata": dynamic_result.metadata
+                    }
                 }
                 
         except Exception as e:
-            logger.error(f"Error in dynamic keyword execution: {e}")
+            logger.error(f"Error in hybrid keyword execution: {e}")
+            logger.error(traceback.format_exc())
             return {
                 "success": False,
-                "error": f"Dynamic keyword execution failed: {str(e)}",
+                "error": f"Hybrid keyword execution error: {str(e)}",
                 "output": None
             }
+            
+    def _apply_state_updates(self, session: ExecutionSession, state_updates: Dict[str, Any]):
+        """Apply state updates to the session."""
+        for key, value in state_updates.items():
+            if not hasattr(session, 'custom_state'):
+                session.custom_state = {}
+            session.custom_state[key] = value
+            logger.debug(f"Applied state update: {key} = {value}")
 
     def get_available_keywords(self, library_name: str = None) -> List[Dict[str, Any]]:
         """Get list of available keywords, optionally filtered by library.
@@ -454,7 +485,9 @@ class ExecutionEngine:
                 "error": result.get("error"),
                 "execution_time": self._calculate_execution_time(step),
                 "session_variables": dict(session.variables),
-                "state_snapshot": await self._capture_state_snapshot(session)
+                "state_snapshot": await self._capture_state_snapshot(session),
+                "keyword_info": result.get("keyword_info", {}),
+                "suggestions": result.get("suggestions", [])
             }
             
         except Exception as e:
@@ -495,18 +528,10 @@ class ExecutionEngine:
             keyword_name = step.keyword
             args = step.arguments
             
-            # First try dynamic keyword discovery
-            dynamic_result = await self._try_dynamic_keyword(session, keyword_name, args)
-            if dynamic_result is not None:
-                return dynamic_result
-            
-            # Fall back to hardcoded special keywords for backward compatibility
-            if keyword_name.lower() == "import library":
-                return await self._handle_import_library(session, args)
-            elif keyword_name.lower() == "set variable":
-                return await self._handle_set_variable(session, args)
-            elif keyword_name.lower() == "log":
-                return await self._handle_log(session, args)
+            # Use hybrid execution approach
+            hybrid_result = await self._execute_hybrid_keyword(session, keyword_name, args)
+            if hybrid_result is not None:
+                return hybrid_result
             
             # Create a test suite and case for execution
             if not session.suite:

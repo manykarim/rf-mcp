@@ -292,6 +292,10 @@ class DynamicKeywordDiscovery:
         suggestions.sort(key=lambda x: x[0], reverse=True)
         return [kw_info for _, kw_info in suggestions[:max_suggestions]]
     
+    def get_keyword_count(self) -> int:
+        """Get total number of discovered keywords."""
+        return len(self.keyword_cache)
+    
     def get_keywords_by_library(self, library_name: str) -> List[KeywordInfo]:
         """Get all keywords from a specific library."""
         if library_name not in self.libraries:
