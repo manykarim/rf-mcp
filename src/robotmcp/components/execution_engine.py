@@ -278,21 +278,42 @@ class ExecutionEngine:
                 "output": None
             }
 
-    def get_available_keywords(self) -> List[Dict[str, Any]]:
-        """Get list of all available keywords from all loaded libraries."""
-        keywords = []
+    def get_available_keywords(self, library_name: str = None) -> List[Dict[str, Any]]:
+        """Get list of available keywords, optionally filtered by library.
         
-        for keyword_info in self.keyword_discovery.get_all_keywords():
-            keywords.append({
+        Args:
+            library_name: Optional library name to filter keywords (e.g., 'Browser', 'BuiltIn')
+                         If None, returns all keywords from all libraries.
+        
+        Returns:
+            List of keyword information dictionaries
+        """
+        if library_name:
+            # Get keywords from specific library
+            keywords_from_lib = self.keyword_discovery.get_keywords_by_library(library_name)
+            return [{
                 "name": keyword_info.name,
                 "library": keyword_info.library,
                 "args": keyword_info.args,
                 "doc": keyword_info.doc,
                 "tags": keyword_info.tags,
                 "is_builtin": keyword_info.is_builtin
-            })
-        
-        return keywords
+            } for keyword_info in keywords_from_lib]
+        else:
+            # Get all keywords from all libraries
+            keywords = []
+            
+            for keyword_info in self.keyword_discovery.get_all_keywords():
+                keywords.append({
+                    "name": keyword_info.name,
+                    "library": keyword_info.library,
+                    "args": keyword_info.args,
+                    "doc": keyword_info.doc,
+                    "tags": keyword_info.tags,
+                    "is_builtin": keyword_info.is_builtin
+                })
+            
+            return keywords
     
     def search_keywords(self, pattern: str) -> List[Dict[str, Any]]:
         """Search for keywords matching a pattern."""

@@ -193,13 +193,19 @@ async def get_library_status(
     return execution_engine.get_installation_status(library_name)
 
 @mcp.tool
-async def get_available_keywords() -> List[Dict[str, Any]]:
-    """Get all available Robot Framework keywords from loaded libraries.
+async def get_available_keywords(
+    library_name: str = None
+) -> List[Dict[str, Any]]:
+    """Get available Robot Framework keywords, optionally filtered by library.
+    
+    Args:
+        library_name: Optional library name to filter keywords (e.g., 'Browser', 'BuiltIn', 'Collections').
+                     If not provided, returns all keywords from all loaded libraries.
     
     Returns:
         List of keyword information including name, library, arguments, and documentation
     """
-    return execution_engine.get_available_keywords()
+    return execution_engine.get_available_keywords(library_name)
 
 @mcp.tool
 async def search_keywords(

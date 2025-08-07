@@ -266,15 +266,14 @@ class TestBuilder:
         # Collect all imports from test cases
         all_imports = set()
         
-        # Standard imports
-        all_imports.add("BuiltIn")
-        
         # Detect required imports from keywords
         for test_case in test_cases:
             for step in test_case.steps:
                 library = await self._detect_library_from_keyword(step.keyword)
-                if library:
+                if library and library != "BuiltIn":  # Exclude BuiltIn as it's automatically available
                     all_imports.add(library)
+        
+        # BuiltIn is automatically available in Robot Framework, so we don't import it explicitly
         
         # Generate suite documentation
         suite_docs = await self._generate_suite_documentation(test_cases, session_id)
@@ -416,23 +415,23 @@ class TestBuilder:
         return setup, teardown
 
     async def _detect_library_from_keyword(self, keyword: str) -> Optional[str]:
-        """Detect which library a keyword belongs to."""
+        """Detect which library a keyword belongs to using dynamic discovery."""
         
+        # Use the execution engine's dynamic keyword discovery if available
+        if self.execution_engine and hasattr(self.execution_engine, 'keyword_discovery'):
+            keyword_info = self.execution_engine.keyword_discovery.find_keyword(keyword)
+            if keyword_info:
+                return keyword_info.library
+        
+        # Fallback to hardcoded patterns for keywords not in dynamic discovery
         keyword_lower = keyword.lower()
         
-        # Browser Library keywords (prioritized)
+        # Browser Library keywords (prioritized for modern web testing)
         if any(kw in keyword_lower for kw in [
             'new browser', 'new context', 'new page', 'fill', 'get text',
-            'get property', 'wait for elements state', 'close browser'
+            'get property', 'wait for elements state', 'close browser', 'click'
         ]):
             return "Browser"
-        
-        # SeleniumLibrary keywords (legacy support)
-        elif any(kw in keyword_lower for kw in [
-            'open browser', 'go to', 'click element', 
-            'click button', 'input text', 'page should contain'
-        ]):
-            return "SeleniumLibrary"
         
         # API keywords
         elif any(kw in keyword_lower for kw in [
@@ -446,11 +445,30 @@ class TestBuilder:
         ]):
             return "DatabaseLibrary"
         
-        # Mobile keywords
+        # String manipulation
         elif any(kw in keyword_lower for kw in [
-            'open application', 'tap', 'swipe'
+            'convert to upper case', 'convert to lower case', 'split string'
         ]):
-            return "AppiumLibrary"
+            return "String"
+        
+        # Collections
+        elif any(kw in keyword_lower for kw in [
+            'append to list', 'get from list', 'create list'
+        ]):
+            return "Collections"
+        
+        # Operating System
+        elif any(kw in keyword_lower for kw in [
+            'copy file', 'create directory', 'file should exist'
+        ]):
+            return "OperatingSystem"
+        
+        # BuiltIn keywords (note: BuiltIn is automatically available, we detect but don't import)
+        elif any(kw in keyword_lower for kw in [
+            'log', 'set variable', 'should be equal', 'should contain',
+            'convert to string', 'convert to integer', 'catenate'
+        ]):
+            return "BuiltIn"
         
         return None
 
@@ -594,13 +612,18 @@ Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 lines.append(f"    [Tags]    {' '.join(test_case.tags)}")
             
             if test_case.setup:
-                lines.append(f"    [Setup]    {test_case.setup.keyword}    {' '.join(test_case.setup.arguments)}")
+                escaped_setup_args = [self._escape_robot_argument(arg) for arg in test_case.setup.arguments]
+                lines.append(f"    [Setup]    {test_case.setup.keyword}    {' '.join(escaped_setup_args)}")
             
             # Test steps
             for step in test_case.steps:
                 step_line = f"    {step.keyword}"
                 if step.arguments:
-                    step_line += f"    {' '.join(step.arguments)}"
+                    # Escape arguments that start with special characters
+                    escaped_args = [self._escape_robot_argument(arg) for arg in step.arguments]
+                    # Use proper 4-space separation between keyword and arguments
+                    args_str = "    ".join(escaped_args)
+                    step_line += f"    {args_str}"
                 
                 if step.comment:
                     step_line += f"    {step.comment}"
@@ -608,7 +631,8 @@ Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 lines.append(step_line)
             
             if test_case.teardown:
-                lines.append(f"    [Teardown]    {test_case.teardown.keyword}    {' '.join(test_case.teardown.arguments)}")
+                escaped_teardown_args = [self._escape_robot_argument(arg) for arg in test_case.teardown.arguments]
+                lines.append(f"    [Teardown]    {test_case.teardown.keyword}    {' '.join(escaped_teardown_args)}")
             
             lines.append("")
         
@@ -661,3 +685,19 @@ Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             return "cleanup"
         else:
             return "other"
+
+    def _escape_robot_argument(self, arg: str) -> str:
+        """Escape Robot Framework arguments that start with special characters."""
+        if not arg:
+            return arg
+        
+        # Escape arguments starting with # (treated as comments in RF)
+        if arg.startswith('#'):
+            return f"\\{arg}"
+        
+        # Future escaping rules can be added here:
+        # - Arguments starting with $ or & (variables)
+        # - Arguments with spaces that need quoting
+        # - Arguments with special RF syntax
+        
+        return arg
