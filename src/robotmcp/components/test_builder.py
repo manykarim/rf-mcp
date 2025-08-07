@@ -619,8 +619,19 @@ Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             for step in test_case.steps:
                 step_line = f"    {step.keyword}"
                 if step.arguments:
+                    # Convert locators for consistency if using execution engine
+                    processed_args = step.arguments.copy()
+                    if (self.execution_engine and hasattr(self.execution_engine, '_convert_locator_for_library') 
+                        and step.arguments):
+                        # Detect library from keyword
+                        library = await self._detect_library_from_keyword(step.keyword)
+                        if library and any(kw in step.keyword.lower() for kw in ['click', 'fill', 'get text', 'wait', 'select']):
+                            converted_locator = self.execution_engine._convert_locator_for_library(step.arguments[0], library)
+                            if converted_locator != step.arguments[0]:
+                                processed_args[0] = converted_locator
+                    
                     # Escape arguments that start with special characters
-                    escaped_args = [self._escape_robot_argument(arg) for arg in step.arguments]
+                    escaped_args = [self._escape_robot_argument(arg) for arg in processed_args]
                     # Use proper 4-space separation between keyword and arguments
                     args_str = "    ".join(escaped_args)
                     step_line += f"    {args_str}"

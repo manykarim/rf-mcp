@@ -232,15 +232,69 @@ class ExecutionEngine:
                 "suggestion": f"Library '{library_name}' not found in common libraries. Manual check required."
             }
 
+    def _convert_locator_for_library(self, locator: str, target_library: str) -> str:
+        """Convert locator format between different libraries."""
+        if not locator:
+            return locator
+            
+        # Convert Selenium-style locators to Browser Library format
+        if target_library == "Browser":
+            if locator.startswith("id="):
+                # id=element -> #element  
+                return f"#{locator[3:]}"
+            elif locator.startswith("css="):
+                # css=selector -> selector
+                return locator[4:]
+            elif locator.startswith("xpath="):
+                # Keep xpath as is for Browser Library
+                return locator[6:]
+            elif locator.startswith("name="):
+                # name=attr -> [name="attr"]
+                return f'[name="{locator[5:]}"]'
+            elif locator.startswith("class="):
+                # class=classname -> .classname
+                return f".{locator[6:]}"
+                
+        # Convert Browser Library locators to Selenium format  
+        elif target_library == "SeleniumLibrary":
+            if locator.startswith("#"):
+                # #element -> id=element
+                return f"id={locator[1:]}"
+            elif locator.startswith(".") and not locator.startswith("./"):
+                # .classname -> class=classname  
+                return f"class={locator[1:]}"
+                
+        return locator
+    
     async def _try_dynamic_keyword(self, session: ExecutionSession, keyword_name: str, args: List[str]) -> Optional[Dict[str, Any]]:
         """Try to execute a keyword using dynamic keyword discovery."""
         try:
             # Check if keyword exists in dynamic discovery
             keyword_info = self.keyword_discovery.find_keyword(keyword_name)
             if not keyword_info:
+                # Try to find similar keywords and provide suggestions
+                suggestions = self.keyword_discovery.suggest_similar_keywords(keyword_name, 3)
+                if suggestions:
+                    suggestion_names = [f"{s.library}.{s.name}" for s in suggestions]
+                    return {
+                        "success": False,
+                        "error": f"Keyword '{keyword_name}' not found. Did you mean: {', '.join(suggestion_names)}?",
+                        "suggestions": suggestion_names
+                    }
                 return None
             
             logger.info(f"Executing dynamic keyword: {keyword_info.library}.{keyword_info.name}")
+            
+            # Convert locators if needed for consistency
+            converted_args = args.copy()
+            if keyword_info.library == "Browser" and args:
+                # Convert first argument (usually a selector) for Browser Library keywords
+                if any(kw in keyword_name.lower() for kw in ['click', 'fill', 'get text', 'wait', 'select']):
+                    converted_args[0] = self._convert_locator_for_library(args[0], "Browser")
+                    if converted_args[0] != args[0]:
+                        logger.info(f"Converted locator: '{args[0]}' -> '{converted_args[0]}'")
+            
+            args = converted_args
             
             # Execute using dynamic discovery
             result = await self.keyword_discovery.execute_keyword(
