@@ -241,12 +241,56 @@ class DynamicKeywordDiscovery:
             if variation in self.keyword_cache:
                 return self.keyword_cache[variation]
         
-        # Partial matching
+        # More careful partial matching - only if no exact matches found
+        partial_matches = []
         for cached_name, keyword_info in self.keyword_cache.items():
-            if normalized in cached_name or cached_name in normalized:
-                return keyword_info
+            # Only match if the search term is a significant part of the keyword
+            # and not just a small substring that could be misleading
+            search_words = normalized.split()
+            cached_words = cached_name.split()
+            
+            # Check if most search words appear in the cached keyword
+            word_matches = sum(1 for search_word in search_words
+                             if any(search_word in cached_word for cached_word in cached_words))
+            
+            # Only consider it a match if at least half the words match
+            # and avoid misleading matches like "select" matching "deselect"
+            if word_matches >= len(search_words) / 2 and word_matches > 0:
+                # Additional check: avoid opposite meanings
+                if not (('select' in normalized and 'deselect' in cached_name.lower()) or
+                        ('deselect' in normalized and 'select' in cached_name.lower() and 'deselect' not in cached_name.lower())):
+                    partial_matches.append((word_matches, keyword_info))
+        
+        # Return the best partial match if found
+        if partial_matches:
+            # Sort by number of word matches (descending)
+            partial_matches.sort(key=lambda x: x[0], reverse=True)
+            best_match = partial_matches[0][1]
+            logger.warning(f"Partial match for '{keyword_name}': using '{best_match.name}' from {best_match.library}")
+            return best_match
         
         return None
+    
+    def suggest_similar_keywords(self, keyword_name: str, max_suggestions: int = 5) -> List[KeywordInfo]:
+        """Find similar keywords for incorrect keyword names."""
+        normalized = keyword_name.lower().strip()
+        suggestions = []
+        
+        # Look for partial matches in keyword names
+        for cached_name, keyword_info in self.keyword_cache.items():
+            # Check if any word in the search term appears in the keyword
+            search_words = normalized.split()
+            keyword_words = cached_name.split()
+            
+            matches = sum(1 for search_word in search_words 
+                         if any(search_word in kw_word for kw_word in keyword_words))
+            
+            if matches > 0:
+                suggestions.append((matches, keyword_info))
+        
+        # Sort by number of matching words (descending) and return top suggestions
+        suggestions.sort(key=lambda x: x[0], reverse=True)
+        return [kw_info for _, kw_info in suggestions[:max_suggestions]]
     
     def get_keywords_by_library(self, library_name: str) -> List[KeywordInfo]:
         """Get all keywords from a specific library."""

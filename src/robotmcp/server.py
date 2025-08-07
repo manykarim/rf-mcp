@@ -57,7 +57,8 @@ async def discover_keywords(
 async def execute_step(
     keyword: str, 
     arguments: List[str] = None, 
-    session_id: str = "default"
+    session_id: str = "default",
+    raise_on_failure: bool = True
 ) -> Dict[str, Any]:
     """Execute a single test step using Robot Framework API.
     
@@ -65,10 +66,29 @@ async def execute_step(
         keyword: Robot Framework keyword name
         arguments: Arguments for the keyword
         session_id: Session identifier for maintaining context
+        raise_on_failure: If True, raises exception for failed steps (proper MCP failure reporting).
+                         If False, returns failure details in response (for debugging/analysis).
     """
     if arguments is None:
         arguments = []
-    return await execution_engine.execute_step(keyword, arguments, session_id)
+    
+    result = await execution_engine.execute_step(keyword, arguments, session_id)
+    
+    # For proper MCP protocol compliance, failed steps should raise exceptions
+    # This ensures AI agents see failures as red/failed instead of green/successful
+    if not result.get("success", False) and raise_on_failure:
+        error_msg = result.get("error", f"Step '{keyword}' failed")
+        
+        # Create detailed error message including suggestions if available
+        detailed_error = f"Step execution failed: {error_msg}"
+        if "suggestions" in result:
+            detailed_error += f"\nSuggestions: {', '.join(result['suggestions'])}"
+        if "step_id" in result:
+            detailed_error += f"\nStep ID: {result['step_id']}"
+            
+        raise Exception(detailed_error)
+    
+    return result
 @mcp.tool
 async def get_application_state(
     state_type: str = "all",
