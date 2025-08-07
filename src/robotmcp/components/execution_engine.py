@@ -8,6 +8,9 @@ from datetime import datetime
 import asyncio
 import traceback
 
+# Import the library availability checker
+from robotmcp.utils.library_checker import LibraryAvailabilityChecker, check_and_suggest_libraries
+
 try:
     from robot.api import TestSuite
     from robot.running.model import TestCase, Keyword
@@ -92,6 +95,9 @@ class ExecutionEngine:
         self.builtin = None
         self.browser_lib = None
         
+        # Initialize library checker
+        self.library_checker = LibraryAvailabilityChecker()
+        
         # Initialize Robot Framework
         self._initialize_robot_framework()
         
@@ -147,6 +153,78 @@ class ExecutionEngine:
         except Exception as e:
             logger.error(f"Error initializing Browser Library: {e}")
             self.browser_lib = None
+    
+    def check_library_requirements(self, required_libraries: List[str]) -> Dict[str, Any]:
+        """
+        Check if required libraries are available and suggest installations if needed.
+        
+        Args:
+            required_libraries: List of library names to check
+            
+        Returns:
+            Dict containing availability status and installation suggestions
+        """
+        available, suggestions = check_and_suggest_libraries(required_libraries)
+        
+        return {
+            "available_libraries": available,
+            "missing_libraries": [lib for lib in required_libraries if lib not in available],
+            "installation_suggestions": suggestions,
+            "all_available": len(suggestions) == 0
+        }
+    
+    def get_installation_status(self, library_name: str) -> Dict[str, Any]:
+        """
+        Get detailed installation status for a specific library.
+        
+        Args:
+            library_name: Name of the library to check
+            
+        Returns:
+            Dict with detailed status information
+        """
+        from robotmcp.utils.library_checker import COMMON_ROBOT_LIBRARIES
+        
+        if library_name in COMMON_ROBOT_LIBRARIES:
+            lib_info = COMMON_ROBOT_LIBRARIES[library_name]
+            package_name = lib_info['package']
+            import_name = lib_info['import']
+            
+            # Check import availability
+            import_available = self.library_checker.is_library_available(package_name, import_name)
+            
+            # Check pip package status
+            pip_installed = self.library_checker.check_pip_package_installed(package_name)
+            
+            result = {
+                "library_name": library_name,
+                "package_name": package_name,
+                "import_name": import_name,
+                "import_available": import_available,
+                "pip_installed": pip_installed,
+                "description": lib_info.get('description', ''),
+                "status": "available" if import_available else "missing"
+            }
+            
+            if not import_available:
+                result["installation_command"] = ' '.join(
+                    self.library_checker.get_installation_command(lib_info)
+                )
+                result["suggestion"] = self.library_checker.suggest_installation(lib_info)
+                
+                if lib_info.get('post_install'):
+                    result["post_install_command"] = lib_info['post_install']
+            
+            return result
+        else:
+            # Handle unknown libraries
+            import_available = self.library_checker.is_robot_library_available(library_name)
+            return {
+                "library_name": library_name,
+                "import_available": import_available,
+                "status": "available" if import_available else "unknown",
+                "suggestion": f"Library '{library_name}' not found in common libraries. Manual check required."
+            }
 
     async def execute_step(
         self,

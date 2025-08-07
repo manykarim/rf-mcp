@@ -164,6 +164,34 @@ async def get_page_source(
     """
     return await execution_engine.get_page_source(session_id, full_source)
 
+@mcp.tool
+async def check_library_availability(
+    libraries: List[str]
+) -> Dict[str, Any]:
+    """Check if Robot Framework libraries are available before installation.
+    
+    Args:
+        libraries: List of library names to check (e.g., ['Browser', 'SeleniumLibrary', 'RequestsLibrary'])
+    
+    Returns:
+        Dict with availability status and installation suggestions
+    """
+    return execution_engine.check_library_requirements(libraries)
+
+@mcp.tool
+async def get_library_status(
+    library_name: str
+) -> Dict[str, Any]:
+    """Get detailed installation status for a specific library.
+    
+    Args:
+        library_name: Name of the library to check (e.g., 'Browser', 'SeleniumLibrary')
+    
+    Returns:
+        Dict with detailed status and installation information
+    """
+    return execution_engine.get_installation_status(library_name)
+
 
 
 if __name__ == "__main__":
