@@ -299,6 +299,28 @@ class ExecutionEngine:
             
         except Exception as e:
             logger.error(f"Error executing step {keyword}: {e}")
+            
+            # Update step object with error information
+            if session_id in self.sessions:
+                session = self.sessions[session_id]
+                if session.steps:
+                    step = session.steps[-1]  # Get the current step
+                    step.status = "fail"
+                    step.error = str(e)
+                    step.end_time = datetime.now()
+                    
+                    return {
+                        "success": False,
+                        "error": str(e),
+                        "step_id": step.step_id,
+                        "keyword": keyword,
+                        "arguments": arguments,
+                        "status": "fail",
+                        "execution_time": self._calculate_execution_time(step),
+                        "session_variables": dict(session.variables)
+                    }
+            
+            # Fallback if no step object found
             return {
                 "success": False,
                 "error": str(e),
@@ -607,12 +629,28 @@ class ExecutionEngine:
         keyword_name: str,
         args: List[str]
     ) -> Dict[str, Any]:
-        """Simulate execution of a generic keyword."""
-        return {
-            "success": True,
-            "output": f"Executed keyword '{keyword_name}' with args: {args}",
-            "variables": {}
-        }
+        """Handle unknown or unsupported keywords."""
+        # Check if this might be a valid Robot Framework keyword
+        known_builtin_keywords = [
+            "log", "set variable", "should be equal", "should contain", 
+            "should not be equal", "should not contain", "fail", "pass execution",
+            "run keyword", "run keywords", "set test variable", "set suite variable"
+        ]
+        
+        if keyword_name.lower() in known_builtin_keywords:
+            # Simulate known BuiltIn library keywords
+            return {
+                "success": True,
+                "output": f"Simulated BuiltIn keyword '{keyword_name}' with args: {args}",
+                "variables": {}
+            }
+        else:
+            # Unknown keyword - should fail
+            return {
+                "success": False,
+                "error": f"Unknown keyword '{keyword_name}'. This keyword is not supported in the current implementation.",
+                "output": None
+            }
 
     # Browser Library execution methods (real implementation)
     async def _execute_new_browser(self, session: ExecutionSession, args: List[str]) -> Dict[str, Any]:
@@ -825,6 +863,31 @@ class ExecutionEngine:
     async def _real_new_page(self, session: ExecutionSession, args: List[str]) -> Dict[str, Any]:
         """Execute actual New Page keyword using Browser Library."""
         try:
+            # Validate URL argument FIRST, before checking browser state
+            if not args:
+                return {
+                    "success": False,
+                    "error": "New Page requires URL argument",
+                    "output": None
+                }
+            
+            url = args[0].strip()
+            if not url:
+                return {
+                    "success": False,
+                    "error": "New Page requires non-empty URL argument",
+                    "output": None
+                }
+            
+            # Basic URL validation
+            if not (url.startswith(('http://', 'https://', 'file://', 'about:', 'data:'))):
+                return {
+                    "success": False,
+                    "error": f"Invalid URL format: '{url}'. URL must start with http://, https://, file://, about:, or data:",
+                    "output": None
+                }
+            
+            # Now check browser state
             if not session.browser_state.browser_id:
                 return {
                     "success": False,
@@ -837,8 +900,6 @@ class ExecutionEngine:
                 context_result = await self._real_new_context(session, [])
                 if not context_result["success"]:
                     return context_result
-            
-            url = args[0] if args else "about:blank"
             
             # Call actual Browser Library method
             page_id = self.browser_lib.new_page(url)
@@ -947,8 +1008,16 @@ class ExecutionEngine:
                     "output": None
                 }
             
-            selector = args[0]
+            selector = args[0].strip()
             text = args[1]
+            
+            # Validate selector is not empty
+            if not selector:
+                return {
+                    "success": False,
+                    "error": "Fill requires non-empty selector argument",
+                    "output": None
+                }
             
             # Call actual Browser Library method
             self.browser_lib.fill_text(selector, text)
@@ -1022,7 +1091,15 @@ class ExecutionEngine:
                     "output": None
                 }
             
-            selector = args[0]
+            selector = args[0].strip()
+            
+            # Validate selector is not empty
+            if not selector:
+                return {
+                    "success": False,
+                    "error": "Get Text requires non-empty selector argument",
+                    "output": None
+                }
             
             # Call actual Browser Library method
             text_content = self.browser_lib.get_text(selector)
@@ -1092,8 +1169,23 @@ class ExecutionEngine:
                     "output": None
                 }
             
-            selector = args[0]
-            property_name = args[1]
+            selector = args[0].strip()
+            property_name = args[1].strip()
+            
+            # Validate arguments are not empty
+            if not selector:
+                return {
+                    "success": False,
+                    "error": "Get Property requires non-empty selector argument",
+                    "output": None
+                }
+            
+            if not property_name:
+                return {
+                    "success": False,
+                    "error": "Get Property requires non-empty property name argument",
+                    "output": None
+                }
             
             # Call actual Browser Library method
             property_value = self.browser_lib.get_property(selector, property_name)
@@ -1172,7 +1264,15 @@ class ExecutionEngine:
                     "output": None
                 }
             
-            selector = args[0]
+            selector = args[0].strip()
+            
+            # Validate selector is not empty
+            if not selector:
+                return {
+                    "success": False,
+                    "error": "Click requires non-empty selector argument",
+                    "output": None
+                }
             
             # Call actual Browser Library method
             self.browser_lib.click(selector)
