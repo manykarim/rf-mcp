@@ -49,7 +49,8 @@ class GeneratedTestSuite:
 class TestBuilder:
     """Builds Robot Framework test suites from successful execution steps."""
     
-    def __init__(self):
+    def __init__(self, execution_engine=None):
+        self.execution_engine = execution_engine
         self.optimization_rules = {
             'combine_waits': True,
             'remove_redundant_verifications': True,
@@ -171,62 +172,44 @@ class TestBuilder:
             }
 
     async def _get_session_steps(self, session_id: str) -> List[Dict[str, Any]]:
-        """Get executed steps from session (mock implementation)."""
-        # In a real implementation, this would get steps from the execution engine
-        # For now, return mock successful steps
+        """Get executed steps from session."""
+        if not self.execution_engine:
+            logger.warning("No execution engine provided, returning empty steps list")
+            return []
         
-        mock_steps = [
-            {
-                "keyword": "Import Library",
-                "arguments": ["SeleniumLibrary"],
-                "status": "pass",
-                "step_id": "step_1"
-            },
-            {
-                "keyword": "Open Browser",
-                "arguments": ["https://example.com", "chrome"],
-                "status": "pass",
-                "step_id": "step_2"
-            },
-            {
-                "keyword": "Go To",
-                "arguments": ["https://example.com/login"],
-                "status": "pass",
-                "step_id": "step_3"
-            },
-            {
-                "keyword": "Input Text",
-                "arguments": ["id=username", "testuser"],
-                "status": "pass",
-                "step_id": "step_4"
-            },
-            {
-                "keyword": "Input Text",
-                "arguments": ["id=password", "testpass"],
-                "status": "pass",
-                "step_id": "step_5"
-            },
-            {
-                "keyword": "Click Button",
-                "arguments": ["id=login-btn"],
-                "status": "pass",
-                "step_id": "step_6"
-            },
-            {
-                "keyword": "Page Should Contain",
-                "arguments": ["Welcome"],
-                "status": "pass",
-                "step_id": "step_7"
-            },
-            {
-                "keyword": "Close Browser",
-                "arguments": [],
-                "status": "pass",
-                "step_id": "step_8"
-            }
-        ]
-        
-        return mock_steps
+        try:
+            # Get session from execution engine
+            session = self.execution_engine.sessions.get(session_id)
+            if not session:
+                logger.warning(f"Session '{session_id}' not found")
+                return []
+            
+            # Convert ExecutionStep objects to dictionary format
+            steps = []
+            for step in session.steps:
+                step_dict = {
+                    "keyword": step.keyword,
+                    "arguments": step.arguments,
+                    "status": step.status,
+                    "step_id": step.step_id
+                }
+                
+                # Add optional fields if available
+                if step.error:
+                    step_dict["error"] = step.error
+                if step.result:
+                    step_dict["result"] = step.result
+                if step.start_time and step.end_time:
+                    step_dict["duration"] = (step.end_time - step.start_time).total_seconds()
+                
+                steps.append(step_dict)
+            
+            logger.info(f"Retrieved {len(steps)} steps from session '{session_id}'")
+            return steps
+            
+        except Exception as e:
+            logger.error(f"Error retrieving session steps: {e}")
+            return []
 
     async def _build_test_case(
         self,

@@ -26,7 +26,7 @@ keyword_matcher = KeywordMatcher()
 library_recommender = LibraryRecommender()
 execution_engine = ExecutionEngine()
 state_manager = StateManager()
-test_builder = TestBuilder()
+test_builder = TestBuilder(execution_engine)
 
 @mcp.tool
 async def analyze_scenario(scenario: str, context: str = "web") -> Dict[str, Any]:

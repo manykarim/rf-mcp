@@ -578,9 +578,9 @@ class ExecutionEngine:
                         timeout_seconds = float(timeout_str)
                     kwargs["timeout"] = dt.timedelta(seconds=timeout_seconds)
             
-            # Set default headless mode
+            # Set default headless mode to False for visibility during script creation
             if "headless" not in kwargs:
-                kwargs["headless"] = True
+                kwargs["headless"] = False
             
             # Call actual Browser Library method
             browser_id = self.browser_lib.new_browser(browser=browser_type, **kwargs)
@@ -594,12 +594,12 @@ class ExecutionEngine:
             session.variables.update({
                 "browser_type": browser_type_str,
                 "browser_id": str(browser_id),
-                "headless": str(kwargs.get("headless", True))
+                "headless": str(kwargs.get("headless", False))
             })
             
             return {
                 "success": True,
-                "output": f"Browser '{browser_type_str}' created with ID '{browser_id}' (headless={kwargs.get('headless', True)})",
+                "output": f"Browser '{browser_type_str}' created with ID '{browser_id}' (headless={kwargs.get('headless', False)})",
                 "variables": {"browser_type": browser_type_str, "browser_id": str(browser_id)},
                 "browser_state": await self._capture_real_browser_state(session)
             }
@@ -611,7 +611,7 @@ class ExecutionEngine:
     async def _simulate_new_browser(self, session: ExecutionSession, args: List[str]) -> Dict[str, Any]:
         """Simulate New Browser keyword."""
         browser_type = args[0] if args else "chromium"
-        headless = args[1] if len(args) > 1 else "True"
+        headless = args[1] if len(args) > 1 else "False"
         
         # Generate unique browser ID
         browser_id = f"browser_{uuid.uuid4().hex[:8]}"
