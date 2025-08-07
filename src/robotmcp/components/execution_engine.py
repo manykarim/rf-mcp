@@ -11,6 +11,9 @@ import traceback
 # Import the library availability checker
 from robotmcp.utils.library_checker import LibraryAvailabilityChecker, check_and_suggest_libraries
 
+# Import dynamic keyword discovery
+from robotmcp.utils.dynamic_keywords import get_keyword_discovery
+
 try:
     from robot.api import TestSuite
     from robot.running.model import TestCase, Keyword
@@ -98,10 +101,13 @@ class ExecutionEngine:
         # Initialize library checker
         self.library_checker = LibraryAvailabilityChecker()
         
+        # Initialize dynamic keyword discovery
+        self.keyword_discovery = get_keyword_discovery()
+        
         # Initialize Robot Framework
         self._initialize_robot_framework()
         
-        # Initialize Browser Library
+        # Initialize Browser Library (kept for backward compatibility)
         self._initialize_browser_library()
 
     def __del__(self):
@@ -226,6 +232,85 @@ class ExecutionEngine:
                 "suggestion": f"Library '{library_name}' not found in common libraries. Manual check required."
             }
 
+    async def _try_dynamic_keyword(self, session: ExecutionSession, keyword_name: str, args: List[str]) -> Optional[Dict[str, Any]]:
+        """Try to execute a keyword using dynamic keyword discovery."""
+        try:
+            # Check if keyword exists in dynamic discovery
+            keyword_info = self.keyword_discovery.find_keyword(keyword_name)
+            if not keyword_info:
+                return None
+            
+            logger.info(f"Executing dynamic keyword: {keyword_info.library}.{keyword_info.name}")
+            
+            # Execute using dynamic discovery
+            result = await self.keyword_discovery.execute_keyword(
+                keyword_name, 
+                args, 
+                session.variables
+            )
+            
+            if result["success"]:
+                # Update session variables if the keyword returns any
+                if "result" in result and hasattr(result["result"], "__dict__"):
+                    # Some keywords might return objects with useful data
+                    pass
+                
+                return {
+                    "success": True,
+                    "output": result["output"],
+                    "variables": {},  # Dynamic keywords handle their own variable management
+                    "keyword_info": result.get("keyword_info", {})
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": result["error"],
+                    "output": None,
+                    "keyword_info": result.get("keyword_info", {}),
+                    "suggestions": result.get("suggestions", [])
+                }
+                
+        except Exception as e:
+            logger.error(f"Error in dynamic keyword execution: {e}")
+            return {
+                "success": False,
+                "error": f"Dynamic keyword execution failed: {str(e)}",
+                "output": None
+            }
+
+    def get_available_keywords(self) -> List[Dict[str, Any]]:
+        """Get list of all available keywords from all loaded libraries."""
+        keywords = []
+        
+        for keyword_info in self.keyword_discovery.get_all_keywords():
+            keywords.append({
+                "name": keyword_info.name,
+                "library": keyword_info.library,
+                "args": keyword_info.args,
+                "doc": keyword_info.doc,
+                "tags": keyword_info.tags,
+                "is_builtin": keyword_info.is_builtin
+            })
+        
+        return keywords
+    
+    def search_keywords(self, pattern: str) -> List[Dict[str, Any]]:
+        """Search for keywords matching a pattern."""
+        matches = self.keyword_discovery.search_keywords(pattern)
+        
+        return [{
+            "name": kw.name,
+            "library": kw.library,
+            "args": kw.args,
+            "doc": kw.doc,
+            "tags": kw.tags,
+            "is_builtin": kw.is_builtin
+        } for kw in matches]
+    
+    def get_library_status(self) -> Dict[str, Any]:
+        """Get status of all loaded libraries."""
+        return self.keyword_discovery.get_library_status()
+
     async def execute_step(
         self,
         keyword: str,
@@ -335,7 +420,12 @@ class ExecutionEngine:
             keyword_name = step.keyword
             args = step.arguments
             
-            # Handle special keywords
+            # First try dynamic keyword discovery
+            dynamic_result = await self._try_dynamic_keyword(session, keyword_name, args)
+            if dynamic_result is not None:
+                return dynamic_result
+            
+            # Fall back to hardcoded special keywords for backward compatibility
             if keyword_name.lower() == "import library":
                 return await self._handle_import_library(session, args)
             elif keyword_name.lower() == "set variable":

@@ -192,6 +192,38 @@ async def get_library_status(
     """
     return execution_engine.get_installation_status(library_name)
 
+@mcp.tool
+async def get_available_keywords() -> List[Dict[str, Any]]:
+    """Get all available Robot Framework keywords from loaded libraries.
+    
+    Returns:
+        List of keyword information including name, library, arguments, and documentation
+    """
+    return execution_engine.get_available_keywords()
+
+@mcp.tool
+async def search_keywords(
+    pattern: str
+) -> List[Dict[str, Any]]:
+    """Search for Robot Framework keywords matching a pattern.
+    
+    Args:
+        pattern: Search pattern to match against keyword names, documentation, or tags
+    
+    Returns:
+        List of matching keywords with their information
+    """
+    return execution_engine.search_keywords(pattern)
+
+@mcp.tool
+async def get_loaded_libraries() -> Dict[str, Any]:
+    """Get status of all loaded Robot Framework libraries.
+    
+    Returns:
+        Dict with information about loaded libraries, failed imports, and keyword counts
+    """
+    return execution_engine.get_library_status()
+
 
 
 if __name__ == "__main__":
