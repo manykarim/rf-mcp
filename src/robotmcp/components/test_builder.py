@@ -82,7 +82,19 @@ class TestBuilder:
             if tags is None:
                 tags = []
             
-            # Get session steps from execution engine (would be injected in real implementation)
+            # First, check if session is ready for test suite generation
+            if self.execution_engine:
+                readiness_check = await self.execution_engine.validate_test_readiness(session_id)
+                if not readiness_check.get("ready_for_suite_generation", False):
+                    return {
+                        "success": False,
+                        "error": "Session not ready for test suite generation",
+                        "guidance": readiness_check.get("guidance", []),
+                        "validation_summary": readiness_check.get("validation_summary", {}),
+                        "recommendation": "Use validate_step_before_suite() to validate individual steps first"
+                    }
+            
+            # Get session steps from execution engine
             steps = await self._get_session_steps(session_id)
             
             if not steps:

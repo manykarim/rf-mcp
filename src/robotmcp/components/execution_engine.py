@@ -2473,3 +2473,81 @@ class ExecutionEngine:
                 "success": False,
                 "error": str(e)
             }
+    
+    def get_session_validation_status(self, session_id: str = "default") -> Dict[str, Any]:
+        """Get validation status of steps in a session.
+        
+        This helps AI agents understand which steps have been validated
+        and are ready for inclusion in test suites.
+        """
+        if session_id not in self.sessions:
+            return {
+                "success": False,
+                "error": f"Session '{session_id}' not found"
+            }
+        
+        session = self.sessions[session_id]
+        validated_steps = []
+        failed_steps = []
+        
+        for step in session.steps:
+            step_info = {
+                "step_id": step.step_id,
+                "keyword": step.keyword,
+                "arguments": step.arguments,
+                "status": step.status,
+                "execution_time": self._calculate_execution_time(step)
+            }
+            
+            if step.status == "pass":
+                validated_steps.append(step_info)
+            elif step.status == "fail":
+                step_info["error"] = step.error
+                failed_steps.append(step_info)
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "validated_steps": validated_steps,
+            "failed_steps": failed_steps,
+            "total_steps": len(session.steps),
+            "ready_for_suite": len(failed_steps) == 0 and len(validated_steps) > 0,
+            "validation_summary": {
+                "passed": len(validated_steps),
+                "failed": len(failed_steps),
+                "success_rate": len(validated_steps) / len(session.steps) if session.steps else 0
+            }
+        }
+    
+    async def validate_test_readiness(self, session_id: str = "default") -> Dict[str, Any]:
+        """Check if a session is ready for test suite generation.
+        
+        This method helps enforce the stepwise workflow by checking that
+        all steps have been validated before allowing suite generation.
+        """
+        validation_status = self.get_session_validation_status(session_id)
+        
+        if not validation_status["success"]:
+            return validation_status
+        
+        ready = validation_status["ready_for_suite"]
+        failed_count = len(validation_status["failed_steps"])
+        validated_count = len(validation_status["validated_steps"])
+        
+        guidance = []
+        if not ready:
+            if validated_count == 0:
+                guidance.append("❌ No validated steps found. Execute and validate steps first.")
+            if failed_count > 0:
+                guidance.append(f"❌ {failed_count} failed steps must be fixed before suite generation.")
+        else:
+            guidance.append(f"✅ {validated_count} validated steps ready for test suite generation.")
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "ready_for_suite_generation": ready,
+            "guidance": guidance,
+            "validation_summary": validation_status["validation_summary"],
+            "next_action": "build_test_suite" if ready else "validate_step_before_suite"
+        }
