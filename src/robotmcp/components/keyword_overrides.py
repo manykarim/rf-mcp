@@ -172,6 +172,11 @@ class BrowserLibraryHandler:
                 if 'headless' in parsed_args.named:
                     headless = parsed_args.named['headless'].lower() in ['true', '1', 'yes']
                     
+                # Set browser state fields that the detection logic relies on
+                session.browser_state.browser_type = browser_type
+                session.browser_state.browser_id = f"browser_{session.session_id}"  # Set browser_id for detection
+                session.browser_state.active_library = "browser"  # Explicitly set active library
+                
                 state_updates['current_browser'] = {
                     'type': browser_type,
                     'headless': headless,
@@ -235,8 +240,14 @@ class BrowserLibraryHandler:
             
             state_updates = {}
             if result.get("success"):
+                # Set page state fields for proper detection
+                url = args[0] if args else 'about:blank'
+                session.browser_state.current_url = url
+                session.browser_state.page_id = f"page_{session.session_id}"  # Set page_id for detection
+                session.browser_state.active_library = "browser"  # Ensure Browser Library is active
+                
                 state_updates['current_page'] = {
-                    'url': args[0] if args else 'about:blank',
+                    'url': url,
                     'loaded_at': datetime.now().isoformat()
                 }
                 

@@ -85,7 +85,8 @@ class StateManager:
         self,
         state_type: str = "all",
         elements_of_interest: List[str] = None,
-        session_id: str = "default"
+        session_id: str = "default",
+        execution_engine=None
     ) -> Dict[str, Any]:
         """
         Retrieve current application state.
@@ -121,7 +122,7 @@ class StateManager:
             }
             
             if state_type in ["dom", "all"]:
-                dom_state = await self._get_dom_state(session_id, elements_of_interest)
+                dom_state = await self._get_dom_state(session_id, elements_of_interest, execution_engine)
                 result["dom"] = dom_state
                 
             if state_type in ["api", "all"]:
@@ -148,15 +149,15 @@ class StateManager:
                 "session_id": session_id
             }
 
-    async def _get_dom_state(self, session_id: str, elements_of_interest: List[str]) -> Dict[str, Any]:
+    async def _get_dom_state(self, session_id: str, elements_of_interest: List[str], execution_engine=None) -> Dict[str, Any]:
         """Get DOM state for web applications."""
         try:
             # Try to get Browser Library state from execution engine if available
-            browser_state = await self._get_browser_library_state(session_id)
+            browser_state = await self._get_browser_library_state(session_id, execution_engine)
             
             if browser_state:
                 # Use actual browser state if available
-                page_state = await self._convert_browser_state_to_page_state(browser_state)
+                page_state = await self._convert_browser_state_to_page_state(browser_state, execution_engine)
             else:
                 # Fall back to simulation
                 page_state = await self._simulate_page_state(session_id)
@@ -616,11 +617,28 @@ class StateManager:
             "changed": changed
         }
 
-    async def _get_browser_library_state(self, session_id: str) -> Optional[Dict[str, Any]]:
+    async def _get_browser_library_state(self, session_id: str, execution_engine=None) -> Optional[Dict[str, Any]]:
         """Get Browser Library state from execution engine if available."""
         try:
-            # This would integrate with the execution engine to get real Browser Library state
-            # For now, check if we have browser-related variables that suggest Browser Library usage
+            # If execution engine is provided, try to get real browser state
+            if execution_engine:
+                try:
+                    browser_status = execution_engine.get_session_browser_status(session_id)
+                    if browser_status and 'error' not in browser_status:
+                        return {
+                            "browser_id": browser_status.get("browser_library", {}).get("browser_id"),
+                            "browser_type": "chromium",
+                            "context_id": browser_status.get("browser_library", {}).get("context_id"),
+                            "page_id": browser_status.get("browser_library", {}).get("page_id"),
+                            "current_url": browser_status.get("current_url", "about:blank"),
+                            "page_title": browser_status.get("page_title", ""),
+                            "viewport": {"width": 1280, "height": 720},
+                            "headless": "False"
+                        }
+                except Exception as engine_error:
+                    logger.debug(f"Could not get browser state from execution engine: {engine_error}")
+            
+            # Fall back to variable-based detection
             current_state = self.current_states.get(session_id)
             
             if current_state and current_state.variables:
@@ -645,7 +663,7 @@ class StateManager:
             logger.error(f"Error getting Browser Library state: {e}")
             return None
 
-    async def _convert_browser_state_to_page_state(self, browser_state: Dict[str, Any]) -> PageState:
+    async def _convert_browser_state_to_page_state(self, browser_state: Dict[str, Any], execution_engine=None) -> PageState:
         """Convert Browser Library state to PageState format."""
         try:
             url = browser_state.get("current_url", "about:blank")
@@ -681,6 +699,29 @@ class StateManager:
             cookies = browser_state.get("cookies", {})
             local_storage = browser_state.get("local_storage", {})
             
+            # Try to get real page source from execution engine
+            real_page_source = None
+            if execution_engine:
+                try:
+                    session_id_from_state = browser_state.get("browser_id", "").replace("browser_", "")
+                    if session_id_from_state:
+                        real_page_source = execution_engine._get_page_source_unified(session_id_from_state)
+                        if real_page_source:
+                            logger.debug(f"Retrieved real page source: {len(real_page_source)} characters")
+                            # Update URL and title from real page source if we can parse it
+                            if BS4_AVAILABLE:
+                                try:
+                                    soup = BeautifulSoup(real_page_source, 'html.parser')
+                                    if soup.title and soup.title.string:
+                                        title = soup.title.string.strip()
+                                except Exception as parse_error:
+                                    logger.debug(f"Could not parse page source for title: {parse_error}")
+                except Exception as source_error:
+                    logger.debug(f"Could not get real page source: {source_error}")
+            
+            # Use real page source if available, otherwise fall back to simulated
+            page_source = real_page_source if real_page_source else f"<!-- Browser Library Page: {title} -->\n<html><head><title>{title}</title></head><body><!-- Elements: {len(elements)} --></body></html>"
+            
             return PageState(
                 url=url,
                 title=title,
@@ -689,7 +730,7 @@ class StateManager:
                 links=self._extract_links_from_elements(elements),
                 cookies=cookies,
                 local_storage=local_storage,
-                page_source=f"<!-- Browser Library Page: {title} -->\n<html><head><title>{title}</title></head><body><!-- Elements: {len(elements)} --></body></html>"
+                page_source=page_source
             )
             
         except Exception as e:

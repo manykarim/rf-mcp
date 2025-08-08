@@ -111,7 +111,7 @@ async def get_application_state(
     """
     if elements_of_interest is None:
         elements_of_interest = []
-    return await state_manager.get_state(state_type, elements_of_interest, session_id)
+    return await state_manager.get_state(state_type, elements_of_interest, session_id, execution_engine)
 @mcp.tool
 async def suggest_next_step(
     current_state: Dict[str, Any],

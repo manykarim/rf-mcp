@@ -266,14 +266,15 @@ class ExecutionEngine:
         """
         keyword_lower = keyword.lower().strip()
         
-        # Explicit Browser Library keywords
+        # Explicit Browser Library keywords (unique to Browser Library)
         browser_keywords = [
-            "new browser", "new context", "new page", "close browser", "close context", "close page",
+            "new browser", "new context", "new page", "close context", "close page",
             "get viewport size", "set viewport size", "wait for elements state", "get element count",
-            "get element", "get elements", "fill text", "select options by", "check checkbox"
+            "get element", "get elements", "fill text", "select options by", "check checkbox",
+            "get page source"  # Browser Library specific
         ]
         
-        # Explicit SeleniumLibrary keywords  
+        # Explicit SeleniumLibrary keywords (unique to SeleniumLibrary)
         selenium_keywords = [
             "open browser", "close browser", "go to", "input text", "click button", "click element",
             "get source", "get title", "get text", "select from list", "wait until element is visible",
@@ -305,11 +306,37 @@ class ExecutionEngine:
                 return None
             
             if lib_type == "browser":
-                # Use Browser Library's get_page_source method
+                # Try to get page source from the dynamic keyword discovery's library instance
+                try:
+                    if 'Browser' in self.keyword_discovery.libraries:
+                        # Use the library instance that actually executed the keywords
+                        browser_lib_info = self.keyword_discovery.libraries['Browser']
+                        rf_browser_lib = browser_lib_info.instance
+                        if rf_browser_lib:
+                            logger.debug("Using Browser Library from dynamic keyword discovery")
+                            return rf_browser_lib.get_page_source()
+                except Exception as context_error:
+                    logger.debug(f"Could not access Browser Library from keyword discovery: {context_error}")
+                
+                # Fall back to our global instance
+                logger.debug("Using global Browser Library instance")
                 return active_lib.get_page_source()
             
             elif lib_type == "selenium":
-                # Use SeleniumLibrary's get_source method
+                # Try to get page source from the dynamic keyword discovery's library instance
+                try:
+                    if 'SeleniumLibrary' in self.keyword_discovery.libraries:
+                        # Use the library instance that actually executed the keywords
+                        selenium_lib_info = self.keyword_discovery.libraries['SeleniumLibrary']
+                        rf_selenium_lib = selenium_lib_info.instance
+                        if rf_selenium_lib:
+                            logger.debug("Using SeleniumLibrary from dynamic keyword discovery")
+                            return rf_selenium_lib.get_source()
+                except Exception as context_error:
+                    logger.debug(f"Could not access SeleniumLibrary from keyword discovery: {context_error}")
+                
+                # Fall back to our global instance
+                logger.debug("Using global SeleniumLibrary instance")
                 return active_lib.get_source()
             
             else:
