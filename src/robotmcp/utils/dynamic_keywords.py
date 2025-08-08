@@ -55,6 +55,65 @@ class DynamicKeywordDiscovery:
             'AppiumLibrary'
         ]
         
+        # Keywords that modify the DOM or navigate pages
+        self.dom_changing_patterns = [
+            # Navigation patterns
+            'go to', 'go back', 'go forward', 'open browser', 'reload', 'refresh',
+            'new page', 'new tab', 'navigate',
+            
+            # Click interactions
+            'click', 'double click', 'right click',
+            
+            # Input patterns
+            'fill', 'input', 'type', 'clear', 'enter',
+            
+            # Selection patterns
+            'select', 'check', 'uncheck', 'choose',
+            
+            # Form actions
+            'submit', 'reset form', 'reset',
+            
+            # Drag and drop
+            'drag', 'drop',
+            
+            # Keyboard actions
+            'press keys', 'keyboard',
+            
+            # File operations
+            'upload', 'choose file',
+            
+            # Alert/Dialog interactions
+            'handle alert', 'accept alert', 'dismiss alert', 'input text into alert',
+            
+            # JavaScript that might modify DOM
+            'execute javascript', 'execute async javascript',
+            
+            # Element state changes
+            'focus', 'blur', 'hover', 'mouse over', 'mouse out', 'mouse down', 'mouse up'
+        ]
+        
+        # Keywords that should NEVER trigger page source capture
+        self.read_only_patterns = [
+            # All getter keywords (word boundary)
+            'get text', 'get value', 'get title', 'get source', 'get element', 'get cookie', 'get location',
+            'get window', 'get selenium', 'get all', 'get current', 'get vertical', 'get horizontal',
+            
+            # All assertion keywords
+            'should be', 'should contain', 'should not', 'should equal',
+            
+            # All configuration keywords (word boundary)
+            'set selenium', 'set window', 'set timeout', 'set implicit', 'set browser',
+            
+            # Logging and capture keywords
+            'log source', 'log title', 'log location', 'capture page', 'capture element', 'screenshot',
+            
+            # Wait keywords (passive)
+            'wait for', 'wait until',
+            
+            # Browser management (non-DOM)
+            'close browser', 'close window', 'maximize', 'minimize'
+        ]
+        
         self._initialize_libraries()
     
     def _initialize_libraries(self):
@@ -338,6 +397,27 @@ class DynamicKeywordDiscovery:
                 matches.append(keyword_info)
         
         return matches
+    
+    def is_dom_changing_keyword(self, keyword_name: str) -> bool:
+        """Determine if a keyword potentially changes the DOM or page state."""
+        keyword_lower = keyword_name.lower().strip()
+        
+        # First check if it's explicitly marked as read-only
+        for read_only_pattern in self.read_only_patterns:
+            if read_only_pattern in keyword_lower:
+                return False
+        
+        # Then check if it matches DOM-changing patterns
+        for dom_pattern in self.dom_changing_patterns:
+            if dom_pattern in keyword_lower:
+                return True
+        
+        # Special cases for JavaScript keywords - only if they might modify
+        if 'execute' in keyword_lower and 'javascript' in keyword_lower:
+            return True
+            
+        # Default to False for unknown keywords (safer approach)
+        return False
     
     async def execute_keyword(self, keyword_name: str, args: List[str], session_variables: Dict[str, Any] = None) -> Dict[str, Any]:
         """Execute a keyword dynamically using Robot Framework's run_keyword for proper argument conversion."""

@@ -319,6 +319,25 @@ class ExecutionEngine:
             logger.debug(f"Error getting page source with unified method: {e}")
             return None
 
+    async def _capture_page_source_after_keyword(self, session: ExecutionSession, keyword_name: str) -> Optional[str]:
+        """Capture page source after a DOM-changing keyword execution."""
+        try:
+            # Get page source using the unified method
+            page_source = self._get_page_source_unified(session.session_id)
+            
+            if page_source:
+                # Store it in session state for future reference
+                session.browser_state.page_source = page_source
+                logger.debug(f"Captured page source after {keyword_name}: {len(page_source)} characters")
+                return page_source
+            else:
+                logger.debug(f"Could not capture page source after {keyword_name}")
+                return None
+                
+        except Exception as e:
+            logger.debug(f"Error capturing page source after {keyword_name}: {e}")
+            return None
+
     async def _execute_selenium_keyword_directly(self, session: ExecutionSession, keyword_name: str, args: List[str]) -> Dict[str, Any]:
         """Execute SeleniumLibrary keyword directly using the selenium_lib instance."""
         try:
@@ -543,7 +562,8 @@ class ExecutionEngine:
                 if override_result.state_updates:
                     self._apply_state_updates(session, override_result.state_updates)
                 
-                return {
+                # Auto-capture page source for DOM-changing keywords
+                result_data = {
                     "success": override_result.success,
                     "output": override_result.output,
                     "error": override_result.error,
@@ -554,12 +574,22 @@ class ExecutionEngine:
                         "override_metadata": override_result.metadata
                     }
                 }
+                
+                # Add auto page source capture for successful DOM-changing keywords
+                if override_result.success and self.keyword_discovery.is_dom_changing_keyword(keyword_name):
+                    page_source = await self._capture_page_source_after_keyword(session, keyword_name)
+                    if page_source:
+                        result_data["page_source"] = page_source
+                        result_data["keyword_info"]["auto_captured_dom"] = True
+                        logger.info(f"Auto-captured page source after DOM-changing keyword: {keyword_name}")
+                
+                return result_data
             else:
                 # Use default dynamic handler
                 logger.info(f"Using dynamic handler for {keyword_name}")
                 dynamic_result = await self.dynamic_handler.execute(session, keyword_name, converted_args, keyword_info)
                 
-                return {
+                result_data = {
                     "success": dynamic_result.success,
                     "output": dynamic_result.output,
                     "error": dynamic_result.error,
@@ -570,6 +600,16 @@ class ExecutionEngine:
                         "override_metadata": dynamic_result.metadata
                     }
                 }
+                
+                # Add auto page source capture for successful DOM-changing keywords
+                if dynamic_result.success and self.keyword_discovery.is_dom_changing_keyword(keyword_name):
+                    page_source = await self._capture_page_source_after_keyword(session, keyword_name)
+                    if page_source:
+                        result_data["page_source"] = page_source
+                        result_data["keyword_info"]["auto_captured_dom"] = True
+                        logger.info(f"Auto-captured page source after DOM-changing keyword: {keyword_name}")
+                
+                return result_data
                 
         except Exception as e:
             logger.error(f"Error in hybrid keyword execution: {e}")

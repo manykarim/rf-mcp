@@ -123,11 +123,6 @@ class BrowserLibraryHandler:
             return await self._handle_new_page(session, args, keyword_info)
         elif 'close browser' in keyword_lower:
             return await self._handle_close_browser(session, args, keyword_info)
-        # Handle SeleniumLibrary keywords
-        elif 'open browser' in keyword_lower:
-            return await self._handle_selenium_open_browser(session, args, keyword_info)
-        elif 'get source' in keyword_lower:
-            return await self._handle_selenium_get_source(session, args, keyword_info)
         else:
             # For other Browser keywords, use dynamic execution with state updates
             return await self._handle_generic_browser_keyword(session, keyword, args, keyword_info)
@@ -377,6 +372,33 @@ class DynamicExecutionHandler:
                 metadata={'override': 'dynamic'}
             )
 
+# SeleniumLibrary Override Handler
+class SeleniumLibraryHandler:
+    """Specialized handler for SeleniumLibrary keywords with custom logic."""
+    
+    def __init__(self, execution_engine):
+        self.execution_engine = execution_engine
+        
+    async def execute(
+        self, 
+        session: 'ExecutionSession', 
+        keyword: str, 
+        args: List[str],
+        keyword_info: Optional[Any] = None
+    ) -> OverrideResult:
+        """Execute SeleniumLibrary keyword with custom logic."""
+        
+        keyword_lower = keyword.lower()
+        
+        # Custom handling for specific SeleniumLibrary keywords
+        if 'open browser' in keyword_lower:
+            return await self._handle_selenium_open_browser(session, args, keyword_info)
+        elif 'get source' in keyword_lower:
+            return await self._handle_selenium_get_source(session, args, keyword_info)
+        else:
+            # For other SeleniumLibrary keywords, use dynamic execution
+            return await self._handle_generic_selenium_keyword(session, keyword, args, keyword_info)
+
     async def _handle_selenium_open_browser(self, session, args, keyword_info) -> OverrideResult:
         """Handle SeleniumLibrary Open Browser keyword with session tracking."""
         try:
@@ -390,6 +412,7 @@ class DynamicExecutionHandler:
                 session.variables
             )
             
+            state_updates = {}
             if result.get("success"):
                 # Track SeleniumLibrary session
                 try:
@@ -401,11 +424,14 @@ class DynamicExecutionHandler:
                         logger.info(f"SeleniumLibrary browser opened, session: {session.browser_state.selenium_session_id}")
                 except Exception as e:
                     logger.debug(f"Could not track SeleniumLibrary session: {e}")
+                
+                state_updates['last_browser_activity'] = datetime.now().isoformat()
             
             return OverrideResult(
                 success=result.get("success", False),
                 output=result.get("output"),
                 error=result.get("error"),
+                state_updates=state_updates,
                 metadata={'override': 'selenium_open_browser'}
             )
             
@@ -450,12 +476,49 @@ class DynamicExecutionHandler:
                 metadata={'override': 'selenium_get_source'}
             )
 
+    async def _handle_generic_selenium_keyword(self, session, keyword, args, keyword_info) -> OverrideResult:
+        """Handle other SeleniumLibrary keywords with argument conversion and state awareness."""
+        try:
+            # Mark session as using SeleniumLibrary
+            session.browser_state.active_library = "selenium"
+            
+            # Execute via dynamic discovery
+            result = await self.execution_engine.keyword_discovery.execute_keyword(
+                keyword,
+                args,
+                session.variables
+            )
+            
+            # Update last activity timestamp
+            state_updates = {
+                'last_browser_activity': datetime.now().isoformat()
+            }
+            
+            return OverrideResult(
+                success=result.get("success", False),
+                output=result.get("output"),
+                error=result.get("error"),
+                state_updates=state_updates,
+                metadata={'override': 'selenium_generic'}
+            )
+            
+        except Exception as e:
+            return OverrideResult(
+                success=False,
+                error=f"SeleniumLibrary keyword error: {str(e)}",
+                metadata={'override': 'selenium_generic'}
+            )
+
 def setup_default_overrides(registry: KeywordOverrideRegistry, execution_engine):
     """Set up the default keyword overrides."""
     
     # Browser Library - gets custom handling for state management and defaults
     browser_handler = BrowserLibraryHandler(execution_engine)
     registry.register_library('Browser', browser_handler)
+    
+    # SeleniumLibrary - gets custom handling for session tracking
+    selenium_handler = SeleniumLibraryHandler(execution_engine)
+    registry.register_library('SeleniumLibrary', selenium_handler)
     
     # Could add more specific overrides here:
     # registry.register_keyword('Get Text', custom_get_text_handler)
