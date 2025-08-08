@@ -278,10 +278,10 @@ class BrowserLibraryHandler:
             if keyword_info and keyword_info.library == "Browser":
                 converted_args = discovery._convert_browser_arguments(keyword_info, args)
                 
-                # Get the library instance and execute with converted args
-                library = discovery.libraries.get("Browser")
-                if library:
-                    method = getattr(library.instance, keyword_info.method_name)
+                # Get the session-scoped library instance and execute with converted args
+                browser_lib = session.browser_state.browser_lib_instance
+                if browser_lib and keyword_info.library == "Browser":
+                    method = getattr(browser_lib, keyword_info.method_name)
                     try:
                         result = method(*converted_args)
                         
@@ -414,14 +414,17 @@ class SeleniumLibraryHandler:
             
             state_updates = {}
             if result.get("success"):
-                # Track SeleniumLibrary session
+                # Track SeleniumLibrary session using session-scoped instance
                 try:
-                    # Get the WebDriver instance from SeleniumLibrary
-                    if self.execution_engine.selenium_lib:
-                        driver = self.execution_engine.selenium_lib.driver
+                    # Get the WebDriver instance from session-scoped SeleniumLibrary
+                    selenium_lib = session.browser_state.selenium_lib_instance
+                    if selenium_lib and hasattr(selenium_lib, 'driver'):
+                        driver = selenium_lib.driver
                         session.browser_state.driver_instance = driver
                         session.browser_state.selenium_session_id = driver.session_id if driver else None
-                        logger.info(f"SeleniumLibrary browser opened, session: {session.browser_state.selenium_session_id}")
+                        logger.info(f"SeleniumLibrary browser opened for session {session.session_id}, driver session: {session.browser_state.selenium_session_id}")
+                    else:
+                        logger.debug(f"No SeleniumLibrary driver available for session {session.session_id}")
                 except Exception as e:
                     logger.debug(f"Could not track SeleniumLibrary session: {e}")
                 

@@ -92,15 +92,21 @@ class BrowserState:
     browser_id: Optional[str] = None
     context_id: Optional[str] = None
     page_id: Optional[str] = None
+    browser_lib_instance: Optional[Any] = None  # Session-scoped Browser Library instance
     
     # SeleniumLibrary specific state
     driver_instance: Optional[Any] = None
     selenium_session_id: Optional[str] = None
+    selenium_lib_instance: Optional[Any] = None  # Session-scoped SeleniumLibrary instance
     
     # Active library indicator ("browser" or "selenium" or None)
     active_library: Optional[str] = None
     session_storage: Dict[str, str] = field(default_factory=dict)
     page_elements: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # Session isolation tracking
+    session_id: Optional[str] = None
+    is_isolated: bool = True
 
 @dataclass
 class ExecutionSession:
@@ -212,7 +218,7 @@ class ExecutionEngine:
 
     def _get_active_browser_library(self, session_id: str = "default") -> tuple[Optional[Any], str]:
         """
-        Determine which browser library is active for a session.
+        Determine which browser library is active for a session using session-scoped instances.
         
         Returns:
             tuple: (library_instance, library_type) where library_type is "browser", "selenium", or "none"
@@ -229,29 +235,36 @@ class ExecutionEngine:
         session = self.sessions[session_id]
         browser_state = session.browser_state
         
+        # Use session-scoped instances for proper isolation
         # Check if session has explicitly set active library
-        if browser_state.active_library == "browser" and self.browser_lib:
-            return self.browser_lib, "browser"
-        elif browser_state.active_library == "selenium" and self.selenium_lib:
-            return self.selenium_lib, "selenium"
+        if browser_state.active_library == "browser" and browser_state.browser_lib_instance:
+            return browser_state.browser_lib_instance, "browser"
+        elif browser_state.active_library == "selenium" and browser_state.selenium_lib_instance:
+            return browser_state.selenium_lib_instance, "selenium"
         
         # Auto-detect based on session state
         if browser_state.browser_id or browser_state.context_id or browser_state.page_id:
             # Browser Library session
-            if self.browser_lib:
+            if browser_state.browser_lib_instance:
                 browser_state.active_library = "browser"
-                return self.browser_lib, "browser"
+                return browser_state.browser_lib_instance, "browser"
         
         if browser_state.driver_instance or browser_state.selenium_session_id:
             # SeleniumLibrary session
-            if self.selenium_lib:
+            if browser_state.selenium_lib_instance:
                 browser_state.active_library = "selenium"
-                return self.selenium_lib, "selenium"
+                return browser_state.selenium_lib_instance, "selenium"
         
-        # Default preference: Browser Library > SeleniumLibrary > None
-        if self.browser_lib:
+        # Default preference: Session-scoped instances > Global instances
+        if browser_state.browser_lib_instance:
+            return browser_state.browser_lib_instance, "browser"
+        elif browser_state.selenium_lib_instance:
+            return browser_state.selenium_lib_instance, "selenium"
+        elif self.browser_lib:
+            logger.warning(f"Using global Browser Library for session {session_id} - isolation compromised")
             return self.browser_lib, "browser"
         elif self.selenium_lib:
+            logger.warning(f"Using global SeleniumLibrary for session {session_id} - isolation compromised")
             return self.selenium_lib, "selenium"
         else:
             return None, "none"
@@ -527,6 +540,14 @@ class ExecutionEngine:
                 }
             
             logger.info(f"Executing hybrid keyword: {keyword_info.library}.{keyword_info.name}")
+            
+            # Validate session browser access for browser-related keywords
+            if keyword_info.library in ["Browser", "SeleniumLibrary"]:
+                if not self._validate_session_browser_access(session, keyword_name):
+                    return {
+                        "success": False,
+                        "error": f"Session browser isolation validation failed for keyword '{keyword_name}'"
+                    }
             
             # Convert locators if needed for consistency (before override handling)
             converted_args = args.copy()
@@ -1008,8 +1029,13 @@ class ExecutionEngine:
             if "headless" not in kwargs:
                 kwargs["headless"] = False
             
+            # Use session-scoped Browser Library instance
+            browser_lib = session.browser_state.browser_lib_instance or self.browser_lib
+            if not browser_lib:
+                return {"success": False, "error": "Browser Library not available for this session"}
+            
             # Call actual Browser Library method
-            browser_id = self.browser_lib.new_browser(browser=browser_type, **kwargs)
+            browser_id = browser_lib.new_browser(browser=browser_type, **kwargs)
             
             # Update session state with real browser ID
             session.browser_state.browser_type = browser_type_str  # Store string for compatibility
@@ -1102,8 +1128,13 @@ class ExecutionEngine:
             
             kwargs["viewport"] = viewport
             
+            # Use session-scoped Browser Library instance
+            browser_lib = session.browser_state.browser_lib_instance or self.browser_lib
+            if not browser_lib:
+                return {"success": False, "error": "Browser Library not available for this session"}
+            
             # Call actual Browser Library method
-            context_id = self.browser_lib.new_context(**kwargs)
+            context_id = browser_lib.new_context(**kwargs)
             
             # Update session state
             session.browser_state.context_id = str(context_id)
@@ -1211,13 +1242,18 @@ class ExecutionEngine:
                 if not context_result["success"]:
                     return context_result
             
+            # Use session-scoped Browser Library instance
+            browser_lib = session.browser_state.browser_lib_instance or self.browser_lib
+            if not browser_lib:
+                return {"success": False, "error": "Browser Library not available for this session"}
+            
             # Call actual Browser Library method
-            page_id = self.browser_lib.new_page(url)
+            page_id = browser_lib.new_page(url)
             
             # Get actual page information
             try:
-                page_title = self.browser_lib.get_title()
-                page_url = self.browser_lib.get_url()
+                page_title = browser_lib.get_title()
+                page_url = browser_lib.get_url()
             except Exception as e:
                 logger.warning(f"Could not get page info: {e}")
                 page_title = self._extract_title_from_url(url)
@@ -1623,11 +1659,20 @@ class ExecutionEngine:
             
             browser_id = session.browser_state.browser_id
             
+            # Use session-scoped Browser Library instance
+            browser_lib = session.browser_state.browser_lib_instance or self.browser_lib
+            if not browser_lib:
+                return {"success": False, "error": "Browser Library not available for this session"}
+            
             # Call actual Browser Library method
             if args and "ALL" in args[0].upper():
-                self.browser_lib.close_browser("ALL")
+                browser_lib.close_browser("ALL")
+                # Clear all browser state for this session and reinitialize
+                session.browser_state = BrowserState()
+                session.browser_state.session_id = session.session_id
+                self._initialize_session_libraries(session)
             else:
-                self.browser_lib.close_browser()
+                browser_lib.close_browser()
             
             # Reset browser state
             session.browser_state = BrowserState()
@@ -2096,11 +2141,150 @@ class ExecutionEngine:
         return state
 
     def _get_or_create_session(self, session_id: str) -> ExecutionSession:
-        """Get existing session or create a new one."""
+        """Get existing session or create a new one with isolated browser instances."""
         if session_id not in self.sessions:
-            self.sessions[session_id] = ExecutionSession(session_id=session_id)
+            session = ExecutionSession(session_id=session_id)
+            session.browser_state.session_id = session_id
+            
+            # Initialize session-scoped library instances for proper isolation
+            self._initialize_session_libraries(session)
+            
+            self.sessions[session_id] = session
+            logger.info(f"Created new isolated session: {session_id}")
         
         return self.sessions[session_id]
+
+    def _initialize_session_libraries(self, session: ExecutionSession) -> None:
+        """Initialize session-scoped library instances for proper isolation."""
+        try:
+            # Initialize session-scoped Browser Library instance
+            if BROWSER_LIBRARY_AVAILABLE:
+                try:
+                    session.browser_state.browser_lib_instance = BrowserLibrary()
+                    logger.info(f"Initialized session-scoped Browser Library for session {session.session_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to initialize session-scoped Browser Library: {e}")
+                    session.browser_state.browser_lib_instance = None
+            
+            # Initialize session-scoped SeleniumLibrary instance
+            if SELENIUM_LIBRARY_AVAILABLE:
+                try:
+                    session.browser_state.selenium_lib_instance = SeleniumLibrary()
+                    logger.info(f"Initialized session-scoped SeleniumLibrary for session {session.session_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to initialize session-scoped SeleniumLibrary: {e}")
+                    session.browser_state.selenium_lib_instance = None
+            
+        except Exception as e:
+            logger.error(f"Error initializing session libraries for {session.session_id}: {e}")
+
+    async def _cleanup_session_browsers(self, session: ExecutionSession) -> None:
+        """Comprehensive cleanup of all browser resources for a session."""
+        try:
+            session_id = session.session_id
+            logger.info(f"Cleaning up browser resources for session {session_id}")
+            
+            # Clean up Browser Library resources
+            if session.browser_state.browser_id and session.browser_state.browser_lib_instance:
+                try:
+                    logger.info(f"Closing Browser Library browser {session.browser_state.browser_id}")
+                    session.browser_state.browser_lib_instance.close_browser("ALL")
+                except Exception as e:
+                    logger.warning(f"Error closing Browser Library browser: {e}")
+            
+            # Clean up SeleniumLibrary resources
+            if session.browser_state.driver_instance and session.browser_state.selenium_lib_instance:
+                try:
+                    logger.info(f"Closing SeleniumLibrary driver {session.browser_state.selenium_session_id}")
+                    session.browser_state.selenium_lib_instance.close_all_browsers()
+                except Exception as e:
+                    logger.warning(f"Error closing SeleniumLibrary driver: {e}")
+            
+            # Clean up any remaining WebDriver instances
+            if session.browser_state.driver_instance:
+                try:
+                    session.browser_state.driver_instance.quit()
+                    logger.info(f"Manually closed WebDriver for session {session_id}")
+                except Exception as e:
+                    logger.warning(f"Error manually closing WebDriver: {e}")
+            
+            # Reset browser state completely
+            old_session_id = session.browser_state.session_id
+            session.browser_state = BrowserState()
+            session.browser_state.session_id = old_session_id
+            session.browser_state.is_isolated = True
+            
+            # Reinitialize session-scoped libraries for fresh start
+            self._initialize_session_libraries(session)
+            
+            logger.info(f"Browser cleanup complete for session {session_id}")
+            
+        except Exception as e:
+            logger.error(f"Error during browser cleanup for session {session.session_id}: {e}")
+
+    def _validate_session_browser_access(self, session: ExecutionSession, keyword_name: str) -> bool:
+        """Validate that browser access is properly isolated to this session."""
+        try:
+            # Check session isolation
+            if not session.browser_state.is_isolated:
+                logger.warning(f"Session {session.session_id} browser isolation compromised for keyword {keyword_name}")
+                return False
+            
+            # Check that session ID matches browser state
+            if session.browser_state.session_id != session.session_id:
+                logger.error(f"Browser state session ID mismatch for {keyword_name}: expected {session.session_id}, got {session.browser_state.session_id}")
+                return False
+            
+            # Check for cross-session contamination
+            if session.browser_state.browser_id:
+                # Verify no other session is using the same browser ID
+                for other_session_id, other_session in self.sessions.items():
+                    if (other_session_id != session.session_id and 
+                        other_session.browser_state.browser_id == session.browser_state.browser_id):
+                        logger.error(f"Browser ID collision detected: {session.browser_state.browser_id} used by sessions {session.session_id} and {other_session_id}")
+                        return False
+            
+            if session.browser_state.selenium_session_id:
+                # Verify no other session is using the same Selenium session ID
+                for other_session_id, other_session in self.sessions.items():
+                    if (other_session_id != session.session_id and 
+                        other_session.browser_state.selenium_session_id == session.browser_state.selenium_session_id):
+                        logger.error(f"Selenium session ID collision detected: {session.browser_state.selenium_session_id} used by sessions {session.session_id} and {other_session_id}")
+                        return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error validating session browser access: {e}")
+            return False
+
+    def get_session_browser_status(self, session_id: str) -> Dict[str, Any]:
+        """Get detailed browser status for a specific session."""
+        if session_id not in self.sessions:
+            return {"error": f"Session {session_id} not found"}
+        
+        session = self.sessions[session_id]
+        browser_state = session.browser_state
+        
+        return {
+            "session_id": session_id,
+            "isolation_status": browser_state.is_isolated,
+            "active_library": browser_state.active_library,
+            "browser_library": {
+                "instance_available": browser_state.browser_lib_instance is not None,
+                "browser_id": browser_state.browser_id,
+                "context_id": browser_state.context_id,
+                "page_id": browser_state.page_id,
+            },
+            "selenium_library": {
+                "instance_available": browser_state.selenium_lib_instance is not None,
+                "driver_instance": browser_state.driver_instance is not None,
+                "session_id": browser_state.selenium_session_id,
+            },
+            "current_url": browser_state.current_url,
+            "page_title": browser_state.page_title,
+            "last_activity": session.last_activity.isoformat() if session.last_activity else None
+        }
 
     def _calculate_execution_time(self, step: ExecutionStep) -> float:
         """Calculate execution time for a step."""
@@ -2157,12 +2341,11 @@ class ExecutionEngine:
                 session = self.sessions[session_id]
                 
                 # Clean up browser resources if they exist
-                if session.browser_state.browser_id and self.browser_lib:
-                    try:
-                        logger.info(f"Cleaning up browser resources for session {session_id}")
-                        await self._real_close_browser(session, [])
-                    except Exception as e:
-                        logger.warning(f"Error cleaning up browser for session {session_id}: {e}")
+                await self._cleanup_session_browsers(session)
+                
+                # Clean up session-scoped library instances
+                session.browser_state.browser_lib_instance = None
+                session.browser_state.selenium_lib_instance = None
                 
                 del self.sessions[session_id]
                 return {
