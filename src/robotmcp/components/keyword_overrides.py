@@ -301,8 +301,8 @@ class BrowserLibraryHandler:
                 parsed_args = discovery._parse_arguments_with_rf_spec(keyword_info, args)
                 converted_args, converted_kwargs = discovery._convert_browser_arguments(keyword_info, parsed_args, args)
                 
-                # Get the session-scoped library instance and execute with converted args
-                browser_lib = session.browser_state.browser_lib_instance
+                # Use global browser library instance
+                browser_lib = self.execution_engine.browser_lib
                 if browser_lib and keyword_info.library == "Browser":
                     method = getattr(browser_lib, keyword_info.method_name)
                     try:
@@ -440,10 +440,10 @@ class SeleniumLibraryHandler:
             
             state_updates = {}
             if result.get("success"):
-                # Track SeleniumLibrary session using session-scoped instance
+                # Track SeleniumLibrary session using global instance
                 try:
-                    # Get the WebDriver instance from session-scoped SeleniumLibrary
-                    selenium_lib = session.browser_state.selenium_lib_instance
+                    # Get the WebDriver instance from global SeleniumLibrary
+                    selenium_lib = self.execution_engine.selenium_lib
                     if selenium_lib and hasattr(selenium_lib, 'driver'):
                         driver = selenium_lib.driver
                         session.browser_state.driver_instance = driver
