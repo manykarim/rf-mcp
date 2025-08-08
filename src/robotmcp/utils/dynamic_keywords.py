@@ -21,6 +21,12 @@ class KeywordInfo:
     tags: List[str] = field(default_factory=list)
     is_builtin: bool = False
 
+@dataclass
+class ParsedArguments:
+    """Parsed positional and named arguments."""
+    positional: List[str] = field(default_factory=list)
+    named: Dict[str, str] = field(default_factory=dict)
+
 @dataclass 
 class LibraryInfo:
     """Information about a Robot Framework library."""
@@ -431,7 +437,10 @@ class DynamicKeywordDiscovery:
             }
         
         try:
-            # Validate arguments
+            # Parse arguments using Robot Framework's native ArgumentSpec if available
+            parsed_args = self._parse_arguments_with_rf_spec(keyword_info, args)
+            
+            # Validate arguments (use original args for backward compatibility)
             validation_result = self._validate_arguments(keyword_info, args)
             if not validation_result["valid"]:
                 return {
@@ -451,7 +460,7 @@ class DynamicKeywordDiscovery:
             
             # Try Robot Framework's run_keyword first for proper argument conversion
             try:
-                result = self._execute_via_robot_framework(keyword_info, args)
+                result = self._execute_via_robot_framework(keyword_info, parsed_args, args)
                 return {
                     "success": True,
                     "output": str(result) if result is not None else f"Executed {keyword_info.name}",
@@ -465,7 +474,7 @@ class DynamicKeywordDiscovery:
             except Exception as rf_error:
                 logger.debug(f"Robot Framework execution failed for {keyword_info.name}: {rf_error}")
                 # Fall back to direct method call
-                return self._execute_direct_method_call(keyword_info, args, session_variables)
+                return self._execute_direct_method_call(keyword_info, parsed_args, args, session_variables)
             
         except Exception as e:
             return {
@@ -479,21 +488,21 @@ class DynamicKeywordDiscovery:
                 }
             }
     
-    def _execute_via_robot_framework(self, keyword_info: KeywordInfo, args: List[str]) -> Any:
+    def _execute_via_robot_framework(self, keyword_info: KeywordInfo, parsed_args: ParsedArguments, original_args: List[str]) -> Any:
         """Execute keyword with Robot Framework-style argument conversion."""
         try:
             # For Browser Library keywords, convert arguments appropriately
             if keyword_info.library == "Browser":
-                return self._execute_browser_keyword_with_conversion(keyword_info, args)
+                return self._execute_browser_keyword_with_conversion(keyword_info, parsed_args, original_args)
             else:
                 # For other libraries, try the RF context approach
-                return self._execute_with_rf_context(keyword_info, args)
+                return self._execute_with_rf_context(keyword_info, parsed_args, original_args)
             
         except Exception as e:
             logger.debug(f"RF execution failed: {e}")
             raise e
     
-    def _execute_browser_keyword_with_conversion(self, keyword_info: KeywordInfo, args: List[str]) -> Any:
+    def _execute_browser_keyword_with_conversion(self, keyword_info: KeywordInfo, parsed_args: ParsedArguments, original_args: List[str]) -> Any:
         """Execute Browser Library keyword with proper argument conversion."""
         try:
             # Get the library instance
@@ -501,19 +510,27 @@ class DynamicKeywordDiscovery:
             method = getattr(library.instance, keyword_info.method_name)
             
             # Convert arguments based on keyword-specific requirements
-            converted_args = self._convert_browser_arguments(keyword_info, args)
+            converted_args, converted_kwargs = self._convert_browser_arguments(keyword_info, parsed_args, original_args)
             
-            # Execute the method with converted arguments
-            result = method(*converted_args)
+            # Execute the method with converted arguments and keyword arguments
+            if converted_kwargs:
+                result = method(*converted_args, **converted_kwargs)
+            else:
+                result = method(*converted_args)
             return result
             
         except Exception as e:
             logger.debug(f"Browser keyword execution failed: {e}")
             raise e
     
-    def _convert_browser_arguments(self, keyword_info: KeywordInfo, args: List[str]) -> List[Any]:
-        """Convert string arguments to appropriate types for Browser Library keywords."""
+    def _convert_browser_arguments(self, keyword_info: KeywordInfo, parsed_args: ParsedArguments, original_args: List[str]) -> Tuple[List[Any], Dict[str, Any]]:
+        """Convert parsed arguments to appropriate types for Browser Library keywords.
+        
+        Returns:
+            Tuple of (positional_args, keyword_args)
+        """
         converted_args = []
+        converted_kwargs = {}
         
         try:
             # Import Browser data types for conversion
@@ -522,88 +539,110 @@ class DynamicKeywordDiscovery:
                 MouseButton, KeyAction, ViewportDimensions
             )
             
+            # Process positional arguments
+            converted_args = parsed_args.positional.copy()
+            
             # Handle specific keyword argument conversions
             keyword_name = keyword_info.name.lower()
             
-            if "select options by" in keyword_name:
-                # select_options_by(selector: str, attribute: SelectAttribute, *values)
-                if len(args) >= 2:
-                    # First arg: selector (keep as string)
-                    converted_args.append(args[0])
-                    
-                    # Second arg: attribute (convert to SelectAttribute enum)
-                    attr_str = args[1].lower()
-                    if attr_str in ['value', 'val']:
-                        converted_args.append(SelectAttribute.value)
-                    elif attr_str in ['label', 'text']:
-                        converted_args.append(SelectAttribute.label)
-                    elif attr_str in ['index', 'idx']:
-                        converted_args.append(SelectAttribute.index)
-                    else:
-                        # Try to get the enum directly
-                        converted_args.append(getattr(SelectAttribute, attr_str, SelectAttribute.value))
-                    
-                    # Remaining args: values (keep as strings)
-                    converted_args.extend(args[2:])
-                else:
-                    # Not enough arguments, pass as-is and let method handle the error
-                    converted_args = args.copy()
-                    
-            elif "new browser" in keyword_name:
+            if "new browser" in keyword_name:
                 # new_browser(browser: SupportedBrowsers, **kwargs)
-                if args:
-                    browser_str = args[0].lower()
-                    if browser_str in ['chromium', 'chrome']:
-                        converted_args.append(SupportedBrowsers.chromium)
-                    elif browser_str == 'firefox':
-                        converted_args.append(SupportedBrowsers.firefox)
-                    elif browser_str == 'webkit':
-                        converted_args.append(SupportedBrowsers.webkit)
+                
+                # Handle browser type (first positional arg or 'browser' named arg)
+                browser_type = None
+                if converted_args:
+                    browser_type = converted_args[0].lower()
+                elif 'browser' in parsed_args.named:
+                    browser_type = parsed_args.named['browser'].lower()
+                    
+                if browser_type:
+                    # Convert browser string to enum
+                    if browser_type in ['chromium', 'chrome']:
+                        browser_enum = SupportedBrowsers.chromium
+                    elif browser_type == 'firefox':
+                        browser_enum = SupportedBrowsers.firefox
+                    elif browser_type == 'webkit':
+                        browser_enum = SupportedBrowsers.webkit
                     else:
-                        converted_args.append(getattr(SupportedBrowsers, browser_str, SupportedBrowsers.chromium))
+                        browser_enum = getattr(SupportedBrowsers, browser_type, SupportedBrowsers.chromium)
                     
-                    # Add remaining args as-is (these are usually keyword arguments)
-                    converted_args.extend(args[1:])
+                    # Replace or set the first positional argument
+                    if converted_args:
+                        converted_args[0] = browser_enum
+                    else:
+                        converted_args.append(browser_enum)
                 else:
-                    # No browser specified, use default
-                    converted_args.append(SupportedBrowsers.chromium)
-                    
+                    # Default browser if none specified
+                    converted_args.insert(0, SupportedBrowsers.chromium)
+                
+                # Convert named arguments to appropriate types
+                for key, value in parsed_args.named.items():
+                    if key == 'browser':
+                        continue  # Already handled above
+                    elif key == 'headless':
+                        converted_kwargs[key] = value.lower() in ['true', '1', 'yes']
+                    elif key in ['timeout', 'slowmo']:
+                        try:
+                            converted_kwargs[key] = float(value) if '.' in value else int(value)
+                        except ValueError:
+                            converted_kwargs[key] = value  # Keep as string if conversion fails
+                    else:
+                        # Keep other named arguments as strings
+                        converted_kwargs[key] = value
+                        
+            elif "select options by" in keyword_name:
+                # select_options_by(selector: str, attribute: SelectAttribute, *values)
+                if len(converted_args) >= 2:
+                    # Second arg: attribute (convert to SelectAttribute enum)
+                    attr_str = converted_args[1].lower()
+                    if attr_str in ['value', 'val']:
+                        converted_args[1] = SelectAttribute.value
+                    elif attr_str in ['label', 'text']:
+                        converted_args[1] = SelectAttribute.label
+                    elif attr_str in ['index', 'idx']:
+                        converted_args[1] = SelectAttribute.index
+                    else:
+                        converted_args[1] = getattr(SelectAttribute, attr_str, SelectAttribute.value)
+                        
             elif "wait for elements state" in keyword_name:
                 # wait_for_elements_state(selector: str, state: ElementState, timeout: str = "10s")
-                if len(args) >= 2:
-                    # First arg: selector
-                    converted_args.append(args[0])
-                    
+                if len(converted_args) >= 2:
                     # Second arg: state (convert to ElementState)
-                    state_str = args[1].lower()
+                    state_str = converted_args[1].lower()
                     try:
-                        converted_args.append(getattr(ElementState, state_str))
+                        converted_args[1] = getattr(ElementState, state_str)
                     except AttributeError:
-                        # Fall back to string if enum value not found
-                        converted_args.append(args[1])
-                    
-                    # Remaining args: keep as-is
-                    converted_args.extend(args[2:])
-                else:
-                    converted_args = args.copy()
-                    
-            else:
-                # For other Browser keywords, keep args as strings
-                # Robot Framework will handle basic conversions
-                converted_args = args.copy()
+                        pass  # Keep as string if enum value not found
+                        
+                # Handle timeout as named argument
+                if 'timeout' in parsed_args.named:
+                    converted_kwargs['timeout'] = parsed_args.named['timeout']
+            
+            # Handle common named arguments for all Browser keywords
+            for key, value in parsed_args.named.items():
+                if key not in converted_kwargs:  # Don't override specific conversions above
+                    if key in ['timeout', 'width', 'height']:
+                        try:
+                            converted_kwargs[key] = float(value) if '.' in value else int(value)
+                        except ValueError:
+                            converted_kwargs[key] = value
+                    elif key in ['headless', 'devtools', 'acceptdownloads', 'bypasscsp']:
+                        converted_kwargs[key] = value.lower() in ['true', '1', 'yes']
+                    else:
+                        converted_kwargs[key] = value
                 
-            return converted_args
+            return (converted_args, converted_kwargs)
             
         except ImportError:
-            # Browser library not available, return original args
+            # Browser library not available, return original args as positional
             logger.debug("Browser library data types not available for conversion")
-            return args.copy()
+            return (original_args.copy(), {})
         except Exception as e:
-            # Any other conversion error, return original args
+            # Any other conversion error, return original args as positional
             logger.debug(f"Argument conversion failed: {e}")
-            return args.copy()
+            return (original_args.copy(), {})
     
-    def _execute_with_rf_context(self, keyword_info: KeywordInfo, args: List[str]) -> Any:
+    def _execute_with_rf_context(self, keyword_info: KeywordInfo, parsed_args: ParsedArguments, original_args: List[str]) -> Any:
         """Execute keyword in a minimal Robot Framework context."""
         try:
             from robot.api import TestSuite
@@ -621,7 +660,13 @@ class DynamicKeywordDiscovery:
             
             # Create a test case with the keyword call
             test = TestCase(name="TempTest")
-            keyword_call = Keyword(name=keyword_info.name, args=args)
+            
+            # Reconstruct arguments for Robot Framework - combine positional and named
+            rf_args = parsed_args.positional.copy()
+            for key, value in parsed_args.named.items():
+                rf_args.append(f"{key}={value}")
+            
+            keyword_call = Keyword(name=keyword_info.name, args=rf_args)
             test.body.append(keyword_call)
             suite.tests.append(test)
             
@@ -659,44 +704,43 @@ class DynamicKeywordDiscovery:
             # This is not critical - RF will handle missing libraries appropriately
             logger.debug(f"Library import for {library_name} in RF context: {e}")
     
-    def _execute_direct_method_call(self, keyword_info: KeywordInfo, args: List[str], session_variables: Dict[str, Any]) -> Dict[str, Any]:
+    def _execute_direct_method_call(self, keyword_info: KeywordInfo, parsed_args: ParsedArguments, original_args: List[str], session_variables: Dict[str, Any]) -> Dict[str, Any]:
         """Fall back to direct method call execution (original implementation)."""
         try:
             # Get library instance
             library = self.libraries[keyword_info.library]
             method = getattr(library.instance, keyword_info.method_name)
             
-            # Handle different types of method calls
+            # Handle different types of method calls with parsed arguments
             try:
                 if keyword_info.is_builtin and hasattr(library.instance, '_context'):
-                    # BuiltIn library methods might need context
-                    result = method(*args)
+                    # BuiltIn library methods might need context - use original args for BuiltIn
+                    result = method(*original_args)
                 else:
-                    # Regular library methods - handle variable arguments
-                    if keyword_info.name == "Create List":
-                        # Collections.Create List takes variable arguments
-                        result = method(*args)
+                    # Regular library methods - handle Browser Library specially
+                    if keyword_info.library == "Browser":
+                        # Use the converted Browser arguments
+                        converted_args, converted_kwargs = self._convert_browser_arguments(keyword_info, parsed_args, original_args)
+                        if converted_kwargs:
+                            result = method(*converted_args, **converted_kwargs)
+                        else:
+                            result = method(*converted_args)
+                    elif keyword_info.name == "Create List":
+                        # Collections.Create List takes variable arguments (use positional only)
+                        result = method(*parsed_args.positional)
                     elif keyword_info.name == "Set Variable":
                         # Set Variable only takes one argument (the value)
-                        result = method(args[0] if args else None)
-                    elif keyword_info.library == "Browser" and keyword_info.name == "New Browser":
-                        # Handle Browser Library's enum requirement
-                        try:
-                            from Browser.utils.data_types import SupportedBrowsers
-                            browser_type = args[0] if args else "chromium"
-                            browser_enum = getattr(SupportedBrowsers, browser_type.lower(), SupportedBrowsers.chromium)
-                            result = method(browser_enum)
-                        except Exception:
-                            # Fall back to regular call
-                            result = method(*args)
+                        value = parsed_args.positional[0] if parsed_args.positional else None
+                        result = method(value)
                     else:
-                        result = method(*args)
+                        # For other libraries, use positional args only (most don't support **kwargs)
+                        result = method(*parsed_args.positional)
             except TypeError as e:
                 # Try calling with different argument patterns
                 if "takes" in str(e) and "positional argument" in str(e):
-                    # Try calling with args as a single list argument
+                    # Try calling with original args as a single list argument
                     try:
-                        result = method(args)
+                        result = method(original_args)
                     except:
                         # Fall back to original error
                         raise e
@@ -771,6 +815,117 @@ class DynamicKeywordDiscovery:
         union = len(set_a | set_b)
         
         return intersection / union if union > 0 else 0.0
+    
+    def _parse_arguments(self, args: List[str]) -> ParsedArguments:
+        """Parse Robot Framework-style arguments into positional and named arguments.
+        
+        Args:
+            args: List of string arguments, potentially containing 'key=value' named arguments
+            
+        Returns:
+            ParsedArguments with separated positional and named arguments
+        """
+        parsed = ParsedArguments()
+        
+        for arg in args:
+            # Check if this is a named argument (contains = and is not clearly a value)
+            if '=' in arg and self._is_named_argument(arg):
+                # Split on first = to separate key and value
+                key, value = arg.split('=', 1)
+                parsed.named[key.strip()] = value.strip()
+            else:
+                # This is a positional argument
+                parsed.positional.append(arg)
+        
+        return parsed
+    
+    def _is_named_argument(self, arg: str) -> bool:
+        """Determine if an argument string is a named argument vs a value containing =.
+        
+        Named arguments typically follow patterns like:
+        - headless=true
+        - timeout=5000
+        - browser=chromium
+        
+        NOT named arguments:
+        - xpath=//div[@class='test']  (XPath expression)
+        - url=https://example.com?param=value  (URL with parameters)
+        - css=[data-testid="button"]  (CSS selector)
+        """
+        if '=' not in arg:
+            return False
+            
+        key, value = arg.split('=', 1)
+        key = key.strip().lower()
+        value = value.strip()
+        
+        # Common Robot Framework named argument patterns
+        common_named_args = {
+            'headless', 'timeout', 'browser', 'width', 'height', 'viewport', 
+            'slowmo', 'devtools', 'args', 'env', 'proxy', 'downloads',
+            'permissions', 'geolocation', 'locale', 'timezone', 'colorscheme',
+            'reducedmotion', 'forcedcolors', 'acceptdownloads', 'bypasscsp',
+            'strictselectors', 'serviceworkers', 'recordhar', 'recordvideo',
+            'state', 'method', 'data', 'json', 'headers', 'cookies'
+        }
+        
+        # Check if the key matches common named argument patterns
+        if key in common_named_args:
+            return True
+            
+        # Check for selector prefixes that indicate values, not named args
+        selector_prefixes = ['xpath', 'css', 'id', 'name', 'class', 'tag', 'text', 'url', 'href']
+        if any(key.startswith(prefix) for prefix in selector_prefixes):
+            return False
+            
+        # Check if value looks like a typical selector or URL
+        if (value.startswith(('http://', 'https://', '//', '//')) or 
+            value.startswith(('[', '#', '.')) or
+            '@' in value):  # Likely XPath, CSS, or URL
+            return False
+            
+        # Default to named argument if key is alphanumeric
+        return key.replace('_', '').replace('-', '').isalnum()
+    
+    def _parse_arguments_with_rf_spec(self, keyword_info: KeywordInfo, args: List[str]) -> ParsedArguments:
+        """Parse arguments using Robot Framework's native ArgumentSpec if available.
+        
+        This is a more accurate approach that uses RF's actual argument parsing logic
+        to determine which arguments are named vs positional based on the keyword's
+        parameter specification.
+        """
+        try:
+            from robot.running.arguments import ArgumentSpec
+            from robot.running.arguments.argumentresolver import ArgumentResolver
+            
+            # Try to create ArgumentSpec from keyword info
+            if hasattr(keyword_info, 'args') and keyword_info.args:
+                # Create a basic ArgumentSpec - this may need refinement
+                # based on how keyword_info.args is structured
+                spec = ArgumentSpec(
+                    positional_or_named=keyword_info.args,
+                    defaults=keyword_info.defaults if hasattr(keyword_info, 'defaults') else {}
+                )
+                
+                # Use Robot Framework's ArgumentResolver to split arguments
+                resolver = ArgumentResolver(spec, resolve_named=True)
+                positional, named = resolver.resolve(args, named_args=None)
+                
+                # Convert to our ParsedArguments format
+                parsed = ParsedArguments()
+                parsed.positional = positional
+                parsed.named = {k: v for k, v in named.items()} if named else {}
+                
+                logger.debug(f"RF ArgumentSpec parsing - Positional: {positional}, Named: {named}")
+                return parsed
+                
+        except ImportError:
+            logger.debug("Robot Framework ArgumentSpec not available, using fallback parsing")
+        except Exception as e:
+            logger.debug(f"RF ArgumentSpec parsing failed: {e}, using fallback parsing")
+            
+        # Fall back to our custom parsing logic
+        return self._parse_arguments(args)
     
     def get_library_status(self) -> Dict[str, Any]:
         """Get status of all libraries."""

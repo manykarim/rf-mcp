@@ -130,15 +130,25 @@ class BrowserLibraryHandler:
     async def _handle_new_browser(self, session, args, keyword_info) -> OverrideResult:
         """Handle New Browser with custom defaults."""
         try:
-            # Apply custom defaults for headless
-            processed_args = args.copy()
+            # Parse arguments using Robot Framework's native approach if available
+            discovery = self.execution_engine.keyword_discovery
+            # Get keyword info for better parsing
+            keyword_info = discovery.find_keyword('New Browser')
+            if keyword_info:
+                parsed_args = discovery._parse_arguments_with_rf_spec(keyword_info, args)
+            else:
+                parsed_args = discovery._parse_arguments(args)
             
-            # Check if headless is specified
-            has_headless = any('headless=' in str(arg) for arg in args)
-            if not has_headless:
+            # Apply custom defaults for headless
+            if 'headless' not in parsed_args.named:
                 # Add default headless=False for better visibility
-                processed_args.append('headless=False')
+                parsed_args.named['headless'] = 'False'
                 logger.info("Applied default headless=False for New Browser")
+            
+            # Reconstruct args from parsed arguments
+            processed_args = parsed_args.positional.copy()
+            for key, value in parsed_args.named.items():
+                processed_args.append(f"{key}={value}")
             
             # Execute via dynamic discovery with processed args
             result = await self.execution_engine.keyword_discovery.execute_keyword(
@@ -150,9 +160,21 @@ class BrowserLibraryHandler:
             # Update browser state
             state_updates = {}
             if result.get("success"):
+                # Determine browser type from positional args or named args
+                browser_type = 'chromium'  # default
+                if parsed_args.positional:
+                    browser_type = parsed_args.positional[0]
+                elif 'browser' in parsed_args.named:
+                    browser_type = parsed_args.named['browser']
+                    
+                # Determine headless setting
+                headless = False  # default
+                if 'headless' in parsed_args.named:
+                    headless = parsed_args.named['headless'].lower() in ['true', '1', 'yes']
+                    
                 state_updates['current_browser'] = {
-                    'type': processed_args[0] if processed_args else 'chromium',
-                    'headless': 'headless=True' in processed_args,
+                    'type': browser_type,
+                    'headless': headless,
                     'created_at': datetime.now().isoformat()
                 }
                 
@@ -274,16 +296,20 @@ class BrowserLibraryHandler:
             if not keyword_info:
                 keyword_info = discovery.find_keyword(keyword)
             
-            # Convert arguments using the same logic as dynamic keywords
+            # Parse arguments using Robot Framework's native approach if available
             if keyword_info and keyword_info.library == "Browser":
-                converted_args = discovery._convert_browser_arguments(keyword_info, args)
+                parsed_args = discovery._parse_arguments_with_rf_spec(keyword_info, args)
+                converted_args, converted_kwargs = discovery._convert_browser_arguments(keyword_info, parsed_args, args)
                 
                 # Get the session-scoped library instance and execute with converted args
                 browser_lib = session.browser_state.browser_lib_instance
                 if browser_lib and keyword_info.library == "Browser":
                     method = getattr(browser_lib, keyword_info.method_name)
                     try:
-                        result = method(*converted_args)
+                        if converted_kwargs:
+                            result = method(*converted_args, **converted_kwargs)
+                        else:
+                            result = method(*converted_args)
                         
                         # Update last activity timestamp
                         state_updates = {
