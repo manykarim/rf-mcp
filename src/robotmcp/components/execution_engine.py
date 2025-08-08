@@ -49,6 +49,18 @@ except ImportError:
     dt = None
     BROWSER_LIBRARY_AVAILABLE = False
 
+# SeleniumLibrary imports  
+try:
+    from SeleniumLibrary import SeleniumLibrary
+    from selenium import webdriver
+    from selenium.webdriver.common.by import By
+    SELENIUM_LIBRARY_AVAILABLE = True
+except ImportError:
+    SeleniumLibrary = None
+    webdriver = None
+    By = None
+    SELENIUM_LIBRARY_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -66,17 +78,27 @@ class ExecutionStep:
 
 @dataclass
 class BrowserState:
-    """Represents Browser Library state."""
+    """Represents Browser Library and SeleniumLibrary state."""
+    # Common browser state
     browser_type: Optional[str] = None
-    browser_id: Optional[str] = None
-    context_id: Optional[str] = None
-    page_id: Optional[str] = None
     current_url: Optional[str] = None
     page_title: Optional[str] = None
     viewport: Dict[str, int] = field(default_factory=lambda: {"width": 1280, "height": 720})
     page_source: Optional[str] = None
     cookies: List[Dict[str, Any]] = field(default_factory=list)
     local_storage: Dict[str, str] = field(default_factory=dict)
+    
+    # Browser Library specific state
+    browser_id: Optional[str] = None
+    context_id: Optional[str] = None
+    page_id: Optional[str] = None
+    
+    # SeleniumLibrary specific state
+    driver_instance: Optional[Any] = None
+    selenium_session_id: Optional[str] = None
+    
+    # Active library indicator ("browser" or "selenium" or None)
+    active_library: Optional[str] = None
     session_storage: Dict[str, str] = field(default_factory=dict)
     page_elements: List[Dict[str, Any]] = field(default_factory=list)
 
@@ -100,6 +122,7 @@ class ExecutionEngine:
         self.sessions: Dict[str, ExecutionSession] = {}
         self.builtin = None
         self.browser_lib = None
+        self.selenium_lib = None
         
         # Initialize library checker
         self.library_checker = LibraryAvailabilityChecker()
@@ -117,6 +140,9 @@ class ExecutionEngine:
         
         # Initialize Browser Library (kept for backward compatibility)
         self._initialize_browser_library()
+        
+        # Initialize SeleniumLibrary
+        self._initialize_selenium_library()
 
     def __del__(self):
         """Cleanup on destruction."""
@@ -167,6 +193,192 @@ class ExecutionEngine:
         except Exception as e:
             logger.error(f"Error initializing Browser Library: {e}")
             self.browser_lib = None
+
+    def _initialize_selenium_library(self) -> None:
+        """Initialize SeleniumLibrary instance."""
+        try:
+            if not SELENIUM_LIBRARY_AVAILABLE:
+                logger.info("SeleniumLibrary not available - Browser Library will be preferred")
+                self.selenium_lib = None
+                return
+            
+            # Initialize SeleniumLibrary instance
+            self.selenium_lib = SeleniumLibrary()
+            logger.info("SeleniumLibrary initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Error initializing SeleniumLibrary: {e}")
+            self.selenium_lib = None
+
+    def _get_active_browser_library(self, session_id: str = "default") -> tuple[Optional[Any], str]:
+        """
+        Determine which browser library is active for a session.
+        
+        Returns:
+            tuple: (library_instance, library_type) where library_type is "browser", "selenium", or "none"
+        """
+        if session_id not in self.sessions:
+            # No session exists, prefer Browser Library if available
+            if self.browser_lib:
+                return self.browser_lib, "browser"
+            elif self.selenium_lib:
+                return self.selenium_lib, "selenium"
+            else:
+                return None, "none"
+        
+        session = self.sessions[session_id]
+        browser_state = session.browser_state
+        
+        # Check if session has explicitly set active library
+        if browser_state.active_library == "browser" and self.browser_lib:
+            return self.browser_lib, "browser"
+        elif browser_state.active_library == "selenium" and self.selenium_lib:
+            return self.selenium_lib, "selenium"
+        
+        # Auto-detect based on session state
+        if browser_state.browser_id or browser_state.context_id or browser_state.page_id:
+            # Browser Library session
+            if self.browser_lib:
+                browser_state.active_library = "browser"
+                return self.browser_lib, "browser"
+        
+        if browser_state.driver_instance or browser_state.selenium_session_id:
+            # SeleniumLibrary session
+            if self.selenium_lib:
+                browser_state.active_library = "selenium"
+                return self.selenium_lib, "selenium"
+        
+        # Default preference: Browser Library > SeleniumLibrary > None
+        if self.browser_lib:
+            return self.browser_lib, "browser"
+        elif self.selenium_lib:
+            return self.selenium_lib, "selenium"
+        else:
+            return None, "none"
+
+    def _detect_library_from_keyword(self, keyword: str, arguments: List[str]) -> str:
+        """
+        Detect which library should be used based on the keyword being executed.
+        
+        Returns:
+            str: "browser", "selenium", or "auto"
+        """
+        keyword_lower = keyword.lower().strip()
+        
+        # Explicit Browser Library keywords
+        browser_keywords = [
+            "new browser", "new context", "new page", "close browser", "close context", "close page",
+            "get viewport size", "set viewport size", "wait for elements state", "get element count",
+            "get element", "get elements", "fill text", "select options by", "check checkbox"
+        ]
+        
+        # Explicit SeleniumLibrary keywords  
+        selenium_keywords = [
+            "open browser", "close browser", "go to", "input text", "click button", "click element",
+            "get source", "get title", "get text", "select from list", "wait until element is visible",
+            "page should contain", "element should be visible", "capture page screenshot"
+        ]
+        
+        if any(kw in keyword_lower for kw in browser_keywords):
+            return "browser"
+        elif any(kw in keyword_lower for kw in selenium_keywords):
+            return "selenium"
+        else:
+            return "auto"  # Let the system auto-detect
+
+    def _get_page_source_unified(self, session_id: str = "default") -> Optional[str]:
+        """
+        Get page source using the appropriate library (Browser Library or SeleniumLibrary).
+        
+        Args:
+            session_id: Session ID to get page source for
+            
+        Returns:
+            str: Page source HTML, or None if not available
+        """
+        try:
+            active_lib, lib_type = self._get_active_browser_library(session_id)
+            
+            if not active_lib:
+                logger.debug(f"No browser library available for session {session_id}")
+                return None
+            
+            if lib_type == "browser":
+                # Use Browser Library's get_page_source method
+                return active_lib.get_page_source()
+            
+            elif lib_type == "selenium":
+                # Use SeleniumLibrary's get_source method
+                return active_lib.get_source()
+            
+            else:
+                logger.debug(f"Unknown library type: {lib_type}")
+                return None
+                
+        except Exception as e:
+            logger.debug(f"Error getting page source with unified method: {e}")
+            return None
+
+    async def _execute_selenium_keyword_directly(self, session: ExecutionSession, keyword_name: str, args: List[str]) -> Dict[str, Any]:
+        """Execute SeleniumLibrary keyword directly using the selenium_lib instance."""
+        try:
+            # Mark session as using SeleniumLibrary
+            session.browser_state.active_library = "selenium"
+            
+            logger.info(f"Executing SeleniumLibrary keyword directly: {keyword_name}")
+            
+            # Get the method name from the keyword
+            method_name = keyword_name.lower().replace(' ', '_')
+            
+            if not hasattr(self.selenium_lib, method_name):
+                return {
+                    "success": False,
+                    "error": f"SeleniumLibrary method '{method_name}' not found",
+                    "output": ""
+                }
+            
+            method = getattr(self.selenium_lib, method_name)
+            
+            # Execute the method
+            if args:
+                result = method(*args)
+            else:
+                result = method()
+            
+            # Handle specific SeleniumLibrary keywords
+            if keyword_name.lower() == "get source":
+                # Store page source in session state for unified access
+                if result:
+                    session.browser_state.page_source = result
+                    logger.info(f"Page source retrieved via SeleniumLibrary: {len(result)} characters")
+            
+            elif keyword_name.lower() == "open browser":
+                # Track SeleniumLibrary session
+                try:
+                    if hasattr(self.selenium_lib, 'driver') and self.selenium_lib.driver:
+                        session.browser_state.driver_instance = self.selenium_lib.driver
+                        session.browser_state.selenium_session_id = self.selenium_lib.driver.session_id
+                        logger.info(f"SeleniumLibrary browser session tracked: {session.browser_state.selenium_session_id}")
+                except Exception as e:
+                    logger.debug(f"Could not track SeleniumLibrary session: {e}")
+            
+            return {
+                "success": True,
+                "output": str(result) if result is not None else f"Executed SeleniumLibrary.{keyword_name}",
+                "result": result,
+                "keyword_info": {
+                    "name": keyword_name,
+                    "library": "SeleniumLibrary",
+                    "method": method_name
+                }
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"SeleniumLibrary {keyword_name} execution error: {str(e)}",
+                "output": ""
+            }
     
     def check_library_requirements(self, required_libraries: List[str]) -> Dict[str, Any]:
         """
@@ -306,8 +518,21 @@ class ExecutionEngine:
                     if converted_args[0] != args[0]:
                         logger.info(f"Converted locator: '{args[0]}' -> '{converted_args[0]}'")
             
+            # Detect which library should handle this keyword
+            detected_library = self._detect_library_from_keyword(keyword_name, converted_args)
+            
+            # Override library detection if we know it's a SeleniumLibrary keyword
+            effective_library = keyword_info.library
+            if detected_library == "selenium":
+                # Force use of SeleniumLibrary for known SeleniumLibrary keywords
+                effective_library = "SeleniumLibrary" 
+                
+                # If we have SeleniumLibrary available, use it directly instead of overrides
+                if self.selenium_lib:
+                    return await self._execute_selenium_keyword_directly(session, keyword_name, converted_args)
+            
             # Check for override handler
-            override_handler = self.override_registry.get_override(keyword_name, keyword_info.library)
+            override_handler = self.override_registry.get_override(keyword_name, effective_library)
             
             if override_handler:
                 # Use override handler
@@ -528,6 +753,14 @@ class ExecutionEngine:
             keyword_name = step.keyword
             args = step.arguments
             
+            # Detect and set active library based on keyword
+            library_preference = self._detect_library_from_keyword(keyword_name, args)
+            if library_preference == "selenium":
+                session.browser_state.active_library = "selenium"
+            elif library_preference == "browser":
+                session.browser_state.active_library = "browser"
+            # If "auto", leave active_library as is (will auto-detect later)
+            
             # Use hybrid execution approach
             hybrid_result = await self._execute_hybrid_keyword(session, keyword_name, args)
             if hybrid_result is not None:
@@ -587,8 +820,8 @@ class ExecutionEngine:
             keyword_name = test_case.body[0].name if test_case.body else ""
             args = test_case.body[0].args if test_case.body else []
             
-            # Handle different keyword types
-            # Browser Library keywords (preferred)
+            # Handle Browser Library keywords that may reach this fallback path
+            # (Most keywords should be handled by hybrid execution system)
             if "New Browser" in keyword_name:
                 return await self._execute_new_browser(session, args)
             elif "New Context" in keyword_name:
@@ -607,22 +840,13 @@ class ExecutionEngine:
                 return await self._execute_close_browser(session, args)
             elif "Click" in keyword_name:
                 return await self._execute_click(session, args)
-            # SeleniumLibrary keywords (legacy support)
-            elif "Open Browser" in keyword_name:
-                return await self._simulate_open_browser(session, args)
-            elif "Go To" in keyword_name:
-                return await self._simulate_go_to(session, args)
-            elif "Click" in keyword_name:
-                return await self._simulate_click(session, args)
-            elif "Input Text" in keyword_name:
-                return await self._simulate_input_text(session, args)
-            elif "Page Should Contain" in keyword_name:
-                return await self._simulate_page_should_contain(session, args)
-            elif "Sleep" in keyword_name:
-                return await self._simulate_sleep(session, args)
             else:
-                # Generic keyword execution
-                return await self._simulate_generic_keyword(session, keyword_name, args)
+                # Unknown keyword - should have been handled by hybrid execution
+                return {
+                    "success": False,
+                    "error": f"Keyword '{keyword_name}' not handled by hybrid execution system",
+                    "output": None
+                }
             
         except Exception as e:
             return {
@@ -698,151 +922,7 @@ class ExecutionEngine:
             "variables": {}
         }
 
-    # Simulation methods for common keywords
-    async def _simulate_open_browser(self, session: ExecutionSession, args: List[str]) -> Dict[str, Any]:
-        """Simulate Open Browser keyword."""
-        url = args[0] if args else "about:blank"
-        browser = args[1] if len(args) > 1 else "chrome"
-        
-        # Update session state
-        session.current_browser = browser
-        session.variables["browser"] = browser
-        session.variables["current_url"] = url
-        
-        return {
-            "success": True,
-            "output": f"Browser '{browser}' opened with URL '{url}'",
-            "variables": {"browser": browser, "current_url": url}
-        }
-
-    async def _simulate_go_to(self, session: ExecutionSession, args: List[str]) -> Dict[str, Any]:
-        """Simulate Go To keyword."""
-        if not args:
-            return {
-                "success": False,
-                "error": "URL required",
-                "output": None
-            }
-        
-        url = args[0]
-        session.variables["current_url"] = url
-        
-        return {
-            "success": True,
-            "output": f"Navigated to '{url}'",
-            "variables": {"current_url": url}
-        }
-
-    async def _simulate_click(self, session: ExecutionSession, args: List[str]) -> Dict[str, Any]:
-        """Simulate Click Element/Button keyword."""
-        if not args:
-            return {
-                "success": False,
-                "error": "Element locator required",
-                "output": None
-            }
-        
-        locator = args[0]
-        
-        return {
-            "success": True,
-            "output": f"Clicked element '{locator}'",
-            "variables": {"last_clicked_element": locator}
-        }
-
-    async def _simulate_input_text(self, session: ExecutionSession, args: List[str]) -> Dict[str, Any]:
-        """Simulate Input Text keyword."""
-        if len(args) < 2:
-            return {
-                "success": False,
-                "error": "Element locator and text required",
-                "output": None
-            }
-        
-        locator = args[0]
-        text = args[1]
-        
-        return {
-            "success": True,
-            "output": f"Entered text '{text}' into element '{locator}'",
-            "variables": {"last_input_element": locator, "last_input_text": text}
-        }
-
-    async def _simulate_page_should_contain(self, session: ExecutionSession, args: List[str]) -> Dict[str, Any]:
-        """Simulate Page Should Contain keyword."""
-        if not args:
-            return {
-                "success": False,
-                "error": "Text to verify required",
-                "output": None
-            }
-        
-        text = args[0]
-        
-        # Simulate verification - in real implementation, would check actual page content
-        return {
-            "success": True,
-            "output": f"Verified page contains '{text}'",
-            "variables": {"last_verified_text": text}
-        }
-
-    async def _simulate_sleep(self, session: ExecutionSession, args: List[str]) -> Dict[str, Any]:
-        """Simulate Sleep keyword."""
-        duration = args[0] if args else "1s"
-        
-        try:
-            # Parse duration
-            if duration.endswith('s'):
-                sleep_time = float(duration[:-1])
-            else:
-                sleep_time = float(duration)
-            
-            # Actually sleep for the duration
-            await asyncio.sleep(sleep_time)
-            
-            return {
-                "success": True,
-                "output": f"Slept for {duration}",
-                "variables": {}
-            }
-            
-        except ValueError:
-            return {
-                "success": False,
-                "error": f"Invalid duration format: {duration}",
-                "output": None
-            }
-
-    async def _simulate_generic_keyword(
-        self,
-        session: ExecutionSession,
-        keyword_name: str,
-        args: List[str]
-    ) -> Dict[str, Any]:
-        """Handle unknown or unsupported keywords."""
-        # Check if this might be a valid Robot Framework keyword
-        known_builtin_keywords = [
-            "log", "set variable", "should be equal", "should contain", 
-            "should not be equal", "should not contain", "fail", "pass execution",
-            "run keyword", "run keywords", "set test variable", "set suite variable"
-        ]
-        
-        if keyword_name.lower() in known_builtin_keywords:
-            # Simulate known BuiltIn library keywords
-            return {
-                "success": True,
-                "output": f"Simulated BuiltIn keyword '{keyword_name}' with args: {args}",
-                "variables": {}
-            }
-        else:
-            # Unknown keyword - should fail
-            return {
-                "success": False,
-                "error": f"Unknown keyword '{keyword_name}'. This keyword is not supported in the current implementation.",
-                "output": None
-            }
-
-    # Browser Library execution methods (real implementation)
+    # Browser Library execution methods
     async def _execute_new_browser(self, session: ExecutionSession, args: List[str]) -> Dict[str, Any]:
         """Execute real New Browser keyword."""
         try:
@@ -1769,15 +1849,20 @@ class ExecutionEngine:
             
             # Try to get page source when necessary
             try:
-                page_source = self.browser_lib.get_page_source()
-                # Store full page source but return truncated version for state
-                session.browser_state.page_source = page_source
-                state["page_source_length"] = len(page_source)
-                state["page_source_preview"] = page_source[:1000] + "..." if len(page_source) > 1000 else page_source
-                state["page_source_available"] = True
-                
-                # Extract additional context from page source
-                state["page_context"] = await self._extract_page_context(page_source)
+                page_source = self._get_page_source_unified(session_id)
+                if page_source:
+                    # Store full page source but return truncated version for state
+                    session.browser_state.page_source = page_source
+                    state["page_source_length"] = len(page_source)
+                    state["page_source_preview"] = page_source[:1000] + "..." if len(page_source) > 1000 else page_source
+                    state["page_source_available"] = True
+                    
+                    # Extract additional context from page source
+                    state["page_context"] = await self._extract_page_context(page_source)
+                else:
+                    state["page_source_available"] = False
+                    state["page_source_length"] = 0
+                    state["page_context"] = {}
                 
             except Exception as e:
                 logger.debug(f"Could not get page source: {e}")
@@ -2122,15 +2207,15 @@ class ExecutionEngine:
             
             session = self.sessions[session_id]
             
-            # Try to get fresh page source if browser is available
-            if self.browser_lib and session.browser_state.browser_id:
-                try:
-                    page_source = self.browser_lib.get_page_source()
+            # Try to get fresh page source using unified method
+            try:
+                page_source = self._get_page_source_unified(session_id)
+                if page_source:
                     session.browser_state.page_source = page_source
-                except Exception as e:
-                    logger.debug(f"Could not get fresh page source: {e}")
+                else:
                     page_source = session.browser_state.page_source or ""
-            else:
+            except Exception as e:
+                logger.debug(f"Could not get fresh page source: {e}")
                 page_source = session.browser_state.page_source or ""
             
             if not page_source:

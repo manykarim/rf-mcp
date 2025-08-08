@@ -123,6 +123,11 @@ class BrowserLibraryHandler:
             return await self._handle_new_page(session, args, keyword_info)
         elif 'close browser' in keyword_lower:
             return await self._handle_close_browser(session, args, keyword_info)
+        # Handle SeleniumLibrary keywords
+        elif 'open browser' in keyword_lower:
+            return await self._handle_selenium_open_browser(session, args, keyword_info)
+        elif 'get source' in keyword_lower:
+            return await self._handle_selenium_get_source(session, args, keyword_info)
         else:
             # For other Browser keywords, use dynamic execution with state updates
             return await self._handle_generic_browser_keyword(session, keyword, args, keyword_info)
@@ -265,13 +270,56 @@ class BrowserLibraryHandler:
             )
             
     async def _handle_generic_browser_keyword(self, session, keyword, args, keyword_info) -> OverrideResult:
-        """Handle other Browser keywords with basic state awareness."""
+        """Handle other Browser keywords with argument conversion and state awareness."""
         try:
-            result = await self.execution_engine.keyword_discovery.execute_keyword(
-                keyword,
-                args,
-                session.variables
-            )
+            # Use the argument conversion logic from dynamic keywords
+            discovery = self.execution_engine.keyword_discovery
+            
+            # Get keyword info if not provided
+            if not keyword_info:
+                keyword_info = discovery.find_keyword(keyword)
+            
+            # Convert arguments using the same logic as dynamic keywords
+            if keyword_info and keyword_info.library == "Browser":
+                converted_args = discovery._convert_browser_arguments(keyword_info, args)
+                
+                # Get the library instance and execute with converted args
+                library = discovery.libraries.get("Browser")
+                if library:
+                    method = getattr(library.instance, keyword_info.method_name)
+                    try:
+                        result = method(*converted_args)
+                        
+                        # Update last activity timestamp
+                        state_updates = {
+                            'last_browser_activity': datetime.now().isoformat()
+                        }
+                        
+                        return OverrideResult(
+                            success=True,
+                            output=str(result) if result is not None else f"Executed {keyword}",
+                            state_updates=state_updates,
+                            metadata={'override': 'browser_generic_with_conversion'}
+                        )
+                    except Exception as method_error:
+                        # If direct method call fails, try the original approach
+                        logger.debug(f"Direct method call failed: {method_error}, trying original approach")
+                        result = await discovery.execute_keyword(keyword, args, session.variables)
+                        
+                        state_updates = {
+                            'last_browser_activity': datetime.now().isoformat()
+                        }
+                        
+                        return OverrideResult(
+                            success=result.get("success", False),
+                            output=result.get("output"),
+                            error=result.get("error"),
+                            state_updates=state_updates,
+                            metadata={'override': 'browser_generic_fallback'}
+                        )
+            
+            # Fall back to original approach if no conversion available
+            result = await discovery.execute_keyword(keyword, args, session.variables)
             
             # Update last activity timestamp
             state_updates = {
@@ -327,6 +375,79 @@ class DynamicExecutionHandler:
                 success=False,
                 error=f"Dynamic execution error: {str(e)}",
                 metadata={'override': 'dynamic'}
+            )
+
+    async def _handle_selenium_open_browser(self, session, args, keyword_info) -> OverrideResult:
+        """Handle SeleniumLibrary Open Browser keyword with session tracking."""
+        try:
+            # Mark session as using SeleniumLibrary
+            session.browser_state.active_library = "selenium"
+            
+            # Execute via dynamic discovery
+            result = await self.execution_engine.keyword_discovery.execute_keyword(
+                'Open Browser',
+                args,
+                session.variables
+            )
+            
+            if result.get("success"):
+                # Track SeleniumLibrary session
+                try:
+                    # Get the WebDriver instance from SeleniumLibrary
+                    if self.execution_engine.selenium_lib:
+                        driver = self.execution_engine.selenium_lib.driver
+                        session.browser_state.driver_instance = driver
+                        session.browser_state.selenium_session_id = driver.session_id if driver else None
+                        logger.info(f"SeleniumLibrary browser opened, session: {session.browser_state.selenium_session_id}")
+                except Exception as e:
+                    logger.debug(f"Could not track SeleniumLibrary session: {e}")
+            
+            return OverrideResult(
+                success=result.get("success", False),
+                output=result.get("output"),
+                error=result.get("error"),
+                metadata={'override': 'selenium_open_browser'}
+            )
+            
+        except Exception as e:
+            return OverrideResult(
+                success=False,
+                error=f"SeleniumLibrary Open Browser error: {str(e)}",
+                metadata={'override': 'selenium_open_browser'}
+            )
+
+    async def _handle_selenium_get_source(self, session, args, keyword_info) -> OverrideResult:
+        """Handle SeleniumLibrary Get Source keyword."""
+        try:
+            # Mark session as using SeleniumLibrary  
+            session.browser_state.active_library = "selenium"
+            
+            # Execute via dynamic discovery
+            result = await self.execution_engine.keyword_discovery.execute_keyword(
+                'Get Source',
+                args,
+                session.variables
+            )
+            
+            if result.get("success"):
+                # Store page source in session state
+                page_source = result.get("result")
+                if page_source:
+                    session.browser_state.page_source = page_source
+                    logger.debug(f"Page source retrieved via SeleniumLibrary: {len(page_source)} characters")
+            
+            return OverrideResult(
+                success=result.get("success", False),
+                output=result.get("output"),
+                error=result.get("error"),
+                metadata={'override': 'selenium_get_source'}
+            )
+            
+        except Exception as e:
+            return OverrideResult(
+                success=False,
+                error=f"SeleniumLibrary Get Source error: {str(e)}",
+                metadata={'override': 'selenium_get_source'}
             )
 
 def setup_default_overrides(registry: KeywordOverrideRegistry, execution_engine):

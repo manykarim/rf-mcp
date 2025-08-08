@@ -89,11 +89,30 @@ class DynamicKeywordDiscovery:
             elif library_name == 'SeleniumLibrary':
                 try:
                     from SeleniumLibrary import SeleniumLibrary
+                    # Create instance in a way that avoids browser dependency during keyword discovery
                     instance = SeleniumLibrary()
+                    
+                    # SeleniumLibrary sometimes throws errors during initialization
+                    # when no browser is open. We'll catch this and still proceed
+                    # with keyword extraction since the class methods exist.
                 except ImportError:
                     logger.debug(f"SeleniumLibrary not available")
                     self.failed_imports[library_name] = "Not installed"
                     return False
+                except Exception as e:
+                    logger.debug(f"SeleniumLibrary initialization error (continuing anyway): {e}")
+                    # Still try to create the instance for keyword discovery
+                    try:
+                        from SeleniumLibrary import SeleniumLibrary
+                        # Create a "bare" instance that might not be fully functional
+                        # but still allows us to discover its methods/keywords
+                        instance = object.__new__(SeleniumLibrary)
+                        # Initialize basic attributes without calling __init__
+                        instance.__class__ = SeleniumLibrary
+                    except Exception as e2:
+                        logger.debug(f"SeleniumLibrary fallback failed: {e2}")
+                        self.failed_imports[library_name] = f"Initialization failed: {e}"
+                        return False
             elif library_name == 'RequestsLibrary':
                 try:
                     from RequestsLibrary import RequestsLibrary
@@ -321,7 +340,7 @@ class DynamicKeywordDiscovery:
         return matches
     
     async def execute_keyword(self, keyword_name: str, args: List[str], session_variables: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Execute a keyword dynamically."""
+        """Execute a keyword dynamically using Robot Framework's run_keyword for proper argument conversion."""
         keyword_info = self.find_keyword(keyword_name)
         
         if not keyword_info:
@@ -332,10 +351,6 @@ class DynamicKeywordDiscovery:
             }
         
         try:
-            # Get library instance
-            library = self.libraries[keyword_info.library]
-            method = getattr(library.instance, keyword_info.method_name)
-            
             # Validate arguments
             validation_result = self._validate_arguments(keyword_info, args)
             if not validation_result["valid"]:
@@ -353,6 +368,223 @@ class DynamicKeywordDiscovery:
             # Execute the keyword
             if session_variables is None:
                 session_variables = {}
+            
+            # Try Robot Framework's run_keyword first for proper argument conversion
+            try:
+                result = self._execute_via_robot_framework(keyword_info, args)
+                return {
+                    "success": True,
+                    "output": str(result) if result is not None else f"Executed {keyword_info.name}",
+                    "result": result,
+                    "keyword_info": {
+                        "name": keyword_info.name,
+                        "library": keyword_info.library,
+                        "doc": keyword_info.doc
+                    }
+                }
+            except Exception as rf_error:
+                logger.debug(f"Robot Framework execution failed for {keyword_info.name}: {rf_error}")
+                # Fall back to direct method call
+                return self._execute_direct_method_call(keyword_info, args, session_variables)
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Error executing {keyword_info.library}.{keyword_info.name}: {str(e)}",
+                "keyword_info": {
+                    "name": keyword_info.name,
+                    "library": keyword_info.library,
+                    "args": keyword_info.args,
+                    "doc": keyword_info.doc
+                }
+            }
+    
+    def _execute_via_robot_framework(self, keyword_info: KeywordInfo, args: List[str]) -> Any:
+        """Execute keyword with Robot Framework-style argument conversion."""
+        try:
+            # For Browser Library keywords, convert arguments appropriately
+            if keyword_info.library == "Browser":
+                return self._execute_browser_keyword_with_conversion(keyword_info, args)
+            else:
+                # For other libraries, try the RF context approach
+                return self._execute_with_rf_context(keyword_info, args)
+            
+        except Exception as e:
+            logger.debug(f"RF execution failed: {e}")
+            raise e
+    
+    def _execute_browser_keyword_with_conversion(self, keyword_info: KeywordInfo, args: List[str]) -> Any:
+        """Execute Browser Library keyword with proper argument conversion."""
+        try:
+            # Get the library instance
+            library = self.libraries[keyword_info.library]
+            method = getattr(library.instance, keyword_info.method_name)
+            
+            # Convert arguments based on keyword-specific requirements
+            converted_args = self._convert_browser_arguments(keyword_info, args)
+            
+            # Execute the method with converted arguments
+            result = method(*converted_args)
+            return result
+            
+        except Exception as e:
+            logger.debug(f"Browser keyword execution failed: {e}")
+            raise e
+    
+    def _convert_browser_arguments(self, keyword_info: KeywordInfo, args: List[str]) -> List[Any]:
+        """Convert string arguments to appropriate types for Browser Library keywords."""
+        converted_args = []
+        
+        try:
+            # Import Browser data types for conversion
+            from Browser.utils.data_types import (
+                SelectAttribute, SupportedBrowsers, ElementState, 
+                MouseButton, KeyAction, ViewportDimensions
+            )
+            
+            # Handle specific keyword argument conversions
+            keyword_name = keyword_info.name.lower()
+            
+            if "select options by" in keyword_name:
+                # select_options_by(selector: str, attribute: SelectAttribute, *values)
+                if len(args) >= 2:
+                    # First arg: selector (keep as string)
+                    converted_args.append(args[0])
+                    
+                    # Second arg: attribute (convert to SelectAttribute enum)
+                    attr_str = args[1].lower()
+                    if attr_str in ['value', 'val']:
+                        converted_args.append(SelectAttribute.value)
+                    elif attr_str in ['label', 'text']:
+                        converted_args.append(SelectAttribute.label)
+                    elif attr_str in ['index', 'idx']:
+                        converted_args.append(SelectAttribute.index)
+                    else:
+                        # Try to get the enum directly
+                        converted_args.append(getattr(SelectAttribute, attr_str, SelectAttribute.value))
+                    
+                    # Remaining args: values (keep as strings)
+                    converted_args.extend(args[2:])
+                else:
+                    # Not enough arguments, pass as-is and let method handle the error
+                    converted_args = args.copy()
+                    
+            elif "new browser" in keyword_name:
+                # new_browser(browser: SupportedBrowsers, **kwargs)
+                if args:
+                    browser_str = args[0].lower()
+                    if browser_str in ['chromium', 'chrome']:
+                        converted_args.append(SupportedBrowsers.chromium)
+                    elif browser_str == 'firefox':
+                        converted_args.append(SupportedBrowsers.firefox)
+                    elif browser_str == 'webkit':
+                        converted_args.append(SupportedBrowsers.webkit)
+                    else:
+                        converted_args.append(getattr(SupportedBrowsers, browser_str, SupportedBrowsers.chromium))
+                    
+                    # Add remaining args as-is (these are usually keyword arguments)
+                    converted_args.extend(args[1:])
+                else:
+                    # No browser specified, use default
+                    converted_args.append(SupportedBrowsers.chromium)
+                    
+            elif "wait for elements state" in keyword_name:
+                # wait_for_elements_state(selector: str, state: ElementState, timeout: str = "10s")
+                if len(args) >= 2:
+                    # First arg: selector
+                    converted_args.append(args[0])
+                    
+                    # Second arg: state (convert to ElementState)
+                    state_str = args[1].lower()
+                    try:
+                        converted_args.append(getattr(ElementState, state_str))
+                    except AttributeError:
+                        # Fall back to string if enum value not found
+                        converted_args.append(args[1])
+                    
+                    # Remaining args: keep as-is
+                    converted_args.extend(args[2:])
+                else:
+                    converted_args = args.copy()
+                    
+            else:
+                # For other Browser keywords, keep args as strings
+                # Robot Framework will handle basic conversions
+                converted_args = args.copy()
+                
+            return converted_args
+            
+        except ImportError:
+            # Browser library not available, return original args
+            logger.debug("Browser library data types not available for conversion")
+            return args.copy()
+        except Exception as e:
+            # Any other conversion error, return original args
+            logger.debug(f"Argument conversion failed: {e}")
+            return args.copy()
+    
+    def _execute_with_rf_context(self, keyword_info: KeywordInfo, args: List[str]) -> Any:
+        """Execute keyword in a minimal Robot Framework context."""
+        try:
+            from robot.api import TestSuite
+            from robot.running.model import TestCase, Keyword
+            from robot.result import ExecutionResult
+            from robot.conf import RobotSettings
+            import tempfile
+            import os
+            
+            # Create a minimal test suite
+            suite = TestSuite(name="TempSuite")
+            
+            # Import the required library
+            suite.resource.imports.library(keyword_info.library)
+            
+            # Create a test case with the keyword call
+            test = TestCase(name="TempTest")
+            keyword_call = Keyword(name=keyword_info.name, args=args)
+            test.body.append(keyword_call)
+            suite.tests.append(test)
+            
+            # Execute the suite in memory
+            with tempfile.TemporaryDirectory() as temp_dir:
+                output_file = os.path.join(temp_dir, "output.xml")
+                
+                # Run the suite
+                result = suite.run(outputdir=temp_dir, output=output_file)
+                
+                # Parse the result to get the keyword result
+                execution_result = ExecutionResult(output_file)
+                test_result = execution_result.suite.tests[0]
+                keyword_result = test_result.keywords[0]
+                
+                if keyword_result.passed:
+                    # Extract return value if available
+                    # This is a simplified approach - RF's return values are complex
+                    return keyword_result.messages[-1].message if keyword_result.messages else "OK"
+                else:
+                    raise Exception(f"Keyword execution failed: {keyword_result.message}")
+                
+        except Exception as e:
+            logger.debug(f"RF context execution failed: {e}")
+            raise e
+    
+    def _ensure_library_imported(self, library_name: str, builtin: Any) -> None:
+        """Ensure library is imported in Robot Framework context."""
+        try:
+            # Try to import the library using RF's import mechanism
+            builtin.import_library(library_name)
+            logger.debug(f"Imported library {library_name} in RF context")
+        except Exception as e:
+            # Library might already be imported or import might fail
+            # This is not critical - RF will handle missing libraries appropriately
+            logger.debug(f"Library import for {library_name} in RF context: {e}")
+    
+    def _execute_direct_method_call(self, keyword_info: KeywordInfo, args: List[str], session_variables: Dict[str, Any]) -> Dict[str, Any]:
+        """Fall back to direct method call execution (original implementation)."""
+        try:
+            # Get library instance
+            library = self.libraries[keyword_info.library]
+            method = getattr(library.instance, keyword_info.method_name)
             
             # Handle different types of method calls
             try:
@@ -405,7 +637,7 @@ class DynamicKeywordDiscovery:
         except Exception as e:
             return {
                 "success": False,
-                "error": f"Error executing {keyword_info.library}.{keyword_info.name}: {str(e)}",
+                "error": f"Error in direct method call for {keyword_info.library}.{keyword_info.name}: {str(e)}",
                 "keyword_info": {
                     "name": keyword_info.name,
                     "library": keyword_info.library,
