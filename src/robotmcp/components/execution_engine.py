@@ -756,7 +756,6 @@ class ExecutionEngine:
             
             # Update session activity
             session.last_activity = datetime.now()
-            session.steps.append(step)
             
             # Mark step as running
             step.status = "running"
@@ -772,9 +771,13 @@ class ExecutionEngine:
             
             if result["success"]:
                 step.status = "pass"
+                # Only append successful steps to the session for suite generation
+                session.steps.append(step)
+                logger.debug(f"Added successful step to session: {keyword}")
             else:
                 step.status = "fail"
                 step.error = result.get("error")
+                logger.debug(f"Failed step not added to session: {keyword} - {result.get('error')}")
             
             # Update session variables if any were set
             if "variables" in result:
@@ -798,33 +801,25 @@ class ExecutionEngine:
         except Exception as e:
             logger.error(f"Error executing step {keyword}: {e}")
             
-            # Update step object with error information
-            if session_id in self.sessions:
-                session = self.sessions[session_id]
-                if session.steps:
-                    step = session.steps[-1]  # Get the current step
-                    step.status = "fail"
-                    step.error = str(e)
-                    step.end_time = datetime.now()
-                    
-                    return {
-                        "success": False,
-                        "error": str(e),
-                        "step_id": step.step_id,
-                        "keyword": keyword,
-                        "arguments": arguments,
-                        "status": "fail",
-                        "execution_time": self._calculate_execution_time(step),
-                        "session_variables": dict(session.variables)
-                    }
+            # For failed steps due to exceptions, create a step object for error reporting
+            # but don't add it to session.steps since it failed
+            step.status = "fail"
+            step.error = str(e)
+            step.end_time = datetime.now()
             
-            # Fallback if no step object found
+            session_variables = {}
+            if session_id in self.sessions:
+                session_variables = dict(self.sessions[session_id].variables)
+            
             return {
                 "success": False,
                 "error": str(e),
+                "step_id": step.step_id,
                 "keyword": keyword,
                 "arguments": arguments,
-                "status": "fail"
+                "status": "fail",
+                "execution_time": self._calculate_execution_time(step),
+                "session_variables": session_variables
             }
 
     async def _execute_keyword(self, session: ExecutionSession, step: ExecutionStep) -> Dict[str, Any]:
@@ -2233,8 +2228,8 @@ class ExecutionEngine:
             "variables": dict(session.variables),
             "current_browser": session.current_browser,
             "total_steps": len(session.steps),
-            "successful_steps": len([s for s in session.steps if s.status == "pass"]),
-            "failed_steps": len([s for s in session.steps if s.status == "fail"]),
+            "successful_steps": len(session.steps),  # All steps in session.steps are successful now
+            "failed_steps": 0,  # Failed steps are not stored in session.steps anymore
             "last_activity": session.last_activity.isoformat()
         }
         
@@ -2260,8 +2255,8 @@ class ExecutionEngine:
             "created_at": session.created_at.isoformat(),
             "last_activity": session.last_activity.isoformat(),
             "total_steps": len(session.steps),
-            "successful_steps": len([s for s in session.steps if s.status == "pass"]),
-            "failed_steps": len([s for s in session.steps if s.status == "fail"]),
+            "successful_steps": len(session.steps),  # All steps in session.steps are successful now
+            "failed_steps": 0,  # Failed steps are not stored in session.steps anymore
             "imported_libraries": session.imported_libraries,
             "variables": dict(session.variables),
             "current_browser": session.current_browser
@@ -2417,8 +2412,9 @@ class ExecutionEngine:
         
         session = self.sessions[session_id]
         validated_steps = []
-        failed_steps = []
+        failed_steps = []  # Will always be empty since failed steps are not stored
         
+        # Since we only store successful steps now, all steps are validated
         for step in session.steps:
             step_info = {
                 "step_id": step.step_id,
@@ -2427,12 +2423,7 @@ class ExecutionEngine:
                 "status": step.status,
                 "execution_time": self._calculate_execution_time(step)
             }
-            
-            if step.status == "pass":
-                validated_steps.append(step_info)
-            elif step.status == "fail":
-                step_info["error"] = step.error
-                failed_steps.append(step_info)
+            validated_steps.append(step_info)  # All stored steps are successful
         
         return {
             "success": True,
