@@ -2,6 +2,7 @@
 
 import logging
 import uuid
+import re
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -500,38 +501,176 @@ class ExecutionEngine:
             }
 
     def _convert_locator_for_library(self, locator: str, target_library: str) -> str:
-        """Convert locator format between different libraries."""
+        """Convert locator format between different libraries.
+        
+        SeleniumLibrary supports:
+        - id, name, identifier (default strategies)
+        - class, tag, xpath, css, dom, link, partial link, data, jquery (explicit)
+        - Implicit xpath detection (starts with //)
+        
+        Browser Library supports:
+        - CSS (default)
+        - xpath (auto-detected if starts with // or ..)
+        - text (finds by text content)
+        - id (CSS shorthand)
+        - Cascaded selectors with >>
+        - Shadow DOM piercing
+        """
         if not locator:
             return locator
             
-        # Convert Selenium-style locators to Browser Library format
+        # Convert SeleniumLibrary locators to Browser Library format
         if target_library == "Browser":
-            if locator.startswith("id="):
-                # id=element -> #element  
-                return f"#{locator[3:]}"
-            elif locator.startswith("css="):
-                # css=selector -> selector
-                return locator[4:]
-            elif locator.startswith("xpath="):
-                # Keep xpath as is for Browser Library
-                return locator[6:]
-            elif locator.startswith("name="):
-                # name=attr -> [name="attr"]
-                return f'[name="{locator[5:]}"]'
-            elif locator.startswith("class="):
-                # class=classname -> .classname
-                return f".{locator[6:]}"
+            # Handle explicit strategy syntax (strategy=value or strategy:value)
+            if "=" in locator and self._is_explicit_strategy(locator):
+                strategy, value = locator.split("=", 1) if "=" in locator else locator.split(":", 1)
+                strategy = strategy.lower().strip()
                 
-        # Convert Browser Library locators to Selenium format  
+                if strategy == "id":
+                    # id=element -> id=element (Browser supports both #element and id=element)
+                    return f"id={value}"
+                elif strategy == "css":
+                    # css=selector -> selector (CSS is default in Browser)
+                    return value
+                elif strategy == "xpath":
+                    # xpath=//path -> //path (Browser auto-detects xpath)
+                    return value
+                elif strategy == "name":
+                    # name=attr -> [name="attr"]
+                    return f'[name="{value}"]'
+                elif strategy == "class":
+                    # class=classname -> .classname
+                    return f".{value}"
+                elif strategy == "tag":
+                    # tag=div -> div
+                    return value
+                elif strategy == "link" or strategy == "partial link":
+                    # link=text -> text=text (Browser uses text selectors)
+                    return f'text={value}'
+                elif strategy == "data":
+                    # data=value -> [data-*="value"] - need specific data attribute
+                    return f'[data-testid="{value}"]'  # Common convention
+                elif strategy == "jquery":
+                    # jquery selectors -> CSS equivalent (best effort)
+                    return self._convert_jquery_to_css(value)
+                elif strategy == "dom":
+                    # dom expressions can't be directly converted
+                    logger.warning(f"DOM locator '{locator}' cannot be converted to Browser Library format")
+                    return locator
+                elif strategy == "identifier":
+                    # identifier -> try id first, fallback to name
+                    return f'id={value}, [name="{value}"]'
+            
+            # Handle implicit xpath (starts with // or ..)
+            elif locator.startswith("//") or locator.startswith(".."):
+                # XPath is auto-detected in Browser Library
+                return locator
+            
+            # Handle CSS shortcuts that might need conversion
+            elif locator.startswith("#") or locator.startswith(".") or locator.startswith("["):
+                # Already in CSS format, keep as-is
+                return locator
+                
+        # Convert Browser Library locators to SeleniumLibrary format  
         elif target_library == "SeleniumLibrary":
-            if locator.startswith("#"):
+            # Handle text selectors
+            if locator.startswith("text="):
+                # text=content -> xpath=//*[contains(text(),'content')]
+                text_content = locator[5:]
+                return f'xpath=//*[contains(text(),"{text_content}")]'
+            
+            # Handle CSS shortcuts
+            elif locator.startswith("#"):
                 # #element -> id=element
                 return f"id={locator[1:]}"
-            elif locator.startswith(".") and not locator.startswith("./"):
+            elif locator.startswith(".") and not locator.startswith("./") and not locator.startswith(".."):
                 # .classname -> class=classname  
                 return f"class={locator[1:]}"
+            
+            # Handle cascaded selectors (>> syntax)
+            elif ">>" in locator:
+                # Convert cascaded to xpath (complex conversion)
+                return self._convert_cascaded_to_xpath(locator)
+            
+            # Handle implicit xpath
+            elif locator.startswith("//") or locator.startswith(".."):
+                # Already xpath, add explicit strategy
+                return f"xpath={locator}"
+            
+            # Handle CSS attribute selectors
+            elif locator.startswith("[") and locator.endswith("]"):
+                # [attribute="value"] -> css=[attribute="value"]
+                return f"css={locator}"
                 
         return locator
+    
+    def _is_explicit_strategy(self, locator: str) -> bool:
+        """Check if locator uses explicit strategy syntax."""
+        if "=" not in locator and ":" not in locator:
+            return False
+            
+        # Get the part before = or :
+        separator = "=" if "=" in locator else ":"
+        strategy_part = locator.split(separator, 1)[0].lower().strip()
+        
+        # Known SeleniumLibrary strategies
+        selenium_strategies = {
+            'id', 'name', 'identifier', 'class', 'tag', 'xpath', 'css', 
+            'dom', 'link', 'partial link', 'data', 'jquery'
+        }
+        
+        return strategy_part in selenium_strategies
+    
+    def _convert_jquery_to_css(self, jquery_selector: str) -> str:
+        """Convert jQuery selector to CSS (best effort)."""
+        # This is a simplified conversion for common jQuery patterns
+        # More complex jQuery expressions may not convert perfectly
+        
+        # Remove jQuery-specific syntax
+        css_selector = jquery_selector
+        
+        # Convert :eq(n) to :nth-child(n+1)
+        css_selector = re.sub(r':eq\((\d+)\)', r':nth-child(\1)', css_selector)
+        
+        # Convert :first to :first-child
+        css_selector = css_selector.replace(':first', ':first-child')
+        
+        # Convert :last to :last-child  
+        css_selector = css_selector.replace(':last', ':last-child')
+        
+        # Remove other jQuery-specific selectors that don't have CSS equivalents
+        css_selector = re.sub(r':contains\([^)]+\)', '', css_selector)
+        
+        logger.debug(f"Converted jQuery '{jquery_selector}' to CSS '{css_selector}'")
+        return css_selector
+    
+    def _convert_cascaded_to_xpath(self, cascaded_selector: str) -> str:
+        """Convert Browser Library cascaded selector to XPath."""
+        # This is a simplified conversion for basic cascaded selectors
+        # Complex cascaded selectors may need more sophisticated handling
+        
+        parts = cascaded_selector.split(">>");
+        xpath_parts = []
+        
+        for part in parts:
+            part = part.strip()
+            if part.startswith("text="):
+                # text=content -> *[contains(text(),'content')]
+                text_content = part[5:]
+                xpath_parts.append(f'*[contains(text(),"{text_content}")]')
+            elif part.startswith("#"):
+                # #id -> *[@id='id']
+                xpath_parts.append(f'*[@id="{part[1:]}"]')
+            elif part.startswith("."):
+                # .class -> *[contains(@class,'class')]
+                xpath_parts.append(f'*[contains(@class,"{part[1:]}")]')
+            else:
+                # Assume CSS selector, convert to xpath
+                xpath_parts.append(f'*[contains(@class,"{part}")]')
+        
+        xpath = "//" + "//".join(xpath_parts)
+        logger.debug(f"Converted cascaded '{cascaded_selector}' to XPath '{xpath}'")
+        return f"xpath={xpath}"
     
     async def _execute_hybrid_keyword(self, session: ExecutionSession, keyword_name: str, args: List[str]) -> Optional[Dict[str, Any]]:
         """Execute a keyword using hybrid approach: overrides first, then dynamic."""
