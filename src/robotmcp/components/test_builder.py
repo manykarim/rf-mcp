@@ -16,6 +16,9 @@ try:
 except ImportError:
     RunningKeyword = None
 
+# Import shared library detection utility
+from robotmcp.utils.library_detector import detect_library_from_keyword
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -428,61 +431,12 @@ class TestBuilder:
 
     async def _detect_library_from_keyword(self, keyword: str) -> Optional[str]:
         """Detect which library a keyword belongs to using dynamic discovery."""
-        
-        # Use the execution engine's dynamic keyword discovery if available
+        # Use shared library detection utility with dynamic keyword discovery
+        keyword_discovery = None
         if self.execution_engine and hasattr(self.execution_engine, 'keyword_discovery'):
-            keyword_info = self.execution_engine.keyword_discovery.find_keyword(keyword)
-            if keyword_info:
-                return keyword_info.library
+            keyword_discovery = self.execution_engine.keyword_discovery
         
-        # Fallback to hardcoded patterns for keywords not in dynamic discovery
-        keyword_lower = keyword.lower()
-        
-        # Browser Library keywords (prioritized for modern web testing)
-        if any(kw in keyword_lower for kw in [
-            'new browser', 'new context', 'new page', 'fill', 'get text',
-            'get property', 'wait for elements state', 'close browser', 'click'
-        ]):
-            return "Browser"
-        
-        # API keywords
-        elif any(kw in keyword_lower for kw in [
-            'get request', 'post request', 'response should', 'create session'
-        ]):
-            return "RequestsLibrary"
-        
-        # Database keywords
-        elif any(kw in keyword_lower for kw in [
-            'connect to database', 'execute sql', 'query'
-        ]):
-            return "DatabaseLibrary"
-        
-        # String manipulation
-        elif any(kw in keyword_lower for kw in [
-            'convert to upper case', 'convert to lower case', 'split string'
-        ]):
-            return "String"
-        
-        # Collections
-        elif any(kw in keyword_lower for kw in [
-            'append to list', 'get from list', 'create list'
-        ]):
-            return "Collections"
-        
-        # Operating System
-        elif any(kw in keyword_lower for kw in [
-            'copy file', 'create directory', 'file should exist'
-        ]):
-            return "OperatingSystem"
-        
-        # BuiltIn keywords (note: BuiltIn is automatically available, we detect but don't import)
-        elif any(kw in keyword_lower for kw in [
-            'log', 'set variable', 'should be equal', 'should contain',
-            'convert to string', 'convert to integer', 'catenate'
-        ]):
-            return "BuiltIn"
-        
-        return None
+        return detect_library_from_keyword(keyword, keyword_discovery)
 
     async def _generate_suite_documentation(
         self,

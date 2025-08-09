@@ -18,6 +18,9 @@ from robotmcp.utils.dynamic_keywords import get_keyword_discovery
 # Import hybrid execution system
 from .keyword_overrides import KeywordOverrideRegistry, DynamicExecutionHandler, setup_default_overrides
 
+# Import shared library detection utility
+from robotmcp.utils.library_detector import detect_library_type_from_keyword
+
 try:
     from robot.api import TestSuite
     from robot.running.model import TestCase, Keyword
@@ -265,29 +268,7 @@ class ExecutionEngine:
         Returns:
             str: "browser", "selenium", or "auto"
         """
-        keyword_lower = keyword.lower().strip()
-        
-        # Explicit Browser Library keywords (unique to Browser Library)
-        browser_keywords = [
-            "new browser", "new context", "new page", "close context", "close page",
-            "get viewport size", "set viewport size", "wait for elements state", "get element count",
-            "get element", "get elements", "fill text", "select options by", "check checkbox",
-            "get page source"  # Browser Library specific
-        ]
-        
-        # Explicit SeleniumLibrary keywords (unique to SeleniumLibrary)
-        selenium_keywords = [
-            "open browser", "close browser", "go to", "input text", "click button", "click element",
-            "get source", "get title", "get text", "select from list", "wait until element is visible",
-            "page should contain", "element should be visible", "capture page screenshot"
-        ]
-        
-        if any(kw in keyword_lower for kw in browser_keywords):
-            return "browser"
-        elif any(kw in keyword_lower for kw in selenium_keywords):
-            return "selenium"
-        else:
-            return "auto"  # Let the system auto-detect
+        return detect_library_type_from_keyword(keyword, arguments)
 
     def _get_page_source_unified(self, session_id: str = "default") -> Optional[str]:
         """
