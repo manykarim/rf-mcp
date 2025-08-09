@@ -391,7 +391,7 @@ class ExecutionEngine:
                 except Exception as e:
                     logger.debug(f"Could not track SeleniumLibrary session: {e}")
             
-            return {
+            result_data = {
                 "success": True,
                 "output": str(result) if result is not None else f"Executed SeleniumLibrary.{keyword_name}",
                 "result": result,
@@ -401,6 +401,16 @@ class ExecutionEngine:
                     "method": method_name
                 }
             }
+            
+            # Auto-capture page source for successful DOM-changing SeleniumLibrary keywords
+            if self.keyword_discovery.is_dom_changing_keyword(keyword_name):
+                page_source = await self._capture_page_source_after_keyword(session, keyword_name)
+                if page_source:
+                    result_data["page_source"] = page_source
+                    result_data["keyword_info"]["auto_captured_dom"] = True
+                    logger.info(f"Auto-captured page source after SeleniumLibrary keyword: {keyword_name}")
+            
+            return result_data
             
         except Exception as e:
             return {
@@ -1017,24 +1027,25 @@ class ExecutionEngine:
             
             # Handle Browser Library keywords that may reach this fallback path
             # (Most keywords should be handled by hybrid execution system)
+            result = None
             if "New Browser" in keyword_name:
-                return await self._execute_new_browser(session, args)
+                result = await self._execute_new_browser(session, args)
             elif "New Context" in keyword_name:
-                return await self._execute_new_context(session, args)
+                result = await self._execute_new_context(session, args)
             elif "New Page" in keyword_name:
-                return await self._execute_new_page(session, args)
+                result = await self._execute_new_page(session, args)
             elif "Fill" in keyword_name:
-                return await self._execute_fill(session, args)
+                result = await self._execute_fill(session, args)
             elif "Get Text" in keyword_name:
-                return await self._execute_get_text(session, args)
+                result = await self._execute_get_text(session, args)
             elif "Get Property" in keyword_name:
-                return await self._execute_get_property(session, args)
+                result = await self._execute_get_property(session, args)
             elif "Wait For Elements State" in keyword_name:
-                return await self._execute_wait_for_elements_state(session, args)
+                result = await self._execute_wait_for_elements_state(session, args)
             elif "Close Browser" in keyword_name:
-                return await self._execute_close_browser(session, args)
+                result = await self._execute_close_browser(session, args)
             elif "Click" in keyword_name:
-                return await self._execute_click(session, args)
+                result = await self._execute_click(session, args)
             else:
                 # Unknown keyword - should have been handled by hybrid execution
                 return {
@@ -1042,6 +1053,18 @@ class ExecutionEngine:
                     "error": f"Keyword '{keyword_name}' not handled by hybrid execution system",
                     "output": None
                 }
+            
+            # Auto-capture page source for successful DOM-changing keywords in fallback execution
+            if result and result.get("success") and self.keyword_discovery.is_dom_changing_keyword(keyword_name):
+                page_source = await self._capture_page_source_after_keyword(session, keyword_name)
+                if page_source:
+                    result["page_source"] = page_source
+                    if "keyword_info" not in result:
+                        result["keyword_info"] = {}
+                    result["keyword_info"]["auto_captured_dom"] = True
+                    logger.info(f"Auto-captured page source after DOM-changing keyword in fallback: {keyword_name}")
+            
+            return result
             
         except Exception as e:
             return {
@@ -2066,7 +2089,7 @@ class ExecutionEngine:
             
             # Try to get page source when necessary
             try:
-                page_source = self._get_page_source_unified(session_id)
+                page_source = self._get_page_source_unified(session.session_id)
                 if page_source:
                     # Store full page source but return truncated version for state
                     session.browser_state.page_source = page_source
