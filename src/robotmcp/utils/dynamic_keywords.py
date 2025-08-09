@@ -772,6 +772,13 @@ class DynamicKeywordDiscovery:
     
     def _validate_arguments(self, keyword_info: KeywordInfo, args: List[str]) -> Dict[str, Any]:
         """Validate arguments for a keyword."""
+        
+        # Special handling for keywords that use *args and **kwargs (like RequestsLibrary)
+        if self._uses_varargs_kwargs(keyword_info):
+            # For *args/**kwargs keywords, we allow any number of arguments
+            # since they handle flexible argument parsing internally
+            return {"valid": True}
+        
         required_args = [arg for arg in keyword_info.args if arg not in keyword_info.defaults]
         
         if len(args) < len(required_args):
@@ -788,6 +795,28 @@ class DynamicKeywordDiscovery:
             }
         
         return {"valid": True}
+    
+    def _uses_varargs_kwargs(self, keyword_info: KeywordInfo) -> bool:
+        """Check if a keyword uses *args and **kwargs for flexible argument handling."""
+        # Check if the keyword signature indicates varargs/kwargs usage
+        args_list = keyword_info.args
+        
+        # Common patterns for *args/**kwargs in Robot Framework
+        if len(args_list) == 2 and args_list == ['args', 'kwargs']:
+            return True
+        
+        # Also check for RequestsLibrary specific patterns
+        if keyword_info.library == "RequestsLibrary":
+            # Most RequestsLibrary keywords use flexible argument handling
+            flexible_keywords = [
+                "post on session", "get on session", "put on session", 
+                "delete on session", "patch on session", "head on session",
+                "options on session", "post request", "get request"
+            ]
+            if any(pattern in keyword_info.name.lower() for pattern in flexible_keywords):
+                return True
+        
+        return False
     
     def _get_keyword_suggestions(self, keyword_name: str) -> List[str]:
         """Get suggestions for similar keyword names."""
