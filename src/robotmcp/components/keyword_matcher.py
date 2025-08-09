@@ -86,33 +86,33 @@ class KeywordMatcher:
             },
             'navigate': {
                 'patterns': ['open', 'go to', 'navigate', 'visit', 'new page'],
-                'libraries': ['SeleniumLibrary', 'Browser'],
-                'keywords': ['Open Browser', 'Go To', 'New Page', 'Navigate To']
+                'libraries': ['Browser', 'SeleniumLibrary'],
+                'keywords': ['New Page', 'Navigate To', 'Open Browser', 'Go To']
             },
             'click': {
                 'patterns': ['click', 'press', 'select', 'tap'],
-                'libraries': ['SeleniumLibrary', 'Browser', 'AppiumLibrary'],
-                'keywords': ['Click Element', 'Click Button', 'Click Link', 'Click', 'Tap']
+                'libraries': ['Browser', 'SeleniumLibrary', 'AppiumLibrary'],
+                'keywords': ['Click', 'Click Element', 'Click Button', 'Click Link', 'Tap']
             },
             'input': {
                 'patterns': ['type', 'enter', 'input', 'fill', 'set'],
-                'libraries': ['SeleniumLibrary', 'Browser', 'AppiumLibrary'],
-                'keywords': ['Input Text', 'Type Text', 'Fill', 'Fill Text', 'Set Text']
+                'libraries': ['Browser', 'SeleniumLibrary', 'AppiumLibrary'],
+                'keywords': ['Fill', 'Fill Text', 'Type Text', 'Input Text', 'Set Text']
             },
             'verify': {
                 'patterns': ['verify', 'check', 'assert', 'should', 'expect', 'get text'],
-                'libraries': ['SeleniumLibrary', 'Browser', 'BuiltIn'],
-                'keywords': ['Page Should Contain', 'Element Should Be Visible', 'Get Text', 'Should Be Equal']
+                'libraries': ['Browser', 'SeleniumLibrary', 'BuiltIn'],
+                'keywords': ['Get Text', 'Wait For Elements State', 'Page Should Contain', 'Element Should Be Visible', 'Should Be Equal']
             },
             'wait': {
                 'patterns': ['wait', 'pause', 'sleep', 'delay'],
-                'libraries': ['SeleniumLibrary', 'Browser', 'BuiltIn'],
-                'keywords': ['Wait Until Element Is Visible', 'Wait For Elements State', 'Sleep', 'Wait For Condition']
+                'libraries': ['Browser', 'SeleniumLibrary', 'BuiltIn'],
+                'keywords': ['Wait For Elements State', 'Wait For Condition', 'Wait Until Element Is Visible', 'Sleep']
             },
             'search': {
                 'patterns': ['search', 'find', 'look for', 'locate', 'get element'],
-                'libraries': ['SeleniumLibrary', 'Browser'],
-                'keywords': ['Get Element', 'Find Element', 'Locate Element', 'Get Elements']
+                'libraries': ['Browser', 'SeleniumLibrary'],
+                'keywords': ['Get Element', 'Get Elements', 'Find Element', 'Locate Element']
             },
             'property': {
                 'patterns': ['get property', 'property', 'attribute'],
@@ -121,7 +121,7 @@ class KeywordMatcher:
             },
             'cleanup': {
                 'patterns': ['close', 'cleanup', 'teardown', 'quit'],
-                'libraries': ['SeleniumLibrary', 'Browser'],
+                'libraries': ['Browser', 'SeleniumLibrary'],
                 'keywords': ['Close Browser', 'Close All Browsers', 'Quit']
             }
         }
@@ -470,7 +470,7 @@ class KeywordMatcher:
         
         # Priority libraries based on context
         context_libraries = {
-            'web': ['SeleniumLibrary', 'Browser'],
+            'web': ['Browser', 'SeleniumLibrary'],
             'mobile': ['AppiumLibrary'],
             'api': ['RequestsLibrary'],
             'database': ['DatabaseLibrary']
