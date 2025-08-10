@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rf-mcp"
-version = "0.1.0dev02"
+version = "0.1.0dev27"
 description = "Robot Framework MCP Server - Natural Language Test Automation Bridge"
 authors = [{name = "Robot MCP Team"}]
 license = {text = "MIT"}
@@ -13,17 +13,13 @@ requires-python = ">=3.10"
 dependencies = [
     "fastmcp>=2.0.0",
     "robotframework>=6.0",
-    "sentence-transformers>=2.2.0",
-    "numpy>=1.21.0",
-    "scipy>=1.7.0",
     "pydantic>=2.0.0",
-    "asyncio-mqtt",
-    "aiohttp>=3.8.0",
     "beautifulsoup4>=4.11.0",
     "lxml>=4.9.0",
     "robotframework-seleniumlibrary",
     "robotframework-requests",
-    "robotframework-databaselibrary"
+    "robotframework-databaselibrary",
+    "robotframework-browser>=19.7.0",
 ]
 
 [project.optional-dependencies]
