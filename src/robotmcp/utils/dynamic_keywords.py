@@ -16,6 +16,7 @@ class KeywordInfo:
     library: str
     method_name: str
     doc: str = ""
+    short_doc: str = ""
     args: List[str] = field(default_factory=list)
     defaults: Dict[str, Any] = field(default_factory=dict)
     tags: List[str] = field(default_factory=list)
@@ -285,11 +286,15 @@ class DynamicKeywordDiscovery:
                 if tag_match:
                     tags = [tag.strip() for tag in tag_match.group(1).split(',')]
             
+            # Create short documentation
+            short_doc = self._create_short_doc(doc)
+            
             return KeywordInfo(
                 name=keyword_name,
                 library=library_name,
                 method_name=method_name,
                 doc=doc,
+                short_doc=short_doc,
                 args=args,
                 defaults=defaults,
                 tags=tags,
@@ -301,8 +306,66 @@ class DynamicKeywordDiscovery:
             return KeywordInfo(
                 name=keyword_name,
                 library=library_name,
-                method_name=method_name
+                method_name=method_name,
+                doc="Documentation not available",
+                short_doc="Documentation not available"
             )
+    
+    def _create_short_doc(self, doc: str, max_length: int = 120) -> str:
+        """Create a short documentation string from full documentation.
+        
+        Args:
+            doc: Full documentation string
+            max_length: Maximum length of short documentation
+            
+        Returns:
+            str: Shortened documentation
+        """
+        if not doc:
+            return ""
+        
+        # Clean and normalize whitespace
+        doc = doc.strip()
+        if not doc:
+            return ""
+        
+        # Split into lines and get first meaningful line
+        lines = doc.split('\n')
+        first_line = ""
+        
+        for line in lines:
+            line = line.strip()
+            if line and not line.startswith('Tags:') and not line.startswith('Arguments:'):
+                first_line = line
+                break
+        
+        if not first_line:
+            return ""
+        
+        # Remove common Robot Framework prefixes
+        prefixes_to_remove = [
+            "Keyword ", "The keyword ", "This keyword ", "Method ", "Function "
+        ]
+        for prefix in prefixes_to_remove:
+            if first_line.startswith(prefix):
+                first_line = first_line[len(prefix):]
+                break
+        
+        # Ensure it ends with a period for consistency
+        if first_line and not first_line.endswith(('.', '!', '?', ':')):
+            if len(first_line) < max_length - 1:
+                first_line += "."
+        
+        # Truncate if too long
+        if len(first_line) > max_length:
+            # Try to truncate at word boundary
+            if ' ' in first_line[:max_length-3]:
+                truncate_pos = first_line[:max_length-3].rfind(' ')
+                first_line = first_line[:truncate_pos] + "..."
+            else:
+                first_line = first_line[:max_length-3] + "..."
+        
+        return first_line
     
     def find_keyword(self, keyword_name: str) -> Optional[KeywordInfo]:
         """Find a keyword by name (case-insensitive)."""

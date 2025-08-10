@@ -232,14 +232,24 @@ async def get_library_status(
 async def get_available_keywords(
     library_name: str = None
 ) -> List[Dict[str, Any]]:
-    """Get available Robot Framework keywords, optionally filtered by library.
+    """Get available Robot Framework keywords with native RF libdoc short documentation, optionally filtered by library.
+    
+    Uses Robot Framework's native libdoc API to provide accurate short_doc, argument types, and metadata.
+    Falls back to inspection-based discovery if libdoc is not available.
     
     Args:
         library_name: Optional library name to filter keywords (e.g., 'Browser', 'BuiltIn', 'Collections').
                      If not provided, returns all keywords from all loaded libraries.
     
     Returns:
-        List of keyword information including name, library, arguments, and documentation
+        List of keyword information including:
+        - name: Keyword name
+        - library: Library name
+        - args: List of argument names
+        - arg_types: List of argument types (when available from libdoc)
+        - short_doc: Short documentation from Robot Framework's native short_doc
+        - tags: Keyword tags
+        - is_deprecated: Whether keyword is deprecated (libdoc only)
     """
     return execution_engine.get_available_keywords(library_name)
 
@@ -247,15 +257,49 @@ async def get_available_keywords(
 async def search_keywords(
     pattern: str
 ) -> List[Dict[str, Any]]:
-    """Search for Robot Framework keywords matching a pattern.
+    """Search for Robot Framework keywords matching a pattern using native RF libdoc.
+    
+    Uses Robot Framework's native libdoc API for accurate search results and documentation.
+    Searches through keyword names, documentation, short_doc, and tags.
     
     Args:
         pattern: Search pattern to match against keyword names, documentation, or tags
     
     Returns:
-        List of matching keywords with their information
+        List of matching keywords with native RF libdoc metadata including short_doc, 
+        argument types, deprecation status, and enhanced tag information.
     """
     return execution_engine.search_keywords(pattern)
+
+@mcp.tool
+async def get_keyword_documentation(
+    keyword_name: str,
+    library_name: str = None
+) -> Dict[str, Any]:
+    """Get full documentation for a specific Robot Framework keyword using native RF libdoc.
+    
+    Uses Robot Framework's native LibraryDocumentation and KeywordDoc objects to provide
+    comprehensive keyword information including source location, argument types, and 
+    deprecation status when available.
+    
+    Args:
+        keyword_name: Name of the keyword to get documentation for
+        library_name: Optional library name to narrow search
+    
+    Returns:
+        Dict containing comprehensive keyword information:
+        - success: Boolean indicating if keyword was found
+        - keyword: Dict with keyword details including:
+          - name, library, args: Basic keyword information
+          - arg_types: Argument types from libdoc (when available)
+          - doc: Full documentation text
+          - short_doc: Native Robot Framework short_doc
+          - tags: Keyword tags
+          - is_deprecated: Deprecation status (libdoc only)
+          - source: Source file path (libdoc only)
+          - lineno: Line number in source (libdoc only)
+    """
+    return execution_engine.get_keyword_documentation(keyword_name, library_name)
 
 @mcp.tool
 async def validate_step_before_suite(
@@ -347,10 +391,19 @@ async def validate_test_readiness(
 
 @mcp.tool
 async def get_loaded_libraries() -> Dict[str, Any]:
-    """Get status of all loaded Robot Framework libraries.
+    """Get status of all loaded Robot Framework libraries using both libdoc and inspection methods.
+    
+    Returns comprehensive library status including:
+    - Native Robot Framework libdoc information (when available)
+    - Inspection-based discovery fallback
+    - Preferred data source (libdoc vs inspection)
+    - Library versions, scopes, types, and keyword counts
     
     Returns:
-        Dict with information about loaded libraries, failed imports, and keyword counts
+        Dict with detailed library information:
+        - preferred_source: 'libdoc' or 'inspection'  
+        - libdoc_based: Native RF libdoc library information (if available)
+        - inspection_based: Inspection-based library discovery information
     """
     return execution_engine.get_library_status()
 

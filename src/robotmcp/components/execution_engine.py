@@ -14,6 +14,7 @@ from robotmcp.utils.library_checker import LibraryAvailabilityChecker, check_and
 
 # Import dynamic keyword discovery
 from robotmcp.utils.dynamic_keywords import get_keyword_discovery
+from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
 
 # Import hybrid execution system
 from .keyword_overrides import KeywordOverrideRegistry, DynamicExecutionHandler, setup_default_overrides
@@ -133,6 +134,7 @@ class ExecutionEngine:
         
         # Initialize dynamic keyword discovery
         self.keyword_discovery = get_keyword_discovery()
+        self.rf_doc_storage = get_rf_doc_storage()
         
         # Initialize hybrid execution system
         self.override_registry = KeywordOverrideRegistry()
@@ -806,51 +808,174 @@ class ExecutionEngine:
                          If None, returns all keywords from all libraries.
         
         Returns:
-            List of keyword information dictionaries
+            List of keyword information dictionaries with short_doc from native RF libdoc
         """
-        if library_name:
-            # Get keywords from specific library
-            keywords_from_lib = self.keyword_discovery.get_keywords_by_library(library_name)
-            return [{
-                "name": keyword_info.name,
-                "library": keyword_info.library,
-                "args": keyword_info.args,
-                "doc": keyword_info.doc,
-                "tags": keyword_info.tags,
-                "is_builtin": keyword_info.is_builtin
-            } for keyword_info in keywords_from_lib]
+        # Use libdoc-based storage if available, otherwise fall back to inspection-based
+        if self.rf_doc_storage.is_available():
+            if library_name:
+                # Get keywords from specific library using libdoc
+                keywords_from_lib = self.rf_doc_storage.get_keywords_by_library(library_name)
+                return [{
+                    "name": kw.name,
+                    "library": kw.library,
+                    "args": kw.args,
+                    "short_doc": kw.short_doc,
+                    "tags": kw.tags,
+                    "is_deprecated": kw.is_deprecated,
+                    "arg_types": kw.arg_types
+                } for kw in keywords_from_lib]
+            else:
+                # Get all keywords using libdoc
+                keywords = []
+                for kw in self.rf_doc_storage.get_all_keywords():
+                    keywords.append({
+                        "name": kw.name,
+                        "library": kw.library,
+                        "args": kw.args,
+                        "short_doc": kw.short_doc,
+                        "tags": kw.tags,
+                        "is_deprecated": kw.is_deprecated,
+                        "arg_types": kw.arg_types
+                    })
+                return keywords
         else:
-            # Get all keywords from all libraries
-            keywords = []
-            
-            for keyword_info in self.keyword_discovery.get_all_keywords():
-                keywords.append({
+            # Fall back to inspection-based discovery
+            if library_name:
+                # Get keywords from specific library
+                keywords_from_lib = self.keyword_discovery.get_keywords_by_library(library_name)
+                return [{
                     "name": keyword_info.name,
                     "library": keyword_info.library,
                     "args": keyword_info.args,
-                    "doc": keyword_info.doc,
+                    "short_doc": keyword_info.short_doc,
                     "tags": keyword_info.tags,
                     "is_builtin": keyword_info.is_builtin
-                })
-            
-            return keywords
+                } for keyword_info in keywords_from_lib]
+            else:
+                # Get all keywords from all libraries
+                keywords = []
+                
+                for keyword_info in self.keyword_discovery.get_all_keywords():
+                    keywords.append({
+                        "name": keyword_info.name,
+                        "library": keyword_info.library,
+                        "args": keyword_info.args,
+                        "short_doc": keyword_info.short_doc,
+                        "tags": keyword_info.tags,
+                        "is_builtin": keyword_info.is_builtin
+                    })
+                
+                return keywords
     
     def search_keywords(self, pattern: str) -> List[Dict[str, Any]]:
-        """Search for keywords matching a pattern."""
-        matches = self.keyword_discovery.search_keywords(pattern)
-        
-        return [{
-            "name": kw.name,
-            "library": kw.library,
-            "args": kw.args,
-            "doc": kw.doc,
-            "tags": kw.tags,
-            "is_builtin": kw.is_builtin
-        } for kw in matches]
+        """Search for keywords matching a pattern using native RF libdoc when available."""
+        # Use libdoc-based search if available, otherwise fall back to inspection-based
+        if self.rf_doc_storage.is_available():
+            matches = self.rf_doc_storage.search_keywords(pattern)
+            return [{
+                "name": kw.name,
+                "library": kw.library,
+                "args": kw.args,
+                "short_doc": kw.short_doc,
+                "tags": kw.tags,
+                "is_deprecated": kw.is_deprecated,
+                "arg_types": kw.arg_types
+            } for kw in matches]
+        else:
+            # Fall back to inspection-based search
+            matches = self.keyword_discovery.search_keywords(pattern)
+            return [{
+                "name": kw.name,
+                "library": kw.library,
+                "args": kw.args,
+                "short_doc": kw.short_doc,
+                "tags": kw.tags,
+                "is_builtin": kw.is_builtin
+            } for kw in matches]
     
     def get_library_status(self) -> Dict[str, Any]:
-        """Get status of all loaded libraries."""
-        return self.keyword_discovery.get_library_status()
+        """Get status of all loaded libraries including libdoc availability."""
+        # Get inspection-based status
+        inspection_status = self.keyword_discovery.get_library_status()
+        
+        # Get libdoc-based status if available
+        if self.rf_doc_storage.is_available():
+            libdoc_status = self.rf_doc_storage.get_library_status()
+            return {
+                "inspection_based": inspection_status,
+                "libdoc_based": libdoc_status,
+                "preferred_source": "libdoc" if libdoc_status["libdoc_available"] else "inspection"
+            }
+        else:
+            return {
+                "inspection_based": inspection_status,
+                "libdoc_based": {"libdoc_available": False},
+                "preferred_source": "inspection"
+            }
+    
+    def get_keyword_documentation(self, keyword_name: str, library_name: str = None) -> Dict[str, Any]:
+        """Get full documentation for a specific keyword using native RF libdoc when available.
+        
+        Args:
+            keyword_name: Name of the keyword to get documentation for
+            library_name: Optional library name to narrow search
+            
+        Returns:
+            Dict containing full keyword documentation, args, and metadata
+        """
+        # Try libdoc-based lookup first
+        if self.rf_doc_storage.is_available():
+            keyword_info = self.rf_doc_storage.get_keyword_documentation(keyword_name, library_name)
+            
+            if keyword_info:
+                return {
+                    "success": True,
+                    "keyword": {
+                        "name": keyword_info.name,
+                        "library": keyword_info.library,
+                        "args": keyword_info.args,
+                        "arg_types": keyword_info.arg_types,
+                        "doc": keyword_info.doc,
+                        "short_doc": keyword_info.short_doc,
+                        "tags": keyword_info.tags,
+                        "is_deprecated": keyword_info.is_deprecated,
+                        "source": keyword_info.source,
+                        "lineno": keyword_info.lineno
+                    }
+                }
+        
+        # Fall back to inspection-based discovery
+        keyword_info = self.keyword_discovery.find_keyword(keyword_name)
+        
+        if not keyword_info:
+            return {
+                "success": False,
+                "error": f"Keyword '{keyword_name}' not found",
+                "keyword": None
+            }
+        
+        # If library name is specified, ensure it matches
+        if library_name and keyword_info.library.lower() != library_name.lower():
+            return {
+                "success": False,
+                "error": f"Keyword '{keyword_name}' not found in library '{library_name}'",
+                "keyword": None
+            }
+        
+        return {
+            "success": True,
+            "keyword": {
+                "name": keyword_info.name,
+                "library": keyword_info.library,
+                "args": keyword_info.args,
+                "defaults": getattr(keyword_info, 'defaults', {}),
+                "doc": keyword_info.doc,
+                "short_doc": keyword_info.short_doc,
+                "tags": keyword_info.tags,
+                "is_builtin": getattr(keyword_info, 'is_builtin', False),
+                "method_name": getattr(keyword_info, 'method_name', "")
+            }
+        }
 
     async def execute_step(
         self,
