@@ -135,7 +135,8 @@ async def build_test_suite(
     test_name: str,
     session_id: str = "default",
     tags: List[str] = None,
-    documentation: str = ""
+    documentation: str = "",
+    remove_library_prefixes: bool = True
 ) -> Dict[str, Any]:
     """Generate Robot Framework test suite from successful steps.
     
@@ -153,10 +154,11 @@ async def build_test_suite(
         session_id: Session with executed steps (must contain verified steps)
         tags: Test tags
         documentation: Test documentation
+        remove_library_prefixes: Remove library prefixes from keywords (default: True)
     """
     if tags is None:
         tags = []
-    return await test_builder.build_suite(session_id, test_name, tags, documentation)
+    return await test_builder.build_suite(session_id, test_name, tags, documentation, remove_library_prefixes)
 @mcp.tool
 async def validate_scenario(
     parsed_scenario: Dict[str, Any], 

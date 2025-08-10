@@ -67,7 +67,8 @@ class TestBuilder:
         session_id: str = "default",
         test_name: str = "",
         tags: List[str] = None,
-        documentation: str = ""
+        documentation: str = "",
+        remove_library_prefixes: bool = True
     ) -> Dict[str, Any]:
         """
         Generate Robot Framework test suite from successful execution steps.
@@ -77,6 +78,7 @@ class TestBuilder:
             test_name: Name for the test case
             tags: Test tags
             documentation: Test documentation
+            remove_library_prefixes: Remove library prefixes from keywords (e.g., "Browser.Click" -> "Click")
             
         Returns:
             Generated test suite with RF API objects and text representation
@@ -124,6 +126,10 @@ class TestBuilder:
             
             # Create test suite
             suite = await self._build_test_suite([test_case], session_id)
+            
+            # Apply library prefix removal if requested
+            if remove_library_prefixes:
+                suite = self._apply_prefix_removal(suite)
             
             # Generate Robot Framework API objects
             rf_suite = await self._create_rf_suite(suite)
@@ -747,3 +753,51 @@ class TestBuilder:
         # - Arguments with special RF syntax
         
         return arg
+
+    def _remove_library_prefix(self, keyword: str) -> str:
+        """Remove library prefix from keyword name for cleaner test suites.
+        
+        Converts "LibraryName.KeywordName" -> "KeywordName"
+        Leaves keywords without prefixes unchanged.
+        
+        Args:
+            keyword: Keyword name potentially with library prefix
+            
+        Returns:
+            Keyword name without library prefix
+        """
+        if '.' in keyword:
+            return keyword.split('.', 1)[1]  # Return everything after first dot
+        return keyword
+
+    def _apply_prefix_removal(self, suite: GeneratedTestSuite) -> GeneratedTestSuite:
+        """Apply library prefix removal to all keywords in the test suite.
+        
+        Args:
+            suite: Test suite with potentially prefixed keywords
+            
+        Returns:
+            Test suite with library prefixes removed from keywords
+        """
+        # Process test cases
+        for test_case in suite.test_cases:
+            # Process test steps
+            for step in test_case.steps:
+                step.keyword = self._remove_library_prefix(step.keyword)
+            
+            # Process setup
+            if test_case.setup:
+                test_case.setup.keyword = self._remove_library_prefix(test_case.setup.keyword)
+            
+            # Process teardown  
+            if test_case.teardown:
+                test_case.teardown.keyword = self._remove_library_prefix(test_case.teardown.keyword)
+        
+        # Process suite-level setup and teardown
+        if suite.setup:
+            suite.setup.keyword = self._remove_library_prefix(suite.setup.keyword)
+        
+        if suite.teardown:
+            suite.teardown.keyword = self._remove_library_prefix(suite.teardown.keyword)
+        
+        return suite
