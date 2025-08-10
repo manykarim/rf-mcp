@@ -190,15 +190,26 @@ async def recommend_libraries(
 @mcp.tool
 async def get_page_source(
     session_id: str = "default",
-    full_source: bool = False
+    full_source: bool = False,
+    filtered: bool = False,
+    filtering_level: str = "standard"
 ) -> Dict[str, Any]:
-    """Get page source and context for a browser session.
+    """Get page source and context for a browser session with optional DOM filtering.
     
     Args:
         session_id: Session identifier
         full_source: If True, returns complete page source. If False, returns preview only.
+        filtered: If True, returns filtered page source with only automation-relevant content.
+        filtering_level: Filtering intensity when filtered=True:
+                        - 'minimal': Remove only scripts and styles
+                        - 'standard': Remove scripts, styles, metadata, SVG, embeds (default)
+                        - 'aggressive': Remove all non-interactive elements and media
+    
+    Returns:
+        Dict with page source, metadata, and filtering information. When filtered=True,
+        includes both original and filtered page source lengths for comparison.
     """
-    return await execution_engine.get_page_source(session_id, full_source)
+    return await execution_engine.get_page_source(session_id, full_source, filtered, filtering_level)
 
 @mcp.tool
 async def check_library_availability(

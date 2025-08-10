@@ -9,6 +9,14 @@ from datetime import datetime
 import asyncio
 import traceback
 
+# Import BeautifulSoup for DOM filtering
+try:
+    from bs4 import BeautifulSoup
+    BS4_AVAILABLE = True
+except ImportError:
+    BeautifulSoup = None
+    BS4_AVAILABLE = False
+
 # Import the library availability checker
 from robotmcp.utils.library_checker import LibraryAvailabilityChecker, check_and_suggest_libraries
 
@@ -331,6 +339,125 @@ class ExecutionEngine:
             logger.debug(f"Error getting page source with unified method: {e}")
             return None
 
+    def filter_page_source(self, html: str, filtering_level: str = "standard") -> str:
+        """
+        Filter HTML page source to keep only automation-relevant content.
+        
+        Removes scripts, styles, metadata, and other elements that are not useful
+        for web automation, making the DOM tree cleaner and more focused.
+        
+        Args:
+            html: Raw HTML source code
+            filtering_level: Filtering intensity ('minimal', 'standard', 'aggressive')
+            
+        Returns:
+            str: Filtered HTML with only automation-relevant elements
+        """
+        if not html or not BS4_AVAILABLE:
+            return html
+            
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            # Define filtering rules based on level
+            if filtering_level == "minimal":
+                elements_to_remove = ['script', 'style']
+                attributes_to_remove = ['onclick', 'onload', 'onmouseover']
+                remove_comments = True
+                simplify_head = False
+                
+            elif filtering_level == "aggressive":
+                elements_to_remove = [
+                    'script', 'style', 'svg', 'noscript', 'meta', 'link', 
+                    'video', 'audio', 'embed', 'object', 'canvas'
+                ]
+                attributes_to_remove = [
+                    'style', 'onclick', 'onload', 'onmouseover', 'onmouseout',
+                    'onfocus', 'onblur', 'onchange', 'onsubmit', 'ondblclick',
+                    'onkeydown', 'onkeyup', 'onkeypress'
+                ]
+                remove_comments = True
+                simplify_head = True
+                
+            else:  # standard (default)
+                elements_to_remove = [
+                    'script', 'style', 'noscript', 'svg', 'meta', 'link', 
+                    'embed', 'object'
+                ]
+                attributes_to_remove = [
+                    'style', 'onclick', 'onload', 'onmouseover', 'onmouseout',
+                    'onfocus', 'onblur', 'onchange', 'onsubmit'
+                ]
+                remove_comments = True
+                simplify_head = True
+            
+            # Remove unwanted elements completely
+            for tag_name in elements_to_remove:
+                for element in soup.find_all(tag_name):
+                    element.decompose()
+            
+            # Remove HTML comments
+            if remove_comments:
+                from bs4 import Comment
+                for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
+                    comment.extract()
+            
+            # Simplify head section - keep only title
+            if simplify_head:
+                head = soup.find('head')
+                if head:
+                    title = head.find('title')
+                    head.clear()
+                    if title:
+                        head.append(title)
+            
+            # Remove unwanted attributes from all elements
+            for element in soup.find_all():
+                attrs_to_remove = []
+                
+                # Check each attribute
+                for attr_name in element.attrs.keys():
+                    # Remove event handler attributes
+                    if attr_name.startswith('on') and attr_name in attributes_to_remove:
+                        attrs_to_remove.append(attr_name)
+                    # Remove style attributes
+                    elif attr_name == 'style' and 'style' in attributes_to_remove:
+                        attrs_to_remove.append(attr_name)
+                    # Remove analytics/tracking attributes
+                    elif attr_name.startswith(('ga-', 'gtm-', 'fb-')):
+                        attrs_to_remove.append(attr_name)
+                
+                # Remove the identified attributes
+                for attr in attrs_to_remove:
+                    del element.attrs[attr]
+            
+            # Remove empty elements (divs/spans with no content and no interactive children)
+            for element in soup.find_all(['div', 'span']):
+                # Skip if element has interactive children or important attributes
+                if (element.find(['input', 'button', 'a', 'select', 'textarea']) or
+                    element.get('id') or 
+                    element.get('class') or
+                    element.get_text(strip=True)):
+                    continue
+                # Remove empty decorative elements
+                element.decompose()
+            
+            # Convert back to string
+            filtered_html = str(soup)
+            
+            # Log filtering results
+            original_size = len(html)
+            filtered_size = len(filtered_html)
+            reduction_percent = ((original_size - filtered_size) / original_size * 100) if original_size > 0 else 0
+            
+            logger.debug(f"DOM filtered: {original_size} → {filtered_size} chars ({reduction_percent:.1f}% reduction)")
+            
+            return filtered_html
+            
+        except Exception as e:
+            logger.warning(f"Failed to filter page source: {e}")
+            return html  # Return original HTML if filtering fails
+
     async def _capture_page_source_after_keyword(self, session: ExecutionSession, keyword_name: str) -> Optional[str]:
         """Capture page source after a DOM-changing keyword execution."""
         try:
@@ -349,6 +476,49 @@ class ExecutionEngine:
         except Exception as e:
             logger.debug(f"Error capturing page source after {keyword_name}: {e}")
             return None
+
+    async def _capture_page_source_with_filtering(self, session: ExecutionSession, keyword_name: str, include_filtered: bool = True) -> Dict[str, Any]:
+        """Capture page source with optional filtering for DOM-changing keywords.
+        
+        Args:
+            session: Execution session
+            keyword_name: Name of the keyword that triggered the capture
+            include_filtered: If True, also include filtered version
+            
+        Returns:
+            Dict with page source and optional filtered version
+        """
+        try:
+            # Get raw page source
+            page_source = self._get_page_source_unified(session.session_id)
+            
+            if not page_source:
+                return {}
+            
+            # Store in session state
+            session.browser_state.page_source = page_source
+            
+            result = {"page_source": page_source}
+            
+            # Add filtered version if requested
+            if include_filtered:
+                filtered_source = self.filter_page_source(page_source, "standard")
+                result["page_source_filtered"] = filtered_source
+                
+                # Log the filtering results
+                original_size = len(page_source)
+                filtered_size = len(filtered_source)
+                reduction_percent = ((original_size - filtered_size) / original_size * 100) if original_size > 0 else 0
+                
+                logger.debug(f"Captured page source after {keyword_name}: {original_size} chars (filtered: {filtered_size} chars, {reduction_percent:.1f}% reduction)")
+            else:
+                logger.debug(f"Captured page source after {keyword_name}: {len(page_source)} characters")
+                
+            return result
+            
+        except Exception as e:
+            logger.debug(f"Error capturing page source after {keyword_name}: {e}")
+            return {}
 
     async def _execute_selenium_keyword_directly(self, session: ExecutionSession, keyword_name: str, args: List[str]) -> Dict[str, Any]:
         """Execute SeleniumLibrary keyword directly using the selenium_lib instance."""
@@ -2607,12 +2777,14 @@ class ExecutionEngine:
             "total_sessions": len(sessions_info)
         }
 
-    async def get_page_source(self, session_id: str = "default", full_source: bool = False) -> Dict[str, Any]:
+    async def get_page_source(self, session_id: str = "default", full_source: bool = False, filtered: bool = False, filtering_level: str = "standard") -> Dict[str, Any]:
         """Get page source for a session.
         
         Args:
             session_id: Session identifier
             full_source: If True, returns complete page source. If False, returns preview.
+            filtered: If True, returns filtered page source with only automation-relevant content.
+            filtering_level: Filtering intensity when filtered=True ('minimal', 'standard', 'aggressive').
         """
         try:
             if session_id not in self.sessions:
@@ -2640,23 +2812,47 @@ class ExecutionEngine:
                     "error": "No page source available for this session"
                 }
             
-            result = {
-                "success": True,
-                "session_id": session_id,
-                "page_source_length": len(page_source),
-                "current_url": session.browser_state.current_url,
-                "page_title": session.browser_state.page_title,
-                "context": await self._extract_page_context(page_source)
-            }
-            
-            if full_source:
-                result["page_source"] = page_source
-            else:
-                # Return preview for large sources
-                if len(page_source) > 2000:
-                    result["page_source_preview"] = page_source[:2000] + "...\n[Truncated - use full_source=True for complete source]"
+            # Apply filtering if requested
+            if filtered:
+                filtered_source = self.filter_page_source(page_source, filtering_level)
+                result = {
+                    "success": True,
+                    "session_id": session_id,
+                    "page_source_length": len(page_source),
+                    "filtered_page_source_length": len(filtered_source),
+                    "current_url": session.browser_state.current_url,
+                    "page_title": session.browser_state.page_title,
+                    "context": await self._extract_page_context(page_source),
+                    "filtering_applied": True,
+                    "filtering_level": filtering_level
+                }
+                
+                if full_source:
+                    result["page_source"] = filtered_source
                 else:
-                    result["page_source_preview"] = page_source
+                    # Return preview of filtered source
+                    if len(filtered_source) > 2000:
+                        result["page_source_preview"] = filtered_source[:2000] + "...\n[Truncated - use full_source=True for complete filtered source]"
+                    else:
+                        result["page_source_preview"] = filtered_source
+            else:
+                result = {
+                    "success": True,
+                    "session_id": session_id,
+                    "page_source_length": len(page_source),
+                    "current_url": session.browser_state.current_url,
+                    "page_title": session.browser_state.page_title,
+                    "context": await self._extract_page_context(page_source)
+                }
+                
+                if full_source:
+                    result["page_source"] = page_source
+                else:
+                    # Return preview for large sources
+                    if len(page_source) > 2000:
+                        result["page_source_preview"] = page_source[:2000] + "...\n[Truncated - use full_source=True for complete source]"
+                    else:
+                        result["page_source_preview"] = page_source
             
             return result
             
