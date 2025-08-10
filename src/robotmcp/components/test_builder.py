@@ -460,14 +460,77 @@ class TestBuilder:
         
         type_description = ", ".join(test_types) if test_types else "automation"
         
-        doc = f"""Test suite generated from session {session_id}.
-
-This suite contains {case_count} test case{'s' if case_count != 1 else ''} for {type_description}.
-
-Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-"""
+        # Create a single-line documentation that won't break Robot Framework syntax
+        doc = f"Test suite generated from session {session_id} containing {case_count} test case{'s' if case_count != 1 else ''} for {type_description}."
         
         return doc
+
+    def _format_rf_documentation(self, documentation: str) -> List[str]:
+        """Format documentation for Robot Framework syntax.
+        
+        Handles both single-line and multi-line documentation properly.
+        Multi-line documentation uses '...' continuation markers.
+        
+        Args:
+            documentation: Documentation string (can contain newlines)
+            
+        Returns:
+            List of formatted documentation lines
+        """
+        if not documentation:
+            return []
+        
+        # Split documentation into lines and clean them
+        doc_lines = [line.strip() for line in documentation.strip().split('\n') if line.strip()]
+        
+        if not doc_lines:
+            return []
+        
+        formatted_lines = []
+        
+        if len(doc_lines) == 1:
+            # Single line documentation
+            formatted_lines.append(f"Documentation    {doc_lines[0]}")
+        else:
+            # Multi-line documentation with continuation markers
+            formatted_lines.append(f"Documentation    {doc_lines[0]}")
+            for line in doc_lines[1:]:
+                formatted_lines.append(f"...              {line}")
+        
+        return formatted_lines
+
+    def _format_rf_test_case_documentation(self, documentation: str) -> List[str]:
+        """Format test case documentation for Robot Framework syntax.
+        
+        Similar to suite documentation but uses [Documentation] format with proper indentation.
+        
+        Args:
+            documentation: Documentation string (can contain newlines)
+            
+        Returns:
+            List of formatted test case documentation lines
+        """
+        if not documentation:
+            return []
+        
+        # Split documentation into lines and clean them
+        doc_lines = [line.strip() for line in documentation.strip().split('\n') if line.strip()]
+        
+        if not doc_lines:
+            return []
+        
+        formatted_lines = []
+        
+        if len(doc_lines) == 1:
+            # Single line test case documentation
+            formatted_lines.append(f"    [Documentation]    {doc_lines[0]}")
+        else:
+            # Multi-line test case documentation with continuation markers
+            formatted_lines.append(f"    [Documentation]    {doc_lines[0]}")
+            for line in doc_lines[1:]:
+                formatted_lines.append(f"    ...                {line}")
+        
+        return formatted_lines
 
     async def _extract_common_tags(self, test_cases: List[GeneratedTestCase]) -> List[str]:
         """Extract common tags across test cases."""
@@ -553,7 +616,11 @@ Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         
         # Suite header
         lines.append(f"*** Settings ***")
-        lines.append(f"Documentation    {suite.documentation}")
+        
+        # Format documentation properly for Robot Framework
+        if suite.documentation:
+            doc_lines = self._format_rf_documentation(suite.documentation)
+            lines.extend(doc_lines)
         
         # Imports
         if suite.imports:
@@ -572,7 +639,9 @@ Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             lines.append(f"{test_case.name}")
             
             if test_case.documentation:
-                lines.append(f"    [Documentation]    {test_case.documentation}")
+                # Format test case documentation properly
+                test_doc_lines = self._format_rf_test_case_documentation(test_case.documentation)
+                lines.extend(test_doc_lines)
             
             if test_case.tags:
                 lines.append(f"    [Tags]    {' '.join(test_case.tags)}")
