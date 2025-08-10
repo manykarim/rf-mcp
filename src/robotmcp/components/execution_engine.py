@@ -1050,7 +1050,8 @@ class ExecutionEngine:
                 "session_variables": dict(session.variables),
                 "state_snapshot": await self._capture_state_snapshot(session),
                 "keyword_info": result.get("keyword_info", {}),
-                "suggestions": result.get("suggestions", [])
+                "suggestions": result.get("suggestions", []),
+                "page_source": result.get("page_source")  # Include captured page source from DOM-changing keywords
             }
             
         except Exception as e:
