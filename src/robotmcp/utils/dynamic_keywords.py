@@ -1135,35 +1135,39 @@ class DynamicKeywordDiscovery:
     def _detect_argument_type(self, type_hint: str) -> str:
         """Detect the basic type from a type hint."""
         
-        type_hint = type_hint.lower().strip()
+        type_hint_lower = type_hint.lower().strip()
         
         # Boolean types
-        if any(indicator in type_hint for indicator in ['bool', 'boolean']):
+        if any(indicator in type_hint_lower for indicator in ['bool', 'boolean']):
             return 'bool'
         
+        # Dictionary types (check before int due to dict[str, int] patterns)
+        if any(indicator in type_hint_lower for indicator in ['dict', 'mapping']) or 'viewportdimensions' in type_hint_lower:
+            return 'dict'
+        
+        # List types (check before int due to list[int] patterns)  
+        if any(indicator in type_hint_lower for indicator in ['list', 'sequence']):
+            return 'list'
+        
         # Integer types
-        if any(indicator in type_hint for indicator in ['int', 'integer']):
+        if any(indicator in type_hint_lower for indicator in ['int', 'integer']) and 'point' not in type_hint_lower:
             return 'int'
         
         # Float types  
-        if any(indicator in type_hint for indicator in ['float', 'double']):
+        if any(indicator in type_hint_lower for indicator in ['float', 'double']):
             return 'float'
         
         # Enum types (e.g., SupportedBrowsers, MouseButton)
-        if any(indicator in type_hint for indicator in ['enum', 'supportedbrowsers', 'mousebutton', 'keyboardmodifier']):
+        if any(indicator in type_hint_lower for indicator in ['enum', 'supportedbrowsers', 'mousebutton', 'keyboardmodifier', 'colorscheme', 'forcedcolors']):
             return 'enum'
         
         # Timedelta
-        if 'timedelta' in type_hint:
+        if 'timedelta' in type_hint_lower:
             return 'timedelta'
         
-        # Lists
-        if any(indicator in type_hint for indicator in ['list', 'sequence']):
-            return 'list'
-        
-        # Dicts
-        if any(indicator in type_hint for indicator in ['dict', 'mapping']):
-            return 'dict'
+        # Tuple types
+        if 'tuple' in type_hint_lower:
+            return 'tuple'
         
         # Default to string
         return 'str'
@@ -1185,6 +1189,41 @@ class DynamicKeywordDiscovery:
                 return float(value)
             except ValueError:
                 return value
+        
+        elif target_type in ['dict', 'list', 'tuple']:
+            try:
+                # First try ast.literal_eval for safe evaluation of Python literals
+                import ast
+                result = ast.literal_eval(value)
+                
+                # Convert to target type if needed
+                if target_type == 'tuple' and isinstance(result, (list, dict)):
+                    return tuple(result) if isinstance(result, list) else tuple(result.items())
+                elif target_type == 'list' and isinstance(result, (tuple, dict)):
+                    return list(result) if isinstance(result, tuple) else list(result.items())
+                elif target_type == 'dict' and isinstance(result, (list, tuple)):
+                    # Try to convert list/tuple of pairs to dict
+                    return dict(result) if len(result) > 0 and all(len(item) == 2 for item in result if isinstance(item, (list, tuple))) else result
+                
+                return result
+                
+            except (ValueError, SyntaxError):
+                # If ast.literal_eval fails, try JSON parsing
+                try:
+                    import json
+                    result = json.loads(value)
+                    
+                    # Convert to target type if needed
+                    if target_type == 'tuple':
+                        return tuple(result) if isinstance(result, list) else result
+                    elif target_type == 'list':
+                        return list(result) if isinstance(result, dict) else result
+                    
+                    return result
+                    
+                except json.JSONDecodeError:
+                    # If both fail, return original string
+                    return value
         
         # For enum, timedelta, etc., return as string for now
         return value
