@@ -143,6 +143,11 @@ class ExecutionCoordinator:
         """Get summary information about all sessions."""
         return self.session_manager.get_all_sessions_info()
     
+    @property
+    def sessions(self) -> Dict[str, Any]:
+        """Provide access to sessions for compatibility with TestBuilder."""
+        return self.session_manager.sessions
+    
     def cleanup_expired_sessions(self) -> int:
         """Clean up sessions that have been inactive for too long."""
         return self.session_manager.cleanup_expired_sessions()
@@ -207,20 +212,26 @@ class ExecutionCoordinator:
         
         # Get active library for the session
         active_library = session.get_active_library()
-        if not active_library:
-            return arguments
         
         # Convert locators in arguments
         converted_args = []
         for arg in arguments:
             # Simple heuristic: if argument looks like a locator, convert it
             if self._looks_like_locator(arg):
-                converted_arg = self.locator_converter.convert_locator_for_library(
-                    arg, active_library.capitalize()
-                )
-                converted_args.append(converted_arg)
-                if converted_arg != arg:
-                    logger.debug(f"Converted locator '{arg}' -> '{converted_arg}' for {active_library}")
+                # For execution, don't add strategy prefixes (causes parsing issues)
+                # Strategy prefixes will be added during test suite generation instead
+                processed_arg = arg
+                
+                # Then apply library-specific conversion if needed
+                if active_library:
+                    converted_arg = self.locator_converter.convert_locator_for_library(
+                        processed_arg, active_library.capitalize()
+                    )
+                    if converted_arg != processed_arg:
+                        logger.debug(f"Converted locator '{processed_arg}' -> '{converted_arg}' for {active_library}")
+                    converted_args.append(converted_arg)
+                else:
+                    converted_args.append(processed_arg)
             else:
                 converted_args.append(arg)
         
@@ -255,6 +266,36 @@ class ExecutionCoordinator:
         
         return any(locator_indicators)
     
+    async def validate_test_readiness(self, session_id: str) -> Dict[str, Any]:
+        """Check if a session is ready for test suite generation."""
+        session = self.session_manager.get_session(session_id)
+        if not session:
+            return {
+                "ready_for_suite_generation": False,
+                "error": f"Session '{session_id}' not found",
+                "guidance": ["Create a session and execute some steps first"],
+                "validation_summary": {"passed": 0, "failed": 0}
+            }
+        
+        step_count = session.step_count
+        if step_count == 0:
+            return {
+                "ready_for_suite_generation": False,
+                "error": "No steps executed in session",
+                "guidance": ["Execute some automation steps before building a test suite"],
+                "validation_summary": {"passed": 0, "failed": 0}
+            }
+        
+        return {
+            "ready_for_suite_generation": True,
+            "validation_summary": {
+                "passed": step_count,
+                "failed": 0,
+                "success_rate": 1.0
+            },
+            "guidance": [f"Session has {step_count} successful steps ready for suite generation"]
+        }
+
     def get_execution_statistics(self) -> Dict[str, Any]:
         """Get execution statistics across all services."""
         stats = {

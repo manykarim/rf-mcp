@@ -15,6 +15,132 @@ class LocatorConverter:
     def __init__(self, config: Optional[ExecutionConfig] = None):
         self.config = config or ExecutionConfig()
     
+    def add_explicit_strategy_prefix(self, locator: str, for_test_suite: bool = False, target_library: str = "Browser") -> str:
+        """
+        Add explicit strategy prefix to locators for better Robot Framework compatibility.
+        
+        This helps avoid Robot Framework escaping issues with # characters and makes
+        the intent clearer to AI agents parsing the generated test suites.
+        
+        Args:
+            locator: The locator string to add prefix to
+            for_test_suite: If True, add prefix for test suite generation;
+                          If False, keep original format for execution
+            target_library: Target library ("Browser" or "SeleniumLibrary")
+            
+        Returns:
+            str: Locator with or without explicit strategy prefix based on context
+        """
+        if not self.config.ADD_EXPLICIT_SELECTOR_STRATEGIES:
+            return locator
+        
+        # For test suite generation, always add prefix to avoid RF escaping
+        if for_test_suite:
+            # Already has a strategy prefix
+            if self._has_explicit_strategy(locator):
+                return locator
+            
+            # Determine and add appropriate strategy prefix based on target library
+            strategy = self._detect_selector_strategy(locator)
+            if strategy:
+                return self._format_strategy_prefix(strategy, locator, target_library)
+            return locator
+        
+        # For execution, keep original format (Browser Library handles prefixes internally)
+        # Only add prefix if it helps avoid ambiguity, but this might cause argument parsing issues
+        return locator
+    
+    def _detect_selector_strategy(self, locator: str) -> Optional[str]:
+        """
+        Detect the appropriate selector strategy for a locator.
+        
+        Args:
+            locator: Locator to analyze
+            
+        Returns:
+            str: Strategy name (css, xpath, text) or None if no prefix needed
+        """
+        # XPath selectors
+        if locator.startswith('//') or locator.startswith('..'):
+            return "xpath"
+        
+        # CSS selectors (most common cases)
+        css_indicators = [
+            locator.startswith('#'),      # ID selector
+            locator.startswith('.'),      # Class selector
+            locator.startswith('['),      # Attribute selector
+            ' > ' in locator,             # Child combinator
+            ' + ' in locator,             # Adjacent sibling
+            ' ~ ' in locator,             # General sibling
+            ':' in locator,               # Pseudo-selectors
+        ]
+        
+        if any(css_indicators):
+            return "css"
+        
+        # Simple tag selectors
+        if locator.lower() in ['input', 'button', 'a', 'div', 'span', 'form', 'textarea', 
+                              'select', 'option', 'label', 'img', 'table', 'tr', 'td']:
+            return "css"
+        
+        # Likely text content (contains spaces or common button text)
+        text_indicators = [
+            ' ' in locator,                                    # Contains spaces
+            locator in ['Login', 'Submit', 'Submit Form',     # Common button texts
+                       'Click here', 'Sign Up', 'Register',
+                       'Cancel', 'OK', 'Save', 'Delete', 'Edit'],
+            len(locator) > 20,                                # Long strings likely text
+        ]
+        
+        if any(text_indicators):
+            return "text"
+        
+        # Default to CSS for Browser Library compatibility
+        return "css"
+    
+    def _format_strategy_prefix(self, strategy: str, locator: str, target_library: str) -> str:
+        """
+        Format strategy prefix according to target library conventions.
+        
+        Args:
+            strategy: Strategy type (css, xpath, text, etc.)
+            locator: Original locator
+            target_library: Target library ("Browser" or "SeleniumLibrary")
+            
+        Returns:
+            str: Formatted locator with appropriate prefix
+        """
+        if target_library == "SeleniumLibrary":
+            # SeleniumLibrary prefers strategy:value syntax
+            if strategy == "text":
+                # SeleniumLibrary doesn't have text strategy, convert to link or xpath
+                if ' ' in locator and len(locator) < 50:  # Likely button/link text
+                    return f"link:{locator}"
+                else:
+                    # Use xpath for complex text matching
+                    escaped_text = locator.replace('"', '\"')
+                    return f'xpath://*[contains(text(),"{escaped_text}")]'
+            else:
+                return f"{strategy}:{locator}"
+        else:
+            # Browser Library uses strategy=value syntax
+            return f"{strategy}={locator}"
+    
+    def _has_explicit_strategy(self, locator: str) -> bool:
+        """Check if locator already has an explicit strategy prefix."""
+        # Browser Library strategies (strategy=value)
+        browser_strategies = ['id=', 'css=', 'xpath=', 'text=']
+        
+        # SeleniumLibrary strategies (strategy:value or strategy=value)
+        selenium_strategies = ['id:', 'name:', 'identifier:', 'class:', 'tag:', 
+                             'xpath:', 'css:', 'dom:', 'link:', 'partial link:', 
+                             'data:', 'jquery:', 'default:']
+        
+        all_strategies = browser_strategies + selenium_strategies + \
+                        [s.replace(':', '=') for s in selenium_strategies if ':' in s]
+        
+        return any(locator.startswith(strategy) for strategy in all_strategies)
+
     def convert_locator_for_library(self, locator: str, target_library: str) -> str:
         """
         Convert locator format between different libraries.

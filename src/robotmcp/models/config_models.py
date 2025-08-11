@@ -41,6 +41,7 @@ class ExecutionConfig:
     ENABLE_LOCATOR_CONVERSION: bool = True
     CONVERT_JQUERY_SELECTORS: bool = True
     CONVERT_CASCADED_SELECTORS: bool = True
+    ADD_EXPLICIT_SELECTOR_STRATEGIES: bool = True  # Add css=, xpath=, text= prefixes
     
     # Error handling
     FAIL_FAST_ON_ENUM_ERRORS: bool = True

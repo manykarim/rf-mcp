@@ -121,7 +121,7 @@ class TestBuilder:
             
             # Build test case from steps
             test_case = await self._build_test_case(
-                successful_steps, test_name or f"Test_{session_id}", tags, documentation
+                successful_steps, test_name or f"Test_{session_id}", tags, documentation, session_id
             )
             
             # Create test suite
@@ -242,7 +242,8 @@ class TestBuilder:
         steps: List[Dict[str, Any]],
         test_name: str,
         tags: List[str],
-        documentation: str
+        documentation: str,
+        session_id: str = None
     ) -> GeneratedTestCase:
         """Build a test case from execution steps."""
         
@@ -261,7 +262,7 @@ class TestBuilder:
                 continue
             
             # Apply optimizations
-            optimized_step = await self._optimize_step(keyword, arguments, test_steps)
+            optimized_step = await self._optimize_step(keyword, arguments, test_steps, session_id)
             
             if optimized_step:  # Only add if not filtered out by optimization
                 test_steps.append(optimized_step)
@@ -295,9 +296,12 @@ class TestBuilder:
         # Detect required imports from keywords
         for test_case in test_cases:
             for step in test_case.steps:
-                library = await self._detect_library_from_keyword(step.keyword)
+                library = await self._detect_library_from_keyword(step.keyword, session_id)
                 if library and library != "BuiltIn":  # Exclude BuiltIn as it's automatically available
                     all_imports.add(library)
+        
+        # Validate library exclusion rules for test suite generation
+        self._validate_suite_library_exclusions(all_imports, session_id)
         
         # BuiltIn is automatically available in Robot Framework, so we don't import it explicitly
         
@@ -319,7 +323,8 @@ class TestBuilder:
         self,
         keyword: str,
         arguments: List[str],
-        existing_steps: List[TestCaseStep]
+        existing_steps: List[TestCaseStep],
+        session_id: str = None
     ) -> Optional[TestCaseStep]:
         """Apply optimization rules to a step."""
         
@@ -338,16 +343,88 @@ class TestBuilder:
                         step.arguments == arguments):
                         return None  # Skip redundant verification
         
+        # Rule: Add explicit selector strategy prefixes for Robot Framework compatibility
+        processed_arguments = self._add_strategy_prefixes_to_arguments(keyword, arguments, session_id)
+        
         # Rule: Add meaningful comments
         comment = None
         if self.optimization_rules.get('add_meaningful_comments'):
-            comment = await self._generate_step_comment(keyword, arguments)
+            comment = await self._generate_step_comment(keyword, processed_arguments)
         
         return TestCaseStep(
             keyword=keyword,
-            arguments=arguments,
+            arguments=processed_arguments,
             comment=comment
         )
+
+    def _add_strategy_prefixes_to_arguments(self, keyword: str, arguments: List[str], session_id: str = None) -> List[str]:
+        """Add explicit strategy prefixes to locator arguments for Robot Framework compatibility."""
+        
+        # Only apply to keywords that typically take locators as first argument
+        browser_library_keywords = [
+            'click', 'fill text', 'type text', 'clear', 'select options by',
+            'check checkbox', 'uncheck checkbox', 'hover', 'wait for elements state',
+            'get element', 'get elements', 'get text', 'get property', 'get attribute',
+            'scroll to element', 'highlight elements', 'take screenshot'
+        ]
+        
+        selenium_library_keywords = [
+            'click element', 'click button', 'click link', 'input text', 'input password',
+            'select checkbox', 'uncheck checkbox', 'select from list by value', 'select from list by label',
+            'mouse over', 'mouse down', 'get text', 'get element attribute', 'element should contain',
+            'wait until element is visible', 'wait until element contains', 'scroll element into view'
+        ]
+        
+        all_locator_keywords = browser_library_keywords + selenium_library_keywords
+        
+        if keyword.lower() not in all_locator_keywords or not arguments:
+            return arguments
+        
+        # Determine target library from session or keyword
+        target_library = "Browser"  # Default
+        
+        if self.execution_engine and session_id:
+            try:
+                session = self.execution_engine.sessions.get(session_id)
+                if session:
+                    active_lib = session.get_active_library()
+                    if active_lib == "selenium":
+                        target_library = "SeleniumLibrary"
+                    elif 'SeleniumLibrary' in session.imported_libraries:
+                        target_library = "SeleniumLibrary"
+                    # Check keyword patterns
+                    elif keyword.lower() in selenium_library_keywords:
+                        target_library = "SeleniumLibrary"
+            except Exception as e:
+                logger.debug(f"Could not determine library from session: {e}")
+        
+        # Also detect from keyword pattern
+        if keyword.lower() in selenium_library_keywords:
+            target_library = "SeleniumLibrary"
+        
+        # Create locator converter for strategy prefix detection
+        from robotmcp.components.execution.locator_converter import LocatorConverter
+        from robotmcp.models.config_models import ExecutionConfig
+        
+        config = ExecutionConfig()
+        converter = LocatorConverter(config)
+        
+        # Process first argument (usually the locator) 
+        processed_arguments = arguments.copy()
+        first_arg = arguments[0]
+        
+        # Add strategy prefix for test suite generation with target library
+        prefixed_locator = converter.add_explicit_strategy_prefix(
+            first_arg, 
+            for_test_suite=True, 
+            target_library=target_library
+        )
+        
+        if prefixed_locator != first_arg:
+            processed_arguments[0] = prefixed_locator
+            logger.debug(f"Added {target_library} strategy prefix for test suite: '{first_arg}' -> '{prefixed_locator}'")
+        
+        return processed_arguments
 
     async def _generate_step_comment(self, keyword: str, arguments: List[str]) -> Optional[str]:
         """Generate a meaningful comment for a step."""
@@ -440,9 +517,43 @@ class TestBuilder:
         
         return setup, teardown
 
-    async def _detect_library_from_keyword(self, keyword: str) -> Optional[str]:
-        """Detect which library a keyword belongs to using dynamic discovery."""
-        # Use shared library detection utility with dynamic keyword discovery
+    async def _detect_library_from_keyword(self, keyword: str, session_id: str = None) -> Optional[str]:
+        """
+        Detect which library a keyword belongs to, respecting session library choice.
+        
+        Args:
+            keyword: Keyword name to detect library for
+            session_id: Session ID to check for library preference
+            
+        Returns:
+            Library name or None
+        """
+        # First check if we have a session with a specific web automation library
+        if session_id and self.execution_engine and hasattr(self.execution_engine, 'sessions'):
+            session = self.execution_engine.sessions.get(session_id)
+            if session:
+                session_web_lib = session.get_web_automation_library()
+                if session_web_lib:
+                    # Check if this keyword could belong to the session's library
+                    keyword_lower = keyword.lower().strip()
+                    
+                    # For Browser Library keywords
+                    if (session_web_lib == "Browser" and 
+                        any(kw in keyword_lower for kw in [
+                            'click', 'fill text', 'get text', 'wait for elements state',
+                            'check checkbox', 'select options by', 'hover', 'new browser', 'new page'
+                        ])):
+                        return "Browser"
+                    
+                    # For SeleniumLibrary keywords  
+                    elif (session_web_lib == "SeleniumLibrary" and
+                          any(kw in keyword_lower for kw in [
+                              'click element', 'input text', 'select from list', 'wait until element',
+                              'open browser', 'close browser', 'select checkbox', 'get text'
+                          ])):
+                        return "SeleniumLibrary"
+        
+        # Fallback to shared library detection utility with dynamic keyword discovery
         keyword_discovery = None
         if self.execution_engine and hasattr(self.execution_engine, 'keyword_discovery'):
             keyword_discovery = self.execution_engine.keyword_discovery
@@ -806,3 +917,37 @@ class TestBuilder:
             suite.teardown.keyword = self._remove_library_prefix(suite.teardown.keyword)
         
         return suite
+    
+    def _validate_suite_library_exclusions(self, imports: set, session_id: str) -> None:
+        """
+        Validate that the test suite doesn't violate library exclusion rules.
+        
+        Args:
+            imports: Set of library names to be imported
+            session_id: Session ID for error reporting
+            
+        Raises:
+            ValueError: If conflicting libraries are detected
+        """
+        web_automation_libs = ['Browser', 'SeleniumLibrary']
+        detected_web_libs = [lib for lib in imports if lib in web_automation_libs]
+        
+        if len(detected_web_libs) > 1:
+            raise ValueError(
+                f"Test suite for session '{session_id}' contains conflicting web automation libraries: "
+                f"{detected_web_libs}. Browser Library and SeleniumLibrary are mutually exclusive. "
+                f"Please use separate sessions for different libraries."
+            )
+        
+        # Also check session consistency if execution engine is available
+        if self.execution_engine and hasattr(self.execution_engine, 'sessions'):
+            session = self.execution_engine.sessions.get(session_id)
+            if session:
+                session_web_lib = session.get_web_automation_library()
+                if session_web_lib and detected_web_libs:
+                    suite_web_lib = detected_web_libs[0]
+                    if session_web_lib != suite_web_lib:
+                        logger.warning(
+                            f"Session '{session_id}' uses '{session_web_lib}' but suite "
+                            f"detected '{suite_web_lib}' from keywords. Using session library."
+                        )

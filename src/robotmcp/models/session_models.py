@@ -51,10 +51,43 @@ class ExecutionSession:
         return self.variables.get(name, default)
     
     def import_library(self, library_name: str) -> None:
-        """Mark a library as imported in this session."""
+        """
+        Mark a library as imported in this session.
+        
+        Enforces exclusion rules - Browser Library and SeleniumLibrary cannot
+        coexist in the same session.
+        
+        Args:
+            library_name: Name of the library to import
+            
+        Raises:
+            ValueError: If trying to import a conflicting library
+        """
         if library_name not in self.imported_libraries:
+            # Enforce web automation library exclusion
+            web_automation_libs = ['Browser', 'SeleniumLibrary']
+            
+            if library_name in web_automation_libs:
+                # Check if another web automation library is already imported
+                existing_web_libs = [lib for lib in self.imported_libraries if lib in web_automation_libs]
+                
+                if existing_web_libs and library_name not in existing_web_libs:
+                    existing_lib = existing_web_libs[0]
+                    raise ValueError(
+                        f"Cannot import '{library_name}' - session already has '{existing_lib}'. "
+                        f"Browser Library and SeleniumLibrary are mutually exclusive per session."
+                    )
+            
             self.imported_libraries.append(library_name)
             self.update_activity()
+    
+    def get_web_automation_library(self) -> Optional[str]:
+        """Get the web automation library imported in this session."""
+        web_automation_libs = ['Browser', 'SeleniumLibrary']
+        for lib in self.imported_libraries:
+            if lib in web_automation_libs:
+                return lib
+        return None
     
     def get_successful_steps(self) -> List[ExecutionStep]:
         """Get all successfully executed steps."""
