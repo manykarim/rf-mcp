@@ -170,6 +170,9 @@ class StateManager:
                         filtered_elements.append(element)
                 page_state.elements = filtered_elements
             
+            # Filter to only include visible elements
+            visible_elements = [elem for elem in page_state.elements if elem.visible]
+            
             result = {
                 "url": page_state.url,
                 "title": page_state.title,
@@ -184,12 +187,13 @@ class StateManager:
                         "css_selector": elem.css_selector,
                         "visible": elem.visible,
                         "clickable": elem.clickable
-                    } for elem in page_state.elements
+                    } for elem in visible_elements
                 ],
                 "forms": page_state.forms,
                 "links": page_state.links,
-                "element_count": len(page_state.elements),
-                "interactive_elements": len([e for e in page_state.elements if e.clickable])
+                "element_count": len(visible_elements),
+                "total_elements": len(page_state.elements),
+                "interactive_elements": len([e for e in visible_elements if e.clickable])
             }
             
             # Add Browser Library specific state if available
