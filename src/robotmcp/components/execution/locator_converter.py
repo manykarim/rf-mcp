@@ -171,12 +171,14 @@ class LocatorConverter:
         if not self.config.ENABLE_LOCATOR_CONVERSION:
             return locator
             
-        # Convert SeleniumLibrary locators to Browser Library format
-        if target_library == "Browser":
-            return self._convert_to_browser_library(locator)
-        # Convert Browser Library locators to SeleniumLibrary format  
-        elif target_library == "SeleniumLibrary":
+        # NOTE: Locator conversion disabled for Browser Library to preserve strategy prefixes
+        # Browser Library supports strategy prefixes (css=, id=, xpath=, etc.) and we should preserve them
+        # Only convert for SeleniumLibrary if needed
+        if target_library == "SeleniumLibrary":
             return self._convert_to_selenium_library(locator)
+        # For Browser Library, preserve original locator to avoid stripping strategy prefixes
+        elif target_library == "Browser":
+            return locator  # No conversion - preserve strategy prefixes
         
         return locator
     

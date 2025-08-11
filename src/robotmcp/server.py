@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 
 from fastmcp import FastMCP
 
-from robotmcp.components.execution_engine import ExecutionEngine
+from robotmcp.components.execution import ExecutionCoordinator
 from robotmcp.components.keyword_matcher import KeywordMatcher
 from robotmcp.components.library_recommender import LibraryRecommender
 from robotmcp.components.nlp_processor import NaturalLanguageProcessor
@@ -24,7 +24,7 @@ mcp = FastMCP("Robot Framework MCP Server")
 nlp_processor = NaturalLanguageProcessor()
 keyword_matcher = KeywordMatcher()
 library_recommender = LibraryRecommender()
-execution_engine = ExecutionEngine()
+execution_engine = ExecutionCoordinator()
 state_manager = StateManager()
 test_builder = TestBuilder(execution_engine)
 

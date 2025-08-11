@@ -7,6 +7,8 @@ from robotmcp.models.session_models import ExecutionSession
 from robotmcp.models.config_models import ExecutionConfig
 from robotmcp.components.browser import BrowserLibraryManager
 from robotmcp.components.execution import SessionManager, PageSourceService, KeywordExecutor, LocatorConverter
+from robotmcp.utils.library_checker import LibraryAvailabilityChecker
+from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,10 @@ class ExecutionCoordinator:
         self.page_source_service = PageSourceService(self.config)
         self.keyword_executor = KeywordExecutor(self.config)
         self.locator_converter = LocatorConverter(self.config)
+        
+        # Initialize additional components for backward compatibility
+        self.library_checker = LibraryAvailabilityChecker()
+        self.rf_doc_storage = get_rf_doc_storage()
         
         logger.info("ExecutionCoordinator initialized with service-oriented architecture")
     
@@ -337,6 +343,266 @@ class ExecutionCoordinator:
         self.browser_library_manager.cleanup()
         
         logger.info("ExecutionCoordinator cleanup completed")
+    
+    # ============================================
+    # MISSING METHODS FOR BACKWARD COMPATIBILITY
+    # ============================================
+    
+    def get_available_keywords(self, library_name: str = None) -> List[Dict[str, Any]]:
+        """Get list of available keywords, optionally filtered by library."""
+        # Use libdoc-based storage if available, otherwise fall back to inspection-based
+        if self.rf_doc_storage.is_available():
+            if library_name:
+                # Get keywords from specific library using libdoc
+                keywords_from_lib = self.rf_doc_storage.get_keywords_by_library(library_name)
+                return [{
+                    "name": kw.name,
+                    "library": kw.library,
+                    "args": kw.args,
+                    "short_doc": kw.short_doc,
+                    "tags": kw.tags,
+                    "is_deprecated": kw.is_deprecated,
+                    "arg_types": kw.arg_types
+                } for kw in keywords_from_lib]
+            else:
+                # Get all keywords using libdoc
+                keywords = []
+                for kw in self.rf_doc_storage.get_all_keywords():
+                    keywords.append({
+                        "name": kw.name,
+                        "library": kw.library,
+                        "args": kw.args,
+                        "short_doc": kw.short_doc,
+                        "tags": kw.tags,
+                        "is_deprecated": kw.is_deprecated,
+                        "arg_types": kw.arg_types
+                    })
+                return keywords
+        else:
+            # Fall back to inspection-based discovery via keyword_executor
+            keyword_discovery = self.keyword_executor.keyword_discovery
+            if library_name:
+                # Get keywords from specific library
+                keywords_from_lib = keyword_discovery.get_keywords_by_library(library_name)
+                return [{
+                    "name": keyword_info.name,
+                    "library": keyword_info.library,
+                    "args": keyword_info.args,
+                    "short_doc": keyword_info.short_doc,
+                    "tags": keyword_info.tags,
+                    "is_builtin": keyword_info.is_builtin
+                } for keyword_info in keywords_from_lib]
+            else:
+                # Get all keywords from all libraries
+                keywords = []
+                for keyword_info in keyword_discovery.get_all_keywords():
+                    keywords.append({
+                        "name": keyword_info.name,
+                        "library": keyword_info.library,
+                        "args": keyword_info.args,
+                        "short_doc": keyword_info.short_doc,
+                        "tags": keyword_info.tags,
+                        "is_builtin": keyword_info.is_builtin
+                    })
+                return keywords
+    
+    def search_keywords(self, pattern: str) -> List[Dict[str, Any]]:
+        """Search for keywords matching a pattern using native RF libdoc when available."""
+        # Use libdoc-based search if available, otherwise fall back to inspection-based
+        if self.rf_doc_storage.is_available():
+            matches = self.rf_doc_storage.search_keywords(pattern)
+            return [{
+                "name": kw.name,
+                "library": kw.library,
+                "args": kw.args,
+                "short_doc": kw.short_doc,
+                "tags": kw.tags,
+                "is_deprecated": kw.is_deprecated,
+                "arg_types": kw.arg_types
+            } for kw in matches]
+        else:
+            # Fall back to inspection-based search via keyword_executor
+            matches = self.keyword_executor.keyword_discovery.search_keywords(pattern)
+            return [{
+                "name": kw.name,
+                "library": kw.library,
+                "args": kw.args,
+                "short_doc": kw.short_doc,
+                "tags": kw.tags,
+                "is_builtin": getattr(kw, 'is_builtin', False)
+            } for kw in matches]
+    
+    def get_keyword_documentation(self, keyword_name: str, library_name: str = None) -> Dict[str, Any]:
+        """Get full documentation for a specific keyword using native RF libdoc when available."""
+        # Try libdoc-based lookup first
+        if self.rf_doc_storage.is_available():
+            keyword_info = self.rf_doc_storage.get_keyword_documentation(keyword_name, library_name)
+            
+            if keyword_info:
+                return {
+                    "success": True,
+                    "keyword": {
+                        "name": keyword_info.name,
+                        "library": keyword_info.library,
+                        "args": keyword_info.args,
+                        "arg_types": keyword_info.arg_types,
+                        "doc": keyword_info.doc,
+                        "short_doc": keyword_info.short_doc,
+                        "tags": keyword_info.tags,
+                        "is_deprecated": keyword_info.is_deprecated,
+                        "source": keyword_info.source,
+                        "lineno": keyword_info.lineno
+                    }
+                }
+        
+        # Fall back to inspection-based search via keyword_executor  
+        keyword_discovery = self.keyword_executor.keyword_discovery
+        keyword_info = keyword_discovery.find_keyword(keyword_name, library_name)
+        
+        if keyword_info:
+            return {
+                "success": True,
+                "keyword": {
+                    "name": keyword_info.name,
+                    "library": keyword_info.library,
+                    "args": keyword_info.args,
+                    "arg_types": getattr(keyword_info, 'arg_types', []),
+                    "doc": getattr(keyword_info, 'doc', ''),
+                    "short_doc": keyword_info.short_doc,
+                    "tags": keyword_info.tags,
+                    "is_deprecated": False,
+                    "source": getattr(keyword_info, 'source', ''),
+                    "lineno": getattr(keyword_info, 'lineno', 0)
+                }
+            }
+        else:
+            return {
+                "success": False,
+                "error": f"Keyword '{keyword_name}' not found"
+            }
+    
+    def get_installation_status(self, library_name: str) -> Dict[str, Any]:
+        """Get detailed installation status for a specific library."""
+        from robotmcp.utils.library_checker import COMMON_ROBOT_LIBRARIES
+        
+        if library_name in COMMON_ROBOT_LIBRARIES:
+            lib_info = COMMON_ROBOT_LIBRARIES[library_name]
+            package_name = lib_info['package']
+            import_name = lib_info['import']
+            
+            # Check import availability
+            import_available = self.library_checker.is_library_available(package_name, import_name)
+            
+            # Check pip package status
+            pip_installed = self.library_checker.check_pip_package_installed(package_name)
+            
+            status = {
+                "library_name": library_name,
+                "package_name": package_name,
+                "import_name": import_name,
+                "import_available": import_available,
+                "pip_installed": pip_installed,
+                "status": "available" if import_available else "not_available",
+                "installation_command": f"pip install {package_name}"
+            }
+            
+            # Add specific guidance
+            if not pip_installed:
+                status["message"] = f"Package {package_name} is not installed. Install with: pip install {package_name}"
+            elif not import_available:
+                status["message"] = f"Package {package_name} is installed but cannot be imported. Check for version conflicts."
+            else:
+                status["message"] = f"Library {library_name} is available and ready to use."
+                
+            return status
+        else:
+            return {
+                "library_name": library_name,
+                "status": "unknown",
+                "message": f"Unknown library '{library_name}'. Cannot determine installation status."
+            }
+    
+    def get_library_status(self) -> Dict[str, Any]:
+        """Get status of all loaded libraries including libdoc availability."""
+        # Get inspection-based status via keyword_executor
+        inspection_status = self.keyword_executor.keyword_discovery.get_library_status()
+        
+        # Get libdoc-based status if available
+        if self.rf_doc_storage.is_available():
+            libdoc_status = self.rf_doc_storage.get_library_status()
+            return {
+                "inspection_based": inspection_status,
+                "libdoc_based": libdoc_status,
+                "preferred_source": "libdoc" if libdoc_status["libdoc_available"] else "inspection"
+            }
+        else:
+            return {
+                "inspection_based": inspection_status,
+                "libdoc_based": {"libdoc_available": False},
+                "preferred_source": "inspection"
+            }
+    
+    def get_session_validation_status(self, session_id: str = "default") -> Dict[str, Any]:
+        """Get validation status of steps in a session."""
+        session = self.session_manager.get_session(session_id)
+        if not session:
+            return {
+                "success": False,
+                "error": f"Session '{session_id}' not found"
+            }
+        
+        validated_steps = []
+        failed_steps = []  # Will always be empty since failed steps are not stored
+        
+        # Since we only store successful steps now, all steps are validated
+        for step in session.steps:
+            step_info = {
+                "step_id": step.step_id,
+                "keyword": step.keyword,
+                "arguments": step.arguments,
+                "status": step.status,
+                "validated": True,  # All stored steps are considered validated
+                "execution_time": step.execution_time
+            }
+            validated_steps.append(step_info)
+        
+        total_steps = len(validated_steps)
+        passed_steps = len([s for s in validated_steps if s["status"] == "pass"])
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "total_steps": total_steps,
+            "validated_steps": passed_steps,
+            "failed_steps": 0,  # Failed steps are not stored
+            "validation_rate": 100.0 if total_steps > 0 else 0.0,  # All stored steps are validated
+            "steps": validated_steps,
+            "ready_for_test_suite": total_steps > 0,
+            "message": f"Session has {total_steps} validated steps ready for test suite generation" if total_steps > 0 
+                      else "Session has no validated steps yet"
+        }
+    
+    # ============================================
+    # BACKWARD COMPATIBILITY PROPERTIES
+    # ============================================
+    
+    @property 
+    def sessions(self) -> Dict[str, ExecutionSession]:
+        """Access to sessions for backward compatibility."""
+        return self.session_manager.sessions
+    
+    @property
+    def keyword_discovery(self):
+        """Access to keyword discovery for backward compatibility."""
+        return self.keyword_executor.keyword_discovery
+    
+    def _convert_locator_for_library(self, locator: str, target_library: str) -> str:
+        """Backward compatibility method for TestBuilder."""
+        return self.locator_converter.convert_locator_for_library(locator, target_library)
+    
+    # ============================================
+    # CONTEXT MANAGER
+    # ============================================
     
     def __enter__(self):
         """Context manager entry."""
