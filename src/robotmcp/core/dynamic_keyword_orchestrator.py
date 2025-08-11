@@ -132,86 +132,7 @@ class DynamicKeywordDiscovery:
         # Fall back to our custom parsing logic
         return self._parse_arguments(args)
     
-    def _convert_browser_arguments(self, keyword_info: KeywordInfo, parsed_args: ParsedArguments, original_args: List[str]) -> Tuple[List[Any], Dict[str, Any]]:
-        """Convert parsed arguments to appropriate types for Browser Library keywords."""
-        
-        # Convert all positional arguments first
-        converted_args = []
-        converted_kwargs = {}
-        
-        # Handle specific keyword argument conversions
-        keyword_name = keyword_info.name.lower()
-        
-        # Try to import Browser data types for advanced conversions
-        try:
-            from Browser.utils.data_types import SupportedBrowsers
-            browser_library_available = True
-        except ImportError:
-            browser_library_available = False
-            logger.debug("Browser library data types not available for advanced conversion")
-        
-        # Handle specific keyword conversions
-        if "new browser" in keyword_name:
-            # New Browser(browser_type, headless=True, **kwargs)
-            if parsed_args.positional:
-                # Convert browser type
-                browser_type = parsed_args.positional[0].lower() if parsed_args.positional[0] else 'chromium'
-                if browser_library_available:
-                    if browser_type in ['chromium', 'chrome']:
-                        converted_args.append(SupportedBrowsers.chromium)
-                    elif browser_type == 'firefox':
-                        converted_args.append(SupportedBrowsers.firefox)
-                    elif browser_type == 'webkit':
-                        converted_args.append(SupportedBrowsers.webkit)
-                    else:
-                        converted_args.append(SupportedBrowsers.chromium)  # default
-                else:
-                    converted_args.append(browser_type)
-                
-                # Convert headless parameter (second positional argument becomes keyword argument)
-                if len(parsed_args.positional) > 1:
-                    headless_value = parsed_args.positional[1].lower().strip()
-                    converted_kwargs['headless'] = headless_value in ['true', '1', 'yes', 'on']
-        
-        elif "set viewport size" in keyword_name:
-            # Set Viewport Size(width, height)
-            for i, arg in enumerate(parsed_args.positional):
-                try:
-                    converted_args.append(int(arg))
-                except ValueError:
-                    converted_args.append(arg)  # Keep as string if conversion fails
-        
-        else:
-            # For other keywords, copy positional args and try basic type conversions
-            for arg in parsed_args.positional:
-                # Try to convert numeric strings
-                if arg.isdigit():
-                    converted_args.append(int(arg))
-                elif '.' in arg and arg.replace('.', '').replace('-', '').isdigit():
-                    try:
-                        converted_args.append(float(arg))
-                    except ValueError:
-                        converted_args.append(arg)
-                else:
-                    converted_args.append(arg)
-        
-        # Handle named arguments
-        for key, value in parsed_args.named.items():
-            if key == 'headless':
-                converted_kwargs[key] = value.lower().strip() in ['true', '1', 'yes', 'on']
-            elif key in ['timeout', 'slowmo', 'width', 'height']:
-                try:
-                    converted_kwargs[key] = float(value) if '.' in value else int(value)
-                except ValueError:
-                    converted_kwargs[key] = value
-            else:
-                converted_kwargs[key] = value
-        
-        return converted_args, converted_kwargs
     
-    def convert_browser_arguments(self, keyword_name: str, args: List[str], library_name: str = None) -> Dict[str, Any]:
-        """Convert arguments for Browser Library keywords using LibDoc type information."""
-        return self.argument_processor.convert_browser_arguments(keyword_name, args, library_name)
     
     # Library management methods
     def get_library_exclusion_info(self) -> Dict[str, Any]:
@@ -290,12 +211,47 @@ class DynamicKeywordDiscovery:
             else:
                 # Regular library methods
                 if keyword_info.library == "Browser":
-                    # Use the internal _convert_browser_arguments method for proper conversion
-                    converted_args, converted_kwargs = self._convert_browser_arguments(keyword_info, parsed_args, original_args)
-                    if converted_kwargs:
-                        result = method(*converted_args, **converted_kwargs)
-                    else:
-                        result = method(*converted_args)
+                    try:
+                        # Use the LibDoc-based approach, with fallback to smart conversion
+                        libdoc_converted = self.argument_processor.convert_browser_arguments(keyword_info.name, original_args, keyword_info.library)
+                        
+                        # If LibDoc conversion didn't detect complex types, apply smart conversion
+                        smart_converted = {}
+                        for key, value in libdoc_converted.items():
+                            if isinstance(value, str):
+                                # Apply smart type conversion for common patterns
+                                if value.startswith('{') and value.endswith('}'):
+                                    # Dictionary pattern
+                                    smart_converted[key] = self.argument_processor.convert_string_value(value, "dict")
+                                elif value.startswith('[') and value.endswith(']'):
+                                    # List pattern
+                                    smart_converted[key] = self.argument_processor.convert_string_value(value, "list") 
+                                elif value.lower() in ['true', 'false']:
+                                    # Boolean pattern
+                                    smart_converted[key] = self.argument_processor.convert_string_value(value, "bool")
+                                elif value.isdigit():
+                                    # Integer pattern
+                                    smart_converted[key] = self.argument_processor.convert_string_value(value, "int")
+                                elif key.startswith('arg_'):
+                                    # Positional argument
+                                    smart_converted[key] = value
+                                else:
+                                    # Keep as string
+                                    smart_converted[key] = value
+                            else:
+                                smart_converted[key] = value
+                        
+                        # Extract positional and keyword arguments
+                        pos_args = [v for k, v in smart_converted.items() if k.startswith('arg_')]
+                        kwargs = {k: v for k, v in smart_converted.items() if not k.startswith('arg_')}
+                        
+                        if kwargs:
+                            result = method(*pos_args, **kwargs)
+                        else:
+                            result = method(*pos_args)
+                    except Exception as browser_error:
+                        logger.debug(f"Browser Library LibDoc conversion failed: {browser_error}, trying with positional args only")
+                        result = method(*parsed_args.positional)
                 elif keyword_info.name == "Create List":
                     # Collections.Create List takes variable arguments
                     result = method(*parsed_args.positional)
@@ -319,6 +275,8 @@ class DynamicKeywordDiscovery:
             }
             
         except Exception as e:
+            import traceback
+            logger.debug(f"Full traceback for {keyword_info.library}.{keyword_info.name}: {traceback.format_exc()}")
             return {
                 "success": False,
                 "error": f"Error executing {keyword_info.library}.{keyword_info.name}: {str(e)}",

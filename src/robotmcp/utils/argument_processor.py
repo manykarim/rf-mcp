@@ -61,6 +61,10 @@ class ArgumentProcessor:
                         param_type = self.detect_argument_type(arg_info.type_hint)
                         break
                 
+                # If LibDoc didn't provide type info, try smart detection for common patterns
+                if param_type == 'str':
+                    param_type = self._smart_detect_argument_type(key, value, library_name)
+                
                 # Convert value to appropriate type
                 if param_type and param_type != 'str':
                     converted_kwargs[key] = self.convert_string_value(value, param_type)
@@ -95,6 +99,25 @@ class ArgumentProcessor:
             try:
                 return float(value)
             except ValueError:
+                return value
+        
+        elif target_type == 'browser_enum':
+            # Handle Browser Library enum conversion
+            try:
+                # Import and convert to the proper enum
+                from Browser.utils.data_types import SupportedBrowsers
+                # Convert string to enum
+                if value.lower() == 'chromium':
+                    return SupportedBrowsers.chromium
+                elif value.lower() == 'firefox':
+                    return SupportedBrowsers.firefox  
+                elif value.lower() == 'webkit':
+                    return SupportedBrowsers.webkit
+                else:
+                    # Default to chromium if unknown
+                    return SupportedBrowsers.chromium
+            except ImportError:
+                # If can't import the enum, return string
                 return value
         
         elif target_type in ['dict', 'list', 'tuple']:
@@ -263,6 +286,10 @@ class ArgumentProcessor:
         if 'float' in type_lower:
             return 'float'
         
+        # Browser Library specific enum types that need special handling
+        if any(browser_enum in type_lower for browser_enum in ['supportedbrowsers', 'browserlibrary']):
+            return 'browser_enum'
+        
         # Enum types (treat as string for now)
         if 'enum' in type_lower:
             return 'str'
@@ -270,6 +297,60 @@ class ArgumentProcessor:
         # Time-related (treat as string for now)
         if any(time_type in type_lower for time_type in ['timedelta', 'duration']):
             return 'str'
+        
+        # Default to string
+        return 'str'
+    
+    def _smart_detect_argument_type(self, arg_name: str, arg_value: str, library_name: str = None) -> str:
+        """Smart detection for argument types when LibDoc doesn't provide enough info."""
+        
+        # Common boolean parameters across libraries
+        boolean_params = {
+            # Browser Library
+            'force', 'headless', 'devtools', 'chromiumSandbox', 'handleSIGHUP', 
+            'handleSIGINT', 'handleSIGTERM', 'noWaitAfter',
+            # SeleniumLibrary
+            'implicit_wait', 'page_load_timeout', 'desired_capabilities',
+            # RequestsLibrary  
+            'verify', 'allow_redirects',
+            # General
+            'debug', 'verbose', 'enabled', 'disabled', 'visible', 'hidden'
+        }
+        
+        # Common integer/numeric parameters
+        numeric_params = {
+            # Browser Library
+            'timeout', 'width', 'height', 'clickCount', 'delay',
+            # SeleniumLibrary
+            'index', 'size', 'position',
+            # RequestsLibrary
+            'timeout', 'max_retries',
+            # General
+            'count', 'limit', 'retry', 'attempts'
+        }
+        
+        arg_name_lower = arg_name.lower()
+        
+        # Check if it's a known boolean parameter
+        if arg_name_lower in boolean_params:
+            return 'bool'
+        
+        # Check if it's a known numeric parameter
+        if arg_name_lower in numeric_params:
+            return 'int'
+        
+        # Smart pattern detection based on value
+        if arg_value.lower() in ['true', 'false']:
+            return 'bool'
+        
+        if arg_value.isdigit():
+            return 'int'
+        
+        if arg_value.startswith('{') and arg_value.endswith('}'):
+            return 'dict'
+        
+        if arg_value.startswith('[') and arg_value.endswith(']'):
+            return 'list'
         
         # Default to string
         return 'str'
@@ -285,21 +366,29 @@ class ArgumentProcessor:
         
         try:
             # Try to find keyword in LibDoc
-            if library_name:
-                lib_info = rf_storage.get_library_info(library_name)
-                if lib_info:
-                    keyword_info = lib_info.get_keyword_info(keyword_name)
-                    if keyword_info and hasattr(keyword_info, 'arg_types'):
-                        return self.parse_argument_signature(keyword_info.arg_types)
-            
-            # Fallback: search across all libraries
-            all_libs = rf_storage.get_all_library_names()
-            for lib_name in all_libs:
-                lib_info = rf_storage.get_library_info(lib_name)
-                if lib_info:
-                    keyword_info = lib_info.get_keyword_info(keyword_name)
-                    if keyword_info and hasattr(keyword_info, 'arg_types'):
-                        return self.parse_argument_signature(keyword_info.arg_types)
+            keyword_info = rf_storage.find_keyword(keyword_name)
+            if keyword_info:
+                # Check if library matches if specified
+                if library_name and keyword_info.library.lower() != library_name.lower():
+                    return []
+                
+                # Parse argument information - try arg_types first, then fall back to args
+                if keyword_info.arg_types:
+                    # arg_types is a list of strings, convert to signature format
+                    signature_parts = []
+                    for i, arg_type in enumerate(keyword_info.arg_types):
+                        if i < len(keyword_info.args):
+                            arg_name = keyword_info.args[i]
+                            signature_parts.append(f"{arg_name}: {arg_type}")
+                        else:
+                            signature_parts.append(f"arg_{i}: {arg_type}")
+                    
+                    signature = ", ".join(signature_parts)
+                    return self.parse_argument_signature(signature)
+                elif keyword_info.args:
+                    # If no arg_types, try to parse from args (which may contain type info)
+                    # Format: ['browser: SupportedBrowsers = chromium', 'headless: bool = True', ...]
+                    return self.parse_argument_signature(", ".join(keyword_info.args))
         
         except Exception as e:
             logger.debug(f"LibDoc argument info lookup failed for '{keyword_name}': {e}")

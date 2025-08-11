@@ -309,8 +309,29 @@ class BrowserLibraryHandler:
             
             # Parse arguments using Robot Framework's native approach if available
             if keyword_info and keyword_info.library == "Browser":
-                parsed_args = discovery._parse_arguments_with_rf_spec(keyword_info, args)
-                converted_args, converted_kwargs = discovery._convert_browser_arguments(keyword_info, parsed_args, args)
+                # Use the LibDoc-based conversion approach directly from argument processor
+                libdoc_converted = discovery.argument_processor.convert_browser_arguments(keyword_info.name, args, keyword_info.library)
+                
+                # Apply smart conversion for patterns that LibDoc might miss
+                smart_converted = {}
+                for key, value in libdoc_converted.items():
+                    if isinstance(value, str):
+                        if value.startswith('{') and value.endswith('}'):
+                            smart_converted[key] = discovery.argument_processor.convert_string_value(value, "dict")
+                        elif value.startswith('[') and value.endswith(']'):
+                            smart_converted[key] = discovery.argument_processor.convert_string_value(value, "list") 
+                        elif value.lower() in ['true', 'false']:
+                            smart_converted[key] = discovery.argument_processor.convert_string_value(value, "bool")
+                        elif value.isdigit():
+                            smart_converted[key] = discovery.argument_processor.convert_string_value(value, "int")
+                        else:
+                            smart_converted[key] = value
+                    else:
+                        smart_converted[key] = value
+                
+                # Extract positional and keyword arguments
+                converted_args = [v for k, v in smart_converted.items() if k.startswith('arg_')]
+                converted_kwargs = {k: v for k, v in smart_converted.items() if not k.startswith('arg_')}
                 
                 # Use global browser library instance
                 browser_lib = self.execution_engine.browser_lib
