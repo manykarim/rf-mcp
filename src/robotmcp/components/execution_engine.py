@@ -411,41 +411,49 @@ class ExecutionEngine:
                     if title:
                         head.append(title)
             
-            # Remove elements that are not visible FIRST (before removing style attributes)
-            elements_to_check = soup.find_all()
-            for element in elements_to_check[:]:  # Create a copy of the list to safely modify during iteration
-                should_remove = False
-                
-                # Check for hidden attribute
-                if element.get('hidden') is not None:
-                    should_remove = True
-                
-                # Check for display:none or visibility:hidden in style attribute
-                style_attr = element.get('style', '')
-                if style_attr:
-                    style_lower = style_attr.lower()
-                    if ('display:none' in style_lower.replace(' ', '') or 
-                        'display: none' in style_lower or
-                        'visibility:hidden' in style_lower.replace(' ', '') or 
-                        'visibility: hidden' in style_lower):
-                        should_remove = True
-                
-                # Check for common CSS classes that indicate hidden elements
-                class_attr = element.get('class', [])
-                if isinstance(class_attr, list):
-                    class_names = ' '.join(class_attr).lower()
-                else:
-                    class_names = str(class_attr).lower()
-                
-                if any(hidden_class in class_names for hidden_class in 
-                      ['hidden', 'invisible', 'd-none', 'hide', 'sr-only', 'visually-hidden']):
-                    should_remove = True
-                
-                # Remove if determined to be hidden
-                if should_remove:
-                    element.decompose()
+            # For "standard" filtering, keep non-visible and hidden elements
+            # This allows automation tools to interact with elements that might be shown/hidden dynamically
+            # Only remove elements that are truly non-interactive (this logic moved to aggressive filtering)
             
-            # Remove unwanted attributes from remaining visible elements
+            # Note: Non-visible elements are kept in standard filtering as they may become visible
+            # through user interactions or JavaScript, and automation tools need to detect them
+            
+            # For aggressive filtering, also remove hidden/non-visible elements
+            if filtering_level == "aggressive":
+                elements_to_check = soup.find_all()
+                for element in elements_to_check[:]:  # Create a copy of the list to safely modify during iteration
+                    should_remove = False
+                    
+                    # Check for hidden attribute
+                    if element.get('hidden') is not None:
+                        should_remove = True
+                    
+                    # Check for display:none or visibility:hidden in style attribute
+                    style_attr = element.get('style', '')
+                    if style_attr:
+                        style_lower = style_attr.lower()
+                        if ('display:none' in style_lower.replace(' ', '') or 
+                            'display: none' in style_lower or
+                            'visibility:hidden' in style_lower.replace(' ', '') or 
+                            'visibility: hidden' in style_lower):
+                            should_remove = True
+                    
+                    # Check for common CSS classes that indicate hidden elements
+                    class_attr = element.get('class', [])
+                    if isinstance(class_attr, list):
+                        class_names = ' '.join(class_attr).lower()
+                    else:
+                        class_names = str(class_attr).lower()
+                    
+                    if any(hidden_class in class_names for hidden_class in 
+                          ['hidden', 'invisible', 'd-none', 'hide', 'sr-only', 'visually-hidden']):
+                        should_remove = True
+                    
+                    # Remove if determined to be hidden
+                    if should_remove:
+                        element.decompose()
+            
+            # Remove unwanted attributes from remaining elements
             for element in soup.find_all():
                 attrs_to_remove = []
                 
