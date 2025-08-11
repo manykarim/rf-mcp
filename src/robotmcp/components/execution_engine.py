@@ -21,7 +21,7 @@ except ImportError:
 from robotmcp.utils.library_checker import LibraryAvailabilityChecker, check_and_suggest_libraries
 
 # Import dynamic keyword discovery
-from robotmcp.utils.dynamic_keywords import get_keyword_discovery
+from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
 from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
 
 # Import hybrid execution system
