@@ -1,7 +1,7 @@
 """Main orchestrator for dynamic keyword discovery."""
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from robotmcp.models.library_models import KeywordInfo, ParsedArguments
 from robotmcp.core.library_manager import LibraryManager
@@ -98,6 +98,117 @@ class DynamicKeywordDiscovery:
         """Parse a list of arguments into positional and named arguments."""
         return self.argument_processor.parse_arguments(args)
     
+    def _parse_arguments(self, args: List[str]) -> ParsedArguments:
+        """Parse Robot Framework-style arguments (internal method for compatibility)."""
+        return self.argument_processor.parse_arguments(args)
+    
+    def _parse_arguments_with_rf_spec(self, keyword_info: KeywordInfo, args: List[str]) -> ParsedArguments:
+        """Parse arguments using Robot Framework's native ArgumentSpec if available."""
+        try:
+            from robot.running.arguments import ArgumentSpec
+            from robot.running.arguments.argumentresolver import ArgumentResolver
+            
+            # Try to create ArgumentSpec from keyword info
+            if hasattr(keyword_info, 'args') and keyword_info.args:
+                spec = ArgumentSpec(
+                    positional_or_named=keyword_info.args,
+                    defaults=keyword_info.defaults if hasattr(keyword_info, 'defaults') else {}
+                )
+                
+                # Use Robot Framework's ArgumentResolver to split arguments
+                resolver = ArgumentResolver(spec, resolve_named=True)
+                positional, named = resolver.resolve(args, named_args=None)
+                
+                # Convert to our ParsedArguments format
+                parsed = ParsedArguments()
+                parsed.positional = positional
+                parsed.named = {k: v for k, v in named.items()} if named else {}
+                
+                return parsed
+                
+        except (ImportError, Exception) as e:
+            logger.debug(f"RF ArgumentSpec parsing failed: {e}, using fallback parsing")
+            
+        # Fall back to our custom parsing logic
+        return self._parse_arguments(args)
+    
+    def _convert_browser_arguments(self, keyword_info: KeywordInfo, parsed_args: ParsedArguments, original_args: List[str]) -> Tuple[List[Any], Dict[str, Any]]:
+        """Convert parsed arguments to appropriate types for Browser Library keywords."""
+        
+        # Convert all positional arguments first
+        converted_args = []
+        converted_kwargs = {}
+        
+        # Handle specific keyword argument conversions
+        keyword_name = keyword_info.name.lower()
+        
+        # Try to import Browser data types for advanced conversions
+        try:
+            from Browser.utils.data_types import SupportedBrowsers
+            browser_library_available = True
+        except ImportError:
+            browser_library_available = False
+            logger.debug("Browser library data types not available for advanced conversion")
+        
+        # Handle specific keyword conversions
+        if "new browser" in keyword_name:
+            # New Browser(browser_type, headless=True, **kwargs)
+            if parsed_args.positional:
+                # Convert browser type
+                browser_type = parsed_args.positional[0].lower() if parsed_args.positional[0] else 'chromium'
+                if browser_library_available:
+                    if browser_type in ['chromium', 'chrome']:
+                        converted_args.append(SupportedBrowsers.chromium)
+                    elif browser_type == 'firefox':
+                        converted_args.append(SupportedBrowsers.firefox)
+                    elif browser_type == 'webkit':
+                        converted_args.append(SupportedBrowsers.webkit)
+                    else:
+                        converted_args.append(SupportedBrowsers.chromium)  # default
+                else:
+                    converted_args.append(browser_type)
+                
+                # Convert headless parameter (second positional argument becomes keyword argument)
+                if len(parsed_args.positional) > 1:
+                    headless_value = parsed_args.positional[1].lower().strip()
+                    converted_kwargs['headless'] = headless_value in ['true', '1', 'yes', 'on']
+        
+        elif "set viewport size" in keyword_name:
+            # Set Viewport Size(width, height)
+            for i, arg in enumerate(parsed_args.positional):
+                try:
+                    converted_args.append(int(arg))
+                except ValueError:
+                    converted_args.append(arg)  # Keep as string if conversion fails
+        
+        else:
+            # For other keywords, copy positional args and try basic type conversions
+            for arg in parsed_args.positional:
+                # Try to convert numeric strings
+                if arg.isdigit():
+                    converted_args.append(int(arg))
+                elif '.' in arg and arg.replace('.', '').replace('-', '').isdigit():
+                    try:
+                        converted_args.append(float(arg))
+                    except ValueError:
+                        converted_args.append(arg)
+                else:
+                    converted_args.append(arg)
+        
+        # Handle named arguments
+        for key, value in parsed_args.named.items():
+            if key == 'headless':
+                converted_kwargs[key] = value.lower().strip() in ['true', '1', 'yes', 'on']
+            elif key in ['timeout', 'slowmo', 'width', 'height']:
+                try:
+                    converted_kwargs[key] = float(value) if '.' in value else int(value)
+                except ValueError:
+                    converted_kwargs[key] = value
+            else:
+                converted_kwargs[key] = value
+        
+        return converted_args, converted_kwargs
+    
     def convert_browser_arguments(self, keyword_name: str, args: List[str], library_name: str = None) -> Dict[str, Any]:
         """Convert arguments for Browser Library keywords using LibDoc type information."""
         return self.argument_processor.convert_browser_arguments(keyword_name, args, library_name)
@@ -179,15 +290,12 @@ class DynamicKeywordDiscovery:
             else:
                 # Regular library methods
                 if keyword_info.library == "Browser":
-                    # Use converted Browser arguments
-                    converted = self.argument_processor.convert_browser_arguments(keyword_info.name, original_args, keyword_info.library)
-                    # Extract positional and keyword arguments
-                    pos_args = [v for k, v in converted.items() if k.startswith('arg_')]
-                    kwargs = {k: v for k, v in converted.items() if not k.startswith('arg_')}
-                    if kwargs:
-                        result = method(*pos_args, **kwargs)
+                    # Use the internal _convert_browser_arguments method for proper conversion
+                    converted_args, converted_kwargs = self._convert_browser_arguments(keyword_info, parsed_args, original_args)
+                    if converted_kwargs:
+                        result = method(*converted_args, **converted_kwargs)
                     else:
-                        result = method(*pos_args)
+                        result = method(*converted_args)
                 elif keyword_info.name == "Create List":
                     # Collections.Create List takes variable arguments
                     result = method(*parsed_args.positional)
