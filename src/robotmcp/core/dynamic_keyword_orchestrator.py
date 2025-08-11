@@ -102,6 +102,10 @@ class DynamicKeywordDiscovery:
         """Parse Robot Framework-style arguments (internal method for compatibility)."""
         return self.argument_processor.parse_arguments(args)
     
+    def _parse_arguments_for_keyword(self, keyword_name: str, args: List[str], library_name: str = None) -> ParsedArguments:
+        """Parse arguments using LibDoc information for a specific keyword."""
+        return self.argument_processor.parse_arguments_for_keyword(keyword_name, args, library_name)
+    
     def _parse_arguments_with_rf_spec(self, keyword_info: KeywordInfo, args: List[str]) -> ParsedArguments:
         """Parse arguments using Robot Framework's native ArgumentSpec if available."""
         try:
@@ -212,39 +216,12 @@ class DynamicKeywordDiscovery:
                 # Regular library methods
                 if keyword_info.library == "Browser":
                     try:
-                        # Use the LibDoc-based approach, with fallback to smart conversion
-                        libdoc_converted = self.argument_processor.convert_browser_arguments(keyword_info.name, original_args, keyword_info.library)
+                        # Use Robot Framework's native type conversion
+                        parsed = self.argument_processor.parse_arguments_for_keyword(keyword_info.name, original_args, keyword_info.library)
                         
-                        # Extract LibDoc type info metadata
-                        libdoc_type_info = libdoc_converted.pop('_libdoc_type_info', {})
-                        
-                        # Apply smart conversion only when LibDoc didn't provide explicit type information
-                        smart_converted = {}
-                        for key, value in libdoc_converted.items():
-                            if isinstance(value, str) and not libdoc_type_info.get(key, False):
-                                # Only apply smart type conversion if LibDoc didn't provide type info for this argument
-                                if value.startswith('{') and value.endswith('}'):
-                                    # Dictionary pattern
-                                    smart_converted[key] = self.argument_processor.convert_string_value(value, "dict")
-                                elif value.startswith('[') and value.endswith(']'):
-                                    # List pattern
-                                    smart_converted[key] = self.argument_processor.convert_string_value(value, "list") 
-                                elif value.lower() in ['true', 'false']:
-                                    # Boolean pattern
-                                    smart_converted[key] = self.argument_processor.convert_string_value(value, "bool")
-                                elif value.isdigit():
-                                    # Integer pattern - only if LibDoc didn't specify the type
-                                    smart_converted[key] = self.argument_processor.convert_string_value(value, "int")
-                                else:
-                                    # Keep as string
-                                    smart_converted[key] = value
-                            else:
-                                # Keep original value if LibDoc provided type info or value is not a string
-                                smart_converted[key] = value
-                        
-                        # Extract positional and keyword arguments
-                        pos_args = [v for k, v in smart_converted.items() if k.startswith('arg_')]
-                        kwargs = {k: v for k, v in smart_converted.items() if not k.startswith('arg_')}
+                        # Extract positional and keyword arguments (already properly type-converted by RF native system)
+                        pos_args = parsed.positional
+                        kwargs = parsed.named
                         
                         if kwargs:
                             result = method(*pos_args, **kwargs)
@@ -303,8 +280,8 @@ class DynamicKeywordDiscovery:
             }
         
         try:
-            # Parse arguments
-            parsed_args = self.parse_arguments(args)
+            # Parse arguments using LibDoc information for accuracy
+            parsed_args = self._parse_arguments_for_keyword(keyword_name, args, keyword_info.library)
             
             # Execute the keyword
             return self._execute_direct_method_call(keyword_info, parsed_args, args, session_variables or {})
