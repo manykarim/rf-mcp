@@ -50,18 +50,19 @@ class ExecutionSession:
         """Get a session variable."""
         return self.variables.get(name, default)
     
-    def import_library(self, library_name: str) -> None:
+    def import_library(self, library_name: str, force: bool = False) -> None:
         """
         Mark a library as imported in this session.
         
         Enforces exclusion rules - Browser Library and SeleniumLibrary cannot
-        coexist in the same session.
+        coexist in the same session, unless force=True is used to switch libraries.
         
         Args:
             library_name: Name of the library to import
+            force: If True, allows switching between mutually exclusive libraries
             
         Raises:
-            ValueError: If trying to import a conflicting library
+            ValueError: If trying to import a conflicting library without force=True
         """
         if library_name not in self.imported_libraries:
             # Enforce web automation library exclusion
@@ -72,11 +73,17 @@ class ExecutionSession:
                 existing_web_libs = [lib for lib in self.imported_libraries if lib in web_automation_libs]
                 
                 if existing_web_libs and library_name not in existing_web_libs:
-                    existing_lib = existing_web_libs[0]
-                    raise ValueError(
-                        f"Cannot import '{library_name}' - session already has '{existing_lib}'. "
-                        f"Browser Library and SeleniumLibrary are mutually exclusive per session."
-                    )
+                    if not force:
+                        existing_lib = existing_web_libs[0]
+                        raise ValueError(
+                            f"Cannot import '{library_name}' - session already has '{existing_lib}'. "
+                            f"Browser Library and SeleniumLibrary are mutually exclusive per session."
+                        )
+                    else:
+                        # Force switch: remove existing web automation libraries
+                        for existing_lib in existing_web_libs:
+                            if existing_lib in self.imported_libraries:
+                                self.imported_libraries.remove(existing_lib)
             
             self.imported_libraries.append(library_name)
             self.update_activity()

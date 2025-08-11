@@ -242,11 +242,11 @@ class BrowserLibraryManager:
         """
         if library_type == "browser" and self.browser_lib:
             session.browser_state.active_library = "browser"
-            session.import_library("Browser")
+            session.import_library("Browser", force=True)  # Allow switching from SeleniumLibrary
             return True
         elif library_type == "selenium" and self.selenium_lib:
             session.browser_state.active_library = "selenium"
-            session.import_library("SeleniumLibrary")
+            session.import_library("SeleniumLibrary", force=True)  # Allow switching from Browser
             return True
         else:
             logger.warning(f"Cannot set active library to '{library_type}' - not available or initialized")
