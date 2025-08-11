@@ -365,8 +365,12 @@ class ArgumentProcessor:
             try:
                 return enum_class[formatted_value]
             except KeyError:
-                # If the string value is not found, return first enum value as default
-                return list(enum_class)[0]
+                # Invalid enum value - fail loudly with helpful error message
+                valid_values = [e.name for e in enum_class]
+                raise ValueError(
+                    f"Invalid {enum_name} value: '{value}' (formatted as '{formatted_value}'). "
+                    f"Valid options are: {valid_values}"
+                )
                 
         except ImportError:
             # If can't import Browser library, return original string
