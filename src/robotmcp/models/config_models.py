@@ -10,7 +10,7 @@ class ExecutionConfig:
     
     # Timeout settings
     DEFAULT_TIMEOUT: int = 10000  # milliseconds
-    SESSION_CLEANUP_TIMEOUT: int = 300  # seconds
+    SESSION_CLEANUP_TIMEOUT: int = 1800  # seconds (30 minutes)
     
     # Page source settings
     DEFAULT_FILTERING_LEVEL: str = "standard"

@@ -205,6 +205,11 @@ class TestBuilder:
                 logger.warning(f"Session '{session_id}' not found")
                 return []
             
+            # Update session activity to prevent cleanup during suite building
+            from datetime import datetime
+            session.last_activity = datetime.now()
+            logger.debug(f"Updated session {session_id} activity during suite building")
+            
             # Convert ExecutionStep objects to dictionary format
             steps = []
             for step in session.steps:

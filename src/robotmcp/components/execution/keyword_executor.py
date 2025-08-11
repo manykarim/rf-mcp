@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 from robotmcp.models.session_models import ExecutionSession
 from robotmcp.models.execution_models import ExecutionStep
 from robotmcp.models.config_models import ExecutionConfig
-from robotmcp.utils.argument_processor import convert_browser_arguments
+from robotmcp.utils.argument_processor import ArgumentProcessor
 from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,7 @@ class KeywordExecutor:
     def __init__(self, config: Optional[ExecutionConfig] = None):
         self.config = config or ExecutionConfig()
         self.keyword_discovery = get_keyword_discovery()
+        self.argument_processor = ArgumentProcessor()
     
     async def execute_keyword(
         self, 
@@ -165,65 +166,22 @@ class KeywordExecutor:
         args: List[str], 
         library: Any
     ) -> Dict[str, Any]:
-        """Execute a Browser Library keyword."""
+        """Execute a Browser Library keyword using the dynamic execution handler."""
         try:
-            # Convert arguments using LibDoc-based conversion
-            converted_args, libdoc_type_info = convert_browser_arguments(keyword, args)
+            # Use the keyword discovery's execute_keyword method
+            result = await self.keyword_discovery.execute_keyword(
+                keyword_name=keyword,
+                args=args,
+                session_variables=session.variables
+            )
             
-            # Get the keyword method from the library
-            keyword_method = getattr(library, keyword.replace(" ", "_").lower(), None)
-            if not keyword_method:
-                # Try alternative naming conventions
-                alt_names = [
-                    keyword.replace(" ", ""),
-                    keyword.replace(" ", "_"),
-                    keyword.lower().replace(" ", "_")
-                ]
-                
-                for alt_name in alt_names:
-                    keyword_method = getattr(library, alt_name, None)
-                    if keyword_method:
-                        break
-            
-            if not keyword_method:
-                return {
-                    "success": False,
-                    "error": f"Browser Library keyword '{keyword}' not found",
-                    "output": "",
-                    "variables": {},
-                    "state_updates": {}
-                }
-            
-            # Execute the keyword
-            try:
-                result = keyword_method(**converted_args)
-                
-                # Update session browser state based on keyword
-                state_updates = self._extract_browser_state_updates(keyword, converted_args, result)
+            # Update session browser state based on keyword if successful
+            if result.get("success"):
+                state_updates = self._extract_browser_state_updates(keyword, args, result.get("output"))
                 self._apply_state_updates(session, state_updates)
-                
-                return {
-                    "success": True,
-                    "output": str(result) if result is not None else "OK",
-                    "variables": {},
-                    "state_updates": state_updates
-                }
-                
-            except Exception as e:
-                error_msg = str(e)
-                
-                # Check if this is an enum conversion error that should fail loudly
-                if "Invalid" in error_msg and any(enum_name in error_msg for enum_name in 
-                    ["SelectAttribute", "MouseButton", "ElementState", "PageLoadStates", "DialogAction", "RequestMethod", "ScrollBehavior"]):
-                    logger.error(f"Enum conversion error for {keyword}: {error_msg}")
-                
-                return {
-                    "success": False,
-                    "error": f"Browser Library execution error: {error_msg}",
-                    "output": "",
-                    "variables": {},
-                    "state_updates": {}
-                }
+                result["state_updates"] = state_updates
+            
+            return result
                 
         except Exception as e:
             logger.error(f"Error executing Browser Library keyword {keyword}: {e}")
@@ -242,55 +200,22 @@ class KeywordExecutor:
         args: List[str], 
         library: Any
     ) -> Dict[str, Any]:
-        """Execute a SeleniumLibrary keyword."""
+        """Execute a SeleniumLibrary keyword using the dynamic execution handler."""
         try:
-            # Get the keyword method from the library
-            keyword_method = getattr(library, keyword.replace(" ", "_").lower(), None)
-            if not keyword_method:
-                # Try alternative naming conventions
-                alt_names = [
-                    keyword.replace(" ", ""),
-                    keyword.replace(" ", "_"),
-                    keyword.lower().replace(" ", "_")
-                ]
-                
-                for alt_name in alt_names:
-                    keyword_method = getattr(library, alt_name, None)
-                    if keyword_method:
-                        break
+            # Use the keyword discovery's execute_keyword method
+            result = await self.keyword_discovery.execute_keyword(
+                keyword_name=keyword,
+                args=args,
+                session_variables=session.variables
+            )
             
-            if not keyword_method:
-                return {
-                    "success": False,
-                    "error": f"SeleniumLibrary keyword '{keyword}' not found",
-                    "output": "",
-                    "variables": {},
-                    "state_updates": {}
-                }
-            
-            # Execute the keyword with string arguments (SeleniumLibrary typically uses strings)
-            try:
-                result = keyword_method(*args)
-                
-                # Update session browser state based on keyword
-                state_updates = self._extract_selenium_state_updates(keyword, args, result)
+            # Update session browser state based on keyword if successful
+            if result.get("success"):
+                state_updates = self._extract_selenium_state_updates(keyword, args, result.get("output"))
                 self._apply_state_updates(session, state_updates)
-                
-                return {
-                    "success": True,
-                    "output": str(result) if result is not None else "OK",
-                    "variables": {},
-                    "state_updates": state_updates
-                }
-                
-            except Exception as e:
-                return {
-                    "success": False,
-                    "error": f"SeleniumLibrary execution error: {str(e)}",
-                    "output": "",
-                    "variables": {},
-                    "state_updates": {}
-                }
+                result["state_updates"] = state_updates
+            
+            return result
                 
         except Exception as e:
             logger.error(f"Error executing SeleniumLibrary keyword {keyword}: {e}")
@@ -389,20 +314,23 @@ class KeywordExecutor:
                 "state_updates": {}
             }
 
-    def _extract_browser_state_updates(self, keyword: str, args: Dict[str, Any], result: Any) -> Dict[str, Any]:
+    def _extract_browser_state_updates(self, keyword: str, args: List[str], result: Any) -> Dict[str, Any]:
         """Extract state updates from Browser Library keyword execution."""
         state_updates = {}
         keyword_lower = keyword.lower()
         
         # Extract state changes based on keyword
         if "new browser" in keyword_lower:
-            state_updates["current_browser"] = {"type": args.get("browser", "chromium")}
+            browser_type = args[0] if args else "chromium"
+            state_updates["current_browser"] = {"type": browser_type}
         elif "new context" in keyword_lower:
             state_updates["current_context"] = {"id": str(result) if result else "context"}
         elif "new page" in keyword_lower:
-            state_updates["current_page"] = {"id": str(result) if result else "page"}
+            url = args[0] if args else ""
+            state_updates["current_page"] = {"id": str(result) if result else "page", "url": url}
         elif "go to" in keyword_lower:
-            state_updates["current_page"] = {"url": args.get("url", "")}
+            url = args[0] if args else ""
+            state_updates["current_page"] = {"url": url}
         
         return state_updates
 
@@ -495,3 +423,48 @@ class KeywordExecutor:
     def validate_detail_level(self, detail_level: str) -> bool:
         """Validate that the detail level is supported."""
         return detail_level in self.get_supported_detail_levels()
+    
+    def _apply_enum_conversion_if_needed(self, keyword: str, arg_index: int, arg_value: str):
+        """Apply enum conversion if needed for Browser Library arguments."""
+        try:
+            # Use the argument processor for enum conversion
+            from robotmcp.utils.argument_processor import convert_string_value
+            
+            # Check if this keyword/argument combination needs enum conversion
+            keyword_lower = keyword.lower().replace(" ", "_")
+            
+            # Known enum conversions for specific keywords and argument positions
+            enum_mappings = {
+                "select_options_by": {1: "SelectAttribute"},  # 2nd argument (index 1)
+                "click": {1: "MouseButton"},  # 2nd argument if provided
+                "wait_for_elements_state": {1: "ElementState"},  # 2nd argument
+            }
+            
+            if keyword_lower in enum_mappings and arg_index in enum_mappings[keyword_lower]:
+                enum_type = enum_mappings[keyword_lower][arg_index]
+                
+                # Try to convert using the enum
+                try:
+                    if enum_type == "SelectAttribute":
+                        from Browser.utils.data_types import SelectAttribute
+                        if arg_value.lower() == "text":
+                            arg_value = "label"  # Map text to label
+                        return SelectAttribute[arg_value]
+                    elif enum_type == "MouseButton":
+                        from Browser.utils.data_types import MouseButton
+                        return MouseButton[arg_value]
+                    elif enum_type == "ElementState":
+                        from Browser.utils.data_types import ElementState
+                        return ElementState[arg_value]
+                except KeyError:
+                    # Let the original error handling deal with this
+                    pass
+                except ImportError:
+                    # Enum types not available, use string
+                    pass
+            
+            return arg_value
+            
+        except Exception:
+            # If conversion fails, return original value
+            return arg_value
