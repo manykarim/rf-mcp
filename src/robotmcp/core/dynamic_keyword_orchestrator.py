@@ -250,8 +250,10 @@ class DynamicKeywordDiscovery:
                         else:
                             result = method(*pos_args)
                     except Exception as browser_error:
-                        logger.debug(f"Browser Library LibDoc conversion failed: {browser_error}, trying with positional args only")
-                        result = method(*parsed_args.positional)
+                        logger.debug(f"Browser Library execution failed: {browser_error}")
+                        # Don't fall back to unconverted args as this can cause enum type errors
+                        # Re-raise the original error
+                        raise browser_error
                 elif keyword_info.name == "Create List":
                     # Collections.Create List takes variable arguments
                     result = method(*parsed_args.positional)
