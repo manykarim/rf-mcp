@@ -279,23 +279,98 @@ class RobotFrameworkNativeConverter:
                         break
                 
                 if primary_type:
-                    # For Browser Library TypedDict types, treat as dict
-                    browser_typed_dicts = [
-                        'ViewportDimensions', 'GeoLocation', 'HttpCredentials', 
-                        'RecordHar', 'RecordVideo', 'Proxy', 'ClientCertificate'
-                    ]
-                    if primary_type in browser_typed_dicts:
-                        return TypeInfo.from_string('dict')
-                    else:
-                        return TypeInfo.from_string(primary_type)
+                    # Try to get TypeInfo for the primary type
+                    return self._parse_single_type(primary_type)
                 else:
                     # All types were None, default to str
                     return TypeInfo.from_string('str')
             
-            return TypeInfo.from_string(type_str)
+            return self._parse_single_type(type_str)
         except Exception as e:
             logger.debug(f"Failed to parse type string '{type_str}': {e}")
             return None
+    
+    def _parse_single_type(self, type_str: str) -> Optional['TypeInfo']:
+        """Parse a single type string, handling custom Browser Library types."""
+        # First try Robot Framework's native parsing
+        type_info = TypeInfo.from_string(type_str)
+        if type_info and type_info.type is not None:
+            return type_info
+        
+        # For Browser Library TypedDict types, treat as dict
+        browser_typed_dicts = [
+            'ViewportDimensions', 'GeoLocation', 'HttpCredentials', 
+            'RecordHar', 'RecordVideo', 'Proxy', 'ClientCertificate'
+        ]
+        if type_str in browser_typed_dicts:
+            return TypeInfo.from_string('dict')
+        
+        # Try to import and use Browser Library enum types
+        browser_enum_types = {
+            'SupportedBrowsers': 'SupportedBrowsers',
+            'SelectAttribute': 'SelectAttribute', 
+            'MouseButton': 'MouseButton',
+            'ElementState': 'ElementState',
+            'PageLoadStates': 'PageLoadStates',
+            'DialogAction': 'DialogAction',
+            'RequestMethod': 'RequestMethod',
+            'ScrollBehavior': 'ScrollBehavior',
+            'ColorScheme': 'ColorScheme',
+            'ForcedColors': 'ForcedColors',
+            'ReduceMotion': 'ReduceMotion',
+        }
+        
+        if type_str in browser_enum_types:
+            try:
+                # Import the actual enum class
+                enum_class = self._import_browser_enum(browser_enum_types[type_str])
+                if enum_class:
+                    return TypeInfo.from_type(enum_class)
+            except Exception as e:
+                logger.debug(f"Failed to import Browser enum {type_str}: {e}")
+        
+        # Fallback to None
+        return None
+    
+    def _import_browser_enum(self, enum_name: str):
+        """Import Browser Library enum class by name."""
+        try:
+            if enum_name == 'SupportedBrowsers':
+                from Browser.utils.data_types import SupportedBrowsers
+                return SupportedBrowsers
+            elif enum_name == 'SelectAttribute':
+                from Browser.utils.data_types import SelectAttribute
+                return SelectAttribute
+            elif enum_name == 'MouseButton':
+                from Browser.utils.data_types import MouseButton
+                return MouseButton
+            elif enum_name == 'ElementState':
+                from Browser.utils.data_types import ElementState
+                return ElementState
+            elif enum_name == 'PageLoadStates':
+                from Browser.utils.data_types import PageLoadStates
+                return PageLoadStates
+            elif enum_name == 'DialogAction':
+                from Browser.utils.data_types import DialogAction
+                return DialogAction
+            elif enum_name == 'RequestMethod':
+                from Browser.utils.data_types import RequestMethod
+                return RequestMethod
+            elif enum_name == 'ScrollBehavior':
+                from Browser.utils.data_types import ScrollBehavior
+                return ScrollBehavior
+            elif enum_name == 'ColorScheme':
+                from Browser.utils.data_types import ColorScheme
+                return ColorScheme
+            elif enum_name == 'ForcedColors':
+                from Browser.utils.data_types import ForcedColors
+                return ForcedColors
+            elif enum_name == 'ReduceMotion':
+                from Browser.utils.data_types import ReduceMotion
+                return ReduceMotion
+        except ImportError:
+            pass
+        return None
     
     def _convert_with_rf_converter(self, value: str, type_info: 'TypeInfo') -> Any:
         """Convert a value using Robot Framework's native type converter."""
@@ -306,6 +381,7 @@ class RobotFrameworkNativeConverter:
             logger.debug(f"Type conversion failed for '{value}' to {type_info.type}: {e}")
             # Return original value if conversion fails
             return value
+    
     
     def _fallback_parse(self, args: List[str]) -> ParsedArguments:
         """Simple fallback parsing when Robot Framework native systems aren't available."""
