@@ -58,6 +58,12 @@ class DynamicKeywordDiscovery:
         self.keyword_cache: Dict[str, KeywordInfo] = {}
         self.failed_imports: Dict[str, str] = {}
         
+        # Library exclusion rules - only one from each group can be loaded
+        self.exclusion_groups = {
+            'web_automation': ['Browser', 'SeleniumLibrary'],  # Browser OR Selenium, not both
+        }
+        self.excluded_libraries: set = set()  # Track which libraries are excluded
+        
         # Common Robot Framework libraries to try
         self.common_libraries = [
             'BuiltIn',
@@ -142,12 +148,111 @@ class DynamicKeywordDiscovery:
         # Always try to initialize BuiltIn library first
         self._try_import_library('BuiltIn')
         
-        # Try to import other common libraries
+        # Try to import other common libraries first
         for library_name in self.common_libraries:
             if library_name != 'BuiltIn':
                 self._try_import_library(library_name)
         
+        # Apply exclusion logic after all libraries have been attempted
+        self._resolve_library_conflicts()
+        
         logger.info(f"Initialized {len(self.libraries)} libraries with {len(self.keyword_cache)} keywords")
+    
+    def _check_library_exclusion(self, library_name: str) -> bool:
+        """
+        Check if a library should be excluded due to exclusion rules.
+        
+        Args:
+            library_name: Name of library to check
+            
+        Returns:
+            bool: True if library should be excluded, False otherwise
+        """
+        # Check if library is already explicitly excluded
+        if library_name in self.excluded_libraries:
+            logger.debug(f"Library '{library_name}' is explicitly excluded")
+            return True
+        
+        # Check exclusion groups
+        for group_name, group_libraries in self.exclusion_groups.items():
+            if library_name in group_libraries:
+                # Check if any other library from this group is already loaded
+                for other_lib in group_libraries:
+                    if other_lib != library_name and other_lib in self.libraries:
+                        logger.info(f"Excluding '{library_name}' because '{other_lib}' is already loaded (group: {group_name})")
+                        self.excluded_libraries.add(library_name)
+                        return True
+        
+        return False
+    
+    def _resolve_library_conflicts(self) -> None:
+        """
+        Resolve conflicts between loaded libraries by removing less preferred ones.
+        Browser Library is preferred over SeleniumLibrary for web automation.
+        """
+        web_automation_libs = self.exclusion_groups.get('web_automation', [])
+        
+        # Check which web automation libraries were actually loaded
+        loaded_web_libs = [lib for lib in web_automation_libs if lib in self.libraries]
+        
+        if len(loaded_web_libs) > 1:
+            logger.info(f"Multiple web automation libraries loaded: {loaded_web_libs}")
+            
+            # Prefer Browser Library over SeleniumLibrary
+            if 'Browser' in loaded_web_libs and 'SeleniumLibrary' in loaded_web_libs:
+                logger.info("Both Browser Library and SeleniumLibrary loaded - removing SeleniumLibrary")
+                self._remove_library('SeleniumLibrary')
+                self.excluded_libraries.add('SeleniumLibrary')
+            
+        elif len(loaded_web_libs) == 1:
+            logger.info(f"Single web automation library loaded: {loaded_web_libs[0]}")
+        else:
+            logger.debug("No web automation libraries loaded")
+    
+    def _remove_library(self, library_name: str) -> None:
+        """
+        Remove a library and its keywords from the discovery system.
+        
+        Args:
+            library_name: Name of library to remove
+        """
+        if library_name not in self.libraries:
+            return
+        
+        # Get library info
+        lib_info = self.libraries[library_name]
+        
+        # Remove keywords from cache
+        keywords_removed = 0
+        for keyword_name in list(lib_info.keywords.keys()):
+            if keyword_name.lower() in self.keyword_cache:
+                # Only remove if this keyword belongs to the library being removed
+                if self.keyword_cache[keyword_name.lower()].library == library_name:
+                    del self.keyword_cache[keyword_name.lower()]
+                    keywords_removed += 1
+        
+        # Remove library
+        del self.libraries[library_name]
+        
+        logger.info(f"Removed library '{library_name}' and {keywords_removed} keywords")
+    
+    def _is_library_importable(self, library_name: str) -> bool:
+        """Check if a library can be imported without actually importing it."""
+        try:
+            if library_name == 'Browser':
+                import Browser
+                return True
+            elif library_name == 'SeleniumLibrary':
+                import SeleniumLibrary
+                return True
+            else:
+                __import__(library_name)
+                return True
+        except ImportError:
+            return False
+        except Exception:
+            # Other errors still mean the module exists
+            return True
     
     def _try_import_library(self, library_name: str) -> bool:
         """Try to import and initialize a Robot Framework library."""
@@ -252,17 +357,24 @@ class DynamicKeywordDiscovery:
         for attr_name in dir(instance):
             if attr_name.startswith('_'):
                 continue
+            
+            try:
+                attr = getattr(instance, attr_name)
+                if not callable(attr):
+                    continue
                 
-            attr = getattr(instance, attr_name)
-            if not callable(attr):
+                # Convert method name to Robot Framework keyword format
+                keyword_name = self._method_to_keyword_name(attr_name)
+                
+                # Extract keyword information
+                keyword_info = self._extract_keyword_info(library_name, keyword_name, attr_name, attr)
+                lib_info.keywords[keyword_name] = keyword_info
+                
+            except Exception as e:
+                # Some library methods may throw errors during inspection (e.g., SeleniumLibrary when no browser is open)
+                # Skip these methods but continue with others
+                logger.debug(f"Skipped method '{attr_name}' from {library_name}: {e}")
                 continue
-            
-            # Convert method name to Robot Framework keyword format
-            keyword_name = self._method_to_keyword_name(attr_name)
-            
-            # Extract keyword information
-            keyword_info = self._extract_keyword_info(library_name, keyword_name, attr_name, attr)
-            lib_info.keywords[keyword_name] = keyword_info
         
         return lib_info
     
@@ -1281,6 +1393,25 @@ class DynamicKeywordDiscovery:
     def _convert_boolean_string(self, value: str) -> bool:
         """Convert string to boolean value."""
         return value.lower().strip() in ['true', '1', 'yes', 'on']
+
+    def get_library_exclusion_info(self) -> Dict[str, Any]:
+        """
+        Get information about library exclusions.
+        
+        Returns:
+            dict: Information about exclusion groups and excluded libraries
+        """
+        return {
+            "exclusion_groups": self.exclusion_groups,
+            "excluded_libraries": list(self.excluded_libraries),
+            "loaded_libraries": list(self.libraries.keys()),
+            "failed_imports": dict(self.failed_imports),
+            "preference_applied": {
+                "browser_available": self._is_library_importable('Browser'),
+                "selenium_available": self._is_library_importable('SeleniumLibrary'),
+                "active_web_library": next((lib for lib in ['Browser', 'SeleniumLibrary'] if lib in self.libraries), None)
+            }
+        }
 
 # Global instance
 _keyword_discovery = None
