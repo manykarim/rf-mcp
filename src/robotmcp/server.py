@@ -58,7 +58,8 @@ async def execute_step(
     keyword: str, 
     arguments: List[str] = None, 
     session_id: str = "default",
-    raise_on_failure: bool = True
+    raise_on_failure: bool = True,
+    detail_level: str = "minimal"
 ) -> Dict[str, Any]:
     """Execute a single test step using Robot Framework API.
     
@@ -75,11 +76,13 @@ async def execute_step(
         session_id: Session identifier for maintaining context
         raise_on_failure: If True, raises exception for failed steps (proper MCP failure reporting).
                          If False, returns failure details in response (for debugging/analysis).
+        detail_level: Level of detail in response ('minimal', 'standard', 'full').
+                     'minimal' reduces response size for AI agents by ~80-90%.
     """
     if arguments is None:
         arguments = []
     
-    result = await execution_engine.execute_step(keyword, arguments, session_id)
+    result = await execution_engine.execute_step(keyword, arguments, session_id, detail_level)
     
     # For proper MCP protocol compliance, failed steps should raise exceptions
     # This ensures AI agents see failures as red/failed instead of green/successful

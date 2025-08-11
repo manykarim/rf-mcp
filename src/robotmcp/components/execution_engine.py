@@ -1185,7 +1185,8 @@ class ExecutionEngine:
         self,
         keyword: str,
         arguments: List[str] = None,
-        session_id: str = "default"
+        session_id: str = "default",
+        detail_level: str = "minimal"
     ) -> Dict[str, Any]:
         """
         Execute a single Robot Framework keyword step.
@@ -1194,6 +1195,7 @@ class ExecutionEngine:
             keyword: Robot Framework keyword name
             arguments: List of arguments for the keyword
             session_id: Session identifier
+            detail_level: Level of detail in response ('minimal', 'standard', 'full')
             
         Returns:
             Execution result with status, output, and state
@@ -1242,21 +1244,11 @@ class ExecutionEngine:
             if "variables" in result:
                 session.variables.update(result["variables"])
             
-            return {
-                "success": result["success"],
-                "step_id": step.step_id,
-                "keyword": keyword,
-                "arguments": arguments,
-                "status": step.status,
-                "output": result.get("output"),
-                "error": result.get("error"),
-                "execution_time": self._calculate_execution_time(step),
-                "session_variables": dict(session.variables),
-                "state_snapshot": await self._capture_state_snapshot(session),
-                "keyword_info": result.get("keyword_info", {}),
-                "suggestions": result.get("suggestions", []),
-                "page_source": result.get("page_source")  # Include captured page source from DOM-changing keywords
-            }
+            # Build response based on detail level
+            response = await self._build_response_by_detail_level(
+                detail_level, result, step, keyword, arguments, session
+            )
+            return response
             
         except Exception as e:
             logger.error(f"Error executing step {keyword}: {e}")
@@ -2692,6 +2684,78 @@ class ExecutionEngine:
         if step.start_time and step.end_time:
             return (step.end_time - step.start_time).total_seconds()
         return 0.0
+
+    async def _build_response_by_detail_level(
+        self, 
+        detail_level: str, 
+        result: Dict[str, Any], 
+        step: ExecutionStep, 
+        keyword: str, 
+        arguments: List[str], 
+        session: 'ExecutionSession'
+    ) -> Dict[str, Any]:
+        """Build response based on requested detail level."""
+        
+        # Base minimal response
+        response = {
+            "success": result["success"],
+            "step_id": step.step_id,
+            "keyword": keyword,
+            "status": step.status,
+            "execution_time": self._calculate_execution_time(step)
+        }
+        
+        # Add error for failed steps in all detail levels
+        if not result["success"]:
+            response["error"] = result.get("error")
+        
+        if detail_level == "minimal":
+            # Only add essential information for AI agents
+            if result.get("output"):
+                # Truncate output to first 200 chars
+                output = str(result.get("output", ""))
+                response["output"] = output[:200] + "..." if len(output) > 200 else output
+            
+            # Add page change indicators for browser keywords
+            page_source = result.get("page_source")
+            if page_source:
+                response["page_changed"] = True
+                response["page_size"] = len(page_source)
+            
+            # Add variable count if variables were changed
+            if "variables" in result:
+                response["variables_changed"] = len(result["variables"])
+                
+        elif detail_level == "standard":
+            # Include more details but still filtered
+            response.update({
+                "arguments": arguments,
+                "output": result.get("output"),
+                "session_variables": dict(session.variables),
+                "suggestions": result.get("suggestions", [])
+            })
+            
+            # Add page source size info without full source
+            page_source = result.get("page_source")
+            if page_source:
+                response["page_changed"] = True  
+                response["page_size"] = len(page_source)
+                response["page_preview"] = page_source[:500] + "..." if len(page_source) > 500 else page_source
+                
+        else:  # detail_level == "full"
+            # Full original response
+            response.update({
+                "arguments": arguments,
+                "output": result.get("output"),
+                "error": result.get("error"),
+                "session_variables": dict(session.variables),
+                "state_snapshot": await self._capture_state_snapshot(session),
+                "keyword_info": result.get("keyword_info", {}),
+                "suggestions": result.get("suggestions", []),
+                "page_source": result.get("page_source")
+            })
+            
+        return response
 
     async def _capture_state_snapshot(self, session: ExecutionSession) -> Dict[str, Any]:
         """Capture current state snapshot for the session."""
