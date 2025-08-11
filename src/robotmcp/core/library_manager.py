@@ -146,7 +146,9 @@ class LibraryManager:
     def resolve_library_conflicts(self) -> None:
         """
         Resolve conflicts between loaded libraries by removing less preferred ones.
-        Browser Library is preferred over SeleniumLibrary for web automation.
+        
+        UPDATED: Allow both Browser Library and SeleniumLibrary to coexist at the 
+        discovery level, since session-level switching is now implemented.
         """
         web_automation_libs = self.exclusion_groups.get('web_automation', [])
         
@@ -155,12 +157,8 @@ class LibraryManager:
         
         if len(loaded_web_libs) > 1:
             logger.info(f"Multiple web automation libraries loaded: {loaded_web_libs}")
-            
-            # Prefer Browser Library over SeleniumLibrary
-            if 'Browser' in loaded_web_libs and 'SeleniumLibrary' in loaded_web_libs:
-                logger.info("Both Browser Library and SeleniumLibrary loaded - removing SeleniumLibrary")
-                self.remove_library('SeleniumLibrary')
-                self.excluded_libraries.add('SeleniumLibrary')
+            logger.info("Both libraries will be available - session-level switching will determine which is active")
+            # NOTE: Previously this removed SeleniumLibrary, but now we allow both for session-level switching
             
         elif len(loaded_web_libs) == 1:
             logger.info(f"Single web automation library loaded: {loaded_web_libs[0]}")
