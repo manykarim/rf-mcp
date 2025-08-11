@@ -102,161 +102,22 @@ class ArgumentProcessor:
                 return value
         
         elif target_type == 'browser_enum':
-            # Handle Browser Library enum conversion
+            # Handle SupportedBrowsers enum conversion using built-in enum access
             try:
-                # Import and convert to the proper enum
                 from Browser.utils.data_types import SupportedBrowsers
-                # Convert string to enum
-                if value.lower() == 'chromium':
+                # Use Python's built-in enum string access (case-sensitive)
+                return SupportedBrowsers[value.lower()]
+            except (ImportError, KeyError):
+                # If can't import the enum or value not found, fallback to chromium
+                try:
+                    from Browser.utils.data_types import SupportedBrowsers
                     return SupportedBrowsers.chromium
-                elif value.lower() == 'firefox':
-                    return SupportedBrowsers.firefox  
-                elif value.lower() == 'webkit':
-                    return SupportedBrowsers.webkit
-                else:
-                    # Default to chromium if unknown
-                    return SupportedBrowsers.chromium
-            except ImportError:
-                # If can't import the enum, return string
-                return value
+                except ImportError:
+                    return value
         
-        elif target_type == 'select_attribute_enum':
-            # Handle SelectAttribute enum conversion
-            try:
-                from Browser.utils.data_types import SelectAttribute
-                # Convert string to enum
-                if value.lower() == 'value':
-                    return SelectAttribute.value
-                elif value.lower() == 'label':
-                    return SelectAttribute.label
-                elif value.lower() == 'index':
-                    return SelectAttribute.index
-                else:
-                    # Default to label if unknown
-                    return SelectAttribute.label
-            except ImportError:
-                # If can't import the enum, return string
-                return value
-        
-        elif target_type == 'mouse_button_enum':
-            # Handle MouseButton enum conversion
-            try:
-                from Browser.utils.data_types import MouseButton
-                if value.lower() == 'left':
-                    return MouseButton.left
-                elif value.lower() == 'right':
-                    return MouseButton.right
-                elif value.lower() == 'middle':
-                    return MouseButton.middle
-                else:
-                    return MouseButton.left  # default
-            except ImportError:
-                return value
-        
-        elif target_type == 'element_state_enum':
-            # Handle ElementState enum conversion
-            try:
-                from Browser.utils.data_types import ElementState
-                value_lower = value.lower()
-                if value_lower == 'visible':
-                    return ElementState.visible
-                elif value_lower == 'hidden':
-                    return ElementState.hidden
-                elif value_lower == 'enabled':
-                    return ElementState.enabled
-                elif value_lower == 'disabled':
-                    return ElementState.disabled
-                elif value_lower == 'attached':
-                    return ElementState.attached
-                elif value_lower == 'detached':
-                    return ElementState.detached
-                elif value_lower == 'editable':
-                    return ElementState.editable
-                elif value_lower == 'readonly':
-                    return ElementState.readonly
-                elif value_lower == 'selected':
-                    return ElementState.selected
-                elif value_lower == 'deselected':
-                    return ElementState.deselected
-                elif value_lower == 'focused':
-                    return ElementState.focused
-                elif value_lower == 'defocused':
-                    return ElementState.defocused
-                elif value_lower == 'checked':
-                    return ElementState.checked
-                elif value_lower == 'unchecked':
-                    return ElementState.unchecked
-                elif value_lower == 'stable':
-                    return ElementState.stable
-                else:
-                    return ElementState.visible  # default
-            except ImportError:
-                return value
-        
-        elif target_type == 'page_load_states_enum':
-            # Handle PageLoadStates enum conversion
-            try:
-                from Browser.utils.data_types import PageLoadStates
-                if value.lower() == 'load':
-                    return PageLoadStates.load
-                elif value.lower() == 'domcontentloaded':
-                    return PageLoadStates.domcontentloaded
-                elif value.lower() == 'networkidle':
-                    return PageLoadStates.networkidle
-                elif value.lower() == 'commit':
-                    return PageLoadStates.commit
-                else:
-                    return PageLoadStates.load  # default
-            except ImportError:
-                return value
-        
-        elif target_type == 'dialog_action_enum':
-            # Handle DialogAction enum conversion
-            try:
-                from Browser.utils.data_types import DialogAction
-                if value.lower() == 'accept':
-                    return DialogAction.accept
-                elif value.lower() == 'dismiss':
-                    return DialogAction.dismiss
-                else:
-                    return DialogAction.accept  # default
-            except ImportError:
-                return value
-        
-        elif target_type == 'request_method_enum':
-            # Handle RequestMethod enum conversion
-            try:
-                from Browser.utils.data_types import RequestMethod
-                value_upper = value.upper()
-                if value_upper == 'GET':
-                    return RequestMethod.GET
-                elif value_upper == 'POST':
-                    return RequestMethod.POST
-                elif value_upper == 'PUT':
-                    return RequestMethod.PUT
-                elif value_upper == 'DELETE':
-                    return RequestMethod.DELETE
-                elif value_upper == 'PATCH':
-                    return RequestMethod.PATCH
-                elif value_upper == 'HEAD':
-                    return RequestMethod.HEAD
-                else:
-                    return RequestMethod.GET  # default
-            except ImportError:
-                return value
-        
-        elif target_type == 'scroll_behavior_enum':
-            # Handle ScrollBehavior enum conversion
-            try:
-                from Browser.utils.data_types import ScrollBehavior
-                if value.lower() == 'smooth':
-                    return ScrollBehavior.smooth
-                elif value.lower() == 'auto':
-                    return ScrollBehavior.auto
-                else:
-                    return ScrollBehavior.auto  # default
-            except ImportError:
-                return value
+        elif target_type.endswith('_enum'):
+            # Handle all Browser Library enum conversions using Python's built-in enum access
+            return self._convert_browser_enum(target_type, value)
         
         elif target_type in ['dict', 'list', 'tuple']:
             try:
@@ -452,6 +313,47 @@ class ArgumentProcessor:
         
         # Default to string
         return 'str'
+    
+    def _convert_browser_enum(self, target_type: str, value: str):
+        """Convert string to Browser Library enum using Python's built-in enum access."""
+        
+        # Map target types to enum classes and their string formats
+        enum_mapping = {
+            'select_attribute_enum': ('SelectAttribute', str.lower),
+            'mouse_button_enum': ('MouseButton', str.lower), 
+            'element_state_enum': ('ElementState', str.lower),
+            'page_load_states_enum': ('PageLoadStates', str.lower),
+            'dialog_action_enum': ('DialogAction', str.lower),
+            'request_method_enum': ('RequestMethod', str.upper),
+            'scroll_behavior_enum': ('ScrollBehavior', str.lower),
+        }
+        
+        if target_type not in enum_mapping:
+            return value
+            
+        enum_name, formatter = enum_mapping[target_type]
+        formatted_value = formatter(value)
+        
+        try:
+            # Dynamically import the enum class
+            from Browser.utils.data_types import (
+                SelectAttribute, MouseButton, ElementState, PageLoadStates,
+                DialogAction, RequestMethod, ScrollBehavior
+            )
+            
+            # Get the enum class
+            enum_class = locals()[enum_name]
+            
+            # Use Python's built-in enum string access
+            try:
+                return enum_class[formatted_value]
+            except KeyError:
+                # If the string value is not found, return first enum value as default
+                return list(enum_class)[0]
+                
+        except ImportError:
+            # If can't import Browser library, return original string
+            return value
     
     def _smart_detect_argument_type(self, arg_name: str, arg_value: str, library_name: str = None) -> str:
         """Smart detection for argument types when LibDoc doesn't provide enough info."""
