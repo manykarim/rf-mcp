@@ -215,11 +215,14 @@ class DynamicKeywordDiscovery:
                         # Use the LibDoc-based approach, with fallback to smart conversion
                         libdoc_converted = self.argument_processor.convert_browser_arguments(keyword_info.name, original_args, keyword_info.library)
                         
-                        # If LibDoc conversion didn't detect complex types, apply smart conversion
+                        # Extract LibDoc type info metadata
+                        libdoc_type_info = libdoc_converted.pop('_libdoc_type_info', {})
+                        
+                        # Apply smart conversion only when LibDoc didn't provide explicit type information
                         smart_converted = {}
                         for key, value in libdoc_converted.items():
-                            if isinstance(value, str):
-                                # Apply smart type conversion for common patterns
+                            if isinstance(value, str) and not libdoc_type_info.get(key, False):
+                                # Only apply smart type conversion if LibDoc didn't provide type info for this argument
                                 if value.startswith('{') and value.endswith('}'):
                                     # Dictionary pattern
                                     smart_converted[key] = self.argument_processor.convert_string_value(value, "dict")
@@ -230,15 +233,13 @@ class DynamicKeywordDiscovery:
                                     # Boolean pattern
                                     smart_converted[key] = self.argument_processor.convert_string_value(value, "bool")
                                 elif value.isdigit():
-                                    # Integer pattern
+                                    # Integer pattern - only if LibDoc didn't specify the type
                                     smart_converted[key] = self.argument_processor.convert_string_value(value, "int")
-                                elif key.startswith('arg_'):
-                                    # Positional argument
-                                    smart_converted[key] = value
                                 else:
                                     # Keep as string
                                     smart_converted[key] = value
                             else:
+                                # Keep original value if LibDoc provided type info or value is not a string
                                 smart_converted[key] = value
                         
                         # Extract positional and keyword arguments

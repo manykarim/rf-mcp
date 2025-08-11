@@ -312,10 +312,14 @@ class BrowserLibraryHandler:
                 # Use the LibDoc-based conversion approach directly from argument processor
                 libdoc_converted = discovery.argument_processor.convert_browser_arguments(keyword_info.name, args, keyword_info.library)
                 
-                # Apply smart conversion for patterns that LibDoc might miss
+                # Extract LibDoc type info metadata
+                libdoc_type_info = libdoc_converted.pop('_libdoc_type_info', {})
+                
+                # Apply smart conversion only for patterns that LibDoc didn't handle
                 smart_converted = {}
                 for key, value in libdoc_converted.items():
-                    if isinstance(value, str):
+                    if isinstance(value, str) and not libdoc_type_info.get(key, False):
+                        # Only apply smart conversion if LibDoc didn't provide type info for this argument
                         if value.startswith('{') and value.endswith('}'):
                             smart_converted[key] = discovery.argument_processor.convert_string_value(value, "dict")
                         elif value.startswith('[') and value.endswith(']'):
@@ -327,6 +331,7 @@ class BrowserLibraryHandler:
                         else:
                             smart_converted[key] = value
                     else:
+                        # Keep original value if LibDoc provided type info or value is not a string
                         smart_converted[key] = value
                 
                 # Extract positional and keyword arguments

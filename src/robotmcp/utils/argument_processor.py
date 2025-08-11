@@ -43,9 +43,10 @@ class ArgumentProcessor:
             library_name: Optional library name for context
             
         Returns:
-            Dict with converted arguments
+            Dict with converted arguments and metadata about LibDoc usage
         """
         converted_kwargs = {}
+        libdoc_type_info = {}  # Track which arguments have LibDoc type info
         
         # Get LibDoc argument information
         libdoc_args = self.get_libdoc_argument_info(keyword_name, library_name)
@@ -56,13 +57,17 @@ class ArgumentProcessor:
                 
                 # Find matching LibDoc argument info
                 param_type = 'str'  # default
+                has_libdoc_info = False
                 for arg_info in libdoc_args:
                     if arg_info.name == key:
                         param_type = self.detect_argument_type(arg_info.type_hint)
+                        has_libdoc_info = True
                         break
                 
+                libdoc_type_info[key] = has_libdoc_info
+                
                 # If LibDoc didn't provide type info, try smart detection for common patterns
-                if param_type == 'str':
+                if param_type == 'str' and not has_libdoc_info:
                     param_type = self._smart_detect_argument_type(key, value, library_name)
                 
                 # Convert value to appropriate type
@@ -73,13 +78,25 @@ class ArgumentProcessor:
             else:
                 # Positional argument
                 param_type = 'str'  # default
+                has_libdoc_info = False
                 if i < len(libdoc_args):
                     param_type = self.detect_argument_type(libdoc_args[i].type_hint)
+                    has_libdoc_info = True
+                
+                arg_key = f'arg_{i}'
+                libdoc_type_info[arg_key] = has_libdoc_info
+                
+                # Only apply smart detection if LibDoc didn't provide type info
+                if param_type == 'str' and not has_libdoc_info:
+                    param_type = self._smart_detect_argument_type(arg_key, arg, library_name)
                 
                 if param_type and param_type != 'str':
-                    converted_kwargs[f'arg_{i}'] = self.convert_string_value(arg, param_type)
+                    converted_kwargs[arg_key] = self.convert_string_value(arg, param_type)
                 else:
-                    converted_kwargs[f'arg_{i}'] = arg
+                    converted_kwargs[arg_key] = arg
+        
+        # Add metadata about LibDoc usage
+        converted_kwargs['_libdoc_type_info'] = libdoc_type_info
         
         return converted_kwargs
     
