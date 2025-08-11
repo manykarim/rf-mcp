@@ -347,7 +347,7 @@ async def validate_step_before_suite(
         arguments = []
         
     # Execute the step with detailed error reporting
-    result = await execution_engine.execute_step(keyword, arguments, session_id, raise_on_failure=False)
+    result = await execution_engine.execute_step(keyword, arguments, session_id, detail_level="full")
     
     # Add validation metadata
     result["validated"] = result.get("success", False)

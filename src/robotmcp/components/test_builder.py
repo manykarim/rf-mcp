@@ -532,7 +532,7 @@ class TestBuilder:
         if session_id and self.execution_engine and hasattr(self.execution_engine, 'sessions'):
             session = self.execution_engine.sessions.get(session_id)
             if session:
-                session_web_lib = session.get_web_automation_library()
+                session_web_lib = self._get_session_web_library(session)
                 if session_web_lib:
                     # Check if this keyword could belong to the session's library
                     keyword_lower = keyword.lower().strip()
@@ -559,6 +559,40 @@ class TestBuilder:
             keyword_discovery = self.execution_engine.keyword_discovery
         
         return detect_library_from_keyword(keyword, keyword_discovery)
+    
+    def _get_session_web_library(self, session) -> Optional[str]:
+        """
+        Safely get the web automation library from a session.
+        
+        Handles both new sessions (with get_web_automation_library method)
+        and older sessions (without the method).
+        
+        Args:
+            session: ExecutionSession object
+            
+        Returns:
+            Web automation library name or None
+        """
+        # Try the new method first
+        if hasattr(session, 'get_web_automation_library'):
+            return session.get_web_automation_library()
+        
+        # Fallback for older sessions - check imported_libraries directly
+        if hasattr(session, 'imported_libraries'):
+            web_automation_libs = ['Browser', 'SeleniumLibrary']
+            for lib in session.imported_libraries:
+                if lib in web_automation_libs:
+                    return lib
+        
+        # Final fallback - check browser_state.active_library
+        if hasattr(session, 'browser_state') and hasattr(session.browser_state, 'active_library'):
+            active_lib = session.browser_state.active_library
+            if active_lib == 'browser':
+                return 'Browser'
+            elif active_lib == 'selenium':
+                return 'SeleniumLibrary'
+        
+        return None
 
     async def _generate_suite_documentation(
         self,
@@ -943,7 +977,8 @@ class TestBuilder:
         if self.execution_engine and hasattr(self.execution_engine, 'sessions'):
             session = self.execution_engine.sessions.get(session_id)
             if session:
-                session_web_lib = session.get_web_automation_library()
+                # Use safe method to get web automation library (handles older sessions)
+                session_web_lib = self._get_session_web_library(session)
                 if session_web_lib and detected_web_libs:
                     suite_web_lib = detected_web_libs[0]
                     if session_web_lib != suite_web_lib:
