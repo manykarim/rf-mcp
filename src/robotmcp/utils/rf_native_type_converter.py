@@ -120,19 +120,29 @@ class RobotFrameworkNativeConverter:
         Create Robot Framework ArgumentSpec from LibDoc signature.
         
         Args:
-            signature_args: List like ['selector: str', 'txt: str', 'force: bool = False']
+            signature_args: List like ['selector: str', 'attribute: SelectAttribute', '*values']
             
         Returns:
             ArgumentSpec that Robot Framework can use
         """
         positional_or_named = []
         defaults = {}
+        var_positional = None
+        var_named = None
         
         for arg_str in signature_args:
             if ':' in arg_str:
                 # Parse "name: type = default" format
                 name_part, type_and_default = arg_str.split(':', 1)
                 name = name_part.strip()
+                
+                # Handle variadic arguments
+                if name.startswith('**'):
+                    var_named = name[2:]  # Remove **
+                    continue
+                elif name.startswith('*'):
+                    var_positional = name[1:]  # Remove *
+                    continue
                 
                 if '=' in type_and_default:
                     # Has default value
@@ -155,17 +165,33 @@ class RobotFrameworkNativeConverter:
                 # Simple format with default
                 name, default = arg_str.split('=', 1)
                 name = name.strip()
+                
+                # Handle variadic arguments
+                if name.startswith('**'):
+                    var_named = name[2:]
+                    continue
+                elif name.startswith('*'):
+                    var_positional = name[1:]
+                    continue
+                    
                 positional_or_named.append(name)
                 defaults[name] = default.strip()
             else:
-                # Required parameter
+                # Required parameter or variadic argument
                 name = arg_str.strip()
-                if name not in ['*', '**']:  # Skip varargs markers
+                
+                if name.startswith('**'):
+                    var_named = name[2:]  # Remove **
+                elif name.startswith('*'):
+                    var_positional = name[1:]  # Remove *
+                elif name not in ['*', '**']:  # Only add regular parameters
                     positional_or_named.append(name)
         
         return ArgumentSpec(
             positional_or_named=positional_or_named,
-            defaults=defaults
+            defaults=defaults,
+            var_positional=var_positional,
+            var_named=var_named
         )
     
     def _split_args_into_positional_and_named(self, args: List[str]) -> tuple[List[str], Dict[str, str]]:
