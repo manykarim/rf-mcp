@@ -179,9 +179,16 @@ class PageSourceService:
             # Try to get fresh page source using browser library
             page_source = ""
             try:
-                page_source = self._get_page_source_unified(session, browser_library_manager)
+                page_source = await self._get_page_source_unified_async(session, browser_library_manager)
                 if page_source:
                     session.browser_state.page_source = page_source
+                    # Also update URL and title if we can extract them
+                    url = await self._get_current_url(session, browser_library_manager)
+                    if url and url != "about:blank":
+                        session.browser_state.current_url = url
+                    title = await self._get_page_title(session, browser_library_manager)
+                    if title and title != "Generic Page":
+                        session.browser_state.page_title = title
                 else:
                     page_source = session.browser_state.page_source or ""
             except Exception as e:
@@ -254,9 +261,9 @@ class PageSourceService:
                 "error": f"Failed to get page source: {str(e)}"
             }
 
-    def _get_page_source_unified(self, session: ExecutionSession, browser_library_manager: Any) -> Optional[str]:
+    async def _get_page_source_unified_async(self, session: ExecutionSession, browser_library_manager: Any) -> Optional[str]:
         """
-        Get page source using the active browser library for a session.
+        Get page source using the keyword discovery system for consistency.
         
         Args:
             session: ExecutionSession to get source from
@@ -266,23 +273,93 @@ class PageSourceService:
             str: Page source HTML or None if not available
         """
         try:
+            from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
+            
+            # Use the same keyword discovery system that handles Browser Library execution
+            keyword_discovery = get_keyword_discovery()
+            
+            # Determine which library to use
             library, library_type = browser_library_manager.get_active_browser_library(session)
             
-            if library_type == "browser" and library:
-                # Browser Library - get page source
-                return library.get_page_source()
-                
-            elif library_type == "selenium" and library:
-                # SeleniumLibrary - get page source
-                return library.get_source()
-                
+            if library_type == "browser":
+                # Use Browser Library via keyword discovery
+                result = await keyword_discovery.execute_keyword("Get Page Source", [], session.variables)
+                if result and result.get("success") and result.get("output"):
+                    return result["output"]
+                    
+            elif library_type == "selenium":
+                # Use SeleniumLibrary via keyword discovery  
+                result = await keyword_discovery.execute_keyword("Get Source", [], session.variables)
+                if result and result.get("success") and result.get("output"):
+                    return result["output"]
+                    
             else:
                 logger.debug("No active browser library available for page source")
                 return None
                 
         except Exception as e:
-            logger.error(f"Error getting page source: {e}")
+            logger.error(f"Error getting page source via keyword discovery: {e}")
+            
+            # Fallback to direct library calls if keyword discovery fails
+            try:
+                library, library_type = browser_library_manager.get_active_browser_library(session)
+                
+                if library_type == "browser" and library:
+                    # Browser Library - direct call as fallback
+                    return library.get_page_source()
+                    
+                elif library_type == "selenium" and library:
+                    # SeleniumLibrary - direct call as fallback
+                    return library.get_source()
+                    
+            except Exception as fallback_error:
+                logger.error(f"Fallback page source retrieval also failed: {fallback_error}")
+                
             return None
+    
+    async def _get_current_url(self, session: ExecutionSession, browser_library_manager: Any) -> Optional[str]:
+        """Get current URL using keyword discovery."""
+        try:
+            from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
+            
+            keyword_discovery = get_keyword_discovery()
+            library, library_type = browser_library_manager.get_active_browser_library(session)
+            
+            if library_type == "browser":
+                result = await keyword_discovery.execute_keyword("Get Url", [], session.variables)
+                if result and result.get("success") and result.get("output"):
+                    return result["output"]
+            elif library_type == "selenium":
+                result = await keyword_discovery.execute_keyword("Get Location", [], session.variables)
+                if result and result.get("success") and result.get("output"):
+                    return result["output"]
+                    
+        except Exception as e:
+            logger.debug(f"Could not get current URL: {e}")
+            
+        return None
+    
+    async def _get_page_title(self, session: ExecutionSession, browser_library_manager: Any) -> Optional[str]:
+        """Get page title using keyword discovery."""
+        try:
+            from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
+            
+            keyword_discovery = get_keyword_discovery()
+            library, library_type = browser_library_manager.get_active_browser_library(session)
+            
+            if library_type == "browser":
+                result = await keyword_discovery.execute_keyword("Get Title", [], session.variables)
+                if result and result.get("success") and result.get("output"):
+                    return result["output"]
+            elif library_type == "selenium":
+                result = await keyword_discovery.execute_keyword("Get Title", [], session.variables)  
+                if result and result.get("success") and result.get("output"):
+                    return result["output"]
+                    
+        except Exception as e:
+            logger.debug(f"Could not get page title: {e}")
+            
+        return None
 
     async def extract_page_context(self, html: str) -> Dict[str, Any]:
         """

@@ -707,19 +707,32 @@ class StateManager:
             real_page_source = None
             if execution_engine:
                 try:
-                    session_id_from_state = browser_state.get("browser_id", "").replace("browser_", "")
-                    if session_id_from_state:
-                        real_page_source = execution_engine._get_page_source_unified(session_id_from_state)
-                        if real_page_source:
-                            logger.debug(f"Retrieved real page source: {len(real_page_source)} characters")
-                            # Update URL and title from real page source if we can parse it
-                            if BS4_AVAILABLE:
-                                try:
-                                    soup = BeautifulSoup(real_page_source, 'html.parser')
-                                    if soup.title and soup.title.string:
-                                        title = soup.title.string.strip()
-                                except Exception as parse_error:
-                                    logger.debug(f"Could not parse page source for title: {parse_error}")
+                    # Use the new ExecutionCoordinator get_page_source method
+                    page_source_result = await execution_engine.get_page_source(
+                        session_id=session_id, 
+                        full_source=True, 
+                        filtered=False
+                    )
+                    
+                    if page_source_result.get("success") and page_source_result.get("page_source"):
+                        real_page_source = page_source_result["page_source"]
+                        logger.debug(f"Retrieved real page source: {len(real_page_source)} characters")
+                        
+                        # Update URL and title from the page source result
+                        if page_source_result.get("url"):
+                            url = page_source_result["url"]
+                        if page_source_result.get("title"):
+                            title = page_source_result["title"]
+                        
+                        # Also try to parse title from HTML if not provided
+                        if BS4_AVAILABLE and not page_source_result.get("title"):
+                            try:
+                                soup = BeautifulSoup(real_page_source, 'html.parser')
+                                if soup.title and soup.title.string:
+                                    title = soup.title.string.strip()
+                            except Exception as parse_error:
+                                logger.debug(f"Could not parse page source for title: {parse_error}")
+                                
                 except Exception as source_error:
                     logger.debug(f"Could not get real page source: {source_error}")
             
