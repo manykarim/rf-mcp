@@ -18,11 +18,30 @@ class ArgumentProcessor:
         """Parse a list of arguments into positional and named arguments."""
         parsed = ParsedArguments()
         
+        # Common Robot Framework locator strategy prefixes that should remain as positional arguments
+        locator_strategies = {
+            'id=', 'name=', 'class=', 'tag=', 'css=', 'xpath=', 'text=', 'link=', 
+            'partial_link=', 'link_text=', 'partial_link_text=', 'dom=', 'jquery=',
+            'id:', 'name:', 'class:', 'tag:', 'css:', 'xpath:', 'text:', 'link:',
+            'partial_link:', 'link_text:', 'partial_link_text:', 'dom:', 'jquery:'
+        }
+        
         for arg in args:
             if '=' in arg:
-                # Named argument
-                key, value = arg.split('=', 1)
-                parsed.named[key] = value
+                # Check if this is a locator strategy prefix (should remain positional)
+                is_locator_strategy = any(arg.lower().startswith(prefix) for prefix in locator_strategies)
+                
+                if is_locator_strategy:
+                    # Treat as positional argument
+                    if not parsed.named:
+                        parsed.positional.append(arg)
+                    else:
+                        # After named arguments, treat as named with empty key
+                        parsed.named[arg] = ""
+                else:
+                    # Named argument
+                    key, value = arg.split('=', 1)
+                    parsed.named[key] = value
             else:
                 # Positional argument (unless we already have named args)
                 if not parsed.named:
@@ -51,30 +70,62 @@ class ArgumentProcessor:
         # Get LibDoc argument information
         libdoc_args = self.get_libdoc_argument_info(keyword_name, library_name)
         
+        # Common Robot Framework locator strategy prefixes that should remain as positional arguments
+        locator_strategies = {
+            'id=', 'name=', 'class=', 'tag=', 'css=', 'xpath=', 'text=', 'link=', 
+            'partial_link=', 'link_text=', 'partial_link_text=', 'dom=', 'jquery=',
+            'id:', 'name:', 'class:', 'tag:', 'css:', 'xpath:', 'text:', 'link:',
+            'partial_link:', 'link_text:', 'partial_link_text:', 'dom:', 'jquery:'
+        }
+        
         for i, arg in enumerate(args):
             if '=' in arg:
-                key, value = arg.split('=', 1)
+                # Check if this is a locator strategy prefix (should remain positional)
+                is_locator_strategy = any(arg.lower().startswith(prefix) for prefix in locator_strategies)
                 
-                # Find matching LibDoc argument info
-                param_type = 'str'  # default
-                has_libdoc_info = False
-                for arg_info in libdoc_args:
-                    if arg_info.name == key:
-                        param_type = self.detect_argument_type(arg_info.type_hint)
+                if is_locator_strategy:
+                    # Treat as positional argument
+                    param_type = 'str'  # default
+                    has_libdoc_info = False
+                    if i < len(libdoc_args):
+                        param_type = self.detect_argument_type(libdoc_args[i].type_hint)
                         has_libdoc_info = True
-                        break
-                
-                libdoc_type_info[key] = has_libdoc_info
-                
-                # If LibDoc didn't provide type info, try smart detection for common patterns
-                if param_type == 'str' and not has_libdoc_info:
-                    param_type = self._smart_detect_argument_type(key, value, library_name)
-                
-                # Convert value to appropriate type
-                if param_type and param_type != 'str':
-                    converted_kwargs[key] = self.convert_string_value(value, param_type)
+                    
+                    arg_key = f'arg_{i}'
+                    libdoc_type_info[arg_key] = has_libdoc_info
+                    
+                    # Only apply smart detection if LibDoc didn't provide type info
+                    if param_type == 'str' and not has_libdoc_info:
+                        param_type = self._smart_detect_argument_type(arg_key, arg, library_name)
+                    
+                    if param_type and param_type != 'str':
+                        converted_kwargs[arg_key] = self.convert_string_value(arg, param_type)
+                    else:
+                        converted_kwargs[arg_key] = arg
                 else:
-                    converted_kwargs[key] = value
+                    # Named argument
+                    key, value = arg.split('=', 1)
+                    
+                    # Find matching LibDoc argument info
+                    param_type = 'str'  # default
+                    has_libdoc_info = False
+                    for arg_info in libdoc_args:
+                        if arg_info.name == key:
+                            param_type = self.detect_argument_type(arg_info.type_hint)
+                            has_libdoc_info = True
+                            break
+                    
+                    libdoc_type_info[key] = has_libdoc_info
+                    
+                    # If LibDoc didn't provide type info, try smart detection for common patterns
+                    if param_type == 'str' and not has_libdoc_info:
+                        param_type = self._smart_detect_argument_type(key, value, library_name)
+                    
+                    # Convert value to appropriate type
+                    if param_type and param_type != 'str':
+                        converted_kwargs[key] = self.convert_string_value(value, param_type)
+                    else:
+                        converted_kwargs[key] = value
             else:
                 # Positional argument
                 param_type = 'str'  # default
