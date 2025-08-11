@@ -7,6 +7,9 @@ from typing import Any, Dict, List, Optional, Tuple, Callable
 from dataclasses import dataclass, field
 import re
 
+# Import LibDoc integration
+from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -27,6 +30,15 @@ class ParsedArguments:
     """Parsed positional and named arguments."""
     positional: List[str] = field(default_factory=list)
     named: Dict[str, str] = field(default_factory=dict)
+
+@dataclass
+class ArgumentInfo:
+    """Information about a single argument from LibDoc signature parsing."""
+    name: str
+    type_hint: str
+    default_value: Optional[str] = None
+    is_varargs: bool = False
+    is_kwargs: bool = False
 
 @dataclass 
 class LibraryInfo:
@@ -595,28 +607,40 @@ class DynamicKeywordDiscovery:
         converted_args = []
         converted_kwargs = {}
         
+        # Process positional arguments
+        converted_args = parsed_args.positional.copy()
+        
+        # Handle specific keyword argument conversions
+        keyword_name = keyword_info.name.lower()
+        
+        # Try to import Browser data types for advanced conversions
         try:
-            # Import Browser data types for conversion
             from Browser.utils.data_types import (
                 SelectAttribute, SupportedBrowsers, ElementState, 
                 MouseButton, KeyAction, ViewportDimensions
             )
-            
-            # Process positional arguments
-            converted_args = parsed_args.positional.copy()
-            
-            # Handle specific keyword argument conversions
-            keyword_name = keyword_info.name.lower()
+            browser_library_available = True
+        except ImportError:
+            browser_library_available = False
+            logger.debug("Browser library data types not available for advanced conversion")
+        
+        # Handle Browser-specific conversions if library is available
+        if browser_library_available:
             
             if "new browser" in keyword_name:
                 # new_browser(browser: SupportedBrowsers, **kwargs)
                 
                 # Handle browser type (first positional arg or 'browser' named arg)
                 browser_type = None
+                browser_is_named = False
+                
                 if converted_args:
+                    # Browser provided as positional argument
                     browser_type = converted_args[0].lower()
                 elif 'browser' in parsed_args.named:
+                    # Browser provided as named argument
                     browser_type = parsed_args.named['browser'].lower()
+                    browser_is_named = True
                     
                 if browser_type:
                     # Convert browser string to enum
@@ -629,21 +653,22 @@ class DynamicKeywordDiscovery:
                     else:
                         browser_enum = getattr(SupportedBrowsers, browser_type, SupportedBrowsers.chromium)
                     
-                    # Replace or set the first positional argument
-                    if converted_args:
-                        converted_args[0] = browser_enum
+                    if browser_is_named:
+                        # Add as named argument, don't add to positional
+                        converted_kwargs['browser'] = browser_enum
                     else:
-                        converted_args.append(browser_enum)
+                        # Replace the positional argument
+                        converted_args[0] = browser_enum
                 else:
-                    # Default browser if none specified
+                    # Default browser if none specified - add as positional to maintain compatibility
                     converted_args.insert(0, SupportedBrowsers.chromium)
                 
-                # Convert named arguments to appropriate types
+                # Convert other named arguments to appropriate types
                 for key, value in parsed_args.named.items():
                     if key == 'browser':
                         continue  # Already handled above
                     elif key == 'headless':
-                        converted_kwargs[key] = value.lower() in ['true', '1', 'yes']
+                        converted_kwargs[key] = self._convert_boolean_string(value)
                     elif key in ['timeout', 'slowmo']:
                         try:
                             converted_kwargs[key] = float(value) if '.' in value else int(value)
@@ -681,29 +706,20 @@ class DynamicKeywordDiscovery:
                 if 'timeout' in parsed_args.named:
                     converted_kwargs['timeout'] = parsed_args.named['timeout']
             
-            # Handle common named arguments for all Browser keywords
-            for key, value in parsed_args.named.items():
-                if key not in converted_kwargs:  # Don't override specific conversions above
-                    if key in ['timeout', 'width', 'height']:
-                        try:
-                            converted_kwargs[key] = float(value) if '.' in value else int(value)
-                        except ValueError:
-                            converted_kwargs[key] = value
-                    elif key in ['headless', 'devtools', 'acceptdownloads', 'bypasscsp']:
-                        converted_kwargs[key] = value.lower() in ['true', '1', 'yes']
-                    else:
-                        converted_kwargs[key] = value
+        # Handle common named arguments for all Browser keywords using LibDoc type detection
+        for key, value in parsed_args.named.items():
+            if key not in converted_kwargs:  # Don't override specific conversions above
+                # Get parameter type from LibDoc
+                param_type = self._get_parameter_type_from_libdoc(key, keyword_info.name, keyword_info.library)
                 
-            return (converted_args, converted_kwargs)
+                if param_type:
+                    # Use LibDoc-detected type for conversion
+                    converted_kwargs[key] = self._convert_string_value(value, param_type)
+                else:
+                    # No LibDoc type found - keep as string
+                    converted_kwargs[key] = value
             
-        except ImportError:
-            # Browser library not available, return original args as positional
-            logger.debug("Browser library data types not available for conversion")
-            return (original_args.copy(), {})
-        except Exception as e:
-            # Any other conversion error, return original args as positional
-            logger.debug(f"Argument conversion failed: {e}")
-            return (original_args.copy(), {})
+        return (converted_args, converted_kwargs)
     
     def _execute_with_rf_context(self, keyword_info: KeywordInfo, parsed_args: ParsedArguments, original_args: List[str]) -> Any:
         """Execute keyword in a minimal Robot Framework context."""
@@ -1034,6 +1050,198 @@ class DynamicKeywordDiscovery:
             "failed_imports": self.failed_imports,
             "total_keywords": len(self.keyword_cache)
         }
+
+    def _parse_argument_signature(self, signature: str) -> List[ArgumentInfo]:
+        """Parse Robot Framework argument signature to extract type information."""
+        
+        if not signature or not signature.strip():
+            return []
+        
+        # Split by comma, but respect nested brackets/parentheses
+        args = self._split_signature_args(signature)
+        parsed_args = []
+        
+        for arg in args:
+            arg = arg.strip()
+            if not arg:
+                continue
+                
+            # Parse individual argument
+            arg_info = self._parse_single_argument(arg)
+            if arg_info:
+                parsed_args.append(arg_info)
+        
+        return parsed_args
+
+    def _split_signature_args(self, signature: str) -> List[str]:
+        """Split signature by comma, respecting nested structures."""
+        args = []
+        current_arg = ""
+        bracket_depth = 0
+        paren_depth = 0
+        
+        for char in signature:
+            if char in '[{':
+                bracket_depth += 1
+            elif char in ']}':
+                bracket_depth -= 1
+            elif char == ')':
+                paren_depth -= 1
+            elif char == '(':
+                paren_depth += 1
+            elif char == ',' and bracket_depth == 0 and paren_depth == 0:
+                args.append(current_arg)
+                current_arg = ""
+                continue
+                
+            current_arg += char
+        
+        if current_arg:
+            args.append(current_arg)
+        
+        return args
+
+    def _parse_single_argument(self, arg: str) -> Optional[ArgumentInfo]:
+        """Parse a single argument like 'force: bool = False'."""
+        
+        # Handle *args and **kwargs
+        if arg.startswith('**'):
+            name = arg[2:].strip()
+            return ArgumentInfo(name=name, type_hint='dict', is_kwargs=True)
+        elif arg.startswith('*') and not arg.startswith('**'):
+            name = arg[1:].strip()
+            # Handle bare * separator
+            if not name or name == ',':
+                return None
+            return ArgumentInfo(name=name, type_hint='list', is_varargs=True)
+        
+        # Regular argument: name: type = default
+        # Match pattern: name : type = default (all parts optional except name)
+        match = re.match(r'^([^:=]+)(?:\s*:\s*([^=]+))?(?:\s*=\s*(.+))?$', arg)
+        
+        if not match:
+            return None
+        
+        name = match.group(1).strip()
+        type_hint = match.group(2).strip() if match.group(2) else 'str'  # Default to str
+        default_value = match.group(3).strip() if match.group(3) else None
+        
+        return ArgumentInfo(
+            name=name,
+            type_hint=type_hint,
+            default_value=default_value
+        )
+
+    def _detect_argument_type(self, type_hint: str) -> str:
+        """Detect the basic type from a type hint."""
+        
+        type_hint = type_hint.lower().strip()
+        
+        # Boolean types
+        if any(indicator in type_hint for indicator in ['bool', 'boolean']):
+            return 'bool'
+        
+        # Integer types
+        if any(indicator in type_hint for indicator in ['int', 'integer']):
+            return 'int'
+        
+        # Float types  
+        if any(indicator in type_hint for indicator in ['float', 'double']):
+            return 'float'
+        
+        # Enum types (e.g., SupportedBrowsers, MouseButton)
+        if any(indicator in type_hint for indicator in ['enum', 'supportedbrowsers', 'mousebutton', 'keyboardmodifier']):
+            return 'enum'
+        
+        # Timedelta
+        if 'timedelta' in type_hint:
+            return 'timedelta'
+        
+        # Lists
+        if any(indicator in type_hint for indicator in ['list', 'sequence']):
+            return 'list'
+        
+        # Dicts
+        if any(indicator in type_hint for indicator in ['dict', 'mapping']):
+            return 'dict'
+        
+        # Default to string
+        return 'str'
+
+    def _convert_string_value(self, value: str, target_type: str):
+        """Convert string value to target type."""
+        
+        if target_type == 'bool':
+            return value.lower().strip() in ['true', '1', 'yes', 'on']
+        
+        elif target_type == 'int':
+            try:
+                return int(value)
+            except ValueError:
+                return value
+        
+        elif target_type == 'float':
+            try:
+                return float(value)
+            except ValueError:
+                return value
+        
+        # For enum, timedelta, etc., return as string for now
+        return value
+
+    def _get_libdoc_argument_info(self, keyword_name: str, library_name: str = None) -> List[ArgumentInfo]:
+        """Get argument information from LibDoc for a keyword."""
+        
+        # Get LibDoc storage
+        rf_storage = get_rf_doc_storage()
+        
+        if not rf_storage.is_available():
+            return []
+        
+        # Find keyword in LibDoc
+        keyword_info = rf_storage.find_keyword(keyword_name)
+        
+        if not keyword_info:
+            return []
+        
+        # If library specified, ensure it matches
+        if library_name and keyword_info.library.lower() != library_name.lower():
+            return []
+        
+        # Parse argument signature from LibDoc args
+        if keyword_info.args:
+            # LibDoc provides a list of argument strings, join them
+            signature = ", ".join(keyword_info.args) if isinstance(keyword_info.args, list) else str(keyword_info.args)
+            return self._parse_argument_signature(signature)
+        
+        return []
+
+    def _get_parameter_type_from_libdoc(self, key: str, keyword_name: str, library_name: str = None) -> Optional[str]:
+        """Get parameter type from LibDoc for a specific keyword argument."""
+        
+        # Get argument information from LibDoc
+        arg_infos = self._get_libdoc_argument_info(keyword_name, library_name)
+        
+        # Find the matching argument
+        for arg_info in arg_infos:
+            if arg_info.name.lower() == key.lower():
+                return self._detect_argument_type(arg_info.type_hint)
+        
+        return None
+
+    def _is_boolean_parameter(self, key: str, value: str, keyword_name: str = None, library_name: str = None) -> bool:
+        """Determine if a parameter should be converted to boolean using LibDoc."""
+        
+        # Use LibDoc to get the actual parameter type
+        if keyword_name:
+            param_type = self._get_parameter_type_from_libdoc(key, keyword_name, library_name)
+            return param_type == 'bool'
+        
+        return False
+    
+    def _convert_boolean_string(self, value: str) -> bool:
+        """Convert string to boolean value."""
+        return value.lower().strip() in ['true', '1', 'yes', 'on']
 
 # Global instance
 _keyword_discovery = None
