@@ -36,18 +36,19 @@ def detect_library_from_keyword(keyword: str, keyword_discovery=None) -> Optiona
     # Fallback to pattern-based detection
     keyword_lower = keyword.lower().strip()
     
-    # Check for more specific SeleniumLibrary keywords first (to avoid conflicts)
+    # Check for specific SeleniumLibrary keywords (excluding conflicting ones like 'go to')
+    # These patterns should only match SeleniumLibrary-specific keywords that don't exist in Browser Library
     if any(kw in keyword_lower for kw in [
-        'open browser', 'close browser', 'go to', 'input text', 'click button', 'click element',
-        'get source', 'get title', 'select from list', 'wait until element is visible',
-        'page should contain', 'element should be visible', 'capture page screenshot'
+        'open browser', 'input text', 'click button', 'select from list', 
+        'wait until element is visible', 'page should contain', 'element should be visible',
+        'capture page screenshot', 'maximize browser window', 'set window size'
     ]):
         logger.debug(f"Pattern detection: '{keyword}' -> SeleniumLibrary")
         return "SeleniumLibrary"
     
     # Browser Library keywords (prioritized for modern web testing)
     elif any(kw in keyword_lower for kw in [
-        'new browser', 'new context', 'new page', 'close context', 'close page',
+        'new browser', 'new context', 'new page', 'close context', 'close page', 'go to',
         'get viewport size', 'set viewport size', 'wait for elements state', 'get element count',
         'get element', 'get elements', 'fill text', 'fill', 'get text', 'get property',
         'select options by', 'check checkbox', 'get page source', 'click'
@@ -138,7 +139,16 @@ def detect_library_type_from_keyword(keyword: str, arguments: list = None) -> st
     Returns:
         str: "browser", "selenium", or "auto"
     """
-    library = detect_library_from_keyword(keyword)
+    # Import here to avoid circular imports
+    from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
+    
+    try:
+        # Use dynamic keyword discovery for accurate library detection
+        keyword_discovery = get_keyword_discovery()
+        library = detect_library_from_keyword(keyword, keyword_discovery)
+    except Exception as e:
+        logger.debug(f"Failed to get dynamic keyword discovery: {e}, using pattern-based detection")
+        library = detect_library_from_keyword(keyword)
     
     if library == "Browser":
         return "browser"
