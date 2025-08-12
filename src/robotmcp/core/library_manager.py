@@ -28,7 +28,7 @@ class LibraryManager:
     
     def load_all_libraries(self, keyword_extractor) -> None:
         """
-        Load all common libraries.
+        Load all common libraries (legacy method for backward compatibility).
         
         Args:
             keyword_extractor: KeywordDiscovery instance for extracting library info
@@ -45,6 +45,47 @@ class LibraryManager:
         self.resolve_library_conflicts()
         
         logger.info(f"Initialized {len(self.libraries)} libraries")
+    
+    def load_session_libraries(self, library_names: list, keyword_extractor) -> None:
+        """
+        Load specific libraries for a session.
+        
+        Args:
+            library_names: List of library names to load
+            keyword_extractor: KeywordDiscovery instance for extracting library info
+        """
+        # Always ensure BuiltIn is loaded first
+        if 'BuiltIn' not in self.libraries:
+            self.try_import_library('BuiltIn', keyword_extractor)
+        
+        # Load requested libraries
+        loaded_count = 0
+        for library_name in library_names:
+            if library_name not in self.libraries and library_name != 'BuiltIn':
+                if self.try_import_library(library_name, keyword_extractor):
+                    loaded_count += 1
+        
+        logger.info(f"Loaded {loaded_count} new libraries for session: {library_names}")
+    
+    def load_library_on_demand(self, library_name: str, keyword_extractor) -> bool:
+        """
+        Load a single library on demand.
+        
+        Args:
+            library_name: Name of library to load
+            keyword_extractor: KeywordDiscovery instance for extracting library info
+            
+        Returns:
+            True if library was loaded successfully, False otherwise
+        """
+        if library_name in self.libraries:
+            return True  # Already loaded
+        
+        success = self.try_import_library(library_name, keyword_extractor)
+        if success:
+            logger.info(f"Loaded library on demand: {library_name}")
+        
+        return success
     
     def try_import_library(self, library_name: str, keyword_extractor) -> bool:
         """Try to import and initialize a Robot Framework library."""
@@ -147,8 +188,8 @@ class LibraryManager:
         """
         Resolve conflicts between loaded libraries by removing less preferred ones.
         
-        UPDATED: Allow both Browser Library and SeleniumLibrary to coexist at the 
-        discovery level, since session-level switching is now implemented.
+        UPDATED: With session-based loading, conflicts are minimized since only
+        relevant libraries are loaded per session.
         """
         web_automation_libs = self.exclusion_groups.get('web_automation', [])
         
@@ -157,8 +198,7 @@ class LibraryManager:
         
         if len(loaded_web_libs) > 1:
             logger.info(f"Multiple web automation libraries loaded: {loaded_web_libs}")
-            logger.info("Both libraries will be available - session-level switching will determine which is active")
-            # NOTE: Previously this removed SeleniumLibrary, but now we allow both for session-level switching
+            logger.info("Session-based search order will resolve keyword conflicts")
             
         elif len(loaded_web_libs) == 1:
             logger.info(f"Single web automation library loaded: {loaded_web_libs[0]}")

@@ -1,6 +1,7 @@
 """Main orchestrator for dynamic keyword discovery."""
 
 import logging
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from robotmcp.models.library_models import KeywordInfo, ParsedArguments
@@ -19,11 +20,27 @@ class DynamicKeywordDiscovery:
         self.keyword_discovery = KeywordDiscovery()
         self.argument_processor = ArgumentProcessor()
         
-        # Initialize all components
-        self._initialize()
+        # Initialize session manager
+        from robotmcp.core.session_manager import get_session_manager
+        self.session_manager = get_session_manager()
+        
+        # Initialize with minimal libraries
+        self._initialize_minimal()
     
-    def _initialize(self) -> None:
-        """Initialize all libraries and set up keyword discovery."""
+    def _initialize_minimal(self) -> None:
+        """Initialize with minimal core libraries only."""
+        # Load minimal core libraries
+        core_libraries = ["BuiltIn", "Collections", "String"]
+        self.library_manager.load_session_libraries(core_libraries, self.keyword_discovery)
+        
+        # Add keywords to cache
+        for lib_info in self.library_manager.libraries.values():
+            self.keyword_discovery.add_keywords_to_cache(lib_info)
+        
+        logger.info(f"Initialized with minimal libraries: {len(self.library_manager.libraries)} libraries with {len(self.keyword_discovery.keyword_cache)} keywords")
+    
+    def _initialize_legacy(self) -> None:
+        """Legacy initialization method - loads all libraries."""
         # Load all libraries through the library manager
         self.library_manager.load_all_libraries(self.keyword_discovery)
         
@@ -294,6 +311,141 @@ class DynamicKeywordDiscovery:
             "total_keywords": len(self.keyword_discovery.keyword_cache)
         }
     
+    async def _ensure_session_libraries(self, session_id: str, keyword_name: str) -> None:
+        """Ensure required libraries are loaded for the session."""
+        session = self.session_manager.get_session(session_id)
+        if not session:
+            session = self.session_manager.create_session(session_id)
+        
+        # Get libraries that should be loaded for this session
+        required_libraries = session.get_libraries_to_load()
+        optional_libraries = session.get_optional_libraries()
+        
+        # Load any missing required libraries
+        libraries_to_load = []
+        for lib_name in required_libraries:
+            if lib_name not in self.library_manager.libraries:
+                libraries_to_load.append(lib_name)
+        
+        if libraries_to_load:
+            self.library_manager.load_session_libraries(libraries_to_load, self.keyword_discovery)
+            
+            # Add new keywords to cache
+            for lib_name in libraries_to_load:
+                if lib_name in self.library_manager.libraries:
+                    lib_info = self.library_manager.libraries[lib_name]
+                    self.keyword_discovery.add_keywords_to_cache(lib_info)
+                    session.mark_library_loaded(lib_name)
+        
+        # Try to load library on-demand if keyword is not found
+        if not self.find_keyword(keyword_name):
+            # Try to determine which library might have this keyword
+            potential_library = self._guess_library_for_keyword(keyword_name)
+            if potential_library and potential_library not in self.library_manager.libraries:
+                if self.library_manager.load_library_on_demand(potential_library, self.keyword_discovery):
+                    lib_info = self.library_manager.libraries[potential_library]
+                    self.keyword_discovery.add_keywords_to_cache(lib_info)
+                    session.mark_library_loaded(potential_library)
+    
+    def _guess_library_for_keyword(self, keyword_name: str) -> Optional[str]:
+        """Guess which library might contain a keyword based on name patterns."""
+        keyword_lower = keyword_name.lower()
+        
+        # Common keyword patterns to library mappings
+        patterns = {
+            r'\b(click|fill|navigate|browser|page|screenshot)\b': 'Browser',
+            r'\b(get request|post|put|delete|create session)\b': 'RequestsLibrary',
+            r'\b(parse xml|get element|xpath)\b': 'XML',
+            r'\b(run process|start process|terminate)\b': 'Process',
+            r'\b(create file|remove file|directory)\b': 'OperatingSystem',
+            r'\b(get current date|convert date)\b': 'DateTime'
+        }
+        
+        for pattern, library in patterns.items():
+            if re.search(pattern, keyword_lower):
+                return library
+        
+        return None
+    
+    def _find_keyword_with_session(self, keyword_name: str, active_library: str = None, session_id: str = None) -> Optional[KeywordInfo]:
+        """Find keyword respecting session search order."""
+        # If no session, use normal search
+        if not session_id:
+            return self.find_keyword(keyword_name, active_library)
+        
+        session = self.session_manager.get_session(session_id)
+        if not session:
+            return self.find_keyword(keyword_name, active_library)
+        
+        # Search in session's search order
+        search_order = session.get_search_order()
+        
+        # First try exact matches in search order
+        for lib_name in search_order:
+            if lib_name in self.library_manager.libraries:
+                lib_keywords = self.get_keywords_by_library(lib_name)
+                for kw in lib_keywords:
+                    if kw.name.lower() == keyword_name.lower():
+                        logger.debug(f"Found '{keyword_name}' in '{lib_name}' via search order")
+                        return kw
+        
+        # If active_library specified and not in search order, check it too
+        if active_library and active_library not in search_order:
+            return self.find_keyword(keyword_name, active_library)
+        
+        # Fall back to normal search
+        return self.find_keyword(keyword_name, active_library)
+    
+    def get_session_info(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get information about a session."""
+        session = self.session_manager.get_session(session_id)
+        if not session:
+            return None
+        return session.get_session_info()
+    
+    async def _update_rf_search_order(self, session) -> None:
+        """Update Robot Framework's native library search order."""
+        try:
+            # Get BuiltIn library instance to call Set Library Search Order
+            if 'BuiltIn' in self.library_manager.libraries:
+                builtin_lib = self.library_manager.libraries['BuiltIn']
+                builtin_instance = builtin_lib.instance
+                
+                # Get current search order from session
+                search_order = session.get_search_order()
+                
+                # Filter to only include loaded libraries
+                loaded_search_order = [lib for lib in search_order if lib in self.library_manager.libraries]
+                
+                if loaded_search_order and hasattr(builtin_instance, 'set_library_search_order'):
+                    # Use Robot Framework's native Set Library Search Order
+                    builtin_instance.set_library_search_order(*loaded_search_order)
+                    logger.debug(f"Updated RF search order: {loaded_search_order}")
+        except Exception as e:
+            logger.debug(f"Could not update RF search order: {e}")
+    
+    def create_session(self, session_id: str) -> Dict[str, Any]:
+        """Create a new session."""
+        session = self.session_manager.create_session(session_id)
+        return session.get_session_info()
+    
+    def set_session_search_order(self, session_id: str, search_order: List[str]) -> bool:
+        """Manually set search order for a session."""
+        session = self.session_manager.get_session(session_id)
+        if not session:
+            return False
+        
+        session.search_order = search_order.copy()
+        
+        # Update Robot Framework's native search order
+        try:
+            import asyncio
+            asyncio.create_task(self._update_rf_search_order(session))
+        except Exception as e:
+            logger.debug(f"Could not update search order: {e}")
+        
+        return True
+    
     # Properties for backward compatibility and access to internal components
     @property
     def libraries(self) -> Dict[str, Any]:
@@ -409,10 +561,14 @@ class DynamicKeywordDiscovery:
                 }
             }
     
-    async def execute_keyword(self, keyword_name: str, args: List[str], session_variables: Dict[str, Any] = None, active_library: str = None) -> Dict[str, Any]:
-        """Execute a keyword dynamically, respecting session-based library exclusion."""
-        # Find keyword with library filtering if active_library is specified
-        keyword_info = self.find_keyword(keyword_name, active_library)
+    async def execute_keyword(self, keyword_name: str, args: List[str], session_variables: Dict[str, Any] = None, active_library: str = None, session_id: str = None) -> Dict[str, Any]:
+        """Execute a keyword dynamically with session-based library management."""
+        # Handle session-based library loading
+        if session_id:
+            await self._ensure_session_libraries(session_id, keyword_name)
+        
+        # Find keyword with library filtering and session search order
+        keyword_info = self._find_keyword_with_session(keyword_name, active_library, session_id)
         
         if not keyword_info:
             error_msg = f"Keyword '{keyword_name}' not found"
@@ -425,8 +581,17 @@ class DynamicKeywordDiscovery:
                 "success": False,
                 "error": error_msg,
                 "suggestions": self.get_keyword_suggestions(keyword_name, 3),
-                "active_library_filter": active_library
+                "active_library_filter": active_library,
+                "session_id": session_id
             }
+        
+        # Record keyword usage for session management and update search order
+        if session_id:
+            session = self.session_manager.get_session(session_id)
+            if session:
+                session.record_keyword_usage(keyword_name)
+                # Update Robot Framework's native search order
+                await self._update_rf_search_order(session)
         
         try:
             # Log which library the keyword was found in for debugging
@@ -439,7 +604,9 @@ class DynamicKeywordDiscovery:
             parsed_args = self._parse_arguments_for_keyword(keyword_name, args, keyword_info.library)
             
             # Execute the keyword
-            return self._execute_direct_method_call(keyword_info, parsed_args, args, session_variables or {})
+            result = self._execute_direct_method_call(keyword_info, parsed_args, args, session_variables or {})
+            result["session_id"] = session_id
+            return result
             
         except Exception as e:
             return {
@@ -450,7 +617,8 @@ class DynamicKeywordDiscovery:
                     "library": keyword_info.library,
                     "doc": keyword_info.doc
                 },
-                "active_library_filter": active_library
+                "active_library_filter": active_library,
+                "session_id": session_id
             }
 
 
