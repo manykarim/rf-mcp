@@ -346,9 +346,9 @@ class DynamicKeywordDiscovery:
                 result = method(*original_args)
             else:
                 # Regular library methods
-                if keyword_info.library == "Browser":
+                if keyword_info.library in ["Browser", "SeleniumLibrary", "RequestsLibrary"]:
                     try:
-                        # Use Robot Framework's native type conversion system
+                        # Use Robot Framework's native type conversion system for all modern libraries
                         result = self._execute_with_rf_type_conversion(method, keyword_info, original_args)
                         if result is not None:  # Successfully converted and executed
                             pass  # Use the result as-is
@@ -362,11 +362,11 @@ class DynamicKeywordDiscovery:
                                 result = method(*pos_args, **kwargs)
                             else:
                                 result = method(*pos_args)
-                    except Exception as browser_error:
-                        logger.debug(f"Browser Library execution failed: {browser_error}")
-                        # Don't fall back to unconverted args as this can cause enum type errors
+                    except Exception as lib_error:
+                        logger.debug(f"{keyword_info.library} execution failed: {lib_error}")
+                        # Don't fall back to unconverted args as this can cause type errors
                         # Re-raise the original error
-                        raise browser_error
+                        raise lib_error
                 elif keyword_info.name == "Create List":
                     # Collections.Create List takes variable arguments
                     result = method(*parsed_args.positional)
