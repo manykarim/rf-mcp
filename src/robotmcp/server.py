@@ -30,10 +30,22 @@ test_builder = TestBuilder(execution_engine)
 @mcp.tool
 async def analyze_scenario(scenario: str, context: str = "web") -> Dict[str, Any]:
     """Process natural language test description into structured test intent.
+    
+    RECOMMENDED WORKFLOW - STEP 1 OF 3:
+    This tool should be used as the FIRST step in the Robot Framework automation workflow:
+    1. ✅ analyze_scenario (THIS TOOL) - Understand what the user wants to accomplish
+    2. ➡️ recommend_libraries - Get targeted library suggestions for the scenario
+    3. ➡️ check_library_availability - Verify only the recommended libraries
+    
+    Using this order prevents unnecessary library checks and pip installations by ensuring
+    you only verify libraries that are actually relevant to the user's scenario.
 
     Args:
         scenario: Human language scenario description
         context: Optional context about the application (web, mobile, API, etc.)
+        
+    Returns:
+        Structured test intent that can be used by recommend_libraries for targeted suggestions
     """
     return await nlp_processor.analyze_scenario(scenario, context)
 
@@ -201,11 +213,24 @@ async def recommend_libraries(
     scenario: str, context: str = "web", max_recommendations: int = 5
 ) -> Dict[str, Any]:
     """Recommend Robot Framework libraries based on test scenario.
+    
+    RECOMMENDED WORKFLOW - STEP 2 OF 3:
+    This tool should be used as the SECOND step in the Robot Framework automation workflow:
+    1. ✅ analyze_scenario - Understand what the user wants to accomplish  
+    2. ✅ recommend_libraries (THIS TOOL) - Get targeted library suggestions for the scenario
+    3. ➡️ check_library_availability - Verify only the recommended libraries
+    
+    IMPORTANT: Use the scenario output from analyze_scenario as input to this tool for
+    the most accurate library recommendations. This prevents checking irrelevant libraries
+    in the next step.
 
     Args:
-        scenario: Natural language description of the test scenario
+        scenario: Natural language description of the test scenario (ideally from analyze_scenario output)
         context: Testing context (web, mobile, api, database, desktop, system, visual)
         max_recommendations: Maximum number of library recommendations to return
+        
+    Returns:
+        Targeted library recommendations that should be passed to check_library_availability
     """
     return library_recommender.recommend_libraries(
         scenario, context, max_recommendations
@@ -243,12 +268,34 @@ async def get_page_source(
 @mcp.tool
 async def check_library_availability(libraries: List[str]) -> Dict[str, Any]:
     """Check if Robot Framework libraries are available before installation.
-
+    
+    RECOMMENDED WORKFLOW - STEP 3 OF 3:
+    This tool should be used as the THIRD step in the Robot Framework automation workflow:
+    1. ✅ analyze_scenario - Understand what the user wants to accomplish
+    2. ✅ recommend_libraries - Get targeted library suggestions for the scenario  
+    3. ✅ check_library_availability (THIS TOOL) - Verify only the recommended libraries
+    
+    CRITICAL: Do NOT call this tool first! It may return empty results if called before
+    the Robot Framework environment is initialized, leading to unnecessary pip installations.
+    
+    PREFERRED INPUT: Use the library recommendations from recommend_libraries as the
+    'libraries' parameter to avoid checking irrelevant libraries.
+    
+    FALLBACK INITIALIZATION: If you must call this tool without the recommended workflow,
+    first call 'get_available_keywords' or 'execute_step' to initialize library discovery,
+    then re-run this check.
+    
     Args:
-        libraries: List of library names to check (e.g., ['Browser', 'SeleniumLibrary', 'RequestsLibrary'])
-
+        libraries: List of library names to check (preferably from recommend_libraries output)
+        
     Returns:
-        Dict with availability status and installation suggestions
+        Dict with availability status, installation suggestions, and workflow guidance.
+        Includes smart hints if called in wrong order or without initialization.
+        
+    Example workflow:
+        scenario_result = await analyze_scenario("I want to test a web form")
+        recommendations = await recommend_libraries(scenario_result["scenario"])  
+        availability = await check_library_availability(recommendations["recommended_libraries"])
     """
     return execution_engine.check_library_requirements(libraries)
 
@@ -272,6 +319,9 @@ async def get_available_keywords(library_name: str = None) -> List[Dict[str, Any
 
     Uses Robot Framework's native libdoc API to provide accurate short_doc, argument types, and metadata.
     Falls back to inspection-based discovery if libdoc is not available.
+    
+    NOTE: This tool initializes library discovery and can be used as a fallback if you need to call
+    check_library_availability without following the recommended 3-step workflow.
 
     Args:
         library_name: Optional library name to filter keywords (e.g., 'Browser', 'BuiltIn', 'Collections').
@@ -286,6 +336,8 @@ async def get_available_keywords(library_name: str = None) -> List[Dict[str, Any
         - short_doc: Short documentation from Robot Framework's native short_doc
         - tags: Keyword tags
         - is_deprecated: Whether keyword is deprecated (libdoc only)
+        
+    Related tools: Use analyze_scenario → recommend_libraries → check_library_availability for optimal workflow.
     """
     return execution_engine.get_available_keywords(library_name)
 

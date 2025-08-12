@@ -162,8 +162,88 @@ class ExecutionCoordinator:
         return self.session_manager.cleanup_expired_sessions()
     
     def check_library_requirements(self, required_libraries: List[str]) -> Dict[str, Any]:
-        """Check if required libraries are available and properly initialized."""
-        return self.browser_library_manager.check_library_requirements(required_libraries)
+        """Check if required libraries are available and properly initialized with intelligent guidance."""
+        # Import here to avoid circular imports
+        from robotmcp.utils.library_checker import check_and_suggest_libraries
+        from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
+        
+        if not required_libraries:
+            return {
+                "available_libraries": [],
+                "missing_libraries": [],
+                "initialization_errors": [],
+                "hint": "No libraries specified to check. Provide a list of library names (e.g., ['Browser', 'XML', 'SeleniumLibrary'])."
+            }
+        
+        try:
+            # Check if the dynamic keyword orchestrator has been initialized
+            orchestrator = get_keyword_discovery()
+            libraries_initialized = len(orchestrator.libraries) > 3  # More than just the basic core libraries
+            total_libraries_loaded = len(orchestrator.libraries)
+            
+            # Use the comprehensive library checker
+            available, suggestions = check_and_suggest_libraries(required_libraries)
+            missing = [lib for lib in required_libraries if lib not in available]
+            
+            # Build the response with guidance
+            result = {
+                "available_libraries": available,
+                "missing_libraries": missing,
+                "installation_suggestions": suggestions,
+                "initialization_errors": [],
+                "libraries_initialized": libraries_initialized,
+                "total_libraries_discovered": total_libraries_loaded
+            }
+            
+            # Add intelligent guidance based on the situation
+            if not libraries_initialized and not available:
+                result["hint"] = (
+                    "Library discovery appears not to be initialized yet. "
+                    "RECOMMENDED: Follow the 3-step workflow instead of calling this tool first."
+                )
+                result["recommended_workflow"] = [
+                    "PREFERRED: 1. analyze_scenario → 2. recommend_libraries → 3. check_library_availability",
+                    "FALLBACK: 1. Call 'get_available_keywords' to initialize library discovery",
+                    "FALLBACK: 2. Call 'check_library_availability' again to get accurate results", 
+                    "FALLBACK: 3. Only install packages that are confirmed missing after initialization"
+                ]
+            elif not libraries_initialized and len(missing) == len(required_libraries):
+                result["hint"] = (
+                    "All requested libraries appear missing, but library discovery may not be complete. "
+                    "RECOMMENDED: Use the proper 3-step workflow for better results."
+                )
+                result["recommended_workflow"] = [
+                    "PREFERRED: 1. analyze_scenario → 2. recommend_libraries → 3. check_library_availability",
+                    "ALTERNATIVE: 1. Run 'get_available_keywords' or 'execute_step' to initialize libraries",
+                    "ALTERNATIVE: 2. Re-check library availability to get accurate results",
+                    "ALTERNATIVE: 3. Install only genuinely missing packages"
+                ]
+            elif missing:
+                result["hint"] = f"Found {len(available)} available, {len(missing)} missing. Only install the missing ones."
+                result["recommended_workflow"] = [
+                    f"Install missing libraries: {', '.join(missing)}",
+                    "Re-run this check after installation to verify"
+                ]
+            else:
+                result["hint"] = "All requested libraries are available. No installation needed."
+                result["recommended_workflow"] = [
+                    "All libraries ready to use",
+                    "Proceed with your Robot Framework automation"
+                ]
+            
+            # Add fallback check for browser libraries (maintain compatibility)
+            browser_status = self.browser_library_manager.check_library_requirements(
+                [lib for lib in required_libraries if lib.lower() in ['browser', 'selenium', 'seleniumlibrary']]
+            )
+            if browser_status.get("initialization_errors"):
+                result["initialization_errors"].extend(browser_status["initialization_errors"])
+            
+            return result
+            
+        except Exception as e:
+            # Fallback to original implementation if there are issues
+            logger.warning(f"Enhanced library checking failed, using fallback: {e}")
+            return self.browser_library_manager.check_library_requirements(required_libraries)
     
     def get_library_capabilities(self) -> Dict[str, Any]:
         """Get information about available library capabilities."""
