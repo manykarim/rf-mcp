@@ -553,7 +553,32 @@ class DynamicKeywordDiscovery:
         """Execute a keyword by calling its method directly."""
         try:
             # Get library instance
+            if keyword_info.library not in self.libraries:
+                return {
+                    "success": False,
+                    "error": f"Library '{keyword_info.library}' is not loaded. Available libraries: {list(self.libraries.keys())}",
+                    "keyword_info": {
+                        "name": keyword_info.name,
+                        "library": keyword_info.library,
+                        "args": keyword_info.args,
+                        "doc": keyword_info.doc
+                    }
+                }
+            
             library = self.libraries[keyword_info.library]
+            
+            if library.instance is None:
+                return {
+                    "success": False,
+                    "error": f"Library '{keyword_info.library}' instance is not initialized",
+                    "keyword_info": {
+                        "name": keyword_info.name,
+                        "library": keyword_info.library,
+                        "args": keyword_info.args,
+                        "doc": keyword_info.doc
+                    }
+                }
+            
             method = getattr(library.instance, keyword_info.method_name)
             
             # Handle different types of method calls
