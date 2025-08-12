@@ -482,7 +482,7 @@ class LibraryRecommender:
             'system': ['SSHLibrary', 'Process', 'OperatingSystem'],
             'visual': ['DocTest.VisualTest', 'DocTest.PdfTest', 'Screenshot'],
             'enterprise': ['RoboSAPiens'],
-            'data': ['DataDriver', 'FakerLibrary']
+            'data': ['DataDriver', 'FakerLibrary', 'XML']
         }
         
         # Priority weighting for web context libraries
@@ -594,7 +594,20 @@ class LibraryRecommender:
             # Penalty for platform-specific libraries if not explicitly needed
             platform_penalty = -0.1 if rec.library.platform_requirements else 0
             
-            final_score = confidence + context_boost + specific_boost + platform_penalty
+            # Strong boost for direct technology matches (e.g., "xml" -> XML Library)
+            technology_boost = 0
+            lib_name_lower = rec.library.name.lower()
+            for keyword in keywords:
+                if keyword.lower() == lib_name_lower or keyword.lower() in lib_name_lower:
+                    technology_boost = 0.3  # Strong boost for exact tech match
+                    break
+                # Check if keyword matches main technology (e.g. "xml" matches "XML")
+                elif keyword.lower() in [uc.lower() for uc in rec.library.use_cases]:
+                    if any(keyword.lower() in uc.lower().split() for uc in rec.library.use_cases):
+                        technology_boost = 0.2  # Medium boost for use case match
+                        break
+            
+            final_score = confidence + context_boost + specific_boost + platform_penalty + technology_boost
             
             return (-final_score, rec.library.name)  # Negative for descending order
         
