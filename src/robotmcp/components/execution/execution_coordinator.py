@@ -489,38 +489,102 @@ class ExecutionCoordinator:
             lib_info = COMMON_ROBOT_LIBRARIES[library_name]
             package_name = lib_info['package']
             import_name = lib_info['import']
+            is_builtin = lib_info.get('is_builtin', False)
             
             # Check import availability
             import_available = self.library_checker.is_library_available(package_name, import_name)
             
-            # Check pip package status
-            pip_installed = self.library_checker.check_pip_package_installed(package_name)
+            # For built-in libraries, check if they're actually loaded in our system
+            is_loaded = library_name in self.keyword_executor.keyword_discovery.libraries
             
-            status = {
-                "library_name": library_name,
-                "package_name": package_name,
-                "import_name": import_name,
-                "import_available": import_available,
-                "pip_installed": pip_installed,
-                "status": "available" if import_available else "not_available",
-                "installation_command": f"pip install {package_name}"
-            }
-            
-            # Add specific guidance
-            if not pip_installed:
-                status["message"] = f"Package {package_name} is not installed. Install with: pip install {package_name}"
-            elif not import_available:
-                status["message"] = f"Package {package_name} is installed but cannot be imported. Check for version conflicts."
-            else:
-                status["message"] = f"Library {library_name} is available and ready to use."
+            if is_builtin:
+                # Built-in libraries are always "pip installed" with robotframework
+                pip_installed = True
                 
+                status = {
+                    "library_name": library_name,
+                    "package_name": package_name,
+                    "import_name": import_name,
+                    "is_builtin": True,
+                    "import_available": import_available,
+                    "pip_installed": True,
+                    "is_loaded": is_loaded,
+                    "status": "available" if (import_available and is_loaded) else "not_available",
+                    "installation_command": "Built-in with Robot Framework",
+                    "description": lib_info.get('description', '')
+                }
+                
+                # Add specific guidance for built-in libraries
+                if not import_available:
+                    status["message"] = f"Built-in library {library_name} cannot be imported. Check Robot Framework installation."
+                elif not is_loaded:
+                    status["message"] = f"Built-in library {library_name} is available but not loaded in the current session."
+                else:
+                    keyword_count = len(self.keyword_executor.keyword_discovery.get_keywords_by_library(library_name))
+                    status["message"] = f"Built-in library {library_name} is loaded and ready to use ({keyword_count} keywords available)."
+                    status["keyword_count"] = keyword_count
+                    
+            else:
+                # External libraries need pip installation
+                pip_installed = self.library_checker.check_pip_package_installed(package_name)
+                
+                status = {
+                    "library_name": library_name,
+                    "package_name": package_name,
+                    "import_name": import_name,
+                    "is_builtin": False,
+                    "import_available": import_available,
+                    "pip_installed": pip_installed,
+                    "is_loaded": is_loaded,
+                    "status": "available" if import_available else "not_available",
+                    "installation_command": f"pip install {package_name}",
+                    "description": lib_info.get('description', '')
+                }
+                
+                # Add keyword count if library is loaded (regardless of pip status)
+                if is_loaded:
+                    keyword_count = len(self.keyword_executor.keyword_discovery.get_keywords_by_library(library_name))
+                    status["keyword_count"] = keyword_count
+                
+                # Add specific guidance for external libraries
+                if not import_available:
+                    status["message"] = f"Package {package_name} is not available. Install with: pip install {package_name}"
+                elif not is_loaded:
+                    status["message"] = f"Library {library_name} is available but not loaded in the current session."
+                else:
+                    # Library is loaded and working
+                    keyword_count = status["keyword_count"]
+                    if pip_installed:
+                        status["message"] = f"Library {library_name} is installed and loaded ({keyword_count} keywords available)."
+                    else:
+                        # Library is working despite pip check failing (common in virtual environments)
+                        status["message"] = f"Library {library_name} is loaded and working ({keyword_count} keywords available). Pip status unclear."
+                
+                # Add post-install commands if specified
+                if lib_info.get('post_install') and import_available and is_loaded:
+                    status["post_install"] = lib_info['post_install']
+                    if 'Note:' not in status["message"]:
+                        status["message"] += f" Note: Run '{lib_info['post_install']}' for full functionality."
+            
             return status
         else:
-            return {
-                "library_name": library_name,
-                "status": "unknown",
-                "message": f"Unknown library '{library_name}'. Cannot determine installation status."
-            }
+            # Check if it's a loaded library we don't recognize
+            is_loaded = library_name in self.keyword_executor.keyword_discovery.libraries
+            if is_loaded:
+                keyword_count = len(self.keyword_executor.keyword_discovery.get_keywords_by_library(library_name))
+                return {
+                    "library_name": library_name,
+                    "status": "available",
+                    "is_loaded": True,
+                    "keyword_count": keyword_count,
+                    "message": f"Library {library_name} is loaded and available ({keyword_count} keywords). Not in standard registry."
+                }
+            else:
+                return {
+                    "library_name": library_name,
+                    "status": "unknown",
+                    "message": f"Unknown library '{library_name}'. Cannot determine installation status."
+                }
     
     def get_library_status(self) -> Dict[str, Any]:
         """Get status of all loaded libraries including libdoc availability."""

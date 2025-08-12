@@ -141,41 +141,111 @@ class LibraryAvailabilityChecker:
 
 # Predefined library configurations for common Robot Framework libraries
 COMMON_ROBOT_LIBRARIES = {
+    # Robot Framework Standard Libraries (Built-in)
+    'BuiltIn': {
+        'package': 'robotframework',
+        'import': 'robot.libraries.BuiltIn',
+        'description': 'Robot Framework built-in library with generic keywords',
+        'is_builtin': True
+    },
+    'Collections': {
+        'package': 'robotframework',
+        'import': 'robot.libraries.Collections',
+        'description': 'Keywords for handling lists and dictionaries',
+        'is_builtin': True
+    },
+    'DateTime': {
+        'package': 'robotframework',
+        'import': 'robot.libraries.DateTime',
+        'description': 'Date and time manipulation keywords',
+        'is_builtin': True
+    },
+    'Dialogs': {
+        'package': 'robotframework',
+        'import': 'robot.libraries.Dialogs',
+        'description': 'User interaction and pause execution keywords',
+        'is_builtin': True
+    },
+    'OperatingSystem': {
+        'package': 'robotframework',
+        'import': 'robot.libraries.OperatingSystem',
+        'description': 'Operating system related keywords',
+        'is_builtin': True
+    },
+    'Process': {
+        'package': 'robotframework',
+        'import': 'robot.libraries.Process',
+        'description': 'Process execution and management keywords',
+        'is_builtin': True
+    },
+    'Screenshot': {
+        'package': 'robotframework',
+        'import': 'robot.libraries.Screenshot',
+        'description': 'Desktop screenshot capture keywords',
+        'is_builtin': True
+    },
+    'String': {
+        'package': 'robotframework',
+        'import': 'robot.libraries.String',
+        'description': 'String manipulation and validation keywords',
+        'is_builtin': True
+    },
+    'Telnet': {
+        'package': 'robotframework',
+        'import': 'robot.libraries.Telnet',
+        'description': 'Telnet connection and command execution keywords',
+        'is_builtin': True
+    },
+    'XML': {
+        'package': 'robotframework',
+        'import': 'robot.libraries.XML',
+        'description': 'XML parsing, validation and manipulation keywords',
+        'is_builtin': True
+    },
+    
+    # External Libraries (Require pip install)
     'Browser': {
         'package': 'robotframework-browser',
         'import': 'Browser',
         'description': 'Modern web testing with Playwright',
-        'post_install': 'rfbrowser init'  # Additional setup command
+        'post_install': 'rfbrowser init',  # Additional setup command
+        'is_builtin': False
     },
     'SeleniumLibrary': {
         'package': 'robotframework-seleniumlibrary', 
         'import': 'SeleniumLibrary',
-        'description': 'Web testing with Selenium WebDriver'
+        'description': 'Web testing with Selenium WebDriver',
+        'is_builtin': False
     },
     'RequestsLibrary': {
         'package': 'robotframework-requests',
         'import': 'RequestsLibrary', 
-        'description': 'HTTP API testing'
+        'description': 'HTTP API testing',
+        'is_builtin': False
     },
     'DatabaseLibrary': {
         'package': 'robotframework-databaselibrary',
         'import': 'DatabaseLibrary',
-        'description': 'Database testing and validation'
+        'description': 'Database testing and validation',
+        'is_builtin': False
     },
     'AppiumLibrary': {
         'package': 'robotframework-appiumlibrary',
         'import': 'AppiumLibrary',
-        'description': 'Mobile app testing with Appium'
+        'description': 'Mobile app testing with Appium',
+        'is_builtin': False
     },
     'SSHLibrary': {
         'package': 'robotframework-sshlibrary',
         'import': 'SSHLibrary',
-        'description': 'SSH and SFTP operations'
+        'description': 'SSH and SFTP operations',
+        'is_builtin': False
     },
     'FTPLibrary': {
         'package': 'robotframework-ftplibrary',
         'import': 'FTPLibrary',
-        'description': 'FTP operations'
+        'description': 'FTP operations',
+        'is_builtin': False
     }
 }
 
