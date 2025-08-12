@@ -8,6 +8,49 @@ from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
 
 logger = logging.getLogger(__name__)
 
+# SeleniumLibrary locator strategies for error guidance
+SELENIUM_LOCATOR_STRATEGIES = {
+    "id": "Element id (e.g., 'id:example')",
+    "name": "name attribute (e.g., 'name:example')",
+    "identifier": "Either id or name (e.g., 'identifier:example')",
+    "class": "Element class (e.g., 'class:example')",
+    "tag": "Tag name (e.g., 'tag:div')",
+    "xpath": "XPath expression (e.g., 'xpath://div[@id=\"example\"]')",
+    "css": "CSS selector (e.g., 'css:div#example')",
+    "dom": "DOM expression (e.g., 'dom:document.images[5]')",
+    "link": "Exact text a link has (e.g., 'link:The example')",
+    "partial link": "Partial link text (e.g., 'partial link:he ex')",
+    "sizzle": "Sizzle selector deprecated (e.g., 'sizzle:div.example')",
+    "data": "Element data-* attribute (e.g., 'data:id:my_id')",
+    "jquery": "jQuery expression (e.g., 'jquery:div.example')",
+    "default": "Keyword specific default behavior (e.g., 'default:example')"
+}
+
+# Browser Library (Playwright) locator strategies for error guidance
+BROWSER_LOCATOR_STRATEGIES = {
+    "css": "CSS selector (default strategy) - e.g., 'css=.class > #login_btn' or just '.class > #login_btn'",
+    "xpath": "XPath expression - e.g., 'xpath=//input[@id=\"login_btn\"]' or '//input[@id=\"login_btn\"]'",
+    "text": "Browser text engine (exact/partial/regex) - e.g., 'text=Login' or \"Login\"",
+    "id": "Element ID attribute - e.g., 'id=login_btn'",
+    "css:light": "CSS without shadow DOM piercing - e.g., 'css:light=article div'",
+    "text:light": "Text without shadow DOM piercing - e.g., 'text:light=Login'",
+    "data-testid": "data-testid attribute - e.g., 'data-testid=submit-button'",
+    "data-test-id": "data-test-id attribute - e.g., 'data-test-id=submit-button'",
+    "data-test": "data-test attribute - e.g., 'data-test=submit-button'",
+    "id:light": "ID without shadow DOM piercing - e.g., 'id:light=login_btn'"
+}
+
+# Browser Library selector format patterns
+BROWSER_SELECTOR_PATTERNS = {
+    "explicit": "strategy=value (e.g., 'css=.button', 'xpath=//button')",
+    "implicit_css": "Plain selectors default to CSS (e.g., '.button' becomes 'css=.button')",
+    "implicit_xpath": "Selectors starting with // or .. become XPath (e.g., '//button')",
+    "implicit_text": "Quoted selectors become text (e.g., '\"Login\"' becomes 'text=Login')",
+    "cascaded": "Multiple strategies with >> separator (e.g., 'text=Hello >> ../.. >> .select_button')",
+    "iframe_piercing": "Frame piercing with >>> (e.g., 'id=iframe >>> id=btn')",
+    "element_reference": "Element reference with element= (e.g., '${ref} >> .child')"
+}
+
 # Import Robot Framework native type conversion
 try:
     from robot.running.arguments.typeinfo import TypeInfo
@@ -62,8 +105,8 @@ class RobotFrameworkNativeConverter:
             # Create Robot Framework ArgumentSpec from LibDoc signature
             spec = self._create_argument_spec(keyword_info.args)
             
-            # Pre-parse named arguments from the args list
-            positional_args, named_args = self._split_args_into_positional_and_named(args)
+            # Pre-parse named arguments from the args list using signature information
+            positional_args, named_args = self._split_args_into_positional_and_named(args, keyword_info.args)
             
             # Use Robot Framework's ArgumentResolver
             resolver = ArgumentResolver(spec)
@@ -194,18 +237,31 @@ class RobotFrameworkNativeConverter:
             var_named=var_named
         )
     
-    def _split_args_into_positional_and_named(self, args: List[str]) -> tuple[List[str], Dict[str, str]]:
+    def _split_args_into_positional_and_named(self, args: List[str], signature_args: List[str] = None) -> tuple[List[str], Dict[str, str]]:
         """
         Split user arguments into positional and named arguments.
         
-        This uses simple heuristics since we'll let Robot Framework handle
-        the complex argument resolution.
+        Uses LibDoc signature information to accurately distinguish between
+        locator strings (like "name=firstname") and actual named arguments.
         """
         positional = []
         named = {}
         
+        # Build list of valid parameter names from signature
+        valid_param_names = set()
+        if signature_args:
+            for arg_str in signature_args:
+                if ':' in arg_str:
+                    param_name = arg_str.split(':', 1)[0].strip()
+                    if param_name.startswith('*'):
+                        param_name = param_name[1:]  # Remove * for varargs
+                    if param_name.startswith('*'):
+                        param_name = param_name[1:]  # Remove ** for kwargs
+                    if param_name and not param_name.startswith('*'):
+                        valid_param_names.add(param_name)
+        
         for arg in args:
-            if '=' in arg and self._looks_like_named_arg(arg):
+            if '=' in arg and self._looks_like_named_arg(arg, valid_param_names):
                 key, value = arg.split('=', 1)
                 named[key.strip()] = value
             else:
@@ -213,15 +269,29 @@ class RobotFrameworkNativeConverter:
         
         return positional, named
     
-    def _looks_like_named_arg(self, arg: str) -> bool:
-        """Simple check if an argument looks like a named argument."""
+    def _looks_like_named_arg(self, arg: str, valid_param_names: set = None) -> bool:
+        """
+        Check if an argument looks like a named argument.
+        
+        Uses valid parameter names from LibDoc signature to distinguish between
+        actual named parameters and locator strings containing '=' characters.
+        """
         if '=' not in arg:
             return False
         
         key_part = arg.split('=', 1)[0].strip()
         
-        # Must be valid Python identifier (no spaces, special chars, etc.)
-        return key_part.isidentifier()
+        # Must be valid Python identifier
+        if not key_part.isidentifier():
+            return False
+        
+        # If we have valid parameter names from signature, only treat as named arg
+        # if the key matches an actual parameter name
+        if valid_param_names:
+            return key_part in valid_param_names
+        
+        # Fallback: treat as named arg if it's a valid identifier
+        return True
     
     def _convert_positional_args(self, args: List[str], signature_args: List[str]) -> List[Any]:
         """Convert positional arguments using Robot Framework's type converters."""
@@ -423,3 +493,188 @@ class RobotFrameworkNativeConverter:
                 parsed.positional.append(arg)
         
         return parsed
+    
+    def get_selenium_locator_guidance(self, error_message: str = None, keyword_name: str = None) -> Dict[str, Any]:
+        """
+        Provide SeleniumLibrary locator strategy guidance for agents.
+        
+        Args:
+            error_message: Optional error message to analyze
+            keyword_name: Optional keyword name that failed
+            
+        Returns:
+            Dict with locator strategies and guidance
+        """
+        guidance = {
+            "locator_strategies": SELENIUM_LOCATOR_STRATEGIES,
+            "common_examples": {
+                "By ID": "id:my-button",
+                "By Name": "name:firstname", 
+                "By CSS": "css:#submit-btn",
+                "By XPath": "xpath://input[@type='submit']",
+                "By Class": "class:button-primary",
+                "By Link Text": "link:Click Here"
+            },
+            "tips": [
+                "For form elements, 'name:fieldname' is often most reliable",
+                "CSS selectors use 'css:' prefix, not just the selector",
+                "XPath expressions must start with 'xpath:' prefix",
+                "Use 'identifier:' to match either id or name attributes",
+                "For buttons/links, try 'link:' for exact text matching"
+            ]
+        }
+        
+        # Add specific guidance based on error analysis
+        if error_message and keyword_name:
+            if "element not found" in error_message.lower():
+                guidance["element_not_found_suggestions"] = [
+                    "Verify the element exists on the current page",
+                    "Try different locator strategies (id, name, css, xpath)",
+                    "Check if element is in an iframe or shadow DOM",
+                    "Ensure page has fully loaded before locating element",
+                    "Use browser developer tools to inspect element attributes"
+                ]
+            
+            if "timeout" in error_message.lower():
+                guidance["timeout_suggestions"] = [
+                    "Increase wait time for dynamic content",
+                    "Use explicit waits (Wait Until Element Is Visible)",
+                    "Check if element loads asynchronously",
+                    "Verify locator strategy is correct"
+                ]
+        
+        return guidance
+    
+    def get_browser_locator_guidance(self, error_message: str = None, keyword_name: str = None) -> Dict[str, Any]:
+        """
+        Provide Browser Library (Playwright) locator strategy guidance for agents.
+        
+        Args:
+            error_message: Optional error message to analyze
+            keyword_name: Optional keyword name that failed
+            
+        Returns:
+            Dict with Browser Library locator strategies and guidance
+        """
+        guidance = {
+            "locator_strategies": BROWSER_LOCATOR_STRATEGIES,
+            "selector_patterns": BROWSER_SELECTOR_PATTERNS,
+            "common_examples": {
+                "CSS (default)": ".button-primary",
+                "CSS explicit": "css=.button-primary", 
+                "CSS with ID": "\\#submit-btn",  # Note: # needs escaping in Robot Framework
+                "XPath": "//input[@type='submit']",
+                "XPath implicit": "//button[contains(text(), 'Login')]",
+                "Text exact": "text=Login",
+                "Text implicit": "\"Login\"",
+                "Text regex": "text=/^Log(in|out)$/i",
+                "ID": "id=submit-button",
+                "Cascaded": "text=Hello >> ../.. >> .select_button",
+                "iFrame piercing": "id=myframe >>> .inner-button"
+            },
+            "selector_format_rules": {
+                "Default strategy": "CSS - plain selectors are treated as CSS",
+                "Explicit format": "strategy=value (spaces around = are ignored)",
+                "XPath detection": "Selectors starting with // or .. become XPath automatically",
+                "Text detection": "Quoted selectors (\"text\" or 'text') become text selectors",
+                "Cascading": "Use >> to chain selectors (css=div >> text=Login >> .button)",
+                "iFrame access": "Use >>> to pierce iFrames (id=frame >>> id=element)",
+                "Element refs": "Use element=${ref} >> .child for element references"
+            },
+            "strict_mode_info": {
+                "description": "Browser Library uses strict mode by default",
+                "strict_true": "Keyword fails if selector finds multiple elements",
+                "strict_false": "Keyword succeeds even with multiple matches (uses first)",
+                "how_to_change": "Use 'Set Strict Mode' keyword or library import parameter"
+            },
+            "shadow_dom_support": {
+                "automatic_piercing": "CSS and text engines automatically pierce open shadow roots",
+                "light_engines": "Use css:light= or text:light= to disable shadow DOM piercing",
+                "closed_shadow_roots": "Closed shadow roots cannot be accessed"
+            },
+            "tips": [
+                "Browser Library uses CSS selectors by default (no prefix needed)",
+                "Use \\# instead of # for ID selectors (Robot Framework escaping)",
+                "XPath: Start with // or .. for automatic detection",
+                "Text: Use quotes for exact text matching or regex patterns",
+                "Cascaded selectors: Chain with >> for complex element paths",
+                "iFrames: Use >>> to access elements inside frames",
+                "Shadow DOM: CSS pierces automatically, use :light for light DOM only",
+                "Strict mode: Controls behavior when multiple elements match"
+            ]
+        }
+        
+        # Add specific guidance based on error analysis
+        if error_message and keyword_name:
+            guidance.update(self._analyze_browser_error(error_message, keyword_name))
+        
+        return guidance
+    
+    def _analyze_browser_error(self, error_message: str, keyword_name: str) -> Dict[str, Any]:
+        """Analyze Browser Library specific errors and provide targeted guidance."""
+        analysis = {}
+        error_lower = error_message.lower()
+        
+        if "strict mode violation" in error_lower or "multiple elements" in error_lower:
+            analysis["strict_mode_violation"] = {
+                "issue": "Selector matches multiple elements but strict mode is enabled",
+                "solutions": [
+                    "Make selector more specific to match only one element",
+                    "Use 'Set Strict Mode    False' to allow multiple matches",
+                    "Add more specific CSS selectors or attributes",
+                    "Use nth-child() or other CSS pseudo-selectors for specific elements"
+                ],
+                "examples": [
+                    "Instead of '.button' use '.button.primary' or '.button:nth-child(1)'",
+                    "Instead of 'div' use 'div.container > div.content'",
+                    "Add unique attributes like '[data-testid=\"submit-btn\"]'"
+                ]
+            }
+        
+        if "element not found" in error_lower or "waiting for selector" in error_lower:
+            analysis["element_not_found_suggestions"] = [
+                "Verify element exists on current page",
+                "Check if element loads asynchronously (use Wait For Elements State)",
+                "Try different selector strategies (CSS, XPath, text, ID)",
+                "Check if element is inside an iFrame (use >>> syntax)",
+                "Verify element is not in closed shadow DOM",
+                "Use browser developer tools to inspect element",
+                "Check if element appears after user interaction"
+            ]
+        
+        if "timeout" in error_lower:
+            analysis["timeout_suggestions"] = [
+                "Increase timeout with explicit waits",
+                "Use 'Wait For Elements State' before interaction",
+                "Check if element loads dynamically",
+                "Verify selector syntax is correct",
+                "Use 'Wait For Load State' to ensure page is ready"
+            ]
+        
+        if "shadow" in error_lower or "shadow root" in error_lower:
+            analysis["shadow_dom_guidance"] = {
+                "issue": "Element may be in shadow DOM",
+                "solutions": [
+                    "Use regular CSS (automatic shadow piercing): 'css=.my-element'",
+                    "Use text selectors (automatic shadow piercing): 'text=Button Text'", 
+                    "Avoid css:light= for shadow DOM elements",
+                    "Check if shadow root is closed (not accessible)"
+                ],
+                "note": "Browser Library automatically pierces open shadow roots with CSS and text engines"
+            }
+        
+        if "iframe" in error_lower or "frame" in error_lower:
+            analysis["iframe_guidance"] = {
+                "issue": "Element may be inside an iFrame",
+                "solutions": [
+                    "Use frame piercing syntax: 'id=myframe >>> .inner-element'",
+                    "First select the frame, then the element inside",
+                    "Use 'Set Selector Prefix' for multiple operations in same frame"
+                ],
+                "examples": [
+                    "Click    id=login-frame >>> input[name='username']",
+                    "Set Selector Prefix    id=content-frame\nClick    .submit-button"
+                ]
+            }
+        
+        return analysis

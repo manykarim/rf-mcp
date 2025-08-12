@@ -406,6 +406,87 @@ async def validate_test_readiness(
     return await execution_engine.validate_test_readiness(session_id)
 
 @mcp.tool
+async def get_selenium_locator_guidance(
+    error_message: str = None,
+    keyword_name: str = None
+) -> Dict[str, Any]:
+    """Get comprehensive SeleniumLibrary locator strategy guidance for AI agents.
+    
+    This tool helps AI agents understand SeleniumLibrary's locator strategies and 
+    provides context-aware suggestions for element location and error resolution.
+    
+    SeleniumLibrary supports these locator strategies:
+    - id: Element id (e.g., 'id:example')
+    - name: name attribute (e.g., 'name:example') 
+    - identifier: Either id or name (e.g., 'identifier:example')
+    - class: Element class (e.g., 'class:example')
+    - tag: Tag name (e.g., 'tag:div')
+    - xpath: XPath expression (e.g., 'xpath://div[@id="example"]')
+    - css: CSS selector (e.g., 'css:div#example')
+    - dom: DOM expression (e.g., 'dom:document.images[5]')
+    - link: Exact link text (e.g., 'link:Click Here')
+    - partial link: Partial link text (e.g., 'partial link:Click')
+    - data: Element data-* attribute (e.g., 'data:id:my_id')
+    - jquery: jQuery expression (e.g., 'jquery:div.example')
+    - default: Keyword-specific default (e.g., 'default:example')
+    
+    Args:
+        error_message: Optional error message to analyze for specific guidance
+        keyword_name: Optional keyword name that failed for context-specific tips
+        
+    Returns:
+        Comprehensive locator strategy guidance with examples, tips, and error-specific advice
+    """
+    from robotmcp.utils.rf_native_type_converter import RobotFrameworkNativeConverter
+    
+    converter = RobotFrameworkNativeConverter()
+    return converter.get_selenium_locator_guidance(error_message, keyword_name)
+
+@mcp.tool
+async def get_browser_locator_guidance(
+    error_message: str = None,
+    keyword_name: str = None
+) -> Dict[str, Any]:
+    """Get comprehensive Browser Library (Playwright) locator strategy guidance for AI agents.
+    
+    This tool helps AI agents understand Browser Library's selector strategies and 
+    provides context-aware suggestions for element location and error resolution.
+    
+    Browser Library uses Playwright's locator strategies with these key features:
+    
+    **Selector Strategies:**
+    - css: CSS selector (default) - e.g., '.button' or 'css=.button'
+    - xpath: XPath expression - e.g., '//button' or 'xpath=//button'  
+    - text: Text content matching - e.g., '"Login"' or 'text=Login'
+    - id: Element ID - e.g., 'id=submit-btn'
+    - data-testid: Test ID attribute - e.g., 'data-testid=login-button'
+    
+    **Advanced Features:**
+    - Cascaded selectors: 'text=Hello >> ../.. >> .select_button'
+    - iFrame piercing: 'id=myframe >>> .inner-button' 
+    - Shadow DOM: Automatic piercing with CSS and text engines
+    - Strict mode: Controls behavior with multiple element matches
+    - Element references: '${ref} >> .child' for chained operations
+    
+    **Implicit Detection Rules:**
+    - Plain selectors → CSS (default): '.button' becomes 'css=.button'
+    - Starting with // or .. → XPath: '//button' becomes 'xpath=//button'
+    - Quoted text → Text selector: '"Login"' becomes 'text=Login'
+    - Explicit format: 'strategy=value' for any strategy
+    
+    Args:
+        error_message: Optional error message to analyze for specific guidance
+        keyword_name: Optional keyword name that failed for context-specific tips
+        
+    Returns:
+        Comprehensive Browser Library locator guidance with examples, patterns, and error-specific advice
+    """
+    from robotmcp.utils.rf_native_type_converter import RobotFrameworkNativeConverter
+    
+    converter = RobotFrameworkNativeConverter()
+    return converter.get_browser_locator_guidance(error_message, keyword_name)
+
+@mcp.tool
 async def get_loaded_libraries() -> Dict[str, Any]:
     """Get status of all loaded Robot Framework libraries using both libdoc and inspection methods.
     
