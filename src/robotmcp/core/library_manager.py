@@ -22,25 +22,9 @@ class LibraryManager:
         }
         self.excluded_libraries: Set[str] = set()
         
-        # Common Robot Framework libraries to try
-        self.common_libraries = [
-            'BuiltIn',
-            'Browser', 
-            'SeleniumLibrary',
-            'RequestsLibrary',
-            'Collections',
-            'String',
-            'DateTime',
-            'OperatingSystem',
-            'Process',
-            'XML',
-            'Telnet',
-            'Screenshot',
-            'Dialogs',
-            'DatabaseLibrary',
-            'SSHLibrary',
-            'AppiumLibrary'
-        ]
+        # Load library list from centralized registry
+        from robotmcp.config.library_registry import get_library_names_for_loading
+        self.common_libraries = get_library_names_for_loading()
     
     def load_all_libraries(self, keyword_extractor) -> None:
         """

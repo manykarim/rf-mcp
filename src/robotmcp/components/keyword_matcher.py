@@ -135,29 +135,11 @@ class KeywordMatcher:
     async def _initialize_keyword_registry(self) -> None:
         """Initialize the keyword registry with standard libraries."""
         try:
-            # Load common Robot Framework libraries
-            standard_libraries = [
-                'BuiltIn',
-                'Collections', 
-                'DateTime',
-                'OperatingSystem',
-                'Process',
-                'String'
-            ]
+            # Load library list from centralized registry
+            from robotmcp.config.library_registry import get_library_names_for_loading
+            all_libraries = get_library_names_for_loading()
             
-            for lib_name in standard_libraries:
-                await self._load_library_keywords(lib_name)
-            
-            # Load commonly used external libraries if available
-            external_libraries = [
-                'Browser',  # Prioritize Browser library
-                'SeleniumLibrary',
-                'RequestsLibrary', 
-                'DatabaseLibrary',
-                'AppiumLibrary'
-            ]
-            
-            for lib_name in external_libraries:
+            for lib_name in all_libraries:
                 try:
                     await self._load_library_keywords(lib_name)
                 except Exception as e:
@@ -468,12 +450,13 @@ class KeywordMatcher:
         """Match keywords based on current context and state using tags."""
         matches = []
         
-        # Priority libraries based on context
+        # Priority libraries based on context - use centralized registry for consistency
+        from robotmcp.config.library_registry import get_libraries_by_category, LibraryCategory
         context_libraries = {
-            'web': ['Browser', 'SeleniumLibrary'],
-            'mobile': ['AppiumLibrary'],
-            'api': ['RequestsLibrary'],
-            'database': ['DatabaseLibrary']
+            'web': list(get_libraries_by_category(LibraryCategory.WEB).keys()),
+            'mobile': list(get_libraries_by_category(LibraryCategory.MOBILE).keys()), 
+            'api': list(get_libraries_by_category(LibraryCategory.API).keys()),
+            'database': list(get_libraries_by_category(LibraryCategory.DATABASE).keys())
         }
         
         # Context-to-tag mapping for better filtering

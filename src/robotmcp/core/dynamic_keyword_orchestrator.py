@@ -68,8 +68,11 @@ class DynamicKeywordDiscovery:
                 except Exception as e:
                     logger.debug(f"LibDoc: Failed to get {active_library} keywords: {e}")
             
-            # Add built-in libraries
-            for builtin_lib in ['BuiltIn', 'Collections', 'String', 'DateTime', 'OperatingSystem', 'Process']:
+            # Add built-in libraries using centralized registry
+            from robotmcp.config.library_registry import get_builtin_libraries
+            builtin_libraries = get_builtin_libraries()
+            
+            for builtin_lib in builtin_libraries.keys():
                 try:
                     builtin_kws = rf_doc_storage.get_keywords_by_library(builtin_lib)
                     keywords.extend(builtin_kws)
@@ -93,7 +96,7 @@ class DynamicKeywordDiscovery:
                     args=kw.args,
                     defaults={},  # LibDoc doesn't provide defaults in same format
                     tags=kw.tags,
-                    is_builtin=(kw.library in ['BuiltIn', 'Collections', 'String', 'DateTime', 'OperatingSystem', 'Process'])
+                    is_builtin=(kw.library in builtin_libraries)
                 )
         
         # Try fuzzy matching with name variations
@@ -116,7 +119,7 @@ class DynamicKeywordDiscovery:
                         args=kw.args,
                         defaults={},
                         tags=kw.tags,
-                        is_builtin=(kw.library in ['BuiltIn', 'Collections', 'String', 'DateTime', 'OperatingSystem', 'Process'])
+                        is_builtin=(kw.library in builtin_libraries)
                     )
         
         return None
@@ -345,10 +348,13 @@ class DynamicKeywordDiscovery:
                 # BuiltIn library methods might need context
                 result = method(*original_args)
             else:
-                # Regular library methods
-                if keyword_info.library in ["Browser", "SeleniumLibrary", "RequestsLibrary"]:
+                # Regular library methods - use centralized type conversion configuration
+                from robotmcp.config.library_registry import get_libraries_requiring_type_conversion
+                type_conversion_libraries = get_libraries_requiring_type_conversion()
+                
+                if keyword_info.library in type_conversion_libraries:
                     try:
-                        # Use Robot Framework's native type conversion system for all modern libraries
+                        # Use Robot Framework's native type conversion system for libraries that need it
                         result = self._execute_with_rf_type_conversion(method, keyword_info, original_args)
                         if result is not None:  # Successfully converted and executed
                             pass  # Use the result as-is

@@ -49,25 +49,9 @@ class RobotFrameworkDocStorage:
         self.keyword_cache: Dict[str, RFKeywordInfo] = {}
         self.failed_imports: Dict[str, str] = {}
         
-        # Common Robot Framework libraries to initialize
-        self.common_libraries = [
-            'BuiltIn',
-            'Browser', 
-            'SeleniumLibrary',
-            'RequestsLibrary',
-            'Collections',
-            'String',
-            'DateTime',
-            'OperatingSystem',
-            'Process',
-            'XML',
-            'Telnet',
-            'Screenshot',
-            'Dialogs',
-            'DatabaseLibrary',
-            'SSHLibrary',
-            'AppiumLibrary'
-        ]
+        # Load library list from centralized registry
+        from robotmcp.config.library_registry import get_library_names_for_loading
+        self.common_libraries = get_library_names_for_loading()
         
         if not HAS_LIBDOC:
             logger.warning("Robot Framework libdoc not available. Falling back to inspection-based discovery.")

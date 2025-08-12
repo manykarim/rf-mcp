@@ -45,253 +45,41 @@ class LibraryRecommender:
         if self._initialized:
             return
             
-        # Core/Built-in Libraries
-        builtin_libs = [
-            LibraryInfo(
-                name="BuiltIn",
-                package_name="robotframework",
-                installation_command="Built-in with Robot Framework",
-                use_cases=["basic operations", "variables", "control flow", "logging", "keywords"],
-                categories=["core", "builtin"],
-                description="Contains generic often needed keywords. Imported automatically and thus always available.",
-                is_builtin=True
-            ),
-            LibraryInfo(
-                name="Collections",
-                package_name="robotframework", 
-                installation_command="Built-in with Robot Framework",
-                use_cases=["list manipulation", "dictionary operations", "data structures"],
-                categories=["core", "builtin", "data"],
-                description="Contains keywords for handling lists and dictionaries.",
-                is_builtin=True
-            ),
-            LibraryInfo(
-                name="DateTime",
-                package_name="robotframework",
-                installation_command="Built-in with Robot Framework", 
-                use_cases=["date operations", "time calculations", "timestamp validation"],
-                categories=["core", "builtin", "utilities"],
-                description="Supports creating and verifying date and time values as well as calculations between them.",
-                is_builtin=True
-            ),
-            LibraryInfo(
-                name="Dialogs",
-                package_name="robotframework",
-                installation_command="Built-in with Robot Framework",
-                use_cases=["user input", "pause execution", "interactive testing", "manual intervention"],
-                categories=["core", "builtin", "interaction"],
-                description="Supports pausing the test execution and getting input from users.",
-                is_builtin=True
-            ),
-            LibraryInfo(
-                name="OperatingSystem",
-                package_name="robotframework",
-                installation_command="Built-in with Robot Framework",
-                use_cases=["file operations", "directory management", "environment variables", "system commands"],
-                categories=["core", "builtin", "system"],
-                description="Enables performing various operating system related tasks.",
-                is_builtin=True
-            ),
-            LibraryInfo(
-                name="Process",
-                package_name="robotframework", 
-                installation_command="Built-in with Robot Framework",
-                use_cases=["execute commands", "process management", "system integration"],
-                categories=["core", "builtin", "system"],
-                description="Supports executing processes in the system.",
-                is_builtin=True
-            ),
-            LibraryInfo(
-                name="Screenshot",
-                package_name="robotframework",
-                installation_command="Built-in with Robot Framework",
-                use_cases=["desktop screenshots", "visual documentation", "debugging"],
-                categories=["core", "builtin", "visual"],
-                description="Provides keywords to capture and store screenshots of the desktop.",
-                is_builtin=True
-            ),
-            LibraryInfo(
-                name="String",
-                package_name="robotframework",
-                installation_command="Built-in with Robot Framework", 
-                use_cases=["text manipulation", "string validation", "pattern matching"],
-                categories=["core", "builtin", "utilities"],
-                description="Library for manipulating strings and verifying their contents.",
-                is_builtin=True
-            ),
-            LibraryInfo(
-                name="Telnet",
-                package_name="robotframework",
-                installation_command="Built-in with Robot Framework",
-                use_cases=["telnet connections", "network protocols", "legacy systems"],
-                categories=["core", "builtin", "network"],
-                description="Supports connecting to Telnet servers and executing commands on the opened connections.",
-                is_builtin=True
-            ),
-            LibraryInfo(
-                name="XML",
-                package_name="robotframework",
-                installation_command="Built-in with Robot Framework",
-                use_cases=["xml parsing", "xml validation", "data verification"],
-                categories=["core", "builtin", "data"],
-                description="Library for verifying and modifying XML documents.",
-                is_builtin=True
-            )
-        ]
+        # Load library information from centralized registry
+        from robotmcp.config.library_registry import get_recommendation_info
         
-        # External Libraries
-        external_libs = [
-            LibraryInfo(
-                name="SeleniumLibrary",
-                package_name="robotframework-seleniumlibrary",
-                installation_command="pip install robotframework-seleniumlibrary",
-                use_cases=["web testing", "browser automation", "web elements", "form filling"],
-                categories=["web", "testing", "automation"],
-                description="Traditional web browser automation using Selenium WebDriver",
-                dependencies=["selenium"]
-            ),
-            LibraryInfo(
-                name="Browser",
-                package_name="robotframework-browser",
-                installation_command="pip install robotframework-browser",
-                use_cases=["modern web testing", "playwright automation", "web performance", "mobile web"],
-                categories=["web", "testing", "modern"],
-                description="Modern web testing with Playwright backend",
-                requires_setup=True,
-                setup_commands=["rfbrowser init"],
-                dependencies=["playwright", "node.js"]
-            ),
-            LibraryInfo(
-                name="RequestsLibrary",
-                package_name="robotframework-requests",
-                installation_command="pip install robotframework-requests",
-                use_cases=["api testing", "http requests", "rest api", "json validation"],
-                categories=["api", "http", "testing"],
-                description="HTTP API testing functionalities by wrapping Python Requests Library"
-            ),
-            LibraryInfo(
-                name="AppiumLibrary", 
-                package_name="robotframework-appiumlibrary",
-                installation_command="pip install robotframework-appiumlibrary",
-                use_cases=["mobile testing", "android automation", "ios testing", "app testing"],
-                categories=["mobile", "testing", "automation"],
-                description="Library for Android and iOS testing using Appium",
-                dependencies=["appium"]
-            ),
-            LibraryInfo(
-                name="DatabaseLibrary",
-                package_name="robotframework-databaselibrary", 
-                installation_command="pip install robotframework-databaselibrary",
-                use_cases=["database testing", "sql queries", "data validation", "database connections"],
-                categories=["database", "testing", "data"],
-                description="Python based library for database testing with multiple DB support"
-            ),
-            LibraryInfo(
-                name="SSHLibrary",
-                package_name="robotframework-sshlibrary",
-                installation_command="pip install robotframework-sshlibrary", 
-                use_cases=["remote connections", "ssh commands", "file transfer", "server management"],
-                categories=["network", "system", "remote"],
-                description="Library for SSH and SFTP connections"
-            ),
-            LibraryInfo(
-                name="DocTest.VisualTest",
-                package_name="robotframework-doctestlibrary",
-                installation_command="pip install robotframework-doctestlibrary",
-                use_cases=["visual testing", "image comparison", "pdf validation", "document testing"],
-                categories=["visual", "testing", "documents"],
-                description="Simple Automated Visual Document Testing with OCR support"
-            ),
-            LibraryInfo(
-                name="DocTest.PdfTest", 
-                package_name="robotframework-doctestlibrary",
-                installation_command="pip install robotframework-doctestlibrary",
-                use_cases=["pdf testing", "document validation", "content verification"],
-                categories=["documents", "testing", "validation"],
-                description="PDF-specific testing and content validation"
-            ),
-            LibraryInfo(
-                name="SikuliLibrary",
-                package_name="robotframework-SikuliLibrary",
-                installation_command="pip install robotframework-SikuliLibrary",
-                use_cases=["image-based automation", "gui testing", "visual recognition"],
-                categories=["visual", "gui", "automation"],
-                description="GUI automation through image recognition using Sikuli",
-                dependencies=["java 11+"]
-            ),
-            LibraryInfo(
-                name="FakerLibrary",
-                package_name="robotframework-faker",
-                installation_command="pip install robotframework-faker",
-                use_cases=["test data generation", "fake data", "random data", "data driven testing"],
-                categories=["data", "utilities", "testing"],
-                description="Robot Framework wrapper for faker - fake test data generator"
-            ),
-            LibraryInfo(
-                name="RoboSAPiens",
-                package_name="robotframework-robosapiens", 
-                installation_command="pip install robotframework-robosapiens",
-                use_cases=["sap automation", "erp testing", "enterprise applications"],
-                categories=["enterprise", "sap", "automation"],
-                description="Fully localized Robot Framework library for automating SAP GUI",
-                platform_requirements=["windows"],
-                dependencies=[".NET SDK 7.0 x64", "PowerShell 7"]
-            ),
-            LibraryInfo(
-                name="REST",
-                package_name="robotframework-requests", 
-                installation_command="pip install robotframework-requests", 
-                use_cases=["rest api testing", "http methods", "json responses", "api validation"],
-                categories=["api", "rest", "testing"],
-                description="REST API testing using RequestsLibrary"
-            ),
-            LibraryInfo(
-                name="ImageHorizonLibrary",
-                package_name="robotframework-imagehorizonlibrary",
-                installation_command="pip install robotframework-imagehorizonlibrary",
-                use_cases=["cross-platform gui automation", "image recognition", "desktop automation"],
-                categories=["gui", "visual", "automation"],
-                description="Cross-platform GUI automation based on image recognition"
-            ),
-            LibraryInfo(
-                name="FlaUILibrary",
-                package_name="robotframework-flaui",
-                installation_command="pip install robotframework-flaui",
-                use_cases=["windows automation", "desktop applications", "win32 gui"],
-                categories=["windows", "gui", "automation"],
-                description="Windows GUI testing library using FlaUI automation",
-                platform_requirements=["windows"],
-                dependencies=["pythonnet"]
-            ),
-            LibraryInfo(
-                name="DataDriver",
-                package_name="robotframework-datadriver",
-                installation_command="pip install robotframework-datadriver[XLS]",
-                use_cases=["data-driven testing", "excel files", "csv data", "parametrized tests"],
-                categories=["data", "testing", "utilities"],
-                description="Data-driven testing with CSV/Excel files support"
-            )
-        ]
+        library_configs = get_recommendation_info()
         
-        # Register all libraries
-        all_libraries = builtin_libs + external_libs
-        for lib in all_libraries:
-            self.libraries_registry[lib.name] = lib
+        for lib_config in library_configs:
+            lib_info = LibraryInfo(
+                name=lib_config['name'],
+                package_name=lib_config['package_name'],
+                installation_command=lib_config['installation_command'],
+                use_cases=lib_config['use_cases'],
+                categories=lib_config['categories'],
+                description=lib_config['description'],
+                is_builtin=lib_config['is_builtin'],
+                requires_setup=lib_config['requires_setup'],
+                setup_commands=lib_config['setup_commands'],
+                platform_requirements=lib_config['platform_requirements'],
+                dependencies=lib_config['dependencies']
+            )
+            self.libraries_registry[lib_info.name] = lib_info
             
             # Build use case mapping
-            for use_case in lib.use_cases:
+            for use_case in lib_info.use_cases:
                 if use_case not in self.use_case_mapping:
                     self.use_case_mapping[use_case] = set()
-                self.use_case_mapping[use_case].add(lib.name)
+                self.use_case_mapping[use_case].add(lib_info.name)
             
             # Build category mapping  
-            for category in lib.categories:
+            for category in lib_info.categories:
                 if category not in self.category_mapping:
                     self.category_mapping[category] = set()
-                self.category_mapping[category].add(lib.name)
+                self.category_mapping[category].add(lib_info.name)
         
         self._initialized = True
-        logger.info(f"Initialized library registry with {len(all_libraries)} libraries")
+        logger.info(f"Initialized library registry with {len(self.libraries_registry)} libraries")
 
     def recommend_libraries(
         self,
