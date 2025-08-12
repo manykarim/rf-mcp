@@ -131,10 +131,12 @@ class KeywordExecutor:
             keyword_name = step.keyword
             args = step.arguments
             
-            # Detect and set active library based on keyword
-            detected_library = browser_library_manager.detect_library_from_keyword(keyword_name, args)
-            if detected_library in ["browser", "selenium"]:
-                browser_library_manager.set_active_library(session, detected_library)
+            # Only detect and set active library if session doesn't have one already
+            current_active = session.get_active_library()
+            if not current_active or current_active == "auto":
+                detected_library = browser_library_manager.detect_library_from_keyword(keyword_name, args)
+                if detected_library in ["browser", "selenium"]:
+                    browser_library_manager.set_active_library(session, detected_library)
             
             # Handle special built-in keywords first
             if keyword_name.lower() in ["set variable", "log", "should be equal"]:
@@ -170,11 +172,12 @@ class KeywordExecutor:
     ) -> Dict[str, Any]:
         """Execute a Browser Library keyword using the dynamic execution handler."""
         try:
-            # Use the keyword discovery's execute_keyword method
+            # Use the keyword discovery's execute_keyword method with Browser Library filter
             result = await self.keyword_discovery.execute_keyword(
                 keyword_name=keyword,
                 args=args,
-                session_variables=session.variables
+                session_variables=session.variables,
+                active_library="Browser"
             )
             
             # Update session browser state based on keyword if successful
@@ -213,11 +216,12 @@ class KeywordExecutor:
     ) -> Dict[str, Any]:
         """Execute a SeleniumLibrary keyword using the dynamic execution handler."""
         try:
-            # Use the keyword discovery's execute_keyword method
+            # Use the keyword discovery's execute_keyword method with SeleniumLibrary filter
             result = await self.keyword_discovery.execute_keyword(
                 keyword_name=keyword,
                 args=args,
-                session_variables=session.variables
+                session_variables=session.variables,
+                active_library="SeleniumLibrary"
             )
             
             # Update session browser state based on keyword if successful

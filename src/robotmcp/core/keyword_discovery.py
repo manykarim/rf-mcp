@@ -146,16 +146,27 @@ class KeywordDiscovery:
                     keywords_removed += 1
         return keywords_removed
     
-    def find_keyword(self, keyword_name: str) -> Optional[KeywordInfo]:
-        """Find a keyword by name with fuzzy matching."""
+    def find_keyword(self, keyword_name: str, active_library: str = None) -> Optional[KeywordInfo]:
+        """Find a keyword by name with fuzzy matching, optionally filtering by active library."""
         if not keyword_name:
             return None
         
         normalized = keyword_name.lower().strip()
         
+        # Create a filtered cache if active_library is specified
+        search_cache = self.keyword_cache
+        if active_library:
+            # Filter keywords to only include those from the active library or built-in libraries
+            search_cache = {
+                name: info for name, info in self.keyword_cache.items()
+                if (info.library == active_library or 
+                    info.library in ['BuiltIn', 'Collections', 'String', 'DateTime', 'OperatingSystem', 'Process'])
+            }
+            logger.debug(f"Filtering keyword search to library '{active_library}' - {len(search_cache)} keywords available")
+        
         # Try exact match first
-        if normalized in self.keyword_cache:
-            return self.keyword_cache[normalized]
+        if normalized in search_cache:
+            return search_cache[normalized]
         
         # Try common variations
         variations = [
@@ -165,14 +176,14 @@ class KeywordDiscovery:
         ]
         
         for variation in variations:
-            if variation in self.keyword_cache:
-                return self.keyword_cache[variation]
+            if variation in search_cache:
+                return search_cache[variation]
         
         # Try fuzzy matching - find best partial match
         best_match = None
         best_score = 0
         
-        for cached_name, keyword_info in self.keyword_cache.items():
+        for cached_name, keyword_info in search_cache.items():
             # Score based on how much of the search term matches
             if normalized in cached_name:
                 score = len(normalized) / len(cached_name)
@@ -187,7 +198,8 @@ class KeywordDiscovery:
         
         # Only return matches with reasonable confidence
         if best_score >= 0.6:
-            logger.debug(f"Fuzzy matched '{keyword_name}' to '{best_match.name}' (score: {best_score:.2f})")
+            library_info = f" from {best_match.library}" if active_library else ""
+            logger.debug(f"Fuzzy matched '{keyword_name}' to '{best_match.name}'{library_info} (score: {best_score:.2f})")
             return best_match
         
         return None

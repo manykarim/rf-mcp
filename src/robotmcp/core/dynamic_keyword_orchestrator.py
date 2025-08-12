@@ -34,9 +34,141 @@ class DynamicKeywordDiscovery:
         logger.info(f"Initialized {len(self.library_manager.libraries)} libraries with {len(self.keyword_discovery.keyword_cache)} keywords")
     
     # Public API methods
-    def find_keyword(self, keyword_name: str) -> Optional[KeywordInfo]:
-        """Find a keyword by name with fuzzy matching."""
-        return self.keyword_discovery.find_keyword(keyword_name)
+    def find_keyword(self, keyword_name: str, active_library: str = None) -> Optional[KeywordInfo]:
+        """Find a keyword by name with fuzzy matching, optionally filtering by active library."""
+        # Try LibDoc-based storage first if available (more accurate)
+        try:
+            from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
+            rf_doc_storage = get_rf_doc_storage()
+            
+            if rf_doc_storage.is_available():
+                libdoc_result = self._find_keyword_libdoc(keyword_name, active_library, rf_doc_storage)
+                if libdoc_result:
+                    return libdoc_result
+        except Exception as e:
+            logger.debug(f"LibDoc keyword search failed, falling back to inspection: {e}")
+        
+        # Fall back to inspection-based discovery
+        return self.keyword_discovery.find_keyword(keyword_name, active_library)
+    
+    def _find_keyword_libdoc(self, keyword_name: str, active_library: str, rf_doc_storage) -> Optional[KeywordInfo]:
+        """Find keyword using LibDoc storage with library filtering."""
+        if not keyword_name:
+            return None
+            
+        # Get keywords to search based on active library filter
+        keywords = []
+        
+        if active_library:
+            # Get keywords ONLY from active library + built-ins
+            if active_library in ["Browser", "SeleniumLibrary"]:
+                try:
+                    keywords.extend(rf_doc_storage.get_keywords_by_library(active_library))
+                    logger.debug(f"LibDoc: Found {len([k for k in keywords if k.library == active_library])} keywords from {active_library}")
+                except Exception as e:
+                    logger.debug(f"LibDoc: Failed to get {active_library} keywords: {e}")
+            
+            # Add built-in libraries
+            for builtin_lib in ['BuiltIn', 'Collections', 'String', 'DateTime', 'OperatingSystem', 'Process']:
+                try:
+                    builtin_kws = rf_doc_storage.get_keywords_by_library(builtin_lib)
+                    keywords.extend(builtin_kws)
+                    logger.debug(f"LibDoc: Found {len(builtin_kws)} keywords from {builtin_lib}")
+                except:
+                    pass  # Library might not be loaded
+        else:
+            # Get all keywords when no filter is specified
+            keywords = rf_doc_storage.get_all_keywords()
+        
+        # Search for exact match first
+        for kw in keywords:
+            if kw.name.lower() == keyword_name.lower():
+                # Convert LibDoc keyword to our KeywordInfo format
+                return KeywordInfo(
+                    name=kw.name,
+                    library=kw.library,
+                    method_name=kw.name.replace(' ', '_').lower(),
+                    doc=kw.doc,
+                    short_doc=kw.short_doc,
+                    args=kw.args,
+                    defaults={},  # LibDoc doesn't provide defaults in same format
+                    tags=kw.tags,
+                    is_builtin=(kw.library in ['BuiltIn', 'Collections', 'String', 'DateTime', 'OperatingSystem', 'Process'])
+                )
+        
+        # Try fuzzy matching with name variations
+        normalized = keyword_name.lower().strip()
+        variations = [
+            normalized.replace(' ', ''),   # Remove spaces
+            normalized.replace('_', ' '),  # Replace underscores
+            normalized.replace('-', ' '),  # Replace hyphens
+        ]
+        
+        for variation in variations:
+            for kw in keywords:
+                if kw.name.lower().replace(' ', '') == variation:
+                    return KeywordInfo(
+                        name=kw.name,
+                        library=kw.library,
+                        method_name=kw.name.replace(' ', '_').lower(),
+                        doc=kw.doc,
+                        short_doc=kw.short_doc,
+                        args=kw.args,
+                        defaults={},
+                        tags=kw.tags,
+                        is_builtin=(kw.library in ['BuiltIn', 'Collections', 'String', 'DateTime', 'OperatingSystem', 'Process'])
+                    )
+        
+        return None
+    
+    def _execute_with_rf_type_conversion(self, method, keyword_info, original_args):
+        """Execute method using Robot Framework's native type conversion system."""
+        try:
+            from robot.running.arguments.typeconverters import TypeConverter
+            from robot.running.arguments.typeinfo import TypeInfo
+            import inspect
+            
+            # Get method signature
+            sig = inspect.signature(method)
+            
+            # Convert arguments using Robot Framework's type conversion
+            converted_args = []
+            param_list = list(sig.parameters.values())
+            
+            for i, (arg_value, param) in enumerate(zip(original_args, param_list)):
+                if param.annotation != inspect.Parameter.empty:
+                    # Create TypeInfo from annotation
+                    type_info = TypeInfo.from_type_hint(param.annotation)
+                    
+                    # Get converter for this type
+                    converter = TypeConverter.converter_for(type_info)
+                    
+                    # Convert the argument
+                    converted_value = converter.convert(arg_value, param.name)
+                    converted_args.append(converted_value)
+                    
+                    logger.debug(f"RF converted arg {i} '{param.name}': {arg_value} -> {converted_value} (type: {type(converted_value).__name__})")
+                else:
+                    # No type annotation, use as-is
+                    converted_args.append(arg_value)
+            
+            # Execute with converted arguments
+            result = method(*converted_args)
+            
+            logger.debug(f"RF native type conversion succeeded for {keyword_info.name}")
+            return result
+            
+        except ImportError as ie:
+            logger.debug(f"Robot Framework type conversion not available: {ie}")
+            return None
+        except Exception as e:
+            logger.debug(f"RF native type conversion failed for {keyword_info.name}: {e}")
+            # Log more details for debugging
+            logger.debug(f"Method signature: {inspect.signature(method) if 'inspect' in locals() else 'N/A'}")
+            logger.debug(f"Original args: {original_args}")
+            import traceback
+            logger.debug(f"Full traceback: {traceback.format_exc()}")
+            return None
     
     def get_keyword_suggestions(self, keyword_name: str, limit: int = 5) -> List[str]:
         """Get keyword suggestions based on partial match."""
@@ -216,17 +348,20 @@ class DynamicKeywordDiscovery:
                 # Regular library methods
                 if keyword_info.library == "Browser":
                     try:
-                        # Use Robot Framework's native type conversion
-                        parsed = self.argument_processor.parse_arguments_for_keyword(keyword_info.name, original_args, keyword_info.library)
-                        
-                        # Extract positional and keyword arguments (already properly type-converted by RF native system)
-                        pos_args = parsed.positional
-                        kwargs = parsed.named
-                        
-                        if kwargs:
-                            result = method(*pos_args, **kwargs)
+                        # Use Robot Framework's native type conversion system
+                        result = self._execute_with_rf_type_conversion(method, keyword_info, original_args)
+                        if result is not None:  # Successfully converted and executed
+                            pass  # Use the result as-is
                         else:
-                            result = method(*pos_args)
+                            # Fallback to our argument processing
+                            parsed = self.argument_processor.parse_arguments_for_keyword(keyword_info.name, original_args, keyword_info.library)
+                            pos_args = parsed.positional
+                            kwargs = parsed.named
+                            
+                            if kwargs:
+                                result = method(*pos_args, **kwargs)
+                            else:
+                                result = method(*pos_args)
                     except Exception as browser_error:
                         logger.debug(f"Browser Library execution failed: {browser_error}")
                         # Don't fall back to unconverted args as this can cause enum type errors
@@ -268,18 +403,32 @@ class DynamicKeywordDiscovery:
                 }
             }
     
-    async def execute_keyword(self, keyword_name: str, args: List[str], session_variables: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Execute a keyword dynamically."""
-        keyword_info = self.find_keyword(keyword_name)
+    async def execute_keyword(self, keyword_name: str, args: List[str], session_variables: Dict[str, Any] = None, active_library: str = None) -> Dict[str, Any]:
+        """Execute a keyword dynamically, respecting session-based library exclusion."""
+        # Find keyword with library filtering if active_library is specified
+        keyword_info = self.find_keyword(keyword_name, active_library)
         
         if not keyword_info:
+            error_msg = f"Keyword '{keyword_name}' not found"
+            if active_library:
+                error_msg += f" in active library '{active_library}' or built-in libraries"
+            else:
+                error_msg += " in any loaded library"
+                
             return {
                 "success": False,
-                "error": f"Keyword '{keyword_name}' not found in any loaded library",
-                "suggestions": self.get_keyword_suggestions(keyword_name, 3)
+                "error": error_msg,
+                "suggestions": self.get_keyword_suggestions(keyword_name, 3),
+                "active_library_filter": active_library
             }
         
         try:
+            # Log which library the keyword was found in for debugging
+            if active_library and keyword_info.library != active_library:
+                logger.debug(f"Using built-in keyword '{keyword_info.name}' from {keyword_info.library} (active library: {active_library})")
+            else:
+                logger.debug(f"Executing keyword '{keyword_info.name}' from {keyword_info.library}")
+            
             # Parse arguments using LibDoc information for accuracy
             parsed_args = self._parse_arguments_for_keyword(keyword_name, args, keyword_info.library)
             
@@ -294,7 +443,8 @@ class DynamicKeywordDiscovery:
                     "name": keyword_info.name,
                     "library": keyword_info.library,
                     "doc": keyword_info.doc
-                }
+                },
+                "active_library_filter": active_library
             }
 
 
