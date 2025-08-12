@@ -60,6 +60,10 @@ class RobotFrameworkDocStorage:
             'DateTime',
             'OperatingSystem',
             'Process',
+            'XML',
+            'Telnet',
+            'Screenshot',
+            'Dialogs',
             'DatabaseLibrary',
             'SSHLibrary',
             'AppiumLibrary'
