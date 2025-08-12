@@ -42,16 +42,18 @@ class ExecutionCoordinator:
         keyword: str,
         arguments: List[str] = None,
         session_id: str = "default",
-        detail_level: str = "minimal"
+        detail_level: str = "minimal",
+        library_prefix: str = None
     ) -> Dict[str, Any]:
         """
-        Execute a single Robot Framework keyword step.
+        Execute a single Robot Framework keyword step with optional library prefix.
         
         Args:
-            keyword: Robot Framework keyword name
+            keyword: Robot Framework keyword name (supports Library.Keyword syntax)
             arguments: List of arguments for the keyword
             session_id: Session identifier
             detail_level: Level of detail in response ('minimal', 'standard', 'full')
+            library_prefix: Optional explicit library name to override session search order
             
         Returns:
             Execution result with status, output, and state
@@ -66,13 +68,14 @@ class ExecutionCoordinator:
             # Convert locators if needed
             converted_arguments = self._convert_locators_in_arguments(arguments, session)
             
-            # Execute the keyword using the keyword executor
+            # Execute the keyword using the keyword executor with library prefix support
             result = await self.keyword_executor.execute_keyword(
                 session=session,
                 keyword=keyword,
                 arguments=converted_arguments,
                 browser_library_manager=self.browser_library_manager,
-                detail_level=detail_level
+                detail_level=detail_level,
+                library_prefix=library_prefix
             )
             
             return result

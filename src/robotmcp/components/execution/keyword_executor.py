@@ -38,17 +38,19 @@ class KeywordExecutor:
         keyword: str,
         arguments: List[str],
         browser_library_manager: Any,  # BrowserLibraryManager
-        detail_level: str = "minimal"
+        detail_level: str = "minimal",
+        library_prefix: str = None
     ) -> Dict[str, Any]:
         """
-        Execute a single Robot Framework keyword step.
+        Execute a single Robot Framework keyword step with optional library prefix.
         
         Args:
             session: ExecutionSession to run in
-            keyword: Robot Framework keyword name
+            keyword: Robot Framework keyword name (supports Library.Keyword syntax)
             arguments: List of arguments for the keyword
             browser_library_manager: BrowserLibraryManager instance
             detail_level: Level of detail in response ('minimal', 'standard', 'full')
+            library_prefix: Optional explicit library name to override session search order
             
         Returns:
             Execution result with status, output, and state
@@ -70,8 +72,8 @@ class KeywordExecutor:
             
             logger.info(f"Executing keyword: {keyword} with args: {arguments}")
             
-            # Execute the keyword
-            result = await self._execute_keyword_internal(session, step, browser_library_manager)
+            # Execute the keyword with library prefix support
+            result = await self._execute_keyword_internal(session, step, browser_library_manager, library_prefix)
             
             # Update step status
             step.end_time = datetime.now()
@@ -124,9 +126,10 @@ class KeywordExecutor:
         self, 
         session: ExecutionSession, 
         step: ExecutionStep,
-        browser_library_manager: Any
+        browser_library_manager: Any,
+        library_prefix: str = None
     ) -> Dict[str, Any]:
-        """Execute a specific keyword with error handling."""
+        """Execute a specific keyword with error handling and library prefix support."""
         try:
             keyword_name = step.keyword
             args = step.arguments
@@ -141,6 +144,10 @@ class KeywordExecutor:
             # Handle special built-in keywords first
             if keyword_name.lower() in ["set variable", "log", "should be equal"]:
                 return await self._execute_builtin_keyword(session, keyword_name, args)
+            
+            # If library prefix is specified, use direct execution
+            if library_prefix:
+                return await self._execute_with_library_prefix(session, keyword_name, args, library_prefix)
             
             # Get active browser library and execute
             library, library_type = browser_library_manager.get_active_browser_library(session)
@@ -162,6 +169,48 @@ class KeywordExecutor:
                 "variables": {},
                 "state_updates": {}
             }
+    
+    async def _execute_with_library_prefix(
+        self,
+        session: ExecutionSession,
+        keyword: str,
+        args: List[str],
+        library_prefix: str
+    ) -> Dict[str, Any]:
+        """Execute keyword with explicit library prefix."""
+        try:
+            # Use keyword discovery with library prefix
+            result = await self.keyword_discovery.execute_keyword(
+                keyword_name=keyword,
+                args=args,
+                session_variables=session.variables,
+                active_library=None,  # Don't use active library when prefix is explicit
+                session_id=session.session_id,
+                library_prefix=library_prefix
+            )
+            
+            # Update session state if successful
+            if result.get("success"):
+                # Extract any state updates based on the library and keyword
+                if library_prefix.lower() == "browser":
+                    state_updates = self._extract_browser_state_updates(keyword, args, result.get("output"))
+                    self._apply_state_updates(session, state_updates)
+                
+                # Add library prefix information to result
+                result["library_prefix_used"] = library_prefix
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error executing {library_prefix}.{keyword}: {e}")
+            return {
+                "success": False,
+                "error": f"Library prefix execution failed: {str(e)}",
+                "output": "",
+                "variables": {},
+                "state_updates": {},
+                "library_prefix_used": library_prefix
+            }
 
     async def _execute_browser_keyword(
         self, 
@@ -177,7 +226,8 @@ class KeywordExecutor:
                 keyword_name=keyword,
                 args=args,
                 session_variables=session.variables,
-                active_library="Browser"
+                active_library="Browser",
+                session_id=session.session_id
             )
             
             # Update session browser state based on keyword if successful
@@ -221,7 +271,8 @@ class KeywordExecutor:
                 keyword_name=keyword,
                 args=args,
                 session_variables=session.variables,
-                active_library="SeleniumLibrary"
+                active_library="SeleniumLibrary",
+                session_id=session.session_id
             )
             
             # Update session browser state based on keyword if successful

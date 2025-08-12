@@ -429,6 +429,67 @@ class DynamicKeywordDiscovery:
         session = self.session_manager.create_session(session_id)
         return session.get_session_info()
     
+    def _parse_library_prefix(self, keyword_name: str) -> tuple[Optional[str], Optional[str]]:
+        """Parse library prefix from keyword name (e.g., 'XML.Get Element Count' -> ('XML', 'Get Element Count'))."""
+        if '.' not in keyword_name:
+            return None, None
+        
+        parts = keyword_name.split('.', 1)
+        if len(parts) == 2:
+            library_name, keyword_part = parts
+            # Validate that library_name looks like a valid library name
+            if library_name and keyword_part and library_name.replace('_', '').replace(' ', '').isalnum():
+                return library_name, keyword_part
+        
+        return None, None
+    
+    async def _ensure_library_loaded(self, library_name: str) -> bool:
+        """Ensure a specific library is loaded."""
+        if library_name in self.library_manager.libraries:
+            return True
+        
+        # Try to load the library on demand
+        success = self.library_manager.load_library_on_demand(library_name, self.keyword_discovery)
+        if success:
+            # Add keywords to cache
+            lib_info = self.library_manager.libraries[library_name]
+            self.keyword_discovery.add_keywords_to_cache(lib_info)
+            logger.info(f"Loaded library '{library_name}' for explicit prefix")
+            return True
+        
+        logger.warning(f"Could not load library '{library_name}' for prefix")
+        return False
+    
+    def _find_keyword_with_library_prefix(self, keyword_name: str, library_name: str) -> Optional[KeywordInfo]:
+        """Find keyword in a specific library only."""
+        if library_name not in self.library_manager.libraries:
+            logger.debug(f"Library '{library_name}' not loaded for prefix search")
+            return None
+        
+        # Search only in the specified library
+        lib_keywords = self.get_keywords_by_library(library_name)
+        for kw in lib_keywords:
+            if kw.name.lower() == keyword_name.lower():
+                logger.debug(f"Found '{keyword_name}' in '{library_name}' via explicit prefix")
+                return kw
+        
+        # Try fuzzy matching within the library
+        normalized = keyword_name.lower().strip()
+        variations = [
+            normalized.replace(' ', ''),   # Remove spaces
+            normalized.replace('_', ' '),  # Replace underscores
+            normalized.replace('-', ' '),  # Replace hyphens
+        ]
+        
+        for variation in variations:
+            for kw in lib_keywords:
+                if kw.name.lower().replace(' ', '') == variation:
+                    logger.debug(f"Found '{keyword_name}' in '{library_name}' via fuzzy prefix match")
+                    return kw
+        
+        logger.debug(f"Keyword '{keyword_name}' not found in library '{library_name}'")
+        return None
+    
     def set_session_search_order(self, session_id: str, search_order: List[str]) -> bool:
         """Manually set search order for a session."""
         session = self.session_manager.get_session(session_id)
@@ -561,26 +622,43 @@ class DynamicKeywordDiscovery:
                 }
             }
     
-    async def execute_keyword(self, keyword_name: str, args: List[str], session_variables: Dict[str, Any] = None, active_library: str = None, session_id: str = None) -> Dict[str, Any]:
-        """Execute a keyword dynamically with session-based library management."""
+    async def execute_keyword(self, keyword_name: str, args: List[str], session_variables: Dict[str, Any] = None, active_library: str = None, session_id: str = None, library_prefix: str = None) -> Dict[str, Any]:
+        """Execute a keyword dynamically with session-based library management and optional library prefix support."""
+        # Parse library prefix from keyword name if present (e.g., "XML.Get Element Count")
+        parsed_library, parsed_keyword = self._parse_library_prefix(keyword_name)
+        
+        # Determine effective library prefix (parameter overrides parsed)
+        effective_library_prefix = library_prefix or parsed_library
+        effective_keyword_name = parsed_keyword or keyword_name
         # Handle session-based library loading
         if session_id:
-            await self._ensure_session_libraries(session_id, keyword_name)
+            await self._ensure_session_libraries(session_id, effective_keyword_name)
         
-        # Find keyword with library filtering and session search order
-        keyword_info = self._find_keyword_with_session(keyword_name, active_library, session_id)
+        # Handle library prefix loading if specified
+        if effective_library_prefix:
+            await self._ensure_library_loaded(effective_library_prefix)
+        
+        # Find keyword with library prefix, session search order, or active library filtering
+        if effective_library_prefix:
+            keyword_info = self._find_keyword_with_library_prefix(effective_keyword_name, effective_library_prefix)
+        else:
+            keyword_info = self._find_keyword_with_session(effective_keyword_name, active_library, session_id)
         
         if not keyword_info:
-            error_msg = f"Keyword '{keyword_name}' not found"
-            if active_library:
-                error_msg += f" in active library '{active_library}' or built-in libraries"
+            if effective_library_prefix:
+                error_msg = f"Keyword '{effective_keyword_name}' not found in library '{effective_library_prefix}'"
             else:
-                error_msg += " in any loaded library"
+                error_msg = f"Keyword '{effective_keyword_name}' not found"
+                if active_library:
+                    error_msg += f" in active library '{active_library}' or built-in libraries"
+                else:
+                    error_msg += " in any loaded library"
                 
             return {
                 "success": False,
                 "error": error_msg,
-                "suggestions": self.get_keyword_suggestions(keyword_name, 3),
+                "suggestions": self.get_keyword_suggestions(effective_keyword_name, 3),
+                "library_prefix": effective_library_prefix,
                 "active_library_filter": active_library,
                 "session_id": session_id
             }
@@ -589,7 +667,8 @@ class DynamicKeywordDiscovery:
         if session_id:
             session = self.session_manager.get_session(session_id)
             if session:
-                session.record_keyword_usage(keyword_name)
+                # Record the base keyword name (without library prefix) for session detection
+                session.record_keyword_usage(effective_keyword_name)
                 # Update Robot Framework's native search order
                 await self._update_rf_search_order(session)
         
@@ -601,7 +680,7 @@ class DynamicKeywordDiscovery:
                 logger.debug(f"Executing keyword '{keyword_info.name}' from {keyword_info.library}")
             
             # Parse arguments using LibDoc information for accuracy
-            parsed_args = self._parse_arguments_for_keyword(keyword_name, args, keyword_info.library)
+            parsed_args = self._parse_arguments_for_keyword(effective_keyword_name, args, keyword_info.library)
             
             # Execute the keyword
             result = self._execute_direct_method_call(keyword_info, parsed_args, args, session_variables or {})
@@ -611,7 +690,8 @@ class DynamicKeywordDiscovery:
         except Exception as e:
             return {
                 "success": False,
-                "error": f"Error executing {keyword_name}: {str(e)}",
+                "error": f"Error executing {effective_keyword_name}: {str(e)}",
+                "library_prefix": effective_library_prefix,
                 "keyword_info": {
                     "name": keyword_info.name,
                     "library": keyword_info.library,
