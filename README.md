@@ -249,25 +249,31 @@ The server provides **24 comprehensive MCP tools** for complete test automation 
 ## 🚀 Installation
 
 ### Prerequisites
-- Python 3.8+
+- Python 3.10+
 - Robot Framework 6.0+
 
-### Quick Start
+### Quick Install from PyPI (Recommended)
+
+```bash
+# Install the latest stable version
+pip install rf-mcp
+
+```
+
+### Development Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/rf-mcp.git
+git clone https://github.com/manykarim/rf-mcp.git
 cd rf-mcp
 
 # Install dependencies using uv (recommended)
 uv sync
 
-# Or install using pip
+# Or install using pip in development mode
 pip install -e .
 
-# Install optional dependencies for full functionality
-uv add sentence-transformers beautifulsoup4
-# OR: pip install sentence-transformers beautifulsoup4
+
 ```
 
 ### Robot Framework Libraries
@@ -299,8 +305,49 @@ uv add robotframework-sshlibrary
 Create or update your VS Code MCP configuration file:
 
 **Location:** `%APPDATA%\Code\User\globalStorage\rooveterinaryinc.roo-cline\mcp.json` (Windows)
-**Location:** `~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/mcp.json` (macOS/Linux)
+**Location:** `~/.config/Code/User/globalStorage\rooveterinaryinc.roo-cline\mcp.json` (macOS/Linux)
 
+### Option 1: Using PyPI Installation (Recommended)
+
+If you installed via `pip install rf-mcp`:
+
+**Windows:**
+```json
+{
+  "servers": {
+    "robotmcp": {
+      "type": "stdio",
+      "command": "python",
+      "args": [
+        "-m",
+        "robotmcp.server"
+      ]
+    }
+  }
+}
+```
+
+**macOS/Linux:**
+```json
+{
+  "servers": {
+    "robotmcp": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "-m",
+        "robotmcp.server"
+      ]
+    }
+  }
+}
+```
+
+### Option 2: Development Installation
+
+If you cloned the repository for development:
+
+**Windows:**
 ```json
 {
   "servers": {
@@ -317,7 +364,7 @@ Create or update your VS Code MCP configuration file:
 }
 ```
 
-**For macOS/Linux:**
+**macOS/Linux:**
 ```json
 {
   "servers": {
@@ -334,7 +381,7 @@ Create or update your VS Code MCP configuration file:
 }
 ```
 
-### Alternative: Using uv
+### Option 3: Using uv
 
 ```json
 {
@@ -358,13 +405,21 @@ Create or update your VS Code MCP configuration file:
 
 ### Starting the Server
 
-**Using uv (recommended):**
+**After PyPI installation:**
 ```bash
-uv run python -m robotmcp.server
+# Using the installed package
+python -m robotmcp.server
+
+# Or using the robotmcp command
+robotmcp
 ```
 
-**Traditional method:**
+**Development installation:**
 ```bash
+# Using uv (recommended for development)
+uv run python -m robotmcp.server
+
+# Or traditional method
 python -m robotmcp.server
 ```
 
@@ -525,8 +580,8 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## 💬 Support
 
-- 🐛 **Bug Reports**: [Create an issue](https://github.com/your-username/rf-mcp/issues)
-- 💡 **Feature Requests**: [Create an issue](https://github.com/your-username/rf-mcp/issues)  
+- 🐛 **Bug Reports**: [Create an issue](https://github.com/manykarim/rf-mcp/issues)
+- 💡 **Feature Requests**: [Create an issue](https://github.com/manykarim/rf-mcp/issues)  
 - 📖 **Documentation**: Check the comprehensive tool documentation above
 - 💬 **Community**: Join our discussions and share your automation success stories
 
