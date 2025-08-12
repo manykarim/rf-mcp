@@ -33,6 +33,10 @@ class LibraryManager:
             'DateTime',
             'OperatingSystem',
             'Process',
+            'XML',
+            'Telnet',
+            'Screenshot',
+            'Dialogs',
             'DatabaseLibrary',
             'SSHLibrary',
             'AppiumLibrary'
@@ -115,14 +119,26 @@ class LibraryManager:
                 from robot.libraries.String import String
                 instance = String()
             elif library_name == 'DateTime':
-                from robot.libraries.DateTime import DateTime
-                instance = DateTime()
+                import robot.libraries.DateTime as DateTime
+                instance = DateTime
             elif library_name == 'OperatingSystem':
                 from robot.libraries.OperatingSystem import OperatingSystem
                 instance = OperatingSystem()
             elif library_name == 'Process':
                 from robot.libraries.Process import Process
                 instance = Process()
+            elif library_name == 'XML':
+                from robot.libraries.XML import XML
+                instance = XML()
+            elif library_name == 'Telnet':
+                from robot.libraries.Telnet import Telnet
+                instance = Telnet()
+            elif library_name == 'Screenshot':
+                from robot.libraries.Screenshot import Screenshot
+                instance = Screenshot()
+            elif library_name == 'Dialogs':
+                import robot.libraries.Dialogs as Dialogs
+                instance = Dialogs
             else:
                 # Try generic import
                 module = importlib.import_module(library_name)
