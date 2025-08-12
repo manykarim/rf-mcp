@@ -4,13 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rf-mcp"
-version = "0.2.1"
+version = "0.3.1"
 description = "Robot Framework MCP Server - Natural Language Test Automation Bridge"
 authors = [{name = "Robot MCP Team"}]
 license = {text = "Apache-2.0"}
 readme = "README.md"
-homepage = "https://github.com/manykarim/rf-mcp"
-repository = "https://github.com/manykarim/rf-mcp"
 requires-python = ">=3.10"
 dependencies = [
     "fastmcp>=2.0.0",
@@ -32,6 +30,12 @@ dev = [
     "mypy>=1.0.0",
     "pre-commit>=2.20.0"
 ]
+
+[project.urls]
+Homepage = "https://github.com/manykarim/rf-mcp"
+Repository = "https://github.com/manykarim/rf-mcp"
+"Bug Tracker" = "https://github.com/manykarim/rf-mcp/issues"
+Documentation = "https://github.com/manykarim/rf-mcp#readme"
 
 [project.scripts]
 robotmcp = "robotmcp.server:main"
