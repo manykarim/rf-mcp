@@ -211,3 +211,9 @@ results/
 output.xml
 log.html
 report.html
+
+playwright*.txt
+
+# Files in root folder
+/test_*.py
+/debug_*.py
