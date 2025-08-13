@@ -103,6 +103,10 @@ class StateManager:
             if elements_of_interest is None:
                 elements_of_interest = []
             
+            # Synchronize with execution engine first
+            if execution_engine:
+                await self.sync_with_execution_engine(session_id, execution_engine)
+            
             # Get current state for session
             current_state = self.current_states.get(session_id)
             
@@ -152,13 +156,18 @@ class StateManager:
     async def _get_dom_state(self, session_id: str, elements_of_interest: List[str], execution_engine=None) -> Dict[str, Any]:
         """Get DOM state for web applications."""
         try:
+            # Enhanced logging for debugging
+            logger.debug(f"Getting DOM state for session {session_id}")
+            
             # Try to get Browser Library state from execution engine if available
             browser_state = await self._get_browser_library_state(session_id, execution_engine)
             
             if browser_state:
+                logger.debug(f"Successfully retrieved browser state: {browser_state.keys()}")
                 # Use actual browser state if available
-                page_state = await self._convert_browser_state_to_page_state(browser_state, execution_engine)
+                page_state = await self._convert_browser_state_to_page_state(browser_state, execution_engine, session_id)
             else:
+                logger.debug(f"No browser state available, falling back to simulation")
                 # Fall back to simulation
                 page_state = await self._simulate_page_state(session_id)
             
@@ -211,6 +220,7 @@ class StateManager:
                     }
                 })
             
+            logger.debug(f"DOM state result: URL={result['url']}, Title={result.get('title', 'N/A')}, Elements={result['element_count']}")
             return result
             
         except Exception as e:
@@ -501,6 +511,44 @@ class StateManager:
         if len(self.state_history[session_id]) > 50:
             self.state_history[session_id] = self.state_history[session_id][-50:]
 
+    async def sync_with_execution_engine(self, session_id: str, execution_engine) -> None:
+        """
+        Synchronize StateManager state with ExecutionCoordinator session state.
+        
+        Args:
+            session_id: Session to synchronize
+            execution_engine: ExecutionCoordinator instance
+        """
+        try:
+            if not execution_engine:
+                return
+                
+            # Get current session state from execution coordinator
+            session_state = execution_engine.get_session_state(session_id)
+            
+            if session_state.get("success"):
+                # Update our state with real session information
+                await self.update_variables(session_id, session_state["variables"])
+                
+                # Update browser-specific variables
+                browser_state = session_state.get("browser_state", {})
+                browser_vars = {
+                    "current_url": browser_state.get("current_url"),
+                    "page_title": browser_state.get("page_title"),
+                    "browser_id": browser_state.get("browser_id"),
+                    "context_id": browser_state.get("context_id"),
+                    "page_id": browser_state.get("page_id"),
+                    "active_library": browser_state.get("active_library")
+                }
+                
+                # Filter out None values
+                browser_vars = {k: v for k, v in browser_vars.items() if v is not None}
+                if browser_vars:
+                    await self.update_variables(session_id, browser_vars)
+                    
+        except Exception as e:
+            logger.error(f"Error syncing state with execution engine: {e}")
+
     async def update_variables(self, session_id: str, variables: Dict[str, Any]) -> None:
         """Update session variables."""
         if session_id not in self.current_states:
@@ -667,7 +715,7 @@ class StateManager:
             logger.error(f"Error getting Browser Library state: {e}")
             return None
 
-    async def _convert_browser_state_to_page_state(self, browser_state: Dict[str, Any], execution_engine=None) -> PageState:
+    async def _convert_browser_state_to_page_state(self, browser_state: Dict[str, Any], execution_engine=None, session_id: str = None) -> PageState:
         """Convert Browser Library state to PageState format."""
         try:
             url = browser_state.get("current_url", "about:blank")
@@ -705,7 +753,7 @@ class StateManager:
             
             # Try to get real page source from execution engine
             real_page_source = None
-            if execution_engine:
+            if execution_engine and session_id:
                 try:
                     # Use the new ExecutionCoordinator get_page_source method
                     page_source_result = await execution_engine.get_page_source(

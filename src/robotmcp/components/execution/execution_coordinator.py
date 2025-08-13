@@ -762,6 +762,86 @@ class ExecutionCoordinator:
                       else "Session has no validated steps yet"
         }
     
+    def get_session_browser_status(self, session_id: str) -> Dict[str, Any]:
+        """
+        Get browser status for a specific session.
+        
+        Args:
+            session_id: Session identifier
+            
+        Returns:
+            Dictionary containing browser status information
+        """
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return {"error": f"Session {session_id} not found"}
+            
+            browser_state = session.browser_state
+            
+            return {
+                "success": True,
+                "session_id": session_id,
+                "current_url": browser_state.current_url,
+                "page_title": browser_state.page_title,
+                "browser_library": {
+                    "browser_id": browser_state.browser_id,
+                    "context_id": browser_state.context_id,
+                    "page_id": browser_state.page_id,
+                    "library_type": browser_state.active_library
+                },
+                "viewport": {
+                    "width": getattr(browser_state, 'viewport_width', 1280),
+                    "height": getattr(browser_state, 'viewport_height', 720)
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting browser status for session {session_id}: {e}")
+            return {"error": str(e)}
+
+    def get_session_state(self, session_id: str) -> Dict[str, Any]:
+        """
+        Get complete session state including browser and variables.
+        
+        Args:
+            session_id: Session identifier
+            
+        Returns:
+            Complete session state information
+        """
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return {"error": f"Session {session_id} not found"}
+            
+            return {
+                "success": True,
+                "session_id": session_id,
+                "browser_state": {
+                    "current_url": session.browser_state.current_url,
+                    "page_title": session.browser_state.page_title,
+                    "browser_id": session.browser_state.browser_id,
+                    "context_id": session.browser_state.context_id,
+                    "page_id": session.browser_state.page_id,
+                    "active_library": session.browser_state.active_library,
+                    "page_source": session.browser_state.page_source
+                },
+                "variables": dict(session.variables),
+                "execution_history": [
+                    {
+                        "step_number": i + 1,
+                        "keyword": step.keyword,
+                        "status": step.status,
+                        "execution_time": step.execution_time
+                    } for i, step in enumerate(session.steps)
+                ]
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting session state for {session_id}: {e}")
+            return {"error": str(e)}
+    
     # ============================================
     # BACKWARD COMPATIBILITY PROPERTIES
     # ============================================
