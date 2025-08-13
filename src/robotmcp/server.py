@@ -75,6 +75,7 @@ async def execute_step(
     session_id: str = "default",
     raise_on_failure: bool = True,
     detail_level: str = "minimal",
+    scenario_hint: str = None,
 ) -> Dict[str, Any]:
     """Execute a single test step using Robot Framework API.
 
@@ -93,12 +94,15 @@ async def execute_step(
                          If False, returns failure details in response (for debugging/analysis).
         detail_level: Level of detail in response ('minimal', 'standard', 'full').
                      'minimal' reduces response size for AI agents by ~80-90%.
+        scenario_hint: Optional scenario text for intelligent library auto-configuration.
+                      When provided on first call, automatically configures the session
+                      based on detected scenario type and explicit library preferences.
     """
     if arguments is None:
         arguments = []
 
     result = await execution_engine.execute_step(
-        keyword, arguments, session_id, detail_level
+        keyword, arguments, session_id, detail_level, scenario_hint=scenario_hint
     )
 
     # For proper MCP protocol compliance, failed steps should raise exceptions

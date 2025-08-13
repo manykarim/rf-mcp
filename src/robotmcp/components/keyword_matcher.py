@@ -80,14 +80,19 @@ class KeywordMatcher:
         # Common keyword patterns for different actions
         self.action_keyword_mapping = {
             'setup_browser': {
-                'patterns': ['create browser', 'new browser', 'open browser', 'start browser'],
+                'patterns': ['create browser', 'new browser', 'start browser'],
                 'libraries': ['Browser'],
                 'keywords': ['New Browser', 'New Context', 'New Page']
             },
             'navigate': {
-                'patterns': ['open', 'go to', 'navigate', 'visit', 'new page'],
+                'patterns': ['go to', 'navigate', 'visit', 'new page'],
                 'libraries': ['Browser', 'SeleniumLibrary'],
-                'keywords': ['New Page', 'Navigate To', 'Open Browser', 'Go To']
+                'keywords': ['New Page', 'Navigate To', 'Go To']
+            },
+            'open_browser': {
+                'patterns': ['open browser', 'start selenium'],
+                'libraries': ['SeleniumLibrary'],
+                'keywords': ['Open Browser']
             },
             'click': {
                 'patterns': ['click', 'press', 'select', 'tap'],

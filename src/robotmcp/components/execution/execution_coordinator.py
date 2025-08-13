@@ -24,18 +24,41 @@ class ExecutionCoordinator:
     def __init__(self, config: Optional[ExecutionConfig] = None):
         self.config = config or ExecutionConfig()
         
+        # Initialize keyword override system first
+        from robotmcp.components.keyword_overrides import setup_default_overrides, KeywordOverrideRegistry
+        self.override_registry = KeywordOverrideRegistry()
+        
         # Initialize all service components
         self.session_manager = SessionManager(self.config)
         self.browser_library_manager = BrowserLibraryManager(self.config)
         self.page_source_service = PageSourceService(self.config)
-        self.keyword_executor = KeywordExecutor(self.config)
+        self.keyword_executor = KeywordExecutor(self.config, self.override_registry)
         self.locator_converter = LocatorConverter(self.config)
         
         # Initialize additional components for backward compatibility
         self.library_checker = LibraryAvailabilityChecker()
         self.rf_doc_storage = get_rf_doc_storage()
         
-        logger.info("ExecutionCoordinator initialized with service-oriented architecture")
+        # Set up default keyword overrides
+        setup_default_overrides(self.override_registry, self)
+        
+        # Set session manager for keyword discovery
+        from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
+        keyword_discovery = get_keyword_discovery()
+        keyword_discovery.set_session_manager(self.session_manager)
+        
+        logger.info("ExecutionCoordinator initialized with service-oriented architecture and keyword overrides")
+    
+    # Add properties for override handlers to access browser libraries
+    @property 
+    def browser_lib(self):
+        """Access to Browser library instance for override handlers."""
+        return self.browser_library_manager.browser_lib
+    
+    @property
+    def selenium_lib(self):
+        """Access to SeleniumLibrary instance for override handlers."""
+        return self.browser_library_manager.selenium_lib
     
     async def execute_step(
         self,
@@ -43,10 +66,11 @@ class ExecutionCoordinator:
         arguments: List[str] = None,
         session_id: str = "default",
         detail_level: str = "minimal",
-        library_prefix: str = None
+        library_prefix: str = None,
+        scenario_hint: str = None
     ) -> Dict[str, Any]:
         """
-        Execute a single Robot Framework keyword step with optional library prefix.
+        Execute a single Robot Framework keyword step with intelligent library auto-configuration.
         
         Args:
             keyword: Robot Framework keyword name (supports Library.Keyword syntax)
@@ -54,6 +78,7 @@ class ExecutionCoordinator:
             session_id: Session identifier
             detail_level: Level of detail in response ('minimal', 'standard', 'full')
             library_prefix: Optional explicit library name to override session search order
+            scenario_hint: Optional scenario text for auto-configuration (used on first call)
             
         Returns:
             Execution result with status, output, and state
@@ -64,6 +89,11 @@ class ExecutionCoordinator:
             
             # Get or create session
             session = self.session_manager.get_or_create_session(session_id)
+            
+            # Auto-configure session based on scenario hint (if provided and not already configured)
+            if scenario_hint and not session.auto_configured:
+                logger.info(f"Auto-configuring session {session_id} based on scenario hint")
+                session.configure_from_scenario(scenario_hint)
             
             # Convert locators if needed
             converted_arguments = self._convert_locators_in_arguments(arguments, session)

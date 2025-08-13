@@ -68,11 +68,14 @@ class KeywordOverrideRegistry:
         if normalized_keyword in self.overrides:
             return self.overrides[normalized_keyword]
             
-        # 2. Check library-specific overrides
+        # 2. Check library-specific overrides (only if library matches exactly)
         if library_name:
             library_key = library_name.lower()
             if library_key in self.library_overrides:
-                return self.library_overrides[library_key]
+                handler = self.library_overrides[library_key]
+                # Verify the handler is appropriate for this specific library
+                if self._handler_supports_library(handler, library_key):
+                    return handler
                 
         # 3. Check pattern matches
         for pattern, handler in self.pattern_overrides.items():
@@ -80,6 +83,21 @@ class KeywordOverrideRegistry:
                 return handler
                 
         return None
+    
+    def _handler_supports_library(self, handler: KeywordOverrideHandler, library_key: str) -> bool:
+        """Check if a handler is appropriate for a specific library."""
+        # Check handler type based on class name
+        handler_class_name = handler.__class__.__name__.lower()
+        
+        # Browser library handler should only handle Browser library keywords
+        if 'browser' in handler_class_name and library_key == 'browser':
+            return True
+        
+        # Selenium library handler should only handle SeleniumLibrary keywords    
+        if 'selenium' in handler_class_name and library_key in ['seleniumlibrary', 'selenium']:
+            return True
+            
+        return False
         
     def _matches_pattern(self, keyword: str, pattern: str, library: str = None) -> bool:
         """Check if a keyword matches a pattern."""
@@ -92,290 +110,117 @@ class KeywordOverrideRegistry:
                 return True
         return pattern in keyword
 
-# Browser Library Override Handler
-class BrowserLibraryHandler:
-    """Specialized handler for Browser Library keywords with custom logic."""
+# Unified Base Handler
+class UnifiedLibraryHandler:
+    """Base class for consistent library override handling using keyword discovery."""
     
-    def __init__(self, execution_engine):
+    def __init__(self, execution_engine, supported_library: str):
         self.execution_engine = execution_engine
-        
+        self.supported_library = supported_library.lower()
+    
     # Implement the protocol
     def __call__(self):
         return self
+    
+    async def execute(self, session, keyword, args, keyword_info):
+        """Unified execution approach using keyword discovery with library prefix."""
+        try:
+            # Get keyword discovery orchestrator
+            from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
+            orchestrator = get_keyword_discovery()
+            
+            # Execute with explicit library specification to prevent wrong routing
+            # Using library_prefix ensures we bypass override system recursion
+            result = await orchestrator.execute_keyword(
+                keyword_name=keyword,
+                args=args,
+                session_variables=session.variables,
+                active_library=keyword_info.library if keyword_info else None,
+                session_id=session.session_id,
+                library_prefix=keyword_info.library if keyword_info else self.supported_library
+            )
+            
+            # Apply library-specific state updates
+            if result.get("success"):
+                await self._handle_success_state_updates(session, keyword, result, keyword_info)
+            
+            return OverrideResult(
+                success=result.get("success", False),
+                output=result.get("output"),
+                error=result.get("error"),
+                state_updates=self._get_library_state_updates(session, keyword, result)
+            )
+            
+        except Exception as e:
+            logger.error(f"{self.supported_library} override error: {e}")
+            return OverrideResult(
+                success=False,
+                error=f"{self.supported_library} override error: {str(e)}"
+            )
+    
+    async def _handle_success_state_updates(self, session, keyword, result, keyword_info):
+        """Override in subclasses for library-specific state handling."""
+        pass
+    
+    def _get_library_state_updates(self, session, keyword, result) -> Dict[str, Any]:
+        """Override in subclasses for library-specific state updates."""
+        from datetime import datetime
+        return {'last_activity': datetime.now().isoformat()}
+
+# Browser Library Override Handler
+class BrowserLibraryHandler(UnifiedLibraryHandler):
+    """Specialized handler for Browser Library keywords using unified approach."""
+    
+    def __init__(self, execution_engine):
+        super().__init__(execution_engine, "browser")
         
-    async def execute(
-        self, 
-        session: 'ExecutionSession', 
-        keyword: str, 
-        args: List[str],
-        keyword_info: Optional[Any] = None
-    ) -> OverrideResult:
-        """Execute Browser Library keyword with custom logic."""
-        
+    async def _handle_success_state_updates(self, session, keyword, result, keyword_info):
+        """Handle Browser Library-specific state updates."""
         keyword_lower = keyword.lower()
         
-        # Custom handling for specific Browser Library keywords
+        # Browser-specific state management
         if 'new browser' in keyword_lower:
-            return await self._handle_new_browser(session, args, keyword_info)
-        elif 'new context' in keyword_lower:
-            return await self._handle_new_context(session, args, keyword_info)  
+            session.browser_state.browser_type = 'chromium'  # Default, could be extracted from args
+            session.browser_state.browser_id = f"browser_{session.session_id}"
+            session.browser_state.active_library = "browser"
+            
         elif 'new page' in keyword_lower:
-            return await self._handle_new_page(session, args, keyword_info)
-        elif 'close browser' in keyword_lower:
-            return await self._handle_close_browser(session, args, keyword_info)
-        else:
-            # For other Browser keywords, use dynamic execution with state updates
-            return await self._handle_generic_browser_keyword(session, keyword, args, keyword_info)
+            # Extract URL from args if provided
+            url = result.get('args', ['about:blank'])[0] if result.get('args') else 'about:blank'
+            session.browser_state.current_url = url
+            session.browser_state.page_id = f"page_{session.session_id}"
+            session.browser_state.active_library = "browser"
             
-    async def _handle_new_browser(self, session, args, keyword_info) -> OverrideResult:
-        """Handle New Browser with custom defaults."""
-        try:
-            # Parse arguments using Robot Framework's native approach if available
-            discovery = self.execution_engine.keyword_discovery
-            # Get keyword info for better parsing
-            keyword_info = discovery.find_keyword('New Browser')
-            if keyword_info:
-                parsed_args = discovery._parse_arguments_with_rf_spec(keyword_info, args)
-            else:
-                parsed_args = discovery._parse_arguments(args)
-            
-            # Apply custom defaults for headless
-            if 'headless' not in parsed_args.named:
-                # Add default headless=False for better visibility
-                parsed_args.named['headless'] = 'False'
-                logger.info("Applied default headless=False for New Browser")
-            
-            # Reconstruct args from parsed arguments
-            processed_args = parsed_args.positional.copy()
-            for key, value in parsed_args.named.items():
-                processed_args.append(f"{key}={value}")
-            
-            # Execute via dynamic discovery with processed args
-            result = await self.execution_engine.keyword_discovery.execute_keyword(
-                'New Browser',
-                processed_args,
-                session.variables
-            )
-            
-            # Update browser state
-            state_updates = {}
-            if result.get("success"):
-                # Determine browser type from positional args or named args
-                browser_type = 'chromium'  # default
-                if parsed_args.positional:
-                    browser_type = parsed_args.positional[0]
-                elif 'browser' in parsed_args.named:
-                    browser_type = parsed_args.named['browser']
-                    
-                # Determine headless setting
-                headless = False  # default
-                if 'headless' in parsed_args.named:
-                    headless = parsed_args.named['headless'].lower() in ['true', '1', 'yes']
-                    
-                # Set browser state fields that the detection logic relies on
-                session.browser_state.browser_type = browser_type
-                session.browser_state.browser_id = f"browser_{session.session_id}"  # Set browser_id for detection
-                session.browser_state.active_library = "browser"  # Explicitly set active library
-                
-                state_updates['current_browser'] = {
-                    'type': browser_type,
-                    'headless': headless,
-                    'created_at': datetime.now().isoformat()
-                }
-                
-            return OverrideResult(
-                success=result.get("success", False),
-                output=result.get("output"),
-                error=result.get("error"),
-                state_updates=state_updates,
-                metadata={'override': 'browser_new_browser', 'args_modified': len(processed_args) != len(args)}
-            )
-            
-        except Exception as e:
-            return OverrideResult(
-                success=False,
-                error=f"Browser override error: {str(e)}",
-                metadata={'override': 'browser_new_browser'}
-            )
-            
-    async def _handle_new_context(self, session, args, keyword_info) -> OverrideResult:
-        """Handle New Context with state tracking."""
-        try:
-            result = await self.execution_engine.keyword_discovery.execute_keyword(
-                'New Context',
-                args,
-                session.variables
-            )
-            
-            state_updates = {}
-            if result.get("success"):
-                state_updates['current_context'] = {
-                    'created_at': datetime.now().isoformat(),
-                    'args': args
-                }
-                
-            return OverrideResult(
-                success=result.get("success", False),
-                output=result.get("output"),
-                error=result.get("error"),
-                state_updates=state_updates,
-                metadata={'override': 'browser_new_context'}
-            )
-            
-        except Exception as e:
-            return OverrideResult(
-                success=False,
-                error=f"Context override error: {str(e)}",
-                metadata={'override': 'browser_new_context'}
-            )
-            
-    async def _handle_new_page(self, session, args, keyword_info) -> OverrideResult:
-        """Handle New Page with URL tracking."""
-        try:
-            result = await self.execution_engine.keyword_discovery.execute_keyword(
-                'New Page',
-                args,
-                session.variables
-            )
-            
-            state_updates = {}
-            if result.get("success"):
-                # Set page state fields for proper detection
-                url = args[0] if args else 'about:blank'
-                session.browser_state.current_url = url
-                session.browser_state.page_id = f"page_{session.session_id}"  # Set page_id for detection
-                session.browser_state.active_library = "browser"  # Ensure Browser Library is active
-                
-                state_updates['current_page'] = {
-                    'url': url,
-                    'loaded_at': datetime.now().isoformat()
-                }
-                
-            return OverrideResult(
-                success=result.get("success", False),
-                output=result.get("output"),
-                error=result.get("error"),
-                state_updates=state_updates,
-                metadata={'override': 'browser_new_page'}
-            )
-            
-        except Exception as e:
-            return OverrideResult(
-                success=False,
-                error=f"Page override error: {str(e)}",
-                metadata={'override': 'browser_new_page'}
-            )
-            
-    async def _handle_close_browser(self, session, args, keyword_info) -> OverrideResult:
-        """Handle Close Browser with state cleanup."""
-        try:
-            result = await self.execution_engine.keyword_discovery.execute_keyword(
-                'Close Browser',
-                args,
-                session.variables
-            )
-            
-            state_updates = {}
-            if result.get("success"):
-                # Clear browser state
-                state_updates['current_browser'] = None
-                state_updates['current_context'] = None  
-                state_updates['current_page'] = None
-                
-            return OverrideResult(
-                success=result.get("success", False),
-                output=result.get("output"),
-                error=result.get("error"),
-                state_updates=state_updates,
-                metadata={'override': 'browser_close_browser'}
-            )
-            
-        except Exception as e:
-            return OverrideResult(
-                success=False,
-                error=f"Close browser override error: {str(e)}",
-                metadata={'override': 'browser_close_browser'}
-            )
-            
-    async def _handle_generic_browser_keyword(self, session, keyword, args, keyword_info) -> OverrideResult:
-        """Handle other Browser keywords with argument conversion and state awareness."""
-        try:
-            # Use the argument conversion logic from dynamic keywords
-            discovery = self.execution_engine.keyword_discovery
-            
-            # Get keyword info if not provided
-            if not keyword_info:
-                keyword_info = discovery.find_keyword(keyword)
-            
-            # Parse arguments using Robot Framework's native approach if available
-            if keyword_info and keyword_info.library == "Browser":
-                # Use Robot Framework's native type conversion
-                parsed = discovery.argument_processor.parse_arguments_for_keyword(keyword_info.name, args, keyword_info.library)
-                
-                # Extract positional and keyword arguments (already properly type-converted by RF native system)
-                converted_args = parsed.positional
-                converted_kwargs = parsed.named
-                
-                # Use global browser library instance
-                browser_lib = self.execution_engine.browser_lib
-                if browser_lib and keyword_info.library == "Browser":
-                    method = getattr(browser_lib, keyword_info.method_name)
-                    try:
-                        if converted_kwargs:
-                            result = method(*converted_args, **converted_kwargs)
-                        else:
-                            result = method(*converted_args)
-                        
-                        # Update last activity timestamp
-                        state_updates = {
-                            'last_browser_activity': datetime.now().isoformat()
-                        }
-                        
-                        return OverrideResult(
-                            success=True,
-                            output=str(result) if result is not None else f"Executed {keyword}",
-                            state_updates=state_updates,
-                            metadata={'override': 'browser_generic_with_conversion'}
-                        )
-                    except Exception as method_error:
-                        # If direct method call fails, try the original approach
-                        logger.debug(f"Direct method call failed: {method_error}, trying original approach")
-                        result = await discovery.execute_keyword(keyword, args, session.variables)
-                        
-                        state_updates = {
-                            'last_browser_activity': datetime.now().isoformat()
-                        }
-                        
-                        return OverrideResult(
-                            success=result.get("success", False),
-                            output=result.get("output"),
-                            error=result.get("error"),
-                            state_updates=state_updates,
-                            metadata={'override': 'browser_generic_fallback'}
-                        )
-            
-            # Fall back to original approach if no conversion available
-            result = await discovery.execute_keyword(keyword, args, session.variables)
-            
-            # Update last activity timestamp
-            state_updates = {
-                'last_browser_activity': datetime.now().isoformat()
+    def _get_library_state_updates(self, session, keyword, result) -> Dict[str, Any]:
+        """Get Browser Library-specific state updates."""
+        keyword_lower = keyword.lower()
+        state_updates = super()._get_library_state_updates(session, keyword, result)
+        
+        # Add Browser-specific state tracking
+        if 'new browser' in keyword_lower:
+            state_updates['current_browser'] = {
+                'type': 'chromium',  # Could extract from args
+                'created_at': datetime.now().isoformat()
             }
-            
-            return OverrideResult(
-                success=result.get("success", False),
-                output=result.get("output"),
-                error=result.get("error"),
-                state_updates=state_updates,
-                metadata={'override': 'browser_generic'}
-            )
-            
-        except Exception as e:
-            return OverrideResult(
-                success=False,
-                error=f"Browser keyword error: {str(e)}",
-                metadata={'override': 'browser_generic'}
-            )
+        elif 'new context' in keyword_lower:
+            state_updates['current_context'] = {
+                'created_at': datetime.now().isoformat()
+            }
+        elif 'new page' in keyword_lower:
+            state_updates['current_page'] = {
+                'url': 'about:blank',  # Could extract from args
+                'loaded_at': datetime.now().isoformat()
+            }
+        elif 'close browser' in keyword_lower:
+            state_updates.update({
+                'current_browser': None,
+                'current_context': None,
+                'current_page': None
+            })
+        else:
+            state_updates['last_browser_activity'] = datetime.now().isoformat()
+        
+        return state_updates
 
 # Generic Dynamic Handler
 class DynamicExecutionHandler:
@@ -414,144 +259,59 @@ class DynamicExecutionHandler:
             )
 
 # SeleniumLibrary Override Handler
-class SeleniumLibraryHandler:
-    """Specialized handler for SeleniumLibrary keywords with custom logic."""
+class SeleniumLibraryHandler(UnifiedLibraryHandler):
+    """Specialized handler for SeleniumLibrary keywords using unified approach."""
     
     def __init__(self, execution_engine):
-        self.execution_engine = execution_engine
+        super().__init__(execution_engine, "seleniumlibrary")
         
-    async def execute(
-        self, 
-        session: 'ExecutionSession', 
-        keyword: str, 
-        args: List[str],
-        keyword_info: Optional[Any] = None
-    ) -> OverrideResult:
-        """Execute SeleniumLibrary keyword with custom logic."""
-        
+    async def _handle_success_state_updates(self, session, keyword, result, keyword_info):
+        """Handle SeleniumLibrary-specific state updates."""
         keyword_lower = keyword.lower()
         
-        # Custom handling for specific SeleniumLibrary keywords
+        # SeleniumLibrary-specific state management
+        session.browser_state.active_library = "selenium"
+        
         if 'open browser' in keyword_lower:
-            return await self._handle_selenium_open_browser(session, args, keyword_info)
-        elif 'get source' in keyword_lower:
-            return await self._handle_selenium_get_source(session, args, keyword_info)
-        else:
-            # For other SeleniumLibrary keywords, use dynamic execution
-            return await self._handle_generic_selenium_keyword(session, keyword, args, keyword_info)
-
-    async def _handle_selenium_open_browser(self, session, args, keyword_info) -> OverrideResult:
-        """Handle SeleniumLibrary Open Browser keyword with session tracking."""
-        try:
-            # Mark session as using SeleniumLibrary
-            session.browser_state.active_library = "selenium"
-            
-            # Execute via dynamic discovery
-            result = await self.execution_engine.keyword_discovery.execute_keyword(
-                'Open Browser',
-                args,
-                session.variables
-            )
-            
-            state_updates = {}
-            if result.get("success"):
-                # Track SeleniumLibrary session using global instance
-                try:
-                    # Get the WebDriver instance from global SeleniumLibrary
-                    selenium_lib = self.execution_engine.selenium_lib
-                    if selenium_lib and hasattr(selenium_lib, 'driver'):
-                        driver = selenium_lib.driver
-                        session.browser_state.driver_instance = driver
-                        session.browser_state.selenium_session_id = driver.session_id if driver else None
-                        logger.info(f"SeleniumLibrary browser opened for session {session.session_id}, driver session: {session.browser_state.selenium_session_id}")
-                    else:
-                        logger.debug(f"No SeleniumLibrary driver available for session {session.session_id}")
-                except Exception as e:
-                    logger.debug(f"Could not track SeleniumLibrary session: {e}")
+            # Track SeleniumLibrary session using global instance
+            try:
+                selenium_lib = self.execution_engine.selenium_lib
+                if selenium_lib and hasattr(selenium_lib, 'driver'):
+                    driver = selenium_lib.driver
+                    session.browser_state.driver_instance = driver
+                    session.browser_state.selenium_session_id = driver.session_id if driver else None
+                    logger.info(f"SeleniumLibrary browser opened for session {session.session_id}, driver session: {session.browser_state.selenium_session_id}")
+            except Exception as e:
+                logger.debug(f"Could not track SeleniumLibrary session: {e}")
                 
-                state_updates['last_browser_activity'] = datetime.now().isoformat()
-            
-            return OverrideResult(
-                success=result.get("success", False),
-                output=result.get("output"),
-                error=result.get("error"),
-                state_updates=state_updates,
-                metadata={'override': 'selenium_open_browser'}
-            )
-            
-        except Exception as e:
-            return OverrideResult(
-                success=False,
-                error=f"SeleniumLibrary Open Browser error: {str(e)}",
-                metadata={'override': 'selenium_open_browser'}
-            )
-
-    async def _handle_selenium_get_source(self, session, args, keyword_info) -> OverrideResult:
-        """Handle SeleniumLibrary Get Source keyword."""
-        try:
-            # Mark session as using SeleniumLibrary  
-            session.browser_state.active_library = "selenium"
-            
-            # Execute via dynamic discovery
-            result = await self.execution_engine.keyword_discovery.execute_keyword(
-                'Get Source',
-                args,
-                session.variables
-            )
-            
-            if result.get("success"):
-                # Store page source in session state
-                page_source = result.get("result")
-                if page_source:
-                    session.browser_state.page_source = page_source
-                    logger.debug(f"Page source retrieved via SeleniumLibrary: {len(page_source)} characters")
-            
-            return OverrideResult(
-                success=result.get("success", False),
-                output=result.get("output"),
-                error=result.get("error"),
-                metadata={'override': 'selenium_get_source'}
-            )
-            
-        except Exception as e:
-            return OverrideResult(
-                success=False,
-                error=f"SeleniumLibrary Get Source error: {str(e)}",
-                metadata={'override': 'selenium_get_source'}
-            )
-
-    async def _handle_generic_selenium_keyword(self, session, keyword, args, keyword_info) -> OverrideResult:
-        """Handle other SeleniumLibrary keywords with argument conversion and state awareness."""
-        try:
-            # Mark session as using SeleniumLibrary
-            session.browser_state.active_library = "selenium"
-            
-            # Execute via dynamic discovery
-            result = await self.execution_engine.keyword_discovery.execute_keyword(
-                keyword,
-                args,
-                session.variables
-            )
-            
-            # Update last activity timestamp
-            state_updates = {
-                'last_browser_activity': datetime.now().isoformat()
+        elif 'get source' in keyword_lower:
+            # Store page source in session state
+            page_source = result.get("output")
+            if page_source:
+                session.browser_state.page_source = page_source
+                logger.debug(f"Page source retrieved via SeleniumLibrary: {len(page_source)} characters")
+                
+    def _get_library_state_updates(self, session, keyword, result) -> Dict[str, Any]:
+        """Get SeleniumLibrary-specific state updates."""
+        keyword_lower = keyword.lower()
+        state_updates = super()._get_library_state_updates(session, keyword, result)
+        
+        # Add SeleniumLibrary-specific state tracking
+        if 'open browser' in keyword_lower:
+            browser_type = 'firefox'  # SeleniumLibrary default
+            state_updates['current_browser'] = {
+                'type': browser_type,
+                'created_at': datetime.now().isoformat()
             }
-            
-            return OverrideResult(
-                success=result.get("success", False),
-                output=result.get("output"),
-                error=result.get("error"),
-                state_updates=state_updates,
-                metadata={'override': 'selenium_generic'}
-            )
-            
-        except Exception as e:
-            return OverrideResult(
-                success=False,
-                error=f"SeleniumLibrary keyword error: {str(e)}",
-                metadata={'override': 'selenium_generic'}
-            )
+        elif 'go to' in keyword_lower:
+            state_updates['current_page'] = {
+                'url': result.get('args', [''])[0] if result.get('args') else '',
+                'loaded_at': datetime.now().isoformat()
+            }
+        else:
+            state_updates['last_browser_activity'] = datetime.now().isoformat()
+        
+        return state_updates
 
 def setup_default_overrides(registry: KeywordOverrideRegistry, execution_engine):
     """Set up the default keyword overrides."""

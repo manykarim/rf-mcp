@@ -133,17 +133,36 @@ class KeywordDiscovery:
     def add_keywords_to_cache(self, lib_info: LibraryInfo) -> None:
         """Add keywords from library to the cache."""
         for keyword_name, keyword_info in lib_info.keywords.items():
-            self.keyword_cache[keyword_name.lower()] = keyword_info
+            # Use library.keyword format as key to avoid overwriting between libraries
+            cache_key = f"{lib_info.name.lower()}.{keyword_name.lower()}"
+            self.keyword_cache[cache_key] = keyword_info
+            
+            # Also maintain a simple lookup for backward compatibility
+            simple_key = keyword_name.lower()
+            if simple_key not in self.keyword_cache:
+                # Only add if no other library has claimed this keyword name yet
+                self.keyword_cache[simple_key] = keyword_info
     
     def remove_keywords_from_cache(self, lib_info: LibraryInfo) -> int:
         """Remove keywords from a specific library from the cache."""
         keywords_removed = 0
+        library_prefix = f"{lib_info.name.lower()}."
+        
+        # Remove library-specific keys
+        keys_to_remove = [key for key in self.keyword_cache.keys() if key.startswith(library_prefix)]
+        for key in keys_to_remove:
+            del self.keyword_cache[key]
+            keywords_removed += 1
+        
+        # Remove simple keys that belong to this library
         for keyword_name in list(lib_info.keywords.keys()):
-            if keyword_name.lower() in self.keyword_cache:
+            simple_key = keyword_name.lower()
+            if simple_key in self.keyword_cache:
                 # Only remove if this keyword belongs to the library being removed
-                if self.keyword_cache[keyword_name.lower()].library == lib_info.name:
-                    del self.keyword_cache[keyword_name.lower()]
+                if self.keyword_cache[simple_key].library == lib_info.name:
+                    del self.keyword_cache[simple_key]
                     keywords_removed += 1
+        
         return keywords_removed
     
     def find_keyword(self, keyword_name: str, active_library: str = None) -> Optional[KeywordInfo]:
@@ -153,20 +172,49 @@ class KeywordDiscovery:
         
         normalized = keyword_name.lower().strip()
         
+        # If active_library is specified, try library-specific key first
+        if active_library:
+            library_specific_key = f"{active_library.lower()}.{normalized}"
+            if library_specific_key in self.keyword_cache:
+                logger.debug(f"Found exact library match: {keyword_name} in {active_library}")
+                return self.keyword_cache[library_specific_key]
+        
         # Create a filtered cache if active_library is specified
         search_cache = self.keyword_cache
         if active_library:
             # Filter keywords to only include those from the active library or built-in libraries
-            search_cache = {
-                name: info for name, info in self.keyword_cache.items()
-                if (info.library == active_library or 
-                    info.library in ['BuiltIn', 'Collections', 'String', 'DateTime', 'OperatingSystem', 'Process'])
-            }
+            builtin_libraries = ['BuiltIn', 'Collections', 'String', 'DateTime', 'OperatingSystem', 'Process']
+            filtered_cache = {}
+            
+            for cache_key, keyword_info in self.keyword_cache.items():
+                if (keyword_info.library == active_library or keyword_info.library in builtin_libraries):
+                    filtered_cache[cache_key] = keyword_info
+            
+            search_cache = filtered_cache
             logger.debug(f"Filtering keyword search to library '{active_library}' - {len(search_cache)} keywords available")
+            
+            # Debug: Show which keywords are available for "open browser"
+            open_browser_candidates = [
+                f"{info.library}.{info.name}" for key, info in search_cache.items() 
+                if "open browser" in key or info.name.lower() == "open browser"
+            ]
+            if open_browser_candidates:
+                logger.debug(f"Available 'Open Browser' candidates after filtering: {open_browser_candidates}")
         
-        # Try exact match first
+        # Try exact match first (simple key for backward compatibility)
         if normalized in search_cache:
-            return search_cache[normalized]
+            keyword_info = search_cache[normalized]
+            # When active_library is specified, ensure the found keyword is from the correct library or built-in
+            if active_library:
+                if (keyword_info.library == active_library or 
+                    keyword_info.library in ['BuiltIn', 'Collections', 'String', 'DateTime', 'OperatingSystem', 'Process']):
+                    logger.debug(f"Found exact match: {keyword_name} from {keyword_info.library} (filtered for {active_library})")
+                    return keyword_info
+                else:
+                    logger.debug(f"Rejecting {keyword_name} from {keyword_info.library} due to active_library filter ({active_library})")
+                    # Continue searching - don't return this result
+            else:
+                return keyword_info
         
         # Try common variations
         variations = [
@@ -220,7 +268,9 @@ class KeywordDiscovery:
     
     def get_keywords_by_library(self, library_name: str) -> List[KeywordInfo]:
         """Get all keywords from a specific library."""
-        return [info for info in self.keyword_cache.values() if info.library == library_name]
+        library_prefix = f"{library_name.lower()}."
+        return [info for key, info in self.keyword_cache.items() 
+                if key.startswith(library_prefix) or info.library == library_name]
     
     def get_all_keywords(self) -> List[KeywordInfo]:
         """Get all cached keywords."""

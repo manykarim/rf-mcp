@@ -2,12 +2,15 @@
 
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from robotmcp.models.library_models import KeywordInfo, ParsedArguments
 from robotmcp.core.library_manager import LibraryManager
 from robotmcp.core.keyword_discovery import KeywordDiscovery
 from robotmcp.utils.argument_processor import ArgumentProcessor
+
+if TYPE_CHECKING:
+    from robotmcp.models.session_models import ExecutionSession
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +23,15 @@ class DynamicKeywordDiscovery:
         self.keyword_discovery = KeywordDiscovery()
         self.argument_processor = ArgumentProcessor()
         
-        # Initialize session manager
-        from robotmcp.core.session_manager import get_session_manager
-        self.session_manager = get_session_manager()
+        # Initialize session manager (use the execution session manager instead)
+        self.session_manager = None  # Will be set by ExecutionCoordinator when needed
         
         # Initialize with minimal libraries
         self._initialize_minimal()
+    
+    def set_session_manager(self, session_manager):
+        """Set the session manager from the execution coordinator."""
+        self.session_manager = session_manager
     
     def _initialize_minimal(self) -> None:
         """Initialize with minimal core libraries only."""
@@ -313,6 +319,10 @@ class DynamicKeywordDiscovery:
     
     async def _ensure_session_libraries(self, session_id: str, keyword_name: str) -> None:
         """Ensure required libraries are loaded for the session."""
+        if not self.session_manager:
+            logger.debug("No session manager available, skipping session library loading")
+            return
+            
         session = self.session_manager.get_session(session_id)
         if not session:
             session = self.session_manager.create_session(session_id)
@@ -339,17 +349,25 @@ class DynamicKeywordDiscovery:
         
         # Try to load library on-demand if keyword is not found
         if not self.find_keyword(keyword_name):
-            # Try to determine which library might have this keyword
-            potential_library = self._guess_library_for_keyword(keyword_name)
+            # Try to determine which library might have this keyword, respecting session context
+            potential_library = self._guess_library_for_keyword(keyword_name, session)
             if potential_library and potential_library not in self.library_manager.libraries:
                 if self.library_manager.load_library_on_demand(potential_library, self.keyword_discovery):
                     lib_info = self.library_manager.libraries[potential_library]
                     self.keyword_discovery.add_keywords_to_cache(lib_info)
                     session.mark_library_loaded(potential_library)
     
-    def _guess_library_for_keyword(self, keyword_name: str) -> Optional[str]:
-        """Guess which library might contain a keyword based on name patterns."""
+    def _guess_library_for_keyword(self, keyword_name: str, session: 'ExecutionSession' = None) -> Optional[str]:
+        """Guess which library might contain a keyword based on name patterns, respecting session context."""
         keyword_lower = keyword_name.lower()
+        
+        # If session has a specific web automation library, respect it for browser keywords
+        if session:
+            web_lib = session.get_web_automation_library()
+            if web_lib and any(term in keyword_lower for term in ['browser', 'click', 'fill', 'navigate', 'page', 'screenshot']):
+                # Session has explicit web automation library - use it instead of guessing
+                logger.debug(f"Session has {web_lib}, using it for '{keyword_name}' instead of auto-detection")
+                return web_lib
         
         # Common keyword patterns to library mappings
         patterns = {
@@ -369,8 +387,8 @@ class DynamicKeywordDiscovery:
     
     def _find_keyword_with_session(self, keyword_name: str, active_library: str = None, session_id: str = None) -> Optional[KeywordInfo]:
         """Find keyword respecting session search order."""
-        # If no session, use normal search
-        if not session_id:
+        # If no session or session manager, use normal search
+        if not session_id or not self.session_manager:
             return self.find_keyword(keyword_name, active_library)
         
         session = self.session_manager.get_session(session_id)
@@ -379,6 +397,7 @@ class DynamicKeywordDiscovery:
         
         # Search in session's search order
         search_order = session.get_search_order()
+        logger.debug(f"Session '{session_id}' search order: {search_order}")
         
         # First try exact matches in search order
         for lib_name in search_order:
@@ -389,15 +408,35 @@ class DynamicKeywordDiscovery:
                         logger.debug(f"Found '{keyword_name}' in '{lib_name}' via search order")
                         return kw
         
+        # Try fuzzy matching in search order
+        normalized = keyword_name.lower().strip()
+        variations = [
+            normalized.replace(' ', ''),   # Remove spaces
+            normalized.replace('_', ' '),  # Replace underscores
+            normalized.replace('-', ' '),  # Replace hyphens
+        ]
+        
+        for lib_name in search_order:
+            if lib_name in self.library_manager.libraries:
+                lib_keywords = self.get_keywords_by_library(lib_name)
+                for variation in variations:
+                    for kw in lib_keywords:
+                        if kw.name.lower().replace(' ', '') == variation:
+                            logger.debug(f"Found '{keyword_name}' in '{lib_name}' via fuzzy search order match")
+                            return kw
+        
         # If active_library specified and not in search order, check it too
         if active_library and active_library not in search_order:
             return self.find_keyword(keyword_name, active_library)
         
-        # Fall back to normal search
-        return self.find_keyword(keyword_name, active_library)
+        # NO fallback to normal search - respect session boundaries
+        logger.debug(f"Keyword '{keyword_name}' not found in session '{session_id}' search order")
+        return None
     
     def get_session_info(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get information about a session."""
+        if not self.session_manager:
+            return None
         session = self.session_manager.get_session(session_id)
         if not session:
             return None
@@ -426,6 +465,8 @@ class DynamicKeywordDiscovery:
     
     def create_session(self, session_id: str) -> Dict[str, Any]:
         """Create a new session."""
+        if not self.session_manager:
+            return {"error": "Session manager not available"}
         session = self.session_manager.create_session(session_id)
         return session.get_session_info()
     
@@ -492,6 +533,8 @@ class DynamicKeywordDiscovery:
     
     def set_session_search_order(self, session_id: str, search_order: List[str]) -> bool:
         """Manually set search order for a session."""
+        if not self.session_manager:
+            return False
         session = self.session_manager.get_session(session_id)
         if not session:
             return False

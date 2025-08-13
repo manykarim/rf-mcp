@@ -83,7 +83,10 @@ class LibraryManager:
         
         success = self.try_import_library(library_name, keyword_extractor)
         if success:
-            logger.info(f"Loaded library on demand: {library_name}")
+            # Add keywords to cache after successful loading
+            lib_info = self.libraries[library_name]
+            keyword_extractor.add_keywords_to_cache(lib_info)
+            logger.info(f"Loaded library on demand: {library_name} with {len(lib_info.keywords)} keywords")
         
         return success
     

@@ -113,6 +113,10 @@ class NaturalLanguageProcessor:
             # Determine required capabilities
             required_capabilities = self._determine_capabilities(normalized_scenario, context)
             
+            # Detect explicit library preferences
+            explicit_library_preference = self._detect_explicit_library_preference(normalized_scenario)
+            session_type = self._detect_session_type(normalized_scenario, context)
+            
             # Build structured scenario
             structured_scenario = TestScenario(
                 title=title,
@@ -147,7 +151,9 @@ class NaturalLanguageProcessor:
                     "action_count": len(actions),
                     "complexity": self._assess_complexity(actions),
                     "estimated_steps": len(actions) * 2,  # Rough estimate
-                    "suggested_libraries": required_capabilities
+                    "suggested_libraries": required_capabilities,
+                    "explicit_library_preference": explicit_library_preference,
+                    "detected_session_type": session_type
                 }
             }
             
@@ -491,6 +497,93 @@ class NaturalLanguageProcessor:
             ])
         
         return verifications
+    
+    def _detect_explicit_library_preference(self, scenario_text: str) -> Optional[str]:
+        """Detect explicit library preference from scenario text."""
+        if not scenario_text:
+            return None
+        
+        text_lower = scenario_text.lower()
+        
+        # Selenium patterns (highest priority for explicit mentions)
+        selenium_patterns = [
+            r'\b(use|using|with)\s+(selenium|seleniumlibrary|selenium\s*library)\b',
+            r'\bselenium\b(?!.*browser)',  # Selenium mentioned but not "selenium browser"
+            r'\bseleniumlibrary\b',
+        ]
+        
+        # Browser Library patterns
+        browser_patterns = [
+            r'\b(use|using|with)\s+(browser|browserlibrary|browser\s*library|playwright)\b',
+            r'\bbrowser\s*library\b',
+            r'\bplaywright\b',
+        ]
+        
+        # Check for explicit Selenium preference first
+        for pattern in selenium_patterns:
+            if re.search(pattern, text_lower):
+                logger.info(f"NLP: Detected explicit SeleniumLibrary preference: {pattern}")
+                return "SeleniumLibrary"
+        
+        # Check for explicit Browser Library preference
+        for pattern in browser_patterns:
+            if re.search(pattern, text_lower):
+                logger.info(f"NLP: Detected explicit Browser Library preference: {pattern}")
+                return "Browser"
+        
+        # Check for other library preferences
+        if re.search(r'\b(xml|xpath)\b', text_lower):
+            return "XML"
+        if re.search(r'\b(api|http|rest|request)\b', text_lower):
+            return "RequestsLibrary"
+        
+        return None
+    
+    def _detect_session_type(self, scenario_text: str, context: str) -> str:
+        """Detect session type from scenario text and context."""
+        if not scenario_text:
+            return "unknown"
+        
+        text_lower = scenario_text.lower()
+        
+        # Web automation patterns
+        web_patterns = [
+            r'\b(click|fill|navigate|browser|page|element|locator)\b',
+            r'\b(new page|go to|wait for|screenshot)\b',
+            r'\b(get text|get attribute|should contain)\b'
+        ]
+        
+        # API testing patterns
+        api_patterns = [
+            r'\b(get request|post|put|delete|api|http)\b',
+            r'\b(create session|request|response|status)\b',
+            r'\b(json|rest|endpoint)\b'
+        ]
+        
+        # XML processing patterns
+        xml_patterns = [
+            r'\b(parse|xml|xpath|element|attribute)\b',
+            r'\b(get element|set element|xml)\b'
+        ]
+        
+        # Count matches for each type
+        web_score = sum(len(re.findall(pattern, text_lower)) for pattern in web_patterns)
+        api_score = sum(len(re.findall(pattern, text_lower)) for pattern in api_patterns)
+        xml_score = sum(len(re.findall(pattern, text_lower)) for pattern in xml_patterns)
+        
+        # Determine session type based on highest score
+        scores = {"web_automation": web_score, "api_testing": api_score, "xml_processing": xml_score}
+        
+        # Consider context as a tie-breaker
+        if context == "web":
+            scores["web_automation"] += 1
+        elif context == "api":
+            scores["api_testing"] += 1
+        
+        if max(scores.values()) == 0:
+            return "unknown"
+        
+        return max(scores, key=scores.get)
 
     def _validate_action(self, action: Dict[str, Any], available_libraries: List[str]) -> List[str]:
         """Validate a single action for feasibility."""

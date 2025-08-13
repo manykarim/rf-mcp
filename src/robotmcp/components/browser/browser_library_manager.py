@@ -242,11 +242,15 @@ class BrowserLibraryManager:
         """
         if library_type == "browser" and self.browser_lib:
             session.browser_state.active_library = "browser"
-            session.import_library("Browser", force=True)  # Allow switching from SeleniumLibrary
+            # Only import if not already present to avoid overwriting session configuration
+            if "Browser" not in session.imported_libraries:
+                session.import_library("Browser", force=True)
             return True
         elif library_type == "selenium" and self.selenium_lib:
             session.browser_state.active_library = "selenium"
-            session.import_library("SeleniumLibrary", force=True)  # Allow switching from Browser
+            # Only import if not already present to avoid overwriting session configuration
+            if "SeleniumLibrary" not in session.imported_libraries:
+                session.import_library("SeleniumLibrary", force=True)
             return True
         else:
             logger.warning(f"Cannot set active library to '{library_type}' - not available or initialized")

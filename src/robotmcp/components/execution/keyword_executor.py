@@ -26,11 +26,12 @@ except ImportError:
 class KeywordExecutor:
     """Handles keyword execution with proper library routing and error handling."""
     
-    def __init__(self, config: Optional[ExecutionConfig] = None):
+    def __init__(self, config: Optional[ExecutionConfig] = None, override_registry=None):
         self.config = config or ExecutionConfig()
         self.keyword_discovery = get_keyword_discovery()
         self.argument_processor = ArgumentProcessor()
         self.rf_converter = RobotFrameworkNativeConverter()
+        self.override_registry = override_registry
     
     async def execute_keyword(
         self, 
@@ -134,12 +135,88 @@ class KeywordExecutor:
             keyword_name = step.keyword
             args = step.arguments
             
-            # Only detect and set active library if session doesn't have one already
+            # Check for keyword overrides first (before library detection)
+            if self.override_registry:
+                # Find keyword in discovery to determine library (session-aware)
+                from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
+                orchestrator = get_keyword_discovery()
+                # Use session-aware keyword discovery to respect session library configuration
+                web_automation_lib = session.get_web_automation_library()
+                if web_automation_lib:
+                    # Map web automation library name to the format expected by find_keyword
+                    active_library = web_automation_lib if web_automation_lib in ["Browser", "SeleniumLibrary"] else None
+                    keyword_info = orchestrator.find_keyword(keyword_name, active_library=active_library)
+                    logger.debug(f"Session-aware keyword discovery: '{keyword_name}' with active_library='{active_library}' → {keyword_info.library if keyword_info else None}")
+                else:
+                    # No web automation library in session, use global discovery
+                    keyword_info = orchestrator.find_keyword(keyword_name)
+                    logger.debug(f"Global keyword discovery: '{keyword_name}' → {keyword_info.library if keyword_info else None}")
+                
+                if keyword_info:
+                    override_handler = self.override_registry.get_override(keyword_name, keyword_info.library)
+                    if override_handler:
+                        logger.info(f"OVERRIDE: Using override handler {type(override_handler).__name__} for {keyword_name} from {keyword_info.library}")
+                        override_result = await override_handler.execute(session, keyword_name, args, keyword_info)
+                        if override_result:
+                            # Ensure proper library is imported in session
+                            session.import_library(keyword_info.library, force=True)
+                            logger.info(f"OVERRIDE: Successfully executed {keyword_name} with {keyword_info.library}, imported to session")
+                            return {
+                                "success": override_result.success,
+                                "output": override_result.output or f"Executed {keyword_name}",
+                                "error": override_result.error,
+                                "variables": {},
+                                "state_updates": override_result.state_updates or {}
+                            }
+                        else:
+                            logger.warning(f"OVERRIDE: Override handler returned None for {keyword_name}")
+                else:
+                    logger.debug(f"OVERRIDE: No keyword info found for {keyword_name}, trying session-based loading")
+                    # Try to ensure libraries are loaded for this session
+                    await orchestrator._ensure_session_libraries(session.session_id, keyword_name)
+                    # Try finding the keyword again after loading (session-aware)
+                    web_automation_lib = session.get_web_automation_library()
+                    if web_automation_lib:
+                        active_library = web_automation_lib if web_automation_lib in ["Browser", "SeleniumLibrary"] else None
+                        keyword_info = orchestrator.find_keyword(keyword_name, active_library=active_library)
+                        logger.debug(f"Post-loading session-aware discovery: '{keyword_name}' with active_library='{active_library}' → {keyword_info.library if keyword_info else None}")
+                    else:
+                        keyword_info = orchestrator.find_keyword(keyword_name)
+                        logger.debug(f"Post-loading global discovery: '{keyword_name}' → {keyword_info.library if keyword_info else None}")
+                    if keyword_info:
+                        override_handler = self.override_registry.get_override(keyword_name, keyword_info.library)
+                        if override_handler:
+                            logger.info(f"OVERRIDE: Using override handler {type(override_handler).__name__} for {keyword_name} from {keyword_info.library} (after loading)")
+                            override_result = await override_handler.execute(session, keyword_name, args, keyword_info)
+                            if override_result:
+                                session.import_library(keyword_info.library, force=True)
+                                logger.info(f"OVERRIDE: Successfully executed {keyword_name} with {keyword_info.library} (after loading)")
+                                return {
+                                    "success": override_result.success,
+                                    "output": override_result.output or f"Executed {keyword_name}",
+                                    "error": override_result.error,
+                                    "variables": {},
+                                    "state_updates": override_result.state_updates or {}
+                                }
+            
+            # Determine library to use based on session configuration
+            web_automation_lib = session.get_web_automation_library()
             current_active = session.get_active_library()
-            if not current_active or current_active == "auto":
+            
+            if web_automation_lib:
+                # Session has a specific web automation library imported - use it
+                if web_automation_lib == "Browser" and (not current_active or current_active == "auto"):
+                    browser_library_manager.set_active_library(session, "browser")
+                    logger.debug(f"Using session's web automation library: Browser")
+                elif web_automation_lib == "SeleniumLibrary" and (not current_active or current_active == "auto"):
+                    browser_library_manager.set_active_library(session, "selenium")
+                    logger.debug(f"Using session's web automation library: SeleniumLibrary")
+            elif not current_active or current_active == "auto":
+                # Session has no specific web library - use auto-detection as fallback
                 detected_library = browser_library_manager.detect_library_from_keyword(keyword_name, args)
                 if detected_library in ["browser", "selenium"]:
                     browser_library_manager.set_active_library(session, detected_library)
+                    logger.debug(f"Auto-detected library for '{keyword_name}': {detected_library}")
             
             # Handle special built-in keywords first
             if keyword_name.lower() in ["set variable", "log", "should be equal"]:
