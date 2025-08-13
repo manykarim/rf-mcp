@@ -3,7 +3,7 @@
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from robotmcp.models.session_models import ExecutionSession
 from robotmcp.models.execution_models import ExecutionStep
@@ -40,7 +40,8 @@ class KeywordExecutor:
         arguments: List[str],
         browser_library_manager: Any,  # BrowserLibraryManager
         detail_level: str = "minimal",
-        library_prefix: str = None
+        library_prefix: str = None,
+        assign_to: Union[str, List[str]] = None
     ) -> Dict[str, Any]:
         """
         Execute a single Robot Framework keyword step with optional library prefix.
@@ -93,6 +94,20 @@ class KeywordExecutor:
             if "variables" in result:
                 session.variables.update(result["variables"])
             
+            # Validate assignment compatibility
+            if assign_to:
+                self._validate_assignment_compatibility(keyword, assign_to)
+            
+            # Process variable assignment if assign_to is specified
+            if assign_to and result.get("success"):
+                assignment_vars = self._process_variable_assignment(
+                    assign_to, result.get("result"), keyword, result.get("output")
+                )
+                if assignment_vars:
+                    session.variables.update(assignment_vars)
+                    # Add assignment info to result for response
+                    result["assigned_variables"] = assignment_vars
+            
             # Build response based on detail level
             response = await self._build_response_by_detail_level(
                 detail_level, result, step, keyword, arguments, session
@@ -122,6 +137,153 @@ class KeywordExecutor:
                 "execution_time": step.execution_time,
                 "session_variables": dict(session.variables)
             }
+    
+    def _process_variable_assignment(
+        self, 
+        assign_to: Union[str, List[str]], 
+        result_value: Any, 
+        keyword: str, 
+        output: str
+    ) -> Dict[str, Any]:
+        """Process variable assignment from keyword execution result.
+        
+        Args:
+            assign_to: Variable name(s) to assign to
+            result_value: The actual return value from the keyword
+            keyword: The keyword name (for logging)
+            output: The output string representation
+            
+        Returns:
+            Dictionary of variables to assign to session
+        """
+        if not assign_to:
+            return {}
+        
+        # If result_value is None but output exists, try to use output
+        # This handles cases where the result is in output but not result field
+        value_to_assign = result_value
+        if value_to_assign is None and output:
+            try:
+                # Try to parse output as the actual value
+                import ast
+                # Handle simple cases like numbers, strings, lists
+                if output.isdigit():
+                    value_to_assign = int(output)
+                elif output.replace('.', '').isdigit():
+                    value_to_assign = float(output)
+                elif output.startswith('[') and output.endswith(']'):
+                    value_to_assign = ast.literal_eval(output)
+                else:
+                    value_to_assign = output
+            except:
+                value_to_assign = output
+        
+        variables = {}
+        
+        try:
+            if isinstance(assign_to, str):
+                # Single assignment
+                var_name = self._normalize_variable_name(assign_to)
+                variables[var_name] = value_to_assign
+                logger.info(f"Assigned {var_name} = {value_to_assign}")
+                
+            elif isinstance(assign_to, list):
+                # Multi-assignment
+                if isinstance(value_to_assign, (list, tuple)):
+                    for i, var_name in enumerate(assign_to):
+                        normalized_name = self._normalize_variable_name(var_name)
+                        if i < len(value_to_assign):
+                            variables[normalized_name] = value_to_assign[i]
+                        else:
+                            variables[normalized_name] = None
+                        logger.info(f"Assigned {normalized_name} = {variables[normalized_name]}")
+                else:
+                    # Single value assigned to multiple variables (first gets value, rest get None)
+                    for i, var_name in enumerate(assign_to):
+                        normalized_name = self._normalize_variable_name(var_name)
+                        variables[normalized_name] = value_to_assign if i == 0 else None
+                        logger.info(f"Assigned {normalized_name} = {variables[normalized_name]}")
+                        
+        except Exception as e:
+            logger.warning(f"Error processing variable assignment for keyword '{keyword}': {e}")
+            # Fallback: assign the raw value to first variable name
+            if isinstance(assign_to, str):
+                var_name = self._normalize_variable_name(assign_to)
+                variables[var_name] = value_to_assign
+            elif isinstance(assign_to, list) and assign_to:
+                var_name = self._normalize_variable_name(assign_to[0])
+                variables[var_name] = value_to_assign
+        
+        return variables
+    
+    def _normalize_variable_name(self, name: str) -> str:
+        """Normalize variable name to Robot Framework format."""
+        if not name.startswith('${') or not name.endswith('}'):
+            return f"${{{name}}}"
+        return name
+    
+    def _validate_assignment_compatibility(self, keyword: str, assign_to: Union[str, List[str]]) -> None:
+        """Validate if keyword is appropriate for variable assignment."""
+        if not assign_to:
+            return
+        
+        # Keywords that typically return useful values for assignment
+        returnable_keywords = {
+            # String operations
+            "Get Length", "Get Substring", "Replace String", "Split String",
+            "Convert To Uppercase", "Convert To Lowercase", "Strip String",
+            
+            # Web automation - element queries
+            "Get Text", "Get Title", "Get Location", "Get Element Count",
+            "Get Element Attribute", "Get Element Size", "Get Element Position",
+            "Get Window Size", "Get Window Position", "Get Page Source",
+            
+            # Web automation - Browser Library
+            "Get Url", "Get Title", "Get Text", "Get Attribute", "Get Property",
+            "Get Element Count", "Get Page Source", "Evaluate JavaScript",
+            
+            # Conversions
+            "Convert To Integer", "Convert To Number", "Convert To String",
+            "Convert To Boolean", "Evaluate",
+            
+            # Collections
+            "Get From List", "Get Slice From List", "Get Length", "Get Index",
+            "Create List", "Create Dictionary", "Get Dictionary Keys", "Get Dictionary Values",
+            
+            # Built-in
+            "Set Variable", "Get Variable Value", "Get Time", "Get Environment Variable",
+            
+            # System operations
+            "Run Process", "Run", "Get Environment Variable"
+        }
+        
+        keyword_lower = keyword.lower()
+        found_match = False
+        
+        for returnable in returnable_keywords:
+            if returnable.lower() in keyword_lower or keyword_lower in returnable.lower():
+                found_match = True
+                break
+        
+        if not found_match:
+            logger.warning(
+                f"Keyword '{keyword}' may not return a useful value for assignment. "
+                f"Typical returnable keywords include: Get Text, Get Length, Get Title, etc."
+            )
+        
+        # Validate assignment count for known multi-return keywords
+        multi_return_keywords = {
+            "Split String": "Can return multiple parts when max_split is used",
+            "Get Time": "Can return multiple time components",
+            "Run Process": "Returns stdout and stderr",
+            "Get Slice From List": "Can return multiple items"
+        }
+        
+        for multi_keyword, description in multi_return_keywords.items():
+            if multi_keyword.lower() in keyword_lower:
+                if isinstance(assign_to, str):
+                    logger.info(f"'{keyword}' {description}. Consider using list assignment: ['part1', 'part2']")
+                break
 
     async def _execute_keyword_internal(
         self, 

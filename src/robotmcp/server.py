@@ -1,7 +1,7 @@
 """Main MCP Server implementation for Robot Framework integration."""
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 
 from fastmcp import FastMCP
 
@@ -76,6 +76,7 @@ async def execute_step(
     raise_on_failure: bool = True,
     detail_level: str = "minimal",
     scenario_hint: str = None,
+    assign_to: Union[str, List[str]] = None,
 ) -> Dict[str, Any]:
     """Execute a single test step using Robot Framework API.
 
@@ -97,12 +98,15 @@ async def execute_step(
         scenario_hint: Optional scenario text for intelligent library auto-configuration.
                       When provided on first call, automatically configures the session
                       based on detected scenario type and explicit library preferences.
+        assign_to: Variable name(s) to assign the keyword's return value to.
+                  Single string for single assignment: "result" creates ${result}
+                  List of strings for multi-assignment: ["first", "rest"] creates ${first}, ${rest}
     """
     if arguments is None:
         arguments = []
 
     result = await execution_engine.execute_step(
-        keyword, arguments, session_id, detail_level, scenario_hint=scenario_hint
+        keyword, arguments, session_id, detail_level, scenario_hint=scenario_hint, assign_to=assign_to
     )
 
     # For proper MCP protocol compliance, failed steps should raise exceptions

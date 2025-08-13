@@ -1,7 +1,7 @@
 """Main execution coordinator orchestrating all execution services."""
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from robotmcp.models.session_models import ExecutionSession
 from robotmcp.models.config_models import ExecutionConfig
@@ -67,7 +67,8 @@ class ExecutionCoordinator:
         session_id: str = "default",
         detail_level: str = "minimal",
         library_prefix: str = None,
-        scenario_hint: str = None
+        scenario_hint: str = None,
+        assign_to: Union[str, List[str]] = None
     ) -> Dict[str, Any]:
         """
         Execute a single Robot Framework keyword step with intelligent library auto-configuration.
@@ -79,6 +80,7 @@ class ExecutionCoordinator:
             detail_level: Level of detail in response ('minimal', 'standard', 'full')
             library_prefix: Optional explicit library name to override session search order
             scenario_hint: Optional scenario text for auto-configuration (used on first call)
+            assign_to: Variable name(s) to assign the keyword's return value to
             
         Returns:
             Execution result with status, output, and state
@@ -105,7 +107,8 @@ class ExecutionCoordinator:
                 arguments=converted_arguments,
                 browser_library_manager=self.browser_library_manager,
                 detail_level=detail_level,
-                library_prefix=library_prefix
+                library_prefix=library_prefix,
+                assign_to=assign_to
             )
             
             return result
