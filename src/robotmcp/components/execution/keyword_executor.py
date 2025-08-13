@@ -319,10 +319,10 @@ class KeywordExecutor:
                     if override_handler:
                         logger.info(f"OVERRIDE: Using override handler {type(override_handler).__name__} for {keyword_name} from {keyword_info.library}")
                         override_result = await override_handler.execute(session, keyword_name, args, keyword_info)
-                        if override_result:
+                        if override_result is not None:
                             # Ensure proper library is imported in session
                             session.import_library(keyword_info.library, force=True)
-                            logger.info(f"OVERRIDE: Successfully executed {keyword_name} with {keyword_info.library}, imported to session")
+                            logger.info(f"OVERRIDE: Successfully executed {keyword_name} with {keyword_info.library}, imported to session - RETURNING EARLY")
                             return {
                                 "success": override_result.success,
                                 "output": override_result.output or f"Executed {keyword_name}",
@@ -350,9 +350,9 @@ class KeywordExecutor:
                         if override_handler:
                             logger.info(f"OVERRIDE: Using override handler {type(override_handler).__name__} for {keyword_name} from {keyword_info.library} (after loading)")
                             override_result = await override_handler.execute(session, keyword_name, args, keyword_info)
-                            if override_result:
+                            if override_result is not None:
                                 session.import_library(keyword_info.library, force=True)
-                                logger.info(f"OVERRIDE: Successfully executed {keyword_name} with {keyword_info.library} (after loading)")
+                                logger.info(f"OVERRIDE: Successfully executed {keyword_name} with {keyword_info.library} (after loading) - RETURNING EARLY")
                                 return {
                                     "success": override_result.success,
                                     "output": override_result.output or f"Executed {keyword_name}",

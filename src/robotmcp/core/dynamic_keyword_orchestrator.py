@@ -182,11 +182,11 @@ class DynamicKeywordDiscovery:
             result = method(*converted_args)
             
             logger.debug(f"RF native type conversion succeeded for {keyword_info.name}")
-            return result
+            return ('executed', result)  # Return tuple to indicate execution happened
             
         except ImportError as ie:
             logger.debug(f"Robot Framework type conversion not available: {ie}")
-            return None
+            return ('not_available', None)  # Indicate type conversion wasn't available
         except Exception as e:
             logger.debug(f"RF native type conversion failed for {keyword_info.name}: {e}")
             # Log more details for debugging
@@ -194,7 +194,8 @@ class DynamicKeywordDiscovery:
             logger.debug(f"Original args: {original_args}")
             import traceback
             logger.debug(f"Full traceback: {traceback.format_exc()}")
-            return None
+            # CRITICAL: Even though execution failed, it DID execute - don't try again
+            raise e  # Re-raise the exception instead of returning None
     
     def get_keyword_suggestions(self, keyword_name: str, limit: int = 5) -> List[str]:
         """Get keyword suggestions based on partial match."""
@@ -636,11 +637,11 @@ class DynamicKeywordDiscovery:
                 if keyword_info.library in type_conversion_libraries:
                     try:
                         # Use Robot Framework's native type conversion system for libraries that need it
-                        result = self._execute_with_rf_type_conversion(method, keyword_info, original_args)
-                        if result is not None:  # Successfully converted and executed
-                            pass  # Use the result as-is
-                        else:
-                            # Fallback to our argument processing
+                        conversion_result = self._execute_with_rf_type_conversion(method, keyword_info, original_args)
+                        if conversion_result[0] == 'executed':  # Successfully converted and executed
+                            result = conversion_result[1]  # Use the result as-is
+                        elif conversion_result[0] == 'not_available':
+                            # Type conversion not available, fallback to our argument processing
                             parsed = self.argument_processor.parse_arguments_for_keyword(keyword_info.name, original_args, keyword_info.library)
                             pos_args = parsed.positional
                             kwargs = parsed.named
