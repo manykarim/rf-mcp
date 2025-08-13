@@ -227,24 +227,28 @@ class TestMCPErrorScenarios:
         # Should handle empty inputs gracefully
         assert isinstance(result.data, dict)
 
-    @pytest.mark.asyncio
-    async def test_validate_step_before_suite_invalid_keyword(self, mcp_client):
-        """Test validating invalid step before suite."""
-        result = await mcp_client.call_tool(
-            "validate_step_before_suite",
-            {
-                "keyword": "InvalidKeywordForValidation123",
-                "arguments": ["test"],
-                "session_id": "validation_error_test"
-            }
-        )
-        
-        # Should return validation failure
-        assert isinstance(result.data, dict)
-        # Check for failure indicators
-        assert (result.data.get("validated") is False or 
-                result.data.get("success") is False or 
-                "error" in result.data)
+    # TOOL DISABLED: validate_step_before_suite
+    # This tool has been disabled due to functional redundancy with execute_step().
+    # See server.py lines 400-474 for detailed explanation.
+    # 
+    # @pytest.mark.asyncio
+    # async def test_validate_step_before_suite_invalid_keyword(self, mcp_client):
+    #     """Test validating invalid step before suite."""
+    #     result = await mcp_client.call_tool(
+    #         "validate_step_before_suite",
+    #         {
+    #             "keyword": "InvalidKeywordForValidation123",
+    #             "arguments": ["test"],
+    #             "session_id": "validation_error_test"
+    #         }
+    #     )
+    #     
+    #     # Should return validation failure
+    #     assert isinstance(result.data, dict)
+    #     # Check for failure indicators
+    #     assert (result.data.get("validated") is False or 
+    #             result.data.get("success") is False or 
+    #             "error" in result.data)
 
     @pytest.mark.asyncio
     async def test_get_session_validation_status_nonexistent(self, mcp_client):

@@ -158,22 +158,26 @@ async def test_tool_07_build_test_suite(mcp_client, test_session_id):
     print("✅ build_test_suite - PASSED")
 
 
-@pytest.mark.asyncio
-async def test_tool_08_validate_step_before_suite(mcp_client, test_session_id):
-    """Test validate_step_before_suite tool - validates steps before suite generation."""
-    result = await mcp_client.call_tool(
-        "validate_step_before_suite",
-        {
-            "keyword": "Log",
-            "arguments": ["Validation test"],
-            "session_id": test_session_id
-        }
-    )
-    
-    assert result.data["success"] is True
-    assert "validated" in result.data
-    assert "next_step_guidance" in result.data
-    print("✅ validate_step_before_suite - PASSED")
+# TOOL DISABLED: validate_step_before_suite
+# This tool has been disabled due to functional redundancy with execute_step().
+# See server.py lines 400-474 for detailed explanation.
+# 
+# @pytest.mark.asyncio
+# async def test_tool_08_validate_step_before_suite(mcp_client, test_session_id):
+#     """Test validate_step_before_suite tool - validates steps before suite generation."""
+#     result = await mcp_client.call_tool(
+#         "validate_step_before_suite",
+#         {
+#             "keyword": "Log",
+#             "arguments": ["Validation test"],
+#             "session_id": test_session_id
+#         }
+#     )
+#     
+#     assert result.data["success"] is True
+#     assert "validated" in result.data
+#     assert "next_step_guidance" in result.data
+#     print("✅ validate_step_before_suite - PASSED")
 
 
 @pytest.mark.asyncio
@@ -446,12 +450,9 @@ async def test_stepwise_development_workflow(mcp_client):
     )
     assert step_result.data["success"] is True
     
-    # Validate step
-    validation = await mcp_client.call_tool(
-        "validate_step_before_suite",
-        {"keyword": "Log", "arguments": ["Stepwise test"], "session_id": session_id}
-    )
-    assert validation.data["success"] is True
+    # Validate step using execute_step with successful execution
+    # (validate_step_before_suite tool has been disabled due to redundancy)
+    # The successful execute_step above serves as validation
     
     # Build suite
     suite = await mcp_client.call_tool(

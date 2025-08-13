@@ -397,65 +397,80 @@ async def get_keyword_documentation(
     return execution_engine.get_keyword_documentation(keyword_name, library_name)
 
 
-@mcp.tool
-async def validate_step_before_suite(
-    keyword: str,
-    arguments: List[str] = None,
-    session_id: str = "default",
-    expected_outcome: str = None,
-) -> Dict[str, Any]:
-    """Validate a single step before adding it to a test suite.
-
-    This method enforces stepwise test development by requiring step validation
-    before suite generation. Use this to verify each keyword works as expected.
-
-    Workflow:
-    1. Call this method for each test step
-    2. Verify the step succeeds and produces expected results
-    3. Only after all steps are validated, use build_test_suite()
-
-    Args:
-        keyword: Robot Framework keyword to validate
-        arguments: Arguments for the keyword
-        session_id: Session identifier
-        expected_outcome: Optional description of expected result for validation
-
-    Returns:
-        Validation result with success status, output, and recommendations
-    """
-    if arguments is None:
-        arguments = []
-
-    # Execute the step with detailed error reporting
-    result = await execution_engine.execute_step(
-        keyword, arguments, session_id, detail_level="full"
-    )
-
-    # Add validation metadata
-    result["validated"] = result.get("success", False)
-    result["validation_time"] = result.get("execution_time")
-
-    if expected_outcome:
-        result["expected_outcome"] = expected_outcome
-        result["meets_expectation"] = "unknown"  # AI agent should evaluate this
-
-    # Add guidance for next steps
-    if result.get("success"):
-        result["next_step_guidance"] = (
-            "✅ Step validated successfully. Safe to include in test suite."
-        )
-    else:
-        result["next_step_guidance"] = (
-            "❌ Step failed validation. Fix issues before adding to test suite."
-        )
-        result["debug_suggestions"] = [
-            "Check keyword spelling and library availability",
-            "Verify argument types and values",
-            "Ensure required browser/context is open",
-            "Review error message for specific issues",
-        ]
-
-    return result
+# TOOL DISABLED: validate_step_before_suite
+# 
+# Reason for removal: This tool is functionally redundant with execute_step().
+# Analysis shows that it duplicates execution (performance impact) and adds
+# minimal unique value beyond what execute_step() already provides.
+# 
+# Key issues:
+# 1. Functional redundancy - re-executes the same step as execute_step()
+# 2. Performance overhead - double execution of steps
+# 3. Agent confusion - two similar tools with overlapping purposes
+# 4. Limited additional value - only adds guidance text and redundant metadata
+#
+# The validation workflow can be achieved with:
+# execute_step() → validate_test_readiness() → build_test_suite()
+#
+# @mcp.tool
+# async def validate_step_before_suite(
+#     keyword: str,
+#     arguments: List[str] = None,
+#     session_id: str = "default",
+#     expected_outcome: str = None,
+# ) -> Dict[str, Any]:
+#     """Validate a single step before adding it to a test suite.
+# 
+#     This method enforces stepwise test development by requiring step validation
+#     before suite generation. Use this to verify each keyword works as expected.
+# 
+#     Workflow:
+#     1. Call this method for each test step
+#     2. Verify the step succeeds and produces expected results
+#     3. Only after all steps are validated, use build_test_suite()
+# 
+#     Args:
+#         keyword: Robot Framework keyword to validate
+#         arguments: Arguments for the keyword
+#         session_id: Session identifier
+#         expected_outcome: Optional description of expected result for validation
+# 
+#     Returns:
+#         Validation result with success status, output, and recommendations
+#     """
+#     if arguments is None:
+#         arguments = []
+# 
+#     # Execute the step with detailed error reporting
+#     result = await execution_engine.execute_step(
+#         keyword, arguments, session_id, detail_level="full"
+#     )
+# 
+#     # Add validation metadata
+#     result["validated"] = result.get("success", False)
+#     result["validation_time"] = result.get("execution_time")
+# 
+#     if expected_outcome:
+#         result["expected_outcome"] = expected_outcome
+#         result["meets_expectation"] = "unknown"  # AI agent should evaluate this
+# 
+#     # Add guidance for next steps
+#     if result.get("success"):
+#         result["next_step_guidance"] = (
+#             "✅ Step validated successfully. Safe to include in test suite."
+#         )
+#     else:
+#         result["next_step_guidance"] = (
+#             "❌ Step failed validation. Fix issues before adding to test suite."
+#         )
+#         result["debug_suggestions"] = [
+#             "Check keyword spelling and library availability",
+#             "Verify argument types and values",
+#             "Ensure required browser/context is open",
+#             "Review error message for specific issues",
+#         ]
+# 
+#     return result
 
 
 @mcp.tool
