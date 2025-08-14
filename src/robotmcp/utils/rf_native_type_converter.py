@@ -60,6 +60,10 @@ try:
     RF_NATIVE_CONVERSION_AVAILABLE = True
 except ImportError:
     RF_NATIVE_CONVERSION_AVAILABLE = False
+    ArgumentSpec = None  # type: ignore
+    ArgumentResolver = None  # type: ignore
+    TypeInfo = None  # type: ignore
+    TypeConverter = None  # type: ignore
     logger.warning("Robot Framework native type conversion not available")
 
 
@@ -239,59 +243,83 @@ class RobotFrameworkNativeConverter:
     
     def _split_args_into_positional_and_named(self, args: List[str], signature_args: List[str] = None) -> tuple[List[str], Dict[str, str]]:
         """
-        Split user arguments into positional and named arguments.
-        
-        Uses LibDoc signature information to accurately distinguish between
-        locator strings (like "name=firstname") and actual named arguments.
+        Split user arguments into positional and named arguments using signature info.
+
+        Implements Robot Framework's rule that named arguments are only accepted
+        after all required positional arguments have been satisfied. When the
+        signature contains ``**kwargs`` any ``key=value`` pair after the required
+        arguments is treated as named regardless of the key name.
         """
-        positional = []
-        named = {}
-        
-        # Build list of valid parameter names from signature
-        valid_param_names = set()
+        positional: List[str] = []
+        named: Dict[str, str] = {}
+
+        valid_param_names: set = set()
+        required_count = 0
+        has_kwargs = False
+        param_order: List[str] = []
+
         if signature_args:
             for arg_str in signature_args:
                 if ':' in arg_str:
-                    param_name = arg_str.split(':', 1)[0].strip()
-                    if param_name.startswith('*'):
-                        param_name = param_name[1:]  # Remove * for varargs
-                    if param_name.startswith('*'):
-                        param_name = param_name[1:]  # Remove ** for kwargs
-                    if param_name and not param_name.startswith('*'):
-                        valid_param_names.add(param_name)
-        
+                    param_part = arg_str.split(':', 1)[0].strip()
+                else:
+                    param_part = arg_str.strip()
+
+                if param_part.startswith('**'):
+                    has_kwargs = True
+                    continue
+                if param_part.startswith('*'):
+                    param_name = param_part[1:]
+                else:
+                    param_name = param_part
+                    if '=' not in arg_str:
+                        required_count += 1
+
+                if param_name and not param_name.startswith('*'):
+                    valid_param_names.add(param_name)
+                    param_order.append(param_name)
+
+        positional_count = 0
         for arg in args:
-            if '=' in arg and self._looks_like_named_arg(arg, valid_param_names):
+            if '=' in arg and self._looks_like_named_arg(
+                arg,
+                valid_param_names,
+                positional_count,
+                required_count,
+                has_kwargs,
+                param_order,
+            ):
                 key, value = arg.split('=', 1)
                 named[key.strip()] = value
             else:
                 positional.append(arg)
-        
+                positional_count += 1
+
         return positional, named
-    
-    def _looks_like_named_arg(self, arg: str, valid_param_names: set = None) -> bool:
-        """
-        Check if an argument looks like a named argument.
-        
-        Uses valid parameter names from LibDoc signature to distinguish between
-        actual named parameters and locator strings containing '=' characters.
-        """
+
+    def _looks_like_named_arg(
+        self,
+        arg: str,
+        valid_param_names: set,
+        positional_count: int,
+        required_count: int,
+        has_kwargs: bool,
+        param_order: List[str],
+    ) -> bool:
+        """Return True if argument should be treated as named."""
         if '=' not in arg:
             return False
-        
+
         key_part = arg.split('=', 1)[0].strip()
-        
-        # Must be valid Python identifier
+
         if not key_part.isidentifier():
             return False
-        
-        # If we have valid parameter names from signature, only treat as named arg
-        # if the key matches an actual parameter name
-        if valid_param_names:
-            return key_part in valid_param_names
-        
-        # Fallback: treat as named arg if it's a valid identifier
-        return True
+
+        if positional_count < len(param_order) and key_part == param_order[positional_count]:
+            return True
+        if positional_count >= required_count and (key_part in valid_param_names or has_kwargs):
+            return True
+        return False
     
     def _convert_positional_args(self, args: List[str], signature_args: List[str]) -> List[Any]:
         """Convert positional arguments using Robot Framework's type converters."""
@@ -484,13 +512,12 @@ class RobotFrameworkNativeConverter:
         parsed = ParsedArguments()
         
         for arg in args:
-            if '=' in arg and self._looks_like_named_arg(arg):
-                # Parse as named argument
+            if '=' in arg:
                 key, value = arg.split('=', 1)
-                parsed.named[key.strip()] = value
-            else:
-                # Treat as positional argument
-                parsed.positional.append(arg)
+                if key.strip().isidentifier():
+                    parsed.named[key.strip()] = value
+                    continue
+            parsed.positional.append(arg)
         
         return parsed
     
