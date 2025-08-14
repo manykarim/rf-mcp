@@ -14,6 +14,14 @@ from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
 
 logger = logging.getLogger(__name__)
 
+# Import Robot Framework components
+try:
+    from robot.libraries.BuiltIn import BuiltIn
+    ROBOT_AVAILABLE = True
+except ImportError:
+    BuiltIn = None
+    ROBOT_AVAILABLE = False
+
 
 class KeywordExecutor:
     """Handles keyword execution with proper library routing and error handling."""
@@ -372,6 +380,10 @@ class KeywordExecutor:
                     browser_library_manager.set_active_library(session, detected_library)
                     logger.debug(f"Auto-detected library for '{keyword_name}': {detected_library}")
             
+            # Handle special built-in keywords first
+            if keyword_name.lower() in ["set variable", "log", "should be equal"]:
+                return await self._execute_builtin_keyword(session, keyword_name, args)
+            
             # If library prefix is specified, use direct execution
             if library_prefix:
                 return await self._execute_with_library_prefix(session, keyword_name, args, library_prefix)
@@ -384,14 +396,8 @@ class KeywordExecutor:
             elif library_type == "selenium":
                 return await self._execute_selenium_keyword(session, keyword_name, args, library)
             else:
-                # Delegate all other keywords (including built-ins) to dynamic discovery
-                return await self.keyword_discovery.execute_keyword(
-                    keyword_name=keyword_name,
-                    args=args,
-                    session_variables=session.variables,
-                    active_library=web_automation_lib if web_automation_lib in ["Browser", "SeleniumLibrary"] else None,
-                    session_id=session.session_id,
-                )
+                # Try built-in execution as fallback
+                return await self._execute_builtin_keyword(session, keyword_name, args)
                 
         except Exception as e:
             logger.error(f"Error in keyword execution: {e}")
@@ -533,6 +539,93 @@ class KeywordExecutor:
                 "variables": {},
                 "state_updates": {},
                 "selenium_guidance": guidance
+            }
+
+    async def _execute_builtin_keyword(
+        self, 
+        session: ExecutionSession, 
+        keyword: str, 
+        args: List[str]
+    ) -> Dict[str, Any]:
+        """Execute a built-in Robot Framework keyword."""
+        try:
+            if not ROBOT_AVAILABLE:
+                return {
+                    "success": False,
+                    "error": "Robot Framework not available for built-in keywords",
+                    "output": "",
+                    "variables": {},
+                    "state_updates": {}
+                }
+            
+            builtin = BuiltIn()
+            keyword_lower = keyword.lower()
+            
+            # Handle common built-in keywords
+            if keyword_lower == "set variable":
+                if args:
+                    var_value = args[0]
+                    return {
+                        "success": True,
+                        "output": var_value,
+                        "variables": {"${VARIABLE}": var_value},
+                        "state_updates": {}
+                    }
+            
+            elif keyword_lower == "log":
+                message = args[0] if args else ""
+                logger.info(f"Robot Log: {message}")
+                return {
+                    "success": True,
+                    "output": message,
+                    "variables": {},
+                    "state_updates": {}
+                }
+            
+            elif keyword_lower == "should be equal":
+                if len(args) >= 2:
+                    if args[0] == args[1]:
+                        return {
+                            "success": True,
+                            "output": f"'{args[0]}' == '{args[1]}'",
+                            "variables": {},
+                            "state_updates": {}
+                        }
+                    else:
+                        return {
+                            "success": False,
+                            "error": f"'{args[0]}' != '{args[1]}'",
+                            "output": "",
+                            "variables": {},
+                            "state_updates": {}
+                        }
+            
+            # Try to execute using BuiltIn library
+            try:
+                result = builtin.run_keyword(keyword, *args)
+                return {
+                    "success": True,
+                    "output": str(result) if result is not None else "OK",
+                    "variables": {},
+                    "state_updates": {}
+                }
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": f"Built-in keyword execution failed: {str(e)}",
+                    "output": "",
+                    "variables": {},
+                    "state_updates": {}
+                }
+                
+        except Exception as e:
+            logger.error(f"Error executing built-in keyword {keyword}: {e}")
+            return {
+                "success": False,
+                "error": f"Built-in keyword execution failed: {str(e)}",
+                "output": "",
+                "variables": {},
+                "state_updates": {}
             }
 
     def _extract_browser_state_updates(self, keyword: str, args: List[str], result: Any) -> Dict[str, Any]:
