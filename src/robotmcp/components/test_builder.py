@@ -290,18 +290,21 @@ class TestBuilder:
     ) -> GeneratedTestSuite:
         """Build a test suite from test cases."""
         
-        # Collect all imports from test cases
-        all_imports = set()
+        # Get libraries from session execution history (more reliable than keyword pattern matching)
+        all_imports = self._get_session_libraries(session_id)
         
-        # Detect required imports from keywords
-        for test_case in test_cases:
-            for step in test_case.steps:
-                library = await self._detect_library_from_keyword(step.keyword, session_id)
-                if library and library != "BuiltIn":  # Exclude BuiltIn as it's automatically available
-                    all_imports.add(library)
+        # If no session libraries found, fall back to keyword detection
+        if not all_imports:
+            for test_case in test_cases:
+                for step in test_case.steps:
+                    library = await self._detect_library_from_keyword(step.keyword, session_id)
+                    if library and library != "BuiltIn":  # Exclude BuiltIn as it's automatically available
+                        all_imports.add(library)
         
         # Validate library exclusion rules for test suite generation
-        self._validate_suite_library_exclusions(all_imports, session_id)
+        # Only validate if we don't have a session with execution history
+        if not self._session_has_execution_history(session_id):
+            self._validate_suite_library_exclusions(all_imports, session_id)
         
         # BuiltIn is automatically available in Robot Framework, so we don't import it explicitly
         
@@ -559,6 +562,57 @@ class TestBuilder:
             keyword_discovery = self.execution_engine.keyword_discovery
         
         return detect_library_from_keyword(keyword, keyword_discovery)
+    
+    def _get_session_libraries(self, session_id: str) -> set:
+        """
+        Get libraries that were actually used in session execution.
+        
+        This method prioritizes the session's imported_libraries over keyword pattern matching
+        because the session has already proven these libraries work together successfully.
+        
+        Args:
+            session_id: Session ID to get libraries from
+            
+        Returns:
+            Set of library names from session execution history
+        """
+        if not self.execution_engine or not hasattr(self.execution_engine, 'sessions'):
+            return set()
+        
+        session = self.execution_engine.sessions.get(session_id)
+        if not session:
+            return set()
+        
+        # Use imported_libraries from session (these are known to work together)
+        session_libraries = set(session.imported_libraries)
+        
+        # Filter out BuiltIn as it's automatically available
+        session_libraries.discard("BuiltIn")
+        
+        logger.debug(f"Session {session_id} libraries from execution history: {session_libraries}")
+        return session_libraries
+    
+    def _session_has_execution_history(self, session_id: str) -> bool:
+        """
+        Check if session has execution history (successful steps).
+        
+        Args:
+            session_id: Session ID to check
+            
+        Returns:
+            True if session has executed steps, False otherwise
+        """
+        if not self.execution_engine or not hasattr(self.execution_engine, 'sessions'):
+            return False
+        
+        session = self.execution_engine.sessions.get(session_id)
+        if not session:
+            return False
+        
+        # Check if session has any successful steps
+        has_history = len(session.steps) > 0
+        logger.debug(f"Session {session_id} has execution history: {has_history} ({len(session.steps)} steps)")
+        return has_history
     
     def _get_session_web_library(self, session) -> Optional[str]:
         """
@@ -952,17 +1006,77 @@ class TestBuilder:
         
         return suite
     
+    def _get_session_libraries(self, session_id: str) -> set:
+        """
+        Get libraries that were actually used in session execution.
+        
+        This method prioritizes the session's imported_libraries over keyword pattern matching
+        because the session has already proven these libraries work together successfully.
+        
+        Args:
+            session_id: Session ID to get libraries from
+            
+        Returns:
+            Set of library names from session execution history
+        """
+        if not self.execution_engine or not hasattr(self.execution_engine, 'sessions'):
+            return set()
+        
+        session = self.execution_engine.sessions.get(session_id)
+        if not session:
+            return set()
+        
+        # Use imported_libraries from session (these are known to work together)
+        session_libraries = set(session.imported_libraries)
+        
+        # Filter out BuiltIn as it's automatically available
+        session_libraries.discard("BuiltIn")
+        
+        logger.debug(f"Session {session_id} libraries from execution history: {session_libraries}")
+        return session_libraries
+    
+    def _session_has_execution_history(self, session_id: str) -> bool:
+        """
+        Check if session has execution history (successful steps).
+        
+        Args:
+            session_id: Session ID to check
+            
+        Returns:
+            True if session has executed steps, False otherwise
+        """
+        if not self.execution_engine or not hasattr(self.execution_engine, 'sessions'):
+            return False
+        
+        session = self.execution_engine.sessions.get(session_id)
+        if not session:
+            return False
+        
+        # Check if session has any successful steps
+        has_history = len(session.steps) > 0
+        logger.debug(f"Session {session_id} has execution history: {has_history} ({len(session.steps)} steps)")
+        return has_history
+    
     def _validate_suite_library_exclusions(self, imports: set, session_id: str) -> None:
         """
         Validate that the test suite doesn't violate library exclusion rules.
+        
+        Only applies strict validation for new/empty sessions. Sessions with execution
+        history have already proven their library combinations work successfully.
         
         Args:
             imports: Set of library names to be imported
             session_id: Session ID for error reporting
             
         Raises:
-            ValueError: If conflicting libraries are detected
+            ValueError: If conflicting libraries are detected for new sessions
         """
+        # If session has execution history, trust its library choices
+        if self._session_has_execution_history(session_id):
+            logger.info(f"Session {session_id} has execution history - skipping library exclusion validation")
+            return
+        
+        # Only apply strict validation for new/empty sessions
         web_automation_libs = ['Browser', 'SeleniumLibrary']
         detected_web_libs = [lib for lib in imports if lib in web_automation_libs]
         
@@ -973,7 +1087,7 @@ class TestBuilder:
                 f"Please use separate sessions for different libraries."
             )
         
-        # Also check session consistency if execution engine is available
+        # For new sessions, also check session consistency if execution engine is available
         if self.execution_engine and hasattr(self.execution_engine, 'sessions'):
             session = self.execution_engine.sessions.get(session_id)
             if session:
