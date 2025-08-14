@@ -900,9 +900,14 @@ class DynamicKeywordDiscovery:
                 type_conversion_libraries = get_libraries_requiring_type_conversion()
                 
                 if keyword_info.library in type_conversion_libraries:
+                    # Enhanced logging for named arguments debugging
+                    has_potential_named_args = any('=' in arg for arg in original_args)
+                    logger.debug(f"NAMED_ARGS_DEBUG: {keyword_info.name} from {keyword_info.library} - args={original_args}, has_potential_named={has_potential_named_args}")
+                    
                     try:
                         # Use Robot Framework's native type conversion system for libraries that need it
                         conversion_result = self._execute_with_rf_type_conversion(method, keyword_info, original_args)
+                        logger.debug(f"NAMED_ARGS_DEBUG: Type conversion result for {keyword_info.name}: {conversion_result[0] if conversion_result else 'None'}")
                         if conversion_result[0] == 'executed':  # Successfully converted and executed
                             result = conversion_result[1]  # Use the result as-is
                         elif conversion_result[0] == 'not_available':
@@ -917,9 +922,21 @@ class DynamicKeywordDiscovery:
                                 result = method(*pos_args)
                     except Exception as lib_error:
                         logger.debug(f"{keyword_info.library} execution failed: {lib_error}")
-                        # Don't fall back to unconverted args as this can cause type errors
-                        # Re-raise the original error
-                        raise lib_error
+                        # NAMED ARGUMENTS FIX: Instead of re-raising, try the parsed arguments approach
+                        # This ensures named arguments are preserved when type conversion fails
+                        logger.info(f"Type conversion failed for {keyword_info.name}, falling back to parsed argument processing")
+                        parsed = self.argument_processor.parse_arguments_for_keyword(keyword_info.name, original_args, keyword_info.library)
+                        pos_args = parsed.positional
+                        kwargs = parsed.named
+                        
+                        logger.debug(f"Fallback execution: positional={pos_args}, named={list(kwargs.keys()) if kwargs else 'none'}")
+                        
+                        if kwargs:
+                            result = method(*pos_args, **kwargs)
+                            logger.debug(f"Successfully executed {keyword_info.name} with fallback named arguments")
+                        else:
+                            result = method(*pos_args)
+                            logger.debug(f"Successfully executed {keyword_info.name} with fallback positional arguments")
                 elif keyword_info.name == "Create List":
                     # Collections.Create List takes variable arguments
                     result = method(*parsed_args.positional)
@@ -928,8 +945,16 @@ class DynamicKeywordDiscovery:
                     value = parsed_args.positional[0] if parsed_args.positional else None
                     result = method(value)
                 else:
-                    # For other libraries, use positional args
-                    result = method(*parsed_args.positional)
+                    # NAMED ARGUMENTS FIX: For other libraries, check for named arguments
+                    # This was the critical bug - line was ignoring named arguments completely
+                    logger.debug(f"Standard execution path for {keyword_info.name}: positional={parsed_args.positional}, named={list(parsed_args.named.keys()) if parsed_args.named else 'none'}")
+                    
+                    if parsed_args.named:
+                        result = method(*parsed_args.positional, **parsed_args.named)
+                        logger.debug(f"Successfully executed {keyword_info.name} with named arguments: {list(parsed_args.named.keys())}")
+                    else:
+                        result = method(*parsed_args.positional)
+                        logger.debug(f"Successfully executed {keyword_info.name} with positional arguments only")
             
             return {
                 "success": True,
@@ -1015,6 +1040,9 @@ class DynamicKeywordDiscovery:
             
             # Parse arguments using LibDoc information for accuracy
             parsed_args = self._parse_arguments_for_keyword(effective_keyword_name, args, keyword_info.library)
+            
+            # Enhanced debug logging for named arguments
+            logger.debug(f"NAMED_ARGS_DEBUG: Parsed arguments for {effective_keyword_name}: positional={parsed_args.positional}, named={list(parsed_args.named.keys()) if parsed_args.named else 'none'}")
             
             # Execute the keyword
             result = self._execute_direct_method_call(keyword_info, parsed_args, args, session_variables or {})
