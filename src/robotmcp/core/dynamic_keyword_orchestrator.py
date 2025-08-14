@@ -161,8 +161,12 @@ class DynamicKeywordDiscovery:
             
             # Check if we have LibDoc signature information for named argument parsing
             if hasattr(keyword_info, 'args') and keyword_info.args:
-                # Parse named arguments using existing logic from rf_native_type_converter
-                positional_args, named_args = self._split_args_into_positional_and_named(original_args, keyword_info.args)
+                # Parse named arguments using centralized converter logic
+                positional_args, named_args = (
+                    self.argument_processor.rf_native_converter._split_args_into_positional_and_named(
+                        original_args, keyword_info.args
+                    )
+                )
                 
                 # Create ArgumentSpec from LibDoc signature
                 spec = self._create_argument_spec_from_libdoc(keyword_info.args)
@@ -225,61 +229,6 @@ class DynamicKeywordDiscovery:
             # CRITICAL: Even though execution failed, it DID execute - don't try again
             raise e  # Re-raise the exception instead of returning None
     
-    def _split_args_into_positional_and_named(self, args: List[str], signature_args: List[str] = None) -> tuple[List[str], Dict[str, str]]:
-        """
-        Split user arguments into positional and named arguments using LibDoc signature information.
-        
-        This method reuses the logic from rf_native_type_converter to ensure consistency.
-        """
-        positional = []
-        named = {}
-        
-        # Build list of valid parameter names from signature
-        valid_param_names = set()
-        if signature_args:
-            for arg_str in signature_args:
-                if ':' in arg_str:
-                    param_name = arg_str.split(':', 1)[0].strip()
-                    if param_name.startswith('*'):
-                        param_name = param_name[1:]  # Remove * for varargs
-                    if param_name.startswith('*'):
-                        param_name = param_name[1:]  # Remove ** for kwargs
-                    if param_name and not param_name.startswith('*'):
-                        valid_param_names.add(param_name)
-        
-        for arg in args:
-            if '=' in arg and self._looks_like_named_arg(arg, valid_param_names):
-                key, value = arg.split('=', 1)
-                named[key.strip()] = value
-            else:
-                positional.append(arg)
-        
-        return positional, named
-    
-    def _looks_like_named_arg(self, arg: str, valid_param_names: set = None) -> bool:
-        """
-        Check if an argument looks like a named argument.
-        
-        Uses valid parameter names from LibDoc signature to distinguish between
-        actual named parameters and locator strings containing '=' characters.
-        """
-        if '=' not in arg:
-            return False
-        
-        key_part = arg.split('=', 1)[0].strip()
-        
-        # Must be valid Python identifier
-        if not key_part.isidentifier():
-            return False
-        
-        # If we have valid parameter names from signature, only treat as named arg
-        # if the key matches an actual parameter name
-        if valid_param_names:
-            return key_part in valid_param_names
-        
-        # Fallback: assume it's a named argument if it's a valid identifier
-        return True
-    
     def _create_argument_spec_from_libdoc(self, libdoc_args: List[str]):
         """Create Robot Framework ArgumentSpec from LibDoc signature."""
         from robot.running.arguments import ArgumentSpec
@@ -290,22 +239,30 @@ class DynamicKeywordDiscovery:
         var_named = None
         
         for arg_str in libdoc_args:
-            if ':' in arg_str:
-                # Extract parameter name and default value
-                name, default_part = arg_str.split(':', 1)
-                name = name.strip()
-                
-                # Handle varargs and kwargs
-                if name.startswith('**'):
-                    var_named = name[2:] if len(name) > 2 else 'kwargs'
-                elif name.startswith('*'):
-                    var_positional = name[1:] if len(name) > 1 else 'args'
-                elif name not in ['*', '**']:  # Only add regular parameters
-                    positional_or_named.append(name)
-                    
-                    # Extract default value if present
-                    if '=' in default_part:
-                        defaults[name] = default_part.split('=', 1)[1].strip()
+            arg = arg_str.strip()
+
+            # Handle varargs and kwargs first
+            if arg.startswith('**'):
+                var_named = arg[2:] if len(arg) > 2 else 'kwargs'
+                continue
+            if arg.startswith('*'):
+                var_positional = arg[1:] if len(arg) > 1 else 'args'
+                continue
+
+            # Remove type information if present
+            name_part = arg
+            default_part = ''
+            if ':' in arg:
+                name_part, rest = arg.split(':', 1)
+                if '=' in rest:
+                    _, default_part = rest.split('=', 1)
+            elif '=' in arg:
+                name_part, default_part = arg.split('=', 1)
+
+            name = name_part.strip()
+            positional_or_named.append(name)
+            if default_part:
+                defaults[name] = default_part.strip()
         
         return ArgumentSpec(
             positional_or_named=positional_or_named,
@@ -350,10 +307,14 @@ class DynamicKeywordDiscovery:
         """Convert named arguments using RF type conversion."""
         from robot.running.arguments.typeconverters import TypeConverter
         from robot.running.arguments.typeinfo import TypeInfo
-        
+
+        if isinstance(named_args, list):
+            # ArgumentResolver may return list of (name, value) pairs
+            named_args = dict(named_args)
+
         converted_named = {}
         param_dict = {param.name: param for param in signature.parameters.values()}
-        
+
         for name, value in named_args.items():
             if name in param_dict:
                 param = param_dict[name]
@@ -434,47 +395,10 @@ class DynamicKeywordDiscovery:
         return self.keyword_discovery.is_dom_changing_keyword(keyword_name)
     
     # Argument processing methods
-    def parse_arguments(self, args: List[str]) -> ParsedArguments:
-        """Parse a list of arguments into positional and named arguments."""
-        return self.argument_processor.parse_arguments(args)
-    
-    def _parse_arguments(self, args: List[str]) -> ParsedArguments:
-        """Parse Robot Framework-style arguments (internal method for compatibility)."""
-        return self.argument_processor.parse_arguments(args)
-    
     def _parse_arguments_for_keyword(self, keyword_name: str, args: List[str], library_name: str = None) -> ParsedArguments:
         """Parse arguments using LibDoc information for a specific keyword."""
         return self.argument_processor.parse_arguments_for_keyword(keyword_name, args, library_name)
-    
-    def _parse_arguments_with_rf_spec(self, keyword_info: KeywordInfo, args: List[str]) -> ParsedArguments:
-        """Parse arguments using Robot Framework's native ArgumentSpec if available."""
-        try:
-            from robot.running.arguments import ArgumentSpec
-            from robot.running.arguments.argumentresolver import ArgumentResolver
-            
-            # Try to create ArgumentSpec from keyword info
-            if hasattr(keyword_info, 'args') and keyword_info.args:
-                spec = ArgumentSpec(
-                    positional_or_named=keyword_info.args,
-                    defaults=keyword_info.defaults if hasattr(keyword_info, 'defaults') else {}
-                )
-                
-                # Use Robot Framework's ArgumentResolver to split arguments
-                resolver = ArgumentResolver(spec, resolve_named=True)
-                positional, named = resolver.resolve(args, named_args=None)
-                
-                # Convert to our ParsedArguments format
-                parsed = ParsedArguments()
-                parsed.positional = positional
-                parsed.named = {k: v for k, v in named.items()} if named else {}
-                
-                return parsed
-                
-        except (ImportError, Exception) as e:
-            logger.debug(f"RF ArgumentSpec parsing failed: {e}, using fallback parsing")
-            
-        # Fall back to our custom parsing logic
-        return self._parse_arguments(args)
+
     
     
     
@@ -576,9 +500,11 @@ class DynamicKeywordDiscovery:
         session = self.session_manager.get_session(session_id)
         if not session:
             return self.find_keyword(keyword_name, active_library)
-        
+
         # Search in session's search order
         search_order = session.get_search_order()
+        if not search_order:
+            return self.find_keyword(keyword_name, active_library)
         logger.debug(f"Session '{session_id}' search order: {search_order}")
         
         # First try exact matches in search order
@@ -805,47 +731,36 @@ class DynamicKeywordDiscovery:
                 }
             
             method = getattr(library.instance, keyword_info.method_name)
-            
-            # Handle different types of method calls
-            if keyword_info.is_builtin and hasattr(library.instance, '_context'):
-                # BuiltIn library methods might need context
-                result = method(*original_args)
+
+            # Use centralized type conversion configuration for all methods
+            from robotmcp.config.library_registry import get_libraries_requiring_type_conversion
+            type_conversion_libraries = get_libraries_requiring_type_conversion()
+
+            if keyword_info.library in type_conversion_libraries:
+                try:
+                    conversion_result = self._execute_with_rf_type_conversion(method, keyword_info, original_args)
+                    if conversion_result[0] == 'executed':
+                        result = conversion_result[1]
+                    elif conversion_result[0] == 'not_available':
+                        parsed = self.argument_processor.parse_arguments_for_keyword(
+                            keyword_info.name, original_args, keyword_info.library
+                        )
+                        pos_args = parsed.positional
+                        kwargs = parsed.named
+                        if kwargs:
+                            result = method(*pos_args, **kwargs)
+                        else:
+                            result = method(*pos_args)
+                except Exception as lib_error:
+                    logger.debug(f"{keyword_info.library} execution failed: {lib_error}")
+                    raise lib_error
+            elif keyword_info.name == "Create List":
+                result = method(*parsed_args.positional)
+            elif keyword_info.name == "Set Variable":
+                value = parsed_args.positional[0] if parsed_args.positional else None
+                result = method(value)
             else:
-                # Regular library methods - use centralized type conversion configuration
-                from robotmcp.config.library_registry import get_libraries_requiring_type_conversion
-                type_conversion_libraries = get_libraries_requiring_type_conversion()
-                
-                if keyword_info.library in type_conversion_libraries:
-                    try:
-                        # Use Robot Framework's native type conversion system for libraries that need it
-                        conversion_result = self._execute_with_rf_type_conversion(method, keyword_info, original_args)
-                        if conversion_result[0] == 'executed':  # Successfully converted and executed
-                            result = conversion_result[1]  # Use the result as-is
-                        elif conversion_result[0] == 'not_available':
-                            # Type conversion not available, fallback to our argument processing
-                            parsed = self.argument_processor.parse_arguments_for_keyword(keyword_info.name, original_args, keyword_info.library)
-                            pos_args = parsed.positional
-                            kwargs = parsed.named
-                            
-                            if kwargs:
-                                result = method(*pos_args, **kwargs)
-                            else:
-                                result = method(*pos_args)
-                    except Exception as lib_error:
-                        logger.debug(f"{keyword_info.library} execution failed: {lib_error}")
-                        # Don't fall back to unconverted args as this can cause type errors
-                        # Re-raise the original error
-                        raise lib_error
-                elif keyword_info.name == "Create List":
-                    # Collections.Create List takes variable arguments
-                    result = method(*parsed_args.positional)
-                elif keyword_info.name == "Set Variable":
-                    # Set Variable takes one argument
-                    value = parsed_args.positional[0] if parsed_args.positional else None
-                    result = method(value)
-                else:
-                    # For other libraries, use positional args
-                    result = method(*parsed_args.positional)
+                result = method(*parsed_args.positional, **parsed_args.named)
             
             return {
                 "success": True,
