@@ -27,34 +27,6 @@ class ArgumentProcessor:
         """
         return self.rf_native_converter.parse_and_convert_arguments(keyword_name, args, library_name)
     
-    def parse_arguments(self, args: List[str]) -> ParsedArguments:
-        """
-        Simple fallback argument parsing when LibDoc information is not available.
-        
-        DEPRECATED: Use parse_arguments_for_keyword() instead for better accuracy.
-        """
-        parsed = ParsedArguments()
-        
-        for arg in args:
-            if '=' in arg and self._looks_like_named_argument(arg):
-                # Parse as named argument
-                key, value = arg.split('=', 1)
-                parsed.named[key.strip()] = value
-            else:
-                # Treat as positional argument
-                parsed.positional.append(arg)
-        
-        return parsed
-    
-    def _looks_like_named_argument(self, arg: str) -> bool:
-        """Simple check if an argument looks like a named argument."""
-        if '=' not in arg:
-            return False
-        
-        key_part = arg.split('=', 1)[0].strip()
-        
-        # Must be a valid Python identifier (no spaces, special chars, etc.)
-        return key_part.isidentifier()
     
     
     def parse_argument_signature(self, signature: str) -> List[ArgumentInfo]:

@@ -14,8 +14,11 @@ class KeywordDiscovery:
     """Handles keyword extraction from library instances and keyword caching."""
     
     def __init__(self):
+        # Cache of fully-qualified library.keyword entries
         self.keyword_cache: Dict[str, KeywordInfo] = {}
-        
+        # Map of simple keyword name -> list of KeywordInfo objects from all libraries
+        self.simple_keyword_map: Dict[str, List[KeywordInfo]] = {}
+
         # Keywords that modify the DOM or navigate pages
         self.dom_changing_patterns = [
             'click', 'fill', 'type', 'select', 'check', 'uncheck',
@@ -70,16 +73,27 @@ class KeywordDiscovery:
         try:
             # Get method signature
             sig = inspect.signature(method)
-            args = []
+            args: List[str] = []
             defaults = {}
-            
+
             for param_name, param in sig.parameters.items():
                 if param_name == 'self':
                     continue
-                    
-                args.append(param_name)
+
+                # Build argument representation preserving kind and default
+                if param.kind == inspect.Parameter.VAR_POSITIONAL:
+                    arg_repr = f"*{param_name}"
+                elif param.kind == inspect.Parameter.VAR_KEYWORD:
+                    arg_repr = f"**{param_name}"
+                else:
+                    arg_repr = param_name
+
                 if param.default != inspect.Parameter.empty:
                     defaults[param_name] = param.default
+                    default_str = repr(param.default) if param.default is not None else 'None'
+                    arg_repr = f"{arg_repr}={default_str}"
+
+                args.append(arg_repr)
             
             # Get documentation
             doc = inspect.getdoc(method) or ""
@@ -136,12 +150,12 @@ class KeywordDiscovery:
             # Use library.keyword format as key to avoid overwriting between libraries
             cache_key = f"{lib_info.name.lower()}.{keyword_name.lower()}"
             self.keyword_cache[cache_key] = keyword_info
-            
-            # Also maintain a simple lookup for backward compatibility
+
+            # Track all libraries providing this keyword for ambiguity detection
             simple_key = keyword_name.lower()
-            if simple_key not in self.keyword_cache:
-                # Only add if no other library has claimed this keyword name yet
-                self.keyword_cache[simple_key] = keyword_info
+            existing = self.simple_keyword_map.setdefault(simple_key, [])
+            if all(info.library != keyword_info.library for info in existing):
+                existing.append(keyword_info)
     
     def remove_keywords_from_cache(self, lib_info: LibraryInfo) -> int:
         """Remove keywords from a specific library from the cache."""
@@ -149,19 +163,22 @@ class KeywordDiscovery:
         library_prefix = f"{lib_info.name.lower()}."
         
         # Remove library-specific keys
-        keys_to_remove = [key for key in self.keyword_cache.keys() if key.startswith(library_prefix)]
+        keys_to_remove = [key for key in list(self.keyword_cache.keys()) if key.startswith(library_prefix)]
         for key in keys_to_remove:
             del self.keyword_cache[key]
             keywords_removed += 1
-        
-        # Remove simple keys that belong to this library
+
+        # Remove from simple map
         for keyword_name in list(lib_info.keywords.keys()):
             simple_key = keyword_name.lower()
-            if simple_key in self.keyword_cache:
-                # Only remove if this keyword belongs to the library being removed
-                if self.keyword_cache[simple_key].library == lib_info.name:
-                    del self.keyword_cache[simple_key]
-                    keywords_removed += 1
+            if simple_key in self.simple_keyword_map:
+                self.simple_keyword_map[simple_key] = [
+                    info for info in self.simple_keyword_map[simple_key]
+                    if info.library != lib_info.name
+                ]
+                if not self.simple_keyword_map[simple_key]:
+                    del self.simple_keyword_map[simple_key]
+                keywords_removed += 1
         
         return keywords_removed
     
@@ -169,87 +186,84 @@ class KeywordDiscovery:
         """Find a keyword by name with fuzzy matching, optionally filtering by active library."""
         if not keyword_name:
             return None
-        
+
+        # Support fully qualified names Library.Keyword
+        if '.' in keyword_name:
+            lib, kw = keyword_name.split('.', 1)
+            return self.find_keyword(kw, active_library=lib)
+
         normalized = keyword_name.lower().strip()
-        
+
         # If active_library is specified, try library-specific key first
         if active_library:
             library_specific_key = f"{active_library.lower()}.{normalized}"
             if library_specific_key in self.keyword_cache:
                 logger.debug(f"Found exact library match: {keyword_name} in {active_library}")
                 return self.keyword_cache[library_specific_key]
-        
-        # Create a filtered cache if active_library is specified
-        search_cache = self.keyword_cache
-        if active_library:
-            # Filter keywords to only include those from the active library or built-in libraries
-            builtin_libraries = ['BuiltIn', 'Collections', 'String', 'DateTime', 'OperatingSystem', 'Process']
-            filtered_cache = {}
-            
-            for cache_key, keyword_info in self.keyword_cache.items():
-                if (keyword_info.library == active_library or keyword_info.library in builtin_libraries):
-                    filtered_cache[cache_key] = keyword_info
-            
-            search_cache = filtered_cache
-            logger.debug(f"Filtering keyword search to library '{active_library}' - {len(search_cache)} keywords available")
-            
-            # Debug: Show which keywords are available for "open browser"
-            open_browser_candidates = [
-                f"{info.library}.{info.name}" for key, info in search_cache.items() 
-                if "open browser" in key or info.name.lower() == "open browser"
-            ]
-            if open_browser_candidates:
-                logger.debug(f"Available 'Open Browser' candidates after filtering: {open_browser_candidates}")
-        
-        # Try exact match first (simple key for backward compatibility)
-        if normalized in search_cache:
-            keyword_info = search_cache[normalized]
-            # When active_library is specified, ensure the found keyword is from the correct library or built-in
+
+        builtin_libraries = ['BuiltIn', 'Collections', 'String', 'DateTime', 'OperatingSystem', 'Process']
+
+        # Search using simple keyword map
+        if normalized in self.simple_keyword_map:
+            candidates = self.simple_keyword_map[normalized]
             if active_library:
-                if (keyword_info.library == active_library or 
-                    keyword_info.library in ['BuiltIn', 'Collections', 'String', 'DateTime', 'OperatingSystem', 'Process']):
-                    logger.debug(f"Found exact match: {keyword_name} from {keyword_info.library} (filtered for {active_library})")
-                    return keyword_info
-                else:
-                    logger.debug(f"Rejecting {keyword_name} from {keyword_info.library} due to active_library filter ({active_library})")
-                    # Continue searching - don't return this result
-            else:
-                return keyword_info
-        
-        # Try common variations
+                candidates = [c for c in candidates if c.library == active_library or c.library in builtin_libraries]
+            if len(candidates) == 1:
+                return candidates[0]
+            if len(candidates) > 1:
+                raise ValueError(f"Keyword '{keyword_name}' is defined in multiple libraries: {[c.library for c in candidates]}")
+
+        # Try common variations against library-specific cache
         variations = [
             normalized.replace(' ', ''),  # Remove spaces
             normalized.replace('_', ' '),  # Replace underscores
             normalized.replace('-', ' '),  # Replace hyphens
         ]
-        
+
         for variation in variations:
-            if variation in search_cache:
-                return search_cache[variation]
-        
-        # Try fuzzy matching - find best partial match
+            if variation in self.simple_keyword_map:
+                candidates = self.simple_keyword_map[variation]
+                if active_library:
+                    candidates = [c for c in candidates if c.library == active_library or c.library in builtin_libraries]
+                if len(candidates) == 1:
+                    return candidates[0]
+                if len(candidates) > 1:
+                    raise ValueError(
+                        f"Keyword '{keyword_name}' is defined in multiple libraries: {[c.library for c in candidates]}"
+                    )
+
+        # Fuzzy matching across library-specific keys
         best_match = None
         best_score = 0
-        
-        for cached_name, keyword_info in search_cache.items():
-            # Score based on how much of the search term matches
+
+        for cache_key, keyword_info in self.keyword_cache.items():
+            cached_name = cache_key.split('.', 1)[1] if '.' in cache_key else cache_key
             if normalized in cached_name:
                 score = len(normalized) / len(cached_name)
-                if score > best_score:
-                    best_score = score
-                    best_match = keyword_info
             elif cached_name in normalized:
                 score = len(cached_name) / len(normalized)
-                if score > best_score:
-                    best_score = score
-                    best_match = keyword_info
-        
-        # Only return matches with reasonable confidence
-        if best_score >= 0.6:
-            library_info = f" from {best_match.library}" if active_library else ""
-            logger.debug(f"Fuzzy matched '{keyword_name}' to '{best_match.name}'{library_info} (score: {best_score:.2f})")
-            return best_match
-        
+            else:
+                score = 0
+
+            if score > best_score:
+                best_score = score
+                best_match = keyword_info
+
+        if best_match and best_score >= 0.6:
+            simple_key = best_match.name.lower()
+            candidates = self.simple_keyword_map.get(simple_key, [])
+            if active_library:
+                candidates = [c for c in candidates if c.library == active_library or c.library in builtin_libraries]
+            if len(candidates) == 1:
+                logger.debug(
+                    f"Fuzzy matched '{keyword_name}' to '{best_match.name}' from {best_match.library} (score: {best_score:.2f})"
+                )
+                return best_match
+            if len(candidates) > 1:
+                raise ValueError(
+                    f"Keyword '{keyword_name}' is defined in multiple libraries: {[c.library for c in candidates]}"
+                )
+
         return None
     
     def get_keyword_suggestions(self, keyword_name: str, limit: int = 5) -> List[str]:
