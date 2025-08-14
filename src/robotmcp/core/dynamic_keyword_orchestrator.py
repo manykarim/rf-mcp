@@ -162,9 +162,22 @@ class DynamicKeywordDiscovery:
             # Smart detection: only process named arguments if we actually find valid ones
             potential_named_args = any('=' in arg for arg in original_args)
             
-            if potential_named_args and hasattr(keyword_info, 'args') and keyword_info.args:
-                # Parse arguments to see if we actually have valid named arguments
-                positional_args, named_args = self._split_args_into_positional_and_named(original_args, keyword_info.args)
+            if potential_named_args:
+                # Try to use the actual method signature for parameter validation (more reliable than KeywordInfo.args)
+                try:
+                    param_names = list(sig.parameters.keys())
+                    logger.debug(f"Method signature parameters for {keyword_info.name}: {param_names}")
+                    
+                    # Parse arguments to see if we actually have valid named arguments
+                    positional_args, named_args = self._split_args_using_method_signature(original_args, sig)
+                except (AttributeError, TypeError):
+                    # Fallback to the original KeywordInfo-based approach (for tests and edge cases)
+                    logger.debug(f"Unable to inspect method signature, falling back to KeywordInfo.args approach")
+                    if hasattr(keyword_info, 'args') and keyword_info.args:
+                        positional_args, named_args = self._split_args_into_positional_and_named(original_args, keyword_info.args)
+                    else:
+                        # No signature info available, fall back to positional-only
+                        raise Exception("fallback_to_positional")
                 
                 # Only use named argument processing if we found actual named arguments
                 if named_args:
@@ -204,7 +217,7 @@ class DynamicKeywordDiscovery:
                     raise Exception("fallback_to_positional")  # Trigger fallback
                     
             else:
-                # No '=' signs detected or no signature info, use original positional-only logic
+                # No '=' signs detected, use original positional-only logic
                 logger.debug(f"No potential named arguments detected for {keyword_info.name}, using positional processing")
                 raise Exception("fallback_to_positional")  # Trigger fallback
                 
@@ -285,6 +298,36 @@ class DynamicKeywordDiscovery:
                 positional.append(arg)
         
         return positional, named
+    
+    def _split_args_using_method_signature(self, original_args: List[str], method_signature) -> Tuple[List[str], Dict[str, str]]:
+        """
+        Split arguments into positional and named using the actual method signature.
+        This is more reliable than using KeywordInfo.args which may be outdated or incorrect.
+        """
+        positional_args = []
+        named_args = {}
+        
+        # Get parameter names from the actual method signature
+        param_names = list(method_signature.parameters.keys())
+        
+        for arg in original_args:
+            if '=' in arg:
+                # Potential named argument
+                param_name, param_value = arg.split('=', 1)
+                
+                # Check if this is a valid parameter name for the method
+                if param_name in param_names:
+                    named_args[param_name] = param_value
+                    logger.debug(f"Valid named argument: {param_name}={param_value}")
+                else:
+                    # Not a valid parameter name - treat as positional (e.g., locator string)
+                    positional_args.append(arg)
+                    logger.debug(f"Invalid parameter name '{param_name}' - treating '{arg}' as positional")
+            else:
+                # Regular positional argument
+                positional_args.append(arg)
+        
+        return positional_args, named_args
     
     def _looks_like_named_arg(self, arg: str, valid_param_names: set = None) -> bool:
         """
