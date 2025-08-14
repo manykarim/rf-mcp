@@ -582,6 +582,92 @@ async def validate_test_readiness(session_id: str = "default") -> Dict[str, Any]
 
 
 @mcp.tool
+async def set_library_search_order(
+    libraries: List[str], session_id: str = "default"
+) -> Dict[str, Any]:
+    """Set explicit library search order for keyword resolution (like RF Set Library Search Order).
+
+    This tool implements Robot Framework's Set Library Search Order concept, allowing explicit
+    control over which library's keywords take precedence when multiple libraries have the
+    same keyword name.
+
+    Args:
+        libraries: List of library names in priority order (highest priority first)
+        session_id: Session identifier to configure
+
+    Returns:
+        Dict with success status, applied search order, and any warnings about invalid libraries
+
+    Example:
+        # Prioritize SeleniumLibrary over Browser Library for web automation
+        await set_library_search_order(["SeleniumLibrary", "BuiltIn", "Collections"], "web_session")
+        
+        # Prioritize RequestsLibrary for API testing
+        await set_library_search_order(["RequestsLibrary", "BuiltIn", "String"], "api_session")
+    """
+    try:
+        # Get or create session
+        session = execution_engine.session_manager.get_or_create_session(session_id)
+        
+        # Set library search order
+        old_order = session.get_search_order()
+        session.set_library_search_order(libraries)
+        new_order = session.get_search_order()
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "old_search_order": old_order,
+            "new_search_order": new_order,
+            "libraries_requested": libraries,
+            "libraries_applied": new_order,
+            "message": f"Library search order updated for session '{session_id}'"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error setting library search order: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "session_id": session_id
+        }
+
+
+@mcp.tool
+async def get_session_info(session_id: str = "default") -> Dict[str, Any]:
+    """Get comprehensive information about a session's configuration and state.
+
+    Args:
+        session_id: Session identifier to get information for
+
+    Returns:
+        Dict with session configuration, library status, and execution history
+    """
+    try:
+        session = execution_engine.session_manager.get_session(session_id)
+        
+        if not session:
+            return {
+                "success": False,
+                "error": f"Session '{session_id}' not found",
+                "available_sessions": execution_engine.session_manager.get_all_session_ids()
+            }
+        
+        return {
+            "success": True,
+            "session_info": session.get_session_info()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting session info: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "session_id": session_id
+        }
+
+
+@mcp.tool
 async def get_selenium_locator_guidance(
     error_message: str = None, keyword_name: str = None
 ) -> Dict[str, Any]:
