@@ -152,36 +152,64 @@ class DynamicKeywordDiscovery:
         try:
             from robot.running.arguments.typeconverters import TypeConverter
             from robot.running.arguments.typeinfo import TypeInfo
+            from robot.running.arguments.argumentresolver import ArgumentResolver
+            from robot.running.arguments import ArgumentSpec
             import inspect
             
             # Get method signature
             sig = inspect.signature(method)
             
-            # Convert arguments using Robot Framework's type conversion
-            converted_args = []
-            param_list = list(sig.parameters.values())
-            
-            for i, (arg_value, param) in enumerate(zip(original_args, param_list)):
-                if param.annotation != inspect.Parameter.empty:
-                    # Create TypeInfo from annotation
-                    type_info = TypeInfo.from_type_hint(param.annotation)
-                    
-                    # Get converter for this type
-                    converter = TypeConverter.converter_for(type_info)
-                    
-                    # Convert the argument
-                    converted_value = converter.convert(arg_value, param.name)
-                    converted_args.append(converted_value)
-                    
-                    logger.debug(f"RF converted arg {i} '{param.name}': {arg_value} -> {converted_value} (type: {type(converted_value).__name__})")
+            # Check if we have LibDoc signature information for named argument parsing
+            if hasattr(keyword_info, 'args') and keyword_info.args:
+                # Parse named arguments using existing logic from rf_native_type_converter
+                positional_args, named_args = self._split_args_into_positional_and_named(original_args, keyword_info.args)
+                
+                # Create ArgumentSpec from LibDoc signature
+                spec = self._create_argument_spec_from_libdoc(keyword_info.args)
+                
+                # Use Robot Framework's ArgumentResolver to properly handle arguments
+                resolver = ArgumentResolver(spec)
+                resolved_positional, resolved_named = resolver.resolve(positional_args, named_args)
+                
+                # Apply type conversion to resolved arguments
+                converted_positional = self._convert_positional_with_rf(resolved_positional, sig)
+                converted_named = self._convert_named_with_rf(resolved_named, sig)
+                
+                # Execute with both positional and named arguments
+                if converted_named:
+                    result = method(*converted_positional, **converted_named)
                 else:
-                    # No type annotation, use as-is
-                    converted_args.append(arg_value)
+                    result = method(*converted_positional)
+                    
+                logger.debug(f"RF native type conversion succeeded for {keyword_info.name} with named args: {list(converted_named.keys()) if converted_named else 'none'}")
+                    
+            else:
+                # Fallback to positional-only conversion (original logic)
+                converted_args = []
+                param_list = list(sig.parameters.values())
+                
+                for i, (arg_value, param) in enumerate(zip(original_args, param_list)):
+                    if param.annotation != inspect.Parameter.empty:
+                        # Create TypeInfo from annotation
+                        type_info = TypeInfo.from_type_hint(param.annotation)
+                        
+                        # Get converter for this type
+                        converter = TypeConverter.converter_for(type_info)
+                        
+                        # Convert the argument
+                        converted_value = converter.convert(arg_value, param.name)
+                        converted_args.append(converted_value)
+                        
+                        logger.debug(f"RF converted arg {i} '{param.name}': {arg_value} -> {converted_value} (type: {type(converted_value).__name__})")
+                    else:
+                        # No type annotation, use as-is
+                        converted_args.append(arg_value)
+                
+                # Execute with converted arguments
+                result = method(*converted_args)
+                
+                logger.debug(f"RF native type conversion succeeded for {keyword_info.name}")
             
-            # Execute with converted arguments
-            result = method(*converted_args)
-            
-            logger.debug(f"RF native type conversion succeeded for {keyword_info.name}")
             return ('executed', result)  # Return tuple to indicate execution happened
             
         except ImportError as ie:
@@ -196,6 +224,159 @@ class DynamicKeywordDiscovery:
             logger.debug(f"Full traceback: {traceback.format_exc()}")
             # CRITICAL: Even though execution failed, it DID execute - don't try again
             raise e  # Re-raise the exception instead of returning None
+    
+    def _split_args_into_positional_and_named(self, args: List[str], signature_args: List[str] = None) -> tuple[List[str], Dict[str, str]]:
+        """
+        Split user arguments into positional and named arguments using LibDoc signature information.
+        
+        This method reuses the logic from rf_native_type_converter to ensure consistency.
+        """
+        positional = []
+        named = {}
+        
+        # Build list of valid parameter names from signature
+        valid_param_names = set()
+        if signature_args:
+            for arg_str in signature_args:
+                if ':' in arg_str:
+                    param_name = arg_str.split(':', 1)[0].strip()
+                    if param_name.startswith('*'):
+                        param_name = param_name[1:]  # Remove * for varargs
+                    if param_name.startswith('*'):
+                        param_name = param_name[1:]  # Remove ** for kwargs
+                    if param_name and not param_name.startswith('*'):
+                        valid_param_names.add(param_name)
+        
+        for arg in args:
+            if '=' in arg and self._looks_like_named_arg(arg, valid_param_names):
+                key, value = arg.split('=', 1)
+                named[key.strip()] = value
+            else:
+                positional.append(arg)
+        
+        return positional, named
+    
+    def _looks_like_named_arg(self, arg: str, valid_param_names: set = None) -> bool:
+        """
+        Check if an argument looks like a named argument.
+        
+        Uses valid parameter names from LibDoc signature to distinguish between
+        actual named parameters and locator strings containing '=' characters.
+        """
+        if '=' not in arg:
+            return False
+        
+        key_part = arg.split('=', 1)[0].strip()
+        
+        # Must be valid Python identifier
+        if not key_part.isidentifier():
+            return False
+        
+        # If we have valid parameter names from signature, only treat as named arg
+        # if the key matches an actual parameter name
+        if valid_param_names:
+            return key_part in valid_param_names
+        
+        # Fallback: assume it's a named argument if it's a valid identifier
+        return True
+    
+    def _create_argument_spec_from_libdoc(self, libdoc_args: List[str]):
+        """Create Robot Framework ArgumentSpec from LibDoc signature."""
+        from robot.running.arguments import ArgumentSpec
+        
+        positional_or_named = []
+        defaults = {}
+        var_positional = None
+        var_named = None
+        
+        for arg_str in libdoc_args:
+            if ':' in arg_str:
+                # Extract parameter name and default value
+                name, default_part = arg_str.split(':', 1)
+                name = name.strip()
+                
+                # Handle varargs and kwargs
+                if name.startswith('**'):
+                    var_named = name[2:] if len(name) > 2 else 'kwargs'
+                elif name.startswith('*'):
+                    var_positional = name[1:] if len(name) > 1 else 'args'
+                elif name not in ['*', '**']:  # Only add regular parameters
+                    positional_or_named.append(name)
+                    
+                    # Extract default value if present
+                    if '=' in default_part:
+                        defaults[name] = default_part.split('=', 1)[1].strip()
+        
+        return ArgumentSpec(
+            positional_or_named=positional_or_named,
+            defaults=defaults,
+            var_positional=var_positional,
+            var_named=var_named
+        )
+    
+    def _convert_positional_with_rf(self, args: List[str], signature) -> List[Any]:
+        """Convert positional arguments using RF type conversion."""
+        from robot.running.arguments.typeconverters import TypeConverter
+        from robot.running.arguments.typeinfo import TypeInfo
+        
+        converted_args = []
+        param_list = list(signature.parameters.values())
+        
+        for i, arg_value in enumerate(args):
+            if i < len(param_list):
+                param = param_list[i]
+                if param.annotation != param.empty:
+                    # Create TypeInfo from annotation
+                    type_info = TypeInfo.from_type_hint(param.annotation)
+                    
+                    # Get converter for this type
+                    converter = TypeConverter.converter_for(type_info)
+                    
+                    # Convert the argument
+                    converted_value = converter.convert(arg_value, param.name)
+                    converted_args.append(converted_value)
+                    
+                    logger.debug(f"RF converted positional arg {i} '{param.name}': {arg_value} -> {converted_value} (type: {type(converted_value).__name__})")
+                else:
+                    # No type annotation, use as-is
+                    converted_args.append(arg_value)
+            else:
+                # More arguments than parameters, use as-is
+                converted_args.append(arg_value)
+        
+        return converted_args
+    
+    def _convert_named_with_rf(self, named_args: Dict[str, str], signature) -> Dict[str, Any]:
+        """Convert named arguments using RF type conversion."""
+        from robot.running.arguments.typeconverters import TypeConverter
+        from robot.running.arguments.typeinfo import TypeInfo
+        
+        converted_named = {}
+        param_dict = {param.name: param for param in signature.parameters.values()}
+        
+        for name, value in named_args.items():
+            if name in param_dict:
+                param = param_dict[name]
+                if param.annotation != param.empty:
+                    # Create TypeInfo from annotation
+                    type_info = TypeInfo.from_type_hint(param.annotation)
+                    
+                    # Get converter for this type
+                    converter = TypeConverter.converter_for(type_info)
+                    
+                    # Convert the argument
+                    converted_value = converter.convert(value, name)
+                    converted_named[name] = converted_value
+                    
+                    logger.debug(f"RF converted named arg '{name}': {value} -> {converted_value} (type: {type(converted_value).__name__})")
+                else:
+                    # No type annotation, use as-is
+                    converted_named[name] = value
+            else:
+                # Unknown parameter, use as-is
+                converted_named[name] = value
+        
+        return converted_named
     
     def get_keyword_suggestions(self, keyword_name: str, limit: int = 5) -> List[str]:
         """Get keyword suggestions based on partial match."""
