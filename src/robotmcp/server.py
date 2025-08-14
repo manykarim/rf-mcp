@@ -28,7 +28,11 @@ test_builder = TestBuilder(execution_engine)
 
 
 @mcp.tool
-async def analyze_scenario(scenario: str, context: str = "web") -> Dict[str, Any]:
+async def analyze_scenario(
+    scenario: str, 
+    context: str = "web", 
+    session_id: str = None
+) -> Dict[str, Any]:
     """Process natural language test description into structured test intent.
     
     RECOMMENDED WORKFLOW - STEP 1 OF 3:
@@ -39,15 +43,45 @@ async def analyze_scenario(scenario: str, context: str = "web") -> Dict[str, Any
     
     Using this order prevents unnecessary library checks and pip installations by ensuring
     you only verify libraries that are actually relevant to the user's scenario.
+    
+    NEW: Session Management Integration
+    If session_id is provided, this tool will create and auto-configure a session based on
+    the scenario analysis, enabling intelligent library management from the start.
 
     Args:
         scenario: Human language scenario description
         context: Optional context about the application (web, mobile, API, etc.)
+        session_id: Optional session ID to create and auto-configure for this scenario
         
     Returns:
-        Structured test intent that can be used by recommend_libraries for targeted suggestions
+        Structured test intent that can be used by recommend_libraries for targeted suggestions.
+        If session_id provided, also includes session configuration details.
     """
-    return await nlp_processor.analyze_scenario(scenario, context)
+    # Analyze the scenario first
+    result = await nlp_processor.analyze_scenario(scenario, context)
+    
+    # If session_id provided, create and auto-configure session
+    if session_id:
+        logger.info(f"Creating and auto-configuring session '{session_id}' based on scenario analysis")
+        
+        # Get or create session using execution coordinator
+        session = execution_engine.session_manager.get_or_create_session(session_id)
+        
+        # Auto-configure session based on scenario
+        session.configure_from_scenario(scenario)
+        
+        # Add session info to result
+        result["session_info"] = {
+            "session_id": session_id,
+            "auto_configured": session.auto_configured,
+            "session_type": session.session_type.value,
+            "explicit_library_preference": session.explicit_library_preference,
+            "recommended_libraries": session.get_libraries_to_load()
+        }
+        
+        logger.info(f"Session '{session_id}' configured: type={session.session_type.value}, preference={session.explicit_library_preference}")
+    
+    return result
 
 
 @mcp.tool
@@ -218,7 +252,10 @@ async def validate_scenario(
 
 @mcp.tool
 async def recommend_libraries(
-    scenario: str, context: str = "web", max_recommendations: int = 5
+    scenario: str, 
+    context: str = "web", 
+    max_recommendations: int = 5,
+    session_id: str = None
 ) -> Dict[str, Any]:
     """Recommend Robot Framework libraries based on test scenario.
     
@@ -231,18 +268,57 @@ async def recommend_libraries(
     IMPORTANT: Use the scenario output from analyze_scenario as input to this tool for
     the most accurate library recommendations. This prevents checking irrelevant libraries
     in the next step.
+    
+    NEW: Session Management Integration
+    If session_id is provided, this tool will setup the session with recommended libraries
+    and configure library search order for optimal keyword resolution.
 
     Args:
         scenario: Natural language description of the test scenario (ideally from analyze_scenario output)
         context: Testing context (web, mobile, api, database, desktop, system, visual)
         max_recommendations: Maximum number of library recommendations to return
+        session_id: Optional session ID to setup with recommended libraries
         
     Returns:
-        Targeted library recommendations that should be passed to check_library_availability
+        Targeted library recommendations that should be passed to check_library_availability.
+        If session_id provided, also includes session setup details.
     """
-    return library_recommender.recommend_libraries(
+    # Get library recommendations
+    result = library_recommender.recommend_libraries(
         scenario, context, max_recommendations
     )
+    
+    # If session_id provided, setup session with recommended libraries
+    if session_id:
+        logger.info(f"Setting up session '{session_id}' with recommended libraries")
+        
+        # Get or create session
+        session = execution_engine.session_manager.get_or_create_session(session_id)
+        
+        # If not already auto-configured, configure from scenario
+        if not session.auto_configured:
+            session.configure_from_scenario(scenario)
+        
+        # Get recommended libraries from result
+        recommended_libs = result.get("recommended_libraries", [])
+        
+        # Setup library search order based on recommendations
+        if recommended_libs:
+            # Update session search order to prioritize recommended libraries
+            session.search_order = recommended_libs + [lib for lib in session.search_order if lib not in recommended_libs]
+            logger.info(f"Updated session '{session_id}' search order: {session.search_order[:3]}...")
+        
+        # Add session setup info to result
+        result["session_setup"] = {
+            "session_id": session_id,
+            "configured": True,
+            "search_order": session.search_order,
+            "session_type": session.session_type.value,
+            "explicit_preference": session.explicit_library_preference,
+            "recommended_libraries_applied": recommended_libs
+        }
+    
+    return result
 
 
 @mcp.tool
