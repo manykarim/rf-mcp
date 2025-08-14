@@ -159,17 +159,17 @@ class DynamicKeywordDiscovery:
             # Get method signature
             sig = inspect.signature(method)
             
-            # Check if we have named arguments that need special processing
-            has_named_args = any('=' in arg for arg in original_args)
+            # Smart detection: only process named arguments if we actually find valid ones
+            potential_named_args = any('=' in arg for arg in original_args)
             
-            if has_named_args and hasattr(keyword_info, 'args') and keyword_info.args:
-                logger.debug(f"Processing named arguments for {keyword_info.name}: {original_args}")
-                
-                # Parse named arguments using existing logic from rf_native_type_converter
+            if potential_named_args and hasattr(keyword_info, 'args') and keyword_info.args:
+                # Parse arguments to see if we actually have valid named arguments
                 positional_args, named_args = self._split_args_into_positional_and_named(original_args, keyword_info.args)
                 
-                # Only use ArgumentResolver if we actually have named arguments
+                # Only use named argument processing if we found actual named arguments
                 if named_args:
+                    logger.debug(f"Found valid named arguments for {keyword_info.name}: {named_args}")
+                    
                     # Create ArgumentSpec from LibDoc signature
                     spec = self._create_argument_spec_from_libdoc(keyword_info.args)
                     
@@ -199,13 +199,13 @@ class DynamicKeywordDiscovery:
                     logger.debug(f"RF native type conversion succeeded for {keyword_info.name} with named args: {list(converted_named.keys()) if converted_named else 'none'}")
                     return ('executed', result)  # Return tuple to indicate execution happened
                 else:
-                    # No actual named arguments, fall back to normal processing
-                    logger.debug(f"No actual named arguments found, fallingback to positional processing")
+                    # Arguments contain '=' but none are valid named arguments (e.g., locator strings)
+                    logger.debug(f"Arguments contain '=' but no valid named arguments found for {keyword_info.name}, using positional processing")
                     raise Exception("fallback_to_positional")  # Trigger fallback
                     
             else:
-                # No named arguments detected, use original positional-only logic
-                logger.debug(f"No named arguments detected for {keyword_info.name}, using original logic")
+                # No '=' signs detected or no signature info, use original positional-only logic
+                logger.debug(f"No potential named arguments detected for {keyword_info.name}, using positional processing")
                 raise Exception("fallback_to_positional")  # Trigger fallback
                 
         except Exception as e:
