@@ -159,6 +159,7 @@ class DynamicKeywordDiscovery:
             # Get method signature
             sig = inspect.signature(method)
             
+
             # Check if we have LibDoc signature information for named argument parsing
             if hasattr(keyword_info, 'args') and keyword_info.args:
                 # Parse named arguments using centralized converter logic
@@ -178,17 +179,55 @@ class DynamicKeywordDiscovery:
                 # Apply type conversion to resolved arguments
                 converted_positional = self._convert_positional_with_rf(resolved_positional, sig)
                 converted_named = self._convert_named_with_rf(resolved_named, sig)
+
                 
-                # Execute with both positional and named arguments
-                if converted_named:
-                    result = method(*converted_positional, **converted_named)
-                else:
-                    result = method(*converted_positional)
+                # Only use named argument processing if we found actual named arguments
+                if named_args:
+                    logger.debug(f"Found valid named arguments for {keyword_info.name}: {named_args}")
                     
-                logger.debug(f"RF native type conversion succeeded for {keyword_info.name} with named args: {list(converted_named.keys()) if converted_named else 'none'}")
+                    # Create ArgumentSpec from LibDoc signature
+                    spec = self._create_argument_spec_from_libdoc(keyword_info.args)
+                    
+                    # Use Robot Framework's ArgumentResolver to properly handle arguments
+                    resolver = ArgumentResolver(spec)
+                    resolved_positional, resolved_named = resolver.resolve(positional_args, named_args)
+                    
+                    # ArgumentResolver might return different types, handle them properly
+                    if not isinstance(resolved_named, dict):
+                        logger.debug(f"ArgumentResolver returned non-dict for named args: {type(resolved_named)} = {resolved_named}")
+                        if hasattr(resolved_named, '__iter__') and not isinstance(resolved_named, str):
+                            # Convert list/tuple to dict if possible
+                            resolved_named = dict(resolved_named) if resolved_named else {}
+                        else:
+                            resolved_named = {}
+                    
+                    # Apply type conversion to resolved arguments
+                    converted_positional = self._convert_positional_with_rf(resolved_positional, sig)
+                    converted_named = self._convert_named_with_rf(resolved_named, sig)
+                    
+                    # Execute with both positional and named arguments
+                    if converted_named:
+                        result = method(*converted_positional, **converted_named)
+                    else:
+                        result = method(*converted_positional)
+                        
+                    logger.debug(f"RF native type conversion succeeded for {keyword_info.name} with named args: {list(converted_named.keys()) if converted_named else 'none'}")
+                    return ('executed', result)  # Return tuple to indicate execution happened
+                else:
+                    # Arguments contain '=' but none are valid named arguments (e.g., locator strings)
+                    logger.debug(f"Arguments contain '=' but no valid named arguments found for {keyword_info.name}, using positional processing")
+                    raise Exception("fallback_to_positional")  # Trigger fallback
                     
             else:
-                # Fallback to positional-only conversion (original logic)
+                # No '=' signs detected, use original positional-only logic
+                logger.debug(f"No potential named arguments detected for {keyword_info.name}, using positional processing")
+                raise Exception("fallback_to_positional")  # Trigger fallback
+                
+        except Exception as e:
+            if str(e) == "fallback_to_positional":
+                # Use the original positional-only logic
+                logger.debug(f"Falling back to positional-only processing for {keyword_info.name}")
+                
                 converted_args = []
                 param_list = list(sig.parameters.values())
                 
@@ -213,8 +252,10 @@ class DynamicKeywordDiscovery:
                 result = method(*converted_args)
                 
                 logger.debug(f"RF native type conversion succeeded for {keyword_info.name}")
-            
-            return ('executed', result)  # Return tuple to indicate execution happened
+                return ('executed', result)  # Return tuple to indicate execution happened
+            else:
+                # Re-raise other exceptions
+                raise e
             
         except ImportError as ie:
             logger.debug(f"Robot Framework type conversion not available: {ie}")
@@ -229,16 +270,24 @@ class DynamicKeywordDiscovery:
             # CRITICAL: Even though execution failed, it DID execute - don't try again
             raise e  # Re-raise the exception instead of returning None
     
+
     def _create_argument_spec_from_libdoc(self, libdoc_args: List[str]):
         """Create Robot Framework ArgumentSpec from LibDoc signature."""
         from robot.running.arguments import ArgumentSpec
         
         positional_or_named = []
+        kw_only = []
         defaults = {}
         var_positional = None
         var_named = None
+        keyword_only_separator_found = False
         
         for arg_str in libdoc_args:
+            # Handle the special "*" separator for keyword-only arguments
+            if arg_str.strip() == '*':
+                keyword_only_separator_found = True
+                continue
+                
             if ':' in arg_str:
                 # Extract parameter name and default value
                 name, default_part = arg_str.split(':', 1)
@@ -250,7 +299,10 @@ class DynamicKeywordDiscovery:
                 elif name.startswith('*'):
                     var_positional = name[1:] if len(name) > 1 else 'args'
                 elif name not in ['*', '**']:  # Only add regular parameters
-                    positional_or_named.append(name)
+                    if keyword_only_separator_found:
+                        kw_only.append(name)
+                    else:
+                        positional_or_named.append(name)
                     
                     # Extract default value if present
                     if '=' in default_part:
@@ -258,6 +310,7 @@ class DynamicKeywordDiscovery:
         
         return ArgumentSpec(
             positional_or_named=positional_or_named,
+            named_only=kw_only,
             defaults=defaults,
             var_positional=var_positional,
             var_named=var_named
