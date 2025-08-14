@@ -73,6 +73,7 @@ async def execute_step(
     keyword: str,
     arguments: List[str] = None,
     session_id: str = "default",
+    library_prefix: str = None,
     raise_on_failure: bool = True,
     detail_level: str = "minimal",
     scenario_hint: str = None,
@@ -91,8 +92,9 @@ async def execute_step(
         keyword: Robot Framework keyword name
         arguments: Arguments for the keyword (supports both positional and named: ["arg1", "param=value"])
         session_id: Session identifier for maintaining context
+        library_prefix: Explicit library name to force keyword execution from a specific library
         raise_on_failure: If True, raises exception for failed steps (proper MCP failure reporting).
-                         If False, returns failure details in response (for debugging/analysis).
+                        If False, returns failure details in response (for debugging/analysis).
         detail_level: Level of detail in response ('minimal', 'standard', 'full').
                      'minimal' reduces response size for AI agents by ~80-90%.
         scenario_hint: Optional scenario text for intelligent library auto-configuration.
@@ -106,7 +108,13 @@ async def execute_step(
         arguments = []
 
     result = await execution_engine.execute_step(
-        keyword, arguments, session_id, detail_level, scenario_hint=scenario_hint, assign_to=assign_to
+        keyword,
+        arguments,
+        session_id,
+        detail_level,
+        library_prefix=library_prefix,
+        scenario_hint=scenario_hint,
+        assign_to=assign_to,
     )
 
     # For proper MCP protocol compliance, failed steps should raise exceptions
