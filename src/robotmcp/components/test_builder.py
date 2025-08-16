@@ -346,8 +346,8 @@ class TestBuilder:
                         step.arguments == arguments):
                         return None  # Skip redundant verification
         
-        # Rule: Add explicit selector strategy prefixes for Robot Framework compatibility
-        processed_arguments = self._add_strategy_prefixes_to_arguments(keyword, arguments, session_id)
+        # Use original arguments - they already worked during execution
+        processed_arguments = arguments
         
         # Rule: Add meaningful comments
         comment = None
@@ -360,74 +360,6 @@ class TestBuilder:
             comment=comment
         )
 
-    def _add_strategy_prefixes_to_arguments(self, keyword: str, arguments: List[str], session_id: str = None) -> List[str]:
-        """Add explicit strategy prefixes to locator arguments for Robot Framework compatibility."""
-        
-        # Only apply to keywords that typically take locators as first argument
-        browser_library_keywords = [
-            'click', 'fill text', 'type text', 'clear', 'select options by',
-            'check checkbox', 'uncheck checkbox', 'hover', 'wait for elements state',
-            'get element', 'get elements', 'get text', 'get property', 'get attribute',
-            'scroll to element', 'highlight elements', 'take screenshot'
-        ]
-        
-        selenium_library_keywords = [
-            'click element', 'click button', 'click link', 'input text', 'input password',
-            'select checkbox', 'uncheck checkbox', 'select from list by value', 'select from list by label',
-            'mouse over', 'mouse down', 'get text', 'get element attribute', 'element should contain',
-            'wait until element is visible', 'wait until element contains', 'scroll element into view'
-        ]
-        
-        all_locator_keywords = browser_library_keywords + selenium_library_keywords
-        
-        if keyword.lower() not in all_locator_keywords or not arguments:
-            return arguments
-        
-        # Determine target library from session or keyword
-        target_library = "Browser"  # Default
-        
-        if self.execution_engine and session_id:
-            try:
-                session = self.execution_engine.sessions.get(session_id)
-                if session:
-                    active_lib = session.get_active_library()
-                    if active_lib == "selenium":
-                        target_library = "SeleniumLibrary"
-                    elif 'SeleniumLibrary' in session.imported_libraries:
-                        target_library = "SeleniumLibrary"
-                    # Check keyword patterns
-                    elif keyword.lower() in selenium_library_keywords:
-                        target_library = "SeleniumLibrary"
-            except Exception as e:
-                logger.debug(f"Could not determine library from session: {e}")
-        
-        # Also detect from keyword pattern
-        if keyword.lower() in selenium_library_keywords:
-            target_library = "SeleniumLibrary"
-        
-        # Create locator converter for strategy prefix detection
-        from robotmcp.components.execution.locator_converter import LocatorConverter
-        from robotmcp.models.config_models import ExecutionConfig
-        
-        config = ExecutionConfig()
-        converter = LocatorConverter(config)
-        
-        # Process first argument (usually the locator) 
-        processed_arguments = arguments.copy()
-        first_arg = arguments[0]
-        
-        # Add strategy prefix for test suite generation with target library
-        prefixed_locator = converter.add_explicit_strategy_prefix(
-            first_arg, 
-            for_test_suite=True, 
-            target_library=target_library
-        )
-        
-        if prefixed_locator != first_arg:
-            processed_arguments[0] = prefixed_locator
-            logger.debug(f"Added {target_library} strategy prefix for test suite: '{first_arg}' -> '{prefixed_locator}'")
-        
-        return processed_arguments
 
     async def _generate_step_comment(self, keyword: str, arguments: List[str]) -> Optional[str]:
         """Generate a meaningful comment for a step."""
