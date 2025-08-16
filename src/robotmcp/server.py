@@ -29,21 +29,19 @@ test_builder = TestBuilder(execution_engine)
 
 @mcp.tool
 async def analyze_scenario(
-    scenario: str, 
-    context: str = "web", 
-    session_id: str = None
+    scenario: str, context: str = "web", session_id: str = None
 ) -> Dict[str, Any]:
     """Process natural language test description into structured test intent.
-    
+
     RECOMMENDED WORKFLOW - STEP 1 OF 3:
     This tool should be used as the FIRST step in the Robot Framework automation workflow:
     1. ✅ analyze_scenario (THIS TOOL) - Understand what the user wants to accomplish
     2. ➡️ recommend_libraries - Get targeted library suggestions for the scenario
     3. ➡️ check_library_availability - Verify only the recommended libraries
-    
+
     Using this order prevents unnecessary library checks and pip installations by ensuring
     you only verify libraries that are actually relevant to the user's scenario.
-    
+
     NEW: Session Management Integration
     If session_id is provided, this tool will create and auto-configure a session based on
     the scenario analysis, enabling intelligent library management from the start.
@@ -52,35 +50,42 @@ async def analyze_scenario(
         scenario: Human language scenario description
         context: Optional context about the application (web, mobile, API, etc.)
         session_id: Optional session ID to create and auto-configure for this scenario
-        
+
     Returns:
         Structured test intent that can be used by recommend_libraries for targeted suggestions.
         If session_id provided, also includes session configuration details.
     """
     # Analyze the scenario first
     result = await nlp_processor.analyze_scenario(scenario, context)
-    
+
     # If session_id provided, create and auto-configure session
-    if session_id:
-        logger.info(f"Creating and auto-configuring session '{session_id}' based on scenario analysis")
-        
-        # Get or create session using execution coordinator
-        session = execution_engine.session_manager.get_or_create_session(session_id)
-        
-        # Auto-configure session based on scenario
-        session.configure_from_scenario(scenario)
-        
-        # Add session info to result
-        result["session_info"] = {
-            "session_id": session_id,
-            "auto_configured": session.auto_configured,
-            "session_type": session.session_type.value,
-            "explicit_library_preference": session.explicit_library_preference,
-            "recommended_libraries": session.get_libraries_to_load()
-        }
-        
-        logger.info(f"Session '{session_id}' configured: type={session.session_type.value}, preference={session.explicit_library_preference}")
-    
+    if not session_id:
+        # Generate a unique session ID
+        session_id = execution_engine.session_manager.create_session_id()
+
+    logger.info(
+        f"Creating and auto-configuring session '{session_id}' based on scenario analysis"
+    )
+
+    # Get or create session using execution coordinator
+    session = execution_engine.session_manager.get_or_create_session(session_id)
+
+    # Auto-configure session based on scenario
+    session.configure_from_scenario(scenario)
+
+    # Add session info to result
+    result["session_info"] = {
+        "session_id": session_id,
+        "auto_configured": session.auto_configured,
+        "session_type": session.session_type.value,
+        "explicit_library_preference": session.explicit_library_preference,
+        "recommended_libraries": session.get_libraries_to_load(),
+    }
+
+    logger.info(
+        f"Session '{session_id}' configured: type={session.session_type.value}, preference={session.explicit_library_preference}"
+    )
+
     return result
 
 
@@ -140,7 +145,12 @@ async def execute_step(
         arguments = []
 
     result = await execution_engine.execute_step(
-        keyword, arguments, session_id, detail_level, scenario_hint=scenario_hint, assign_to=assign_to
+        keyword,
+        arguments,
+        session_id,
+        detail_level,
+        scenario_hint=scenario_hint,
+        assign_to=assign_to,
     )
 
     # For proper MCP protocol compliance, failed steps should raise exceptions
@@ -252,23 +262,23 @@ async def validate_scenario(
 
 @mcp.tool
 async def recommend_libraries(
-    scenario: str, 
-    context: str = "web", 
+    scenario: str,
+    context: str = "web",
     max_recommendations: int = 5,
-    session_id: str = None
+    session_id: str = None,
 ) -> Dict[str, Any]:
     """Recommend Robot Framework libraries based on test scenario.
-    
+
     RECOMMENDED WORKFLOW - STEP 2 OF 3:
     This tool should be used as the SECOND step in the Robot Framework automation workflow:
-    1. ✅ analyze_scenario - Understand what the user wants to accomplish  
+    1. ✅ analyze_scenario - Understand what the user wants to accomplish
     2. ✅ recommend_libraries (THIS TOOL) - Get targeted library suggestions for the scenario
     3. ➡️ check_library_availability - Verify only the recommended libraries
-    
+
     IMPORTANT: Use the scenario output from analyze_scenario as input to this tool for
     the most accurate library recommendations. This prevents checking irrelevant libraries
     in the next step.
-    
+
     NEW: Session Management Integration
     If session_id is provided, this tool will setup the session with recommended libraries
     and configure library search order for optimal keyword resolution.
@@ -278,7 +288,7 @@ async def recommend_libraries(
         context: Testing context (web, mobile, api, database, desktop, system, visual)
         max_recommendations: Maximum number of library recommendations to return
         session_id: Optional session ID to setup with recommended libraries
-        
+
     Returns:
         Targeted library recommendations that should be passed to check_library_availability.
         If session_id provided, also includes session setup details.
@@ -287,27 +297,31 @@ async def recommend_libraries(
     result = library_recommender.recommend_libraries(
         scenario, context, max_recommendations
     )
-    
+
     # If session_id provided, setup session with recommended libraries
     if session_id:
         logger.info(f"Setting up session '{session_id}' with recommended libraries")
-        
+
         # Get or create session
         session = execution_engine.session_manager.get_or_create_session(session_id)
-        
+
         # If not already auto-configured, configure from scenario
         if not session.auto_configured:
             session.configure_from_scenario(scenario)
-        
+
         # Get recommended libraries from result
         recommended_libs = result.get("recommended_libraries", [])
-        
+
         # Setup library search order based on recommendations
         if recommended_libs:
             # Update session search order to prioritize recommended libraries
-            session.search_order = recommended_libs + [lib for lib in session.search_order if lib not in recommended_libs]
-            logger.info(f"Updated session '{session_id}' search order: {session.search_order[:3]}...")
-        
+            session.search_order = recommended_libs + [
+                lib for lib in session.search_order if lib not in recommended_libs
+            ]
+            logger.info(
+                f"Updated session '{session_id}' search order: {session.search_order[:3]}..."
+            )
+
         # Add session setup info to result
         result["session_setup"] = {
             "session_id": session_id,
@@ -315,9 +329,9 @@ async def recommend_libraries(
             "search_order": session.search_order,
             "session_type": session.session_type.value,
             "explicit_preference": session.explicit_library_preference,
-            "recommended_libraries_applied": recommended_libs
+            "recommended_libraries_applied": recommended_libs,
         }
-    
+
     return result
 
 
@@ -352,33 +366,33 @@ async def get_page_source(
 @mcp.tool
 async def check_library_availability(libraries: List[str]) -> Dict[str, Any]:
     """Check if Robot Framework libraries are available before installation.
-    
+
     RECOMMENDED WORKFLOW - STEP 3 OF 3:
     This tool should be used as the THIRD step in the Robot Framework automation workflow:
     1. ✅ analyze_scenario - Understand what the user wants to accomplish
-    2. ✅ recommend_libraries - Get targeted library suggestions for the scenario  
+    2. ✅ recommend_libraries - Get targeted library suggestions for the scenario
     3. ✅ check_library_availability (THIS TOOL) - Verify only the recommended libraries
-    
+
     CRITICAL: Do NOT call this tool first! It may return empty results if called before
     the Robot Framework environment is initialized, leading to unnecessary pip installations.
-    
+
     PREFERRED INPUT: Use the library recommendations from recommend_libraries as the
     'libraries' parameter to avoid checking irrelevant libraries.
-    
+
     FALLBACK INITIALIZATION: If you must call this tool without the recommended workflow,
     first call 'get_available_keywords' or 'execute_step' to initialize library discovery,
     then re-run this check.
-    
+
     Args:
         libraries: List of library names to check (preferably from recommend_libraries output)
-        
+
     Returns:
         Dict with availability status, installation suggestions, and workflow guidance.
         Includes smart hints if called in wrong order or without initialization.
-        
+
     Example workflow:
         scenario_result = await analyze_scenario("I want to test a web form")
-        recommendations = await recommend_libraries(scenario_result["scenario"])  
+        recommendations = await recommend_libraries(scenario_result["scenario"])
         availability = await check_library_availability(recommendations["recommended_libraries"])
     """
     return execution_engine.check_library_requirements(libraries)
@@ -403,7 +417,7 @@ async def get_available_keywords(library_name: str = None) -> List[Dict[str, Any
 
     Uses Robot Framework's native libdoc API to provide accurate short_doc, argument types, and metadata.
     Falls back to inspection-based discovery if libdoc is not available.
-    
+
     NOTE: This tool initializes library discovery and can be used as a fallback if you need to call
     check_library_availability without following the recommended 3-step workflow.
 
@@ -420,7 +434,7 @@ async def get_available_keywords(library_name: str = None) -> List[Dict[str, Any
         - short_doc: Short documentation from Robot Framework's native short_doc
         - tags: Keyword tags
         - is_deprecated: Whether keyword is deprecated (libdoc only)
-        
+
     Related tools: Use analyze_scenario → recommend_libraries → check_library_availability for optimal workflow.
     """
     return execution_engine.get_available_keywords(library_name)
@@ -474,11 +488,11 @@ async def get_keyword_documentation(
 
 
 # TOOL DISABLED: validate_step_before_suite
-# 
+#
 # Reason for removal: This tool is functionally redundant with execute_step().
 # Analysis shows that it duplicates execution (performance impact) and adds
 # minimal unique value beyond what execute_step() already provides.
-# 
+#
 # Key issues:
 # 1. Functional redundancy - re-executes the same step as execute_step()
 # 2. Performance overhead - double execution of steps
@@ -496,40 +510,40 @@ async def get_keyword_documentation(
 #     expected_outcome: str = None,
 # ) -> Dict[str, Any]:
 #     """Validate a single step before adding it to a test suite.
-# 
+#
 #     This method enforces stepwise test development by requiring step validation
 #     before suite generation. Use this to verify each keyword works as expected.
-# 
+#
 #     Workflow:
 #     1. Call this method for each test step
 #     2. Verify the step succeeds and produces expected results
 #     3. Only after all steps are validated, use build_test_suite()
-# 
+#
 #     Args:
 #         keyword: Robot Framework keyword to validate
 #         arguments: Arguments for the keyword
 #         session_id: Session identifier
 #         expected_outcome: Optional description of expected result for validation
-# 
+#
 #     Returns:
 #         Validation result with success status, output, and recommendations
 #     """
 #     if arguments is None:
 #         arguments = []
-# 
+#
 #     # Execute the step with detailed error reporting
 #     result = await execution_engine.execute_step(
 #         keyword, arguments, session_id, detail_level="full"
 #     )
-# 
+#
 #     # Add validation metadata
 #     result["validated"] = result.get("success", False)
 #     result["validation_time"] = result.get("execution_time")
-# 
+#
 #     if expected_outcome:
 #         result["expected_outcome"] = expected_outcome
 #         result["meets_expectation"] = "unknown"  # AI agent should evaluate this
-# 
+#
 #     # Add guidance for next steps
 #     if result.get("success"):
 #         result["next_step_guidance"] = (
@@ -545,7 +559,7 @@ async def get_keyword_documentation(
 #             "Ensure required browser/context is open",
 #             "Review error message for specific issues",
 #         ]
-# 
+#
 #     return result
 
 
@@ -601,19 +615,19 @@ async def set_library_search_order(
     Example:
         # Prioritize SeleniumLibrary over Browser Library for web automation
         await set_library_search_order(["SeleniumLibrary", "BuiltIn", "Collections"], "web_session")
-        
+
         # Prioritize RequestsLibrary for API testing
         await set_library_search_order(["RequestsLibrary", "BuiltIn", "String"], "api_session")
     """
     try:
         # Get or create session
         session = execution_engine.session_manager.get_or_create_session(session_id)
-        
+
         # Set library search order
         old_order = session.get_search_order()
         session.set_library_search_order(libraries)
         new_order = session.get_search_order()
-        
+
         return {
             "success": True,
             "session_id": session_id,
@@ -621,16 +635,12 @@ async def set_library_search_order(
             "new_search_order": new_order,
             "libraries_requested": libraries,
             "libraries_applied": new_order,
-            "message": f"Library search order updated for session '{session_id}'"
+            "message": f"Library search order updated for session '{session_id}'",
         }
-        
+
     except Exception as e:
         logger.error(f"Error setting library search order: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "session_id": session_id
-        }
+        return {"success": False, "error": str(e), "session_id": session_id}
 
 
 @mcp.tool
@@ -645,26 +655,19 @@ async def get_session_info(session_id: str = "default") -> Dict[str, Any]:
     """
     try:
         session = execution_engine.session_manager.get_session(session_id)
-        
+
         if not session:
             return {
                 "success": False,
                 "error": f"Session '{session_id}' not found",
-                "available_sessions": execution_engine.session_manager.get_all_session_ids()
+                "available_sessions": execution_engine.session_manager.get_all_session_ids(),
             }
-        
-        return {
-            "success": True,
-            "session_info": session.get_session_info()
-        }
-        
+
+        return {"success": True, "session_info": session.get_session_info()}
+
     except Exception as e:
         logger.error(f"Error getting session info: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "session_id": session_id
-        }
+        return {"success": False, "error": str(e), "session_id": session_id}
 
 
 @mcp.tool
