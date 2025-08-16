@@ -11,6 +11,7 @@ from robotmcp.models.config_models import ExecutionConfig
 from robotmcp.utils.argument_processor import ArgumentProcessor
 from robotmcp.utils.rf_native_type_converter import RobotFrameworkNativeConverter
 from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
+from robotmcp.components.variables.variable_resolver import VariableResolver
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class KeywordExecutor:
         self.argument_processor = ArgumentProcessor()
         self.rf_converter = RobotFrameworkNativeConverter()
         self.override_registry = override_registry
+        self.variable_resolver = VariableResolver()
     
     async def execute_keyword(
         self, 
@@ -72,10 +74,26 @@ class KeywordExecutor:
             # Mark step as running
             step.status = "running"
             
-            logger.info(f"Executing keyword: {keyword} with args: {arguments}")
+            # Resolve variables in arguments before execution
+            try:
+                resolved_arguments = self.variable_resolver.resolve_arguments(arguments, session.variables)
+                logger.debug(f"Variable resolution: {arguments} → {resolved_arguments}")
+            except Exception as var_error:
+                logger.error(f"Variable resolution failed for {arguments}: {var_error}")
+                # Return error result for variable resolution failure
+                step.mark_failure(f"Variable resolution failed: {str(var_error)}")
+                return {
+                    "success": False,
+                    "error": f"Variable resolution failed: {str(var_error)}",
+                    "keyword": keyword,
+                    "arguments": arguments,
+                    "step_id": step.step_id
+                }
             
-            # Execute the keyword with library prefix support
-            result = await self._execute_keyword_internal(session, step, browser_library_manager, library_prefix)
+            logger.info(f"Executing keyword: {keyword} with resolved args: {resolved_arguments}")
+            
+            # Execute the keyword with library prefix support using resolved arguments
+            result = await self._execute_keyword_internal(session, step, browser_library_manager, library_prefix, resolved_arguments)
             
             # Update step status
             step.end_time = datetime.now()
@@ -110,7 +128,7 @@ class KeywordExecutor:
             
             # Build response based on detail level
             response = await self._build_response_by_detail_level(
-                detail_level, result, step, keyword, arguments, session
+                detail_level, result, step, keyword, arguments, session, resolved_arguments
             )
             return response
             
@@ -290,12 +308,14 @@ class KeywordExecutor:
         session: ExecutionSession, 
         step: ExecutionStep,
         browser_library_manager: Any,
-        library_prefix: str = None
+        library_prefix: str = None,
+        resolved_arguments: List[str] = None
     ) -> Dict[str, Any]:
         """Execute a specific keyword with error handling and library prefix support."""
         try:
             keyword_name = step.keyword
-            args = step.arguments
+            # Use resolved arguments if provided, otherwise fall back to step arguments
+            args = resolved_arguments if resolved_arguments is not None else step.arguments
             
             # Check for keyword overrides first (before library detection)
             if self.override_registry:
@@ -687,14 +707,15 @@ class KeywordExecutor:
         step: ExecutionStep,
         keyword: str,
         arguments: List[str],
-        session: ExecutionSession
+        session: ExecutionSession,
+        resolved_arguments: List[str] = None
     ) -> Dict[str, Any]:
         """Build execution response based on requested detail level."""
         base_response = {
             "success": result["success"],
             "step_id": step.step_id,
             "keyword": keyword,
-            "arguments": arguments,
+            "arguments": arguments,  # Show original arguments in response
             "status": step.status,
             "execution_time": step.execution_time
         }
@@ -711,6 +732,9 @@ class KeywordExecutor:
                 "session_variables": dict(session.variables),
                 "active_library": session.get_active_library()
             })
+            # Add resolved arguments for debugging if they differ from original
+            if resolved_arguments is not None and resolved_arguments != arguments:
+                base_response["resolved_arguments"] = resolved_arguments
             
         elif detail_level == "full":
             base_response.update({
@@ -727,6 +751,9 @@ class KeywordExecutor:
                 "step_count": session.step_count,
                 "duration": session.duration
             })
+            # Always include resolved arguments in full detail for debugging
+            if resolved_arguments is not None:
+                base_response["resolved_arguments"] = resolved_arguments
         
         return base_response
 
