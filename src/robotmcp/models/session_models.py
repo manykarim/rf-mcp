@@ -280,109 +280,120 @@ class ExecutionSession:
     # ===============================
     
     def detect_explicit_library_preference(self, scenario_text: str) -> Optional[str]:
-        """Detect explicit library preference from scenario text with enhanced patterns."""
+        """Detect explicit library preference from scenario text with enhanced patterns and confidence scoring."""
         if not scenario_text:
             return None
         
         text_lower = scenario_text.lower()
+        library_scores = {}
         
         # Enhanced Selenium patterns (highest priority for explicit mentions)
         selenium_patterns = [
-            r'\b(use|using|with|via|through)\s+(selenium|seleniumlibrary|selenium\s*library)\b',
-            r'\bselenium\b(?!.*browser)(?!.*grid)',  # Selenium mentioned but not "selenium browser" or "selenium grid"
-            r'\bseleniumlibrary\b',
-            r'\bwebdriver\b',  # WebDriver often implies Selenium
-            r'\b(selenium|webdriver)\s+(automation|testing|framework)\b',
+            (r'\b(use|using|with|via|through)\s+(selenium|seleniumlibrary|selenium\s*library)\b', 10),
+            (r'\btest\s+automation\s+with\s+selenium\b', 8),
+            (r'\bseleniumlibrary\b', 9),
+            (r'\bwebdriver\b', 6),  # WebDriver often implies Selenium
+            (r'\bselenium\b(?!.*browser)(?!.*grid)', 7),  # Selenium mentioned but not "selenium browser" or "selenium grid"
+            (r'\b(selenium|webdriver)\s+(automation|testing|framework)\b', 8),
+            (r'\bchrome\s*driver|firefox\s*driver|edge\s*driver\b', 5),
         ]
         
         # Enhanced Browser Library patterns
         browser_patterns = [
-            r'\b(use|using|with|via|through)\s+(browser|browserlibrary|browser\s*library|playwright)\b',
-            r'\bbrowser\s*library\b',
-            r'\bplaywright\b',
-            r'\b(modern|new)\s+(browser|web)\s+(automation|testing)\b',
-            r'\b(chromium|firefox|webkit)\s+(browser|automation)\b',
+            (r'\b(use|using|with|via|through)\s+(browser|browserlibrary|browser\s*library|playwright)\b', 10),
+            (r'\btest\s+automation\s+with\s+(browser\s*library|playwright)\b', 8),
+            (r'\bbrowser\s*library\b', 9),
+            (r'\bplaywright\b', 8),
+            (r'\b(modern|new)\s+(browser|web)\s+(automation|testing)\b', 6),
+            (r'\b(chromium|firefox|webkit)\s+(browser|automation)\b', 7),
+            (r'\b(headless|headed)\s+(browser|testing)\b', 5),
+            (r'\basync\s+(browser|web)\s+automation\b', 6),
         ]
         
         # Enhanced API testing patterns
         api_patterns = [
-            r'\b(use|using|with)\s+(requests|requestslibrary|requests\s*library)\b',
-            r'\brequestslibrary\b',
-            r'\b(rest|http)\s+(api|testing|automation)\b',
-            r'\b(post|get|put|delete)\s+(request|endpoint)\b',
+            (r'\b(use|using|with)\s+(requests|requestslibrary|requests\s*library)\b', 10),
+            (r'\btest\s+automation\s+with\s+requests\b', 8),
+            (r'\brequestslibrary\b', 9),
+            (r'\b(rest|http)\s+(api|testing|automation)\b', 7),
+            (r'\b(post|get|put|delete)\s+(request|endpoint)\b', 6),
+            (r'\bjson\s+(api|response|request)\b', 5),
+            (r'\bapi\s+(automation|testing|validation)\b', 6),
         ]
         
         # Enhanced XML processing patterns
         xml_patterns = [
-            r'\b(use|using|with)\s+(xml|xmllibrary|xml\s*library)\b',
-            r'\bxmllibrary\b',
-            r'\b(xml|xpath)\s+(processing|parsing|manipulation)\b',
-            r'\b(parse|process|manipulate)\s+xml\b',
+            (r'\b(use|using|with)\s+(xml|xmllibrary|xml\s*library)\b', 10),
+            (r'\btest\s+automation\s+with\s+xml\b', 8),
+            (r'\bxmllibrary\b', 9),
+            (r'\b(xml|xpath)\s+(processing|parsing|manipulation)\b', 7),
+            (r'\b(parse|process|manipulate)\s+xml\b', 6),
+            (r'\bxml\s+(validation|testing|automation)\b', 6),
         ]
         
         # Enhanced mobile testing patterns
         mobile_patterns = [
-            r'\b(use|using|with)\s+(appium|appiumlibrary|appium\s*library)\b',
-            r'\bappiumlibrary\b',
-            r'\b(mobile|android|ios)\s+(app|testing|automation)\b',
-            r'\b(device|mobile)\s+(automation|testing)\b',
+            (r'\b(use|using|with)\s+(appium|appiumlibrary|appium\s*library)\b', 10),
+            (r'\btest\s+automation\s+with\s+appium\b', 8),
+            (r'\bappiumlibrary\b', 9),
+            (r'\b(mobile|android|ios)\s+(app|testing|automation)\b', 7),
+            (r'\b(device|mobile)\s+(automation|testing)\b', 6),
+            (r'\b(native|hybrid)\s+(app|mobile)\s+(testing|automation)\b', 6),
         ]
         
         # Enhanced database testing patterns
         database_patterns = [
-            r'\b(use|using|with)\s+(database|databaselibrary|database\s*library)\b',
-            r'\bdatabaselibrary\b',
-            r'\b(sql|database)\s+(testing|automation|queries)\b',
-            r'\b(mysql|postgresql|sqlite|oracle)\s+(database|testing)\b',
+            (r'\b(use|using|with)\s+(database|databaselibrary|database\s*library)\b', 10),
+            (r'\btest\s+automation\s+with\s+database\b', 8),
+            (r'\bdatabaselibrary\b', 9),
+            (r'\b(sql|database)\s+(testing|automation|queries)\b', 7),
+            (r'\b(mysql|postgresql|sqlite|oracle)\s+(database|testing)\b', 6),
+            (r'\bdatabase\s+(validation|testing|automation)\b', 6),
         ]
         
-        # Check for explicit Selenium preference first (highest priority)
-        for pattern in selenium_patterns:
-            if re.search(pattern, text_lower):
-                logger.info(f"Detected explicit SeleniumLibrary preference in scenario: {pattern}")
-                return "SeleniumLibrary"
+        # Score all patterns
+        all_patterns = [
+            ("SeleniumLibrary", selenium_patterns),
+            ("Browser", browser_patterns),
+            ("RequestsLibrary", api_patterns),
+            ("XML", xml_patterns),
+            ("AppiumLibrary", mobile_patterns),
+            ("DatabaseLibrary", database_patterns),
+        ]
         
-        # Check for explicit Browser Library preference
-        for pattern in browser_patterns:
-            if re.search(pattern, text_lower):
-                logger.info(f"Detected explicit Browser Library preference in scenario: {pattern}")
-                return "Browser"
+        for library_name, patterns in all_patterns:
+            library_scores[library_name] = 0
+            for pattern, weight in patterns:
+                matches = len(re.findall(pattern, text_lower))
+                library_scores[library_name] += matches * weight
         
-        # Check for other library preferences
-        for pattern in api_patterns:
-            if re.search(pattern, text_lower):
-                logger.info(f"Detected explicit RequestsLibrary preference in scenario: {pattern}")
-                return "RequestsLibrary"
+        # Find highest scoring library
+        if library_scores:
+            best_library = max(library_scores, key=library_scores.get)
+            max_score = library_scores[best_library]
+            
+            # Only return if confidence is high enough
+            if max_score >= 5:  # Minimum confidence threshold
+                logger.info(f"Detected explicit {best_library} preference (score: {max_score}) in scenario")
+                return best_library
         
-        for pattern in xml_patterns:
-            if re.search(pattern, text_lower):
-                logger.info(f"Detected explicit XML Library preference in scenario: {pattern}")
-                return "XML"
+        # Fallback: Generic patterns for common libraries (lower confidence)
+        fallback_patterns = [
+            (r'\b(xml|xpath)\b', "XML"),
+            (r'\b(api|http|rest|request)\b', "RequestsLibrary"),
+            (r'\b(mobile|android|ios|device)\b', "AppiumLibrary"),
+            (r'\b(database|sql|mysql|postgresql)\b', "DatabaseLibrary"),
+        ]
         
-        for pattern in mobile_patterns:
+        for pattern, library in fallback_patterns:
             if re.search(pattern, text_lower):
-                logger.info(f"Detected explicit AppiumLibrary preference in scenario: {pattern}")
-                return "AppiumLibrary"
-        
-        for pattern in database_patterns:
-            if re.search(pattern, text_lower):
-                logger.info(f"Detected explicit DatabaseLibrary preference in scenario: {pattern}")
-                return "DatabaseLibrary"
-        
-        # Fallback: Generic patterns for common libraries
-        if re.search(r'\b(xml|xpath)\b', text_lower):
-            return "XML"
-        if re.search(r'\b(api|http|rest|request)\b', text_lower):
-            return "RequestsLibrary"
-        if re.search(r'\b(mobile|android|ios|device)\b', text_lower):
-            return "AppiumLibrary"
-        if re.search(r'\b(database|sql|mysql|postgresql)\b', text_lower):
-            return "DatabaseLibrary"
+                logger.info(f"Fallback detection: {library} preference based on generic pattern")
+                return library
         
         return None
     
     def detect_session_type_from_scenario(self, scenario_text: str) -> SessionType:
-        """Detect session type from scenario text with enhanced pattern matching."""
+        """Detect session type from scenario text with enhanced multi-pass pattern matching."""
         if not scenario_text:
             return SessionType.UNKNOWN
         
@@ -390,30 +401,54 @@ class ExecutionSession:
         profiles = self._get_session_profiles()
         scores = {session_type: 0 for session_type in profiles.keys()}
         
-        # Enhanced scoring with weighted patterns
+        # Enhanced scoring with weighted patterns and context awareness
         pattern_weights = {
             # High confidence patterns get higher weight
             SessionType.WEB_AUTOMATION: [
                 (r'\b(web|browser|page|form|button|click|fill)\b', 2),
-                (r'\b(selenium|browser\s*library|playwright)\b', 3),
-                (r'\b(login|registration|navigation|ui)\b', 1),
+                (r'\b(selenium|browser\s*library|playwright)\b', 4),  # Explicit library mentions
+                (r'\b(login|registration|navigation|ui|website)\b', 2),
+                (r'\b(url|link|element|locator|css|xpath)\b', 2),
+                (r'\b(headless|headed|screenshot|automation)\b', 1),
+                (r'\bhttps?://\S+', 3),  # URL detection
             ],
             SessionType.API_TESTING: [
                 (r'\b(api|rest|http|endpoint|request)\b', 3),
-                (r'\b(get|post|put|delete|json)\b', 2),
-                (r'\b(response|status|header)\b', 1),
+                (r'\b(get|post|put|delete|patch)\s+(request|method|call)\b', 4),
+                (r'\b(json|xml|response|status|header)\b', 2),
+                (r'\b(oauth|token|authentication|authorization)\b', 2),
+                (r'\bmicroservice|webhook|graphql\b', 2),
+                (r'\bapi\s+(testing|automation|validation)\b', 3),
             ],
             SessionType.XML_PROCESSING: [
                 (r'\b(xml|xpath|parse|element|attribute)\b', 3),
-                (r'\b(document|node|tag)\b', 2),
+                (r'\b(document|node|tag|namespace)\b', 2),
+                (r'\b(xslt|xsd|dtd|schema)\b', 3),
+                (r'\bxml\s+(processing|parsing|validation)\b', 4),
             ],
             SessionType.DATA_PROCESSING: [
-                (r'\b(data|process|transform|manipulate)\b', 2),
-                (r'\b(list|dictionary|collection|string)\b', 1),
+                (r'\b(data|process|transform|manipulate|convert)\b', 2),
+                (r'\b(list|dictionary|collection|string|csv|excel)\b', 2),
+                (r'\b(filter|sort|aggregate|merge|split)\b', 2),
+                (r'\bdata\s+(processing|transformation|manipulation)\b', 3),
             ],
             SessionType.SYSTEM_TESTING: [
-                (r'\b(system|process|file|directory)\b', 2),
-                (r'\b(command|shell|environment)\b', 2),
+                (r'\b(system|process|file|directory|filesystem)\b', 2),
+                (r'\b(command|shell|environment|terminal)\b', 2),
+                (r'\b(ssh|ftp|sftp|scp)\b', 2),
+                (r'\bsystem\s+(testing|automation|administration)\b', 3),
+            ],
+            SessionType.MOBILE_TESTING: [
+                (r'\b(mobile|android|ios|device|app)\b', 3),
+                (r'\b(appium|espresso|xcuitest)\b', 4),
+                (r'\b(tap|swipe|scroll|pinch|gesture)\b', 3),
+                (r'\bmobile\s+(testing|automation|app)\b', 4),
+            ],
+            SessionType.DATABASE_TESTING: [
+                (r'\b(database|sql|query|table|record)\b', 3),
+                (r'\b(mysql|postgresql|sqlite|oracle|mongodb)\b', 3),
+                (r'\b(select|insert|update|delete|create)\s+(table|from|into)\b', 3),
+                (r'\bdatabase\s+(testing|automation|validation)\b', 4),
             ]
         }
         
@@ -468,16 +503,19 @@ class ExecutionSession:
         logger.info(f"Session {self.session_id} auto-configured: type={self.session_type.value}, explicit_lib={self.explicit_library_preference}")
     
     def _apply_session_configuration(self) -> None:
-        """Apply enhanced configuration based on detected session type and preferences."""
+        """Apply enhanced configuration with improved conflict resolution based on detected session type and preferences."""
         profiles = self._get_session_profiles()
         
-        # Enhanced explicit library preference handling
+        # Enhanced explicit library preference handling with conflict resolution
         profile = self._get_profile_for_preferences(profiles)
         
         if not profile:
             # Fallback to minimal configuration
             self.search_order = ["BuiltIn", "Collections", "String"]
             return
+        
+        # Apply conflict resolution before setting search order
+        self._resolve_library_conflicts()
         
         # Set intelligent search order using RF Set Library Search Order concept
         self.search_order = self._build_intelligent_search_order(profile)
@@ -489,6 +527,42 @@ class ExecutionSession:
                 logger.info(f"Auto-imported preferred library: {self.explicit_library_preference}")
             except ValueError as e:
                 logger.warning(f"Could not import preferred library {self.explicit_library_preference}: {e}")
+    
+    def _resolve_library_conflicts(self) -> None:
+        """Resolve library conflicts based on explicit preferences and session type."""
+        if not self.explicit_library_preference:
+            return
+        
+        # Define exclusion groups with priority handling
+        exclusion_groups = [
+            {
+                "libraries": {"Browser", "SeleniumLibrary"},
+                "description": "Web automation libraries",
+                "default_priority": "Browser"  # Modern default
+            },
+            # Future: Add more exclusion groups as needed
+            # {
+            #     "libraries": {"RequestsLibrary", "RESTLibrary"},
+            #     "description": "HTTP/REST testing libraries",
+            #     "default_priority": "RequestsLibrary"
+            # }
+        ]
+        
+        for group in exclusion_groups:
+            if self.explicit_library_preference in group["libraries"]:
+                # Remove conflicting libraries from imported libraries
+                for conflicting_lib in group["libraries"]:
+                    if (conflicting_lib != self.explicit_library_preference and 
+                        conflicting_lib in self.imported_libraries):
+                        self.imported_libraries.remove(conflicting_lib)
+                        logger.info(f"Removed conflicting library {conflicting_lib} in favor of {self.explicit_library_preference}")
+                
+                # Update loaded libraries set to reflect preference
+                for conflicting_lib in group["libraries"]:
+                    if conflicting_lib != self.explicit_library_preference:
+                        self.loaded_libraries.discard(conflicting_lib)
+                
+                break
     
     def _get_profile_for_preferences(self, profiles: Dict[SessionType, SessionProfile]) -> Optional[SessionProfile]:
         """Get the appropriate profile based on explicit preferences and session type."""

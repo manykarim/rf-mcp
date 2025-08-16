@@ -33,18 +33,24 @@ async def analyze_scenario(
 ) -> Dict[str, Any]:
     """Process natural language test description into structured test intent.
 
-    RECOMMENDED WORKFLOW - STEP 1 OF 3:
+    CRITICAL: This tool ALWAYS creates a session for your test execution.
+    Use the returned session_id in ALL subsequent tool calls (execute_step, build_test_suite, etc.)
+    
+    RECOMMENDED WORKFLOW - STEP 1 OF 4:
     This tool should be used as the FIRST step in the Robot Framework automation workflow:
-    1. ✅ analyze_scenario (THIS TOOL) - Understand what the user wants to accomplish
-    2. ➡️ recommend_libraries - Get targeted library suggestions for the scenario
-    3. ➡️ check_library_availability - Verify only the recommended libraries
+    1. ✅ analyze_scenario (THIS TOOL) - Creates session and understands requirements
+    2. ➡️ recommend_libraries - Get targeted library suggestions  
+    3. ➡️ execute_step - Execute steps using the SAME session_id
+    4. ➡️ build_test_suite - Build suite using the SAME session_id
 
     Using this order prevents unnecessary library checks and pip installations by ensuring
     you only verify libraries that are actually relevant to the user's scenario.
 
-    NEW: Session Management Integration
-    If session_id is provided, this tool will create and auto-configure a session based on
-    the scenario analysis, enabling intelligent library management from the start.
+    NEW FEATURE: Automatic Session Creation
+    - If session_id not provided: Creates new unique session ID
+    - If session_id provided: Uses existing session or creates new one
+    - Session is auto-configured based on scenario analysis and explicit library preferences
+    - Returns session_id that MUST be used in all subsequent calls
 
     Args:
         scenario: Human language scenario description
@@ -52,16 +58,18 @@ async def analyze_scenario(
         session_id: Optional session ID to create and auto-configure for this scenario
 
     Returns:
-        Structured test intent that can be used by recommend_libraries for targeted suggestions.
-        If session_id provided, also includes session configuration details.
+        Structured test intent with session_info containing session_id for subsequent calls.
+        Session is automatically configured with optimal library choices for the scenario.
     """
     # Analyze the scenario first
     result = await nlp_processor.analyze_scenario(scenario, context)
 
-    # If session_id provided, create and auto-configure session
+    # ALWAYS create a session - either use provided ID or generate one
     if not session_id:
-        # Generate a unique session ID
         session_id = execution_engine.session_manager.create_session_id()
+        logger.info(f"Auto-generated session ID: {session_id}")
+    else:
+        logger.info(f"Using provided session ID: {session_id}")
 
     logger.info(
         f"Creating and auto-configuring session '{session_id}' based on scenario analysis"
@@ -73,13 +81,18 @@ async def analyze_scenario(
     # Auto-configure session based on scenario
     session.configure_from_scenario(scenario)
 
-    # Add session info to result
+    # Enhanced session info with guidance
     result["session_info"] = {
         "session_id": session_id,
         "auto_configured": session.auto_configured,
         "session_type": session.session_type.value,
         "explicit_library_preference": session.explicit_library_preference,
         "recommended_libraries": session.get_libraries_to_load(),
+        "search_order": session.get_search_order(),
+        "libraries_loaded": list(session.loaded_libraries),
+        "next_step_guidance": f"Use session_id='{session_id}' in all subsequent tool calls",
+        "status": "active",
+        "ready_for_execution": True
     }
 
     logger.info(
@@ -215,34 +228,82 @@ async def suggest_next_step(
 @mcp.tool
 async def build_test_suite(
     test_name: str,
-    session_id: str = "default",
+    session_id: str = "",
     tags: List[str] = None,
     documentation: str = "",
     remove_library_prefixes: bool = True,
 ) -> Dict[str, Any]:
-    """Generate Robot Framework test suite from successful steps.
+    """Generate Robot Framework test suite from successful steps with intelligent session resolution.
 
     IMPORTANT: Only use AFTER validating all steps individually with execute_step().
     This tool generates .robot files from previously executed and verified steps.
     Do NOT write test suites before confirming each keyword works correctly.
 
+    Enhanced Session Resolution:
+    - If session_id provided and valid: Uses that session
+    - If session_id empty/invalid: Automatically finds most suitable session with steps
+    - Provides clear guidance on session issues and recovery options
+
     Recommended workflow:
-    1. Use execute_step() to test each keyword
-    2. Verify expected outputs and behavior
-    3. Only then use build_test_suite() to create .robot files
+    1. Use analyze_scenario() to create configured session
+    2. Use execute_step() to test each keyword with the SAME session_id
+    3. Use build_test_suite() with the SAME session_id to create .robot files
 
     Args:
         test_name: Name for the test case
-        session_id: Session with executed steps (must contain verified steps)
+        session_id: Session with executed steps (auto-resolves if empty/invalid)
         tags: Test tags
         documentation: Test documentation
         remove_library_prefixes: Remove library prefixes from keywords (default: True)
     """
     if tags is None:
         tags = []
-    return await test_builder.build_suite(
-        session_id, test_name, tags, documentation, remove_library_prefixes
+    
+    # Import session resolver here to avoid circular imports
+    from robotmcp.utils.session_resolution import SessionResolver
+    session_resolver = SessionResolver(execution_engine.session_manager)
+    
+    # Resolve session with intelligent fallback
+    resolution_result = session_resolver.resolve_session_with_fallback(session_id)
+    
+    if not resolution_result["success"]:
+        # Return enhanced error with guidance
+        return {
+            "success": False,
+            "error": "Session not ready for test suite generation",
+            "error_details": resolution_result["error_guidance"],
+            "guidance": [
+                "Create a session and execute some steps first",
+                "Use the session_id returned by analyze_scenario",
+                "Check session status with get_session_validation_status"
+            ],
+            "validation_summary": {"passed": 0, "failed": 0},
+            "recommendation": "Start with analyze_scenario() to create a properly configured session"
+        }
+    
+    # Use resolved session ID
+    resolved_session_id = resolution_result["session_id"]
+    
+    # Build the test suite with resolved session
+    result = await test_builder.build_suite(
+        resolved_session_id, test_name, tags, documentation, remove_library_prefixes
     )
+    
+    # Add session resolution info to result
+    if resolution_result.get("fallback_used", False):
+        result["session_resolution"] = {
+            "fallback_used": True,
+            "original_session_id": session_id,
+            "resolved_session_id": resolved_session_id,
+            "message": f"Automatically used session '{resolved_session_id}' with {resolution_result['session_info']['step_count']} executed steps"
+        }
+    else:
+        result["session_resolution"] = {
+            "fallback_used": False,
+            "session_id": resolved_session_id
+        }
+    
+    return result
 
 
 @mcp.tool
@@ -564,19 +625,61 @@ async def get_keyword_documentation(
 
 
 @mcp.tool
-async def get_session_validation_status(session_id: str = "default") -> Dict[str, Any]:
-    """Get validation status of all steps in a session.
+async def get_session_validation_status(session_id: str = "") -> Dict[str, Any]:
+    """Get validation status of all steps in a session with intelligent session resolution.
 
     Use this to check which steps have been validated and are ready for test suite generation.
     Helps ensure stepwise test development by showing validation progress.
 
+    Enhanced Session Resolution:
+    - If session_id provided and valid: Uses that session
+    - If session_id empty/invalid: Automatically finds most suitable session with steps
+
     Args:
-        session_id: Session identifier to check
+        session_id: Session identifier to check (auto-resolves if empty/invalid)
 
     Returns:
         Validation status with passed/failed step counts and readiness assessment
     """
-    return execution_engine.get_session_validation_status(session_id)
+    # Import session resolver here to avoid circular imports
+    from robotmcp.utils.session_resolution import SessionResolver
+    session_resolver = SessionResolver(execution_engine.session_manager)
+    
+    # Resolve session with intelligent fallback
+    resolution_result = session_resolver.resolve_session_with_fallback(session_id)
+    
+    if not resolution_result["success"]:
+        # Return enhanced error with guidance
+        return {
+            "success": False,
+            "error": f"Session '{session_id}' not found",
+            "error_details": resolution_result["error_guidance"],
+            "available_sessions": resolution_result["error_guidance"]["available_sessions"],
+            "sessions_with_steps": resolution_result["error_guidance"]["sessions_with_steps"],
+            "recommendation": "Use analyze_scenario() to create a session first"
+        }
+    
+    # Use resolved session ID
+    resolved_session_id = resolution_result["session_id"]
+    
+    # Get validation status for resolved session
+    result = execution_engine.get_session_validation_status(resolved_session_id)
+    
+    # Add session resolution info to result
+    if resolution_result.get("fallback_used", False):
+        result["session_resolution"] = {
+            "fallback_used": True,
+            "original_session_id": session_id,
+            "resolved_session_id": resolved_session_id,
+            "message": f"Automatically checked session '{resolved_session_id}'"
+        }
+    else:
+        result["session_resolution"] = {
+            "fallback_used": False,
+            "session_id": resolved_session_id
+        }
+    
+    return result
 
 
 @mcp.tool

@@ -3,7 +3,7 @@
 import logging
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 from robotmcp.models.config_models import ExecutionConfig
 from robotmcp.models.session_models import ExecutionSession
@@ -167,3 +167,28 @@ class SessionManager:
 
         logger.info(f"Cleaned up all {count} sessions")
         return count
+    
+    def get_most_recent_session(self) -> Optional[ExecutionSession]:
+        """Get the most recently active session."""
+        if not self.sessions:
+            return None
+        
+        most_recent = max(self.sessions.values(), key=lambda s: s.last_activity)
+        return most_recent
+    
+    def get_sessions_with_steps(self) -> List[ExecutionSession]:
+        """Get all sessions that have executed steps."""
+        sessions_with_steps = [s for s in self.sessions.values() if s.step_count > 0]
+        # Sort by last activity (most recent first)
+        sessions_with_steps.sort(key=lambda s: s.last_activity, reverse=True)
+        return sessions_with_steps
+    
+    def suggest_session_for_suite_build(self) -> Optional[str]:
+        """Suggest best session ID for test suite building."""
+        sessions_with_steps = self.get_sessions_with_steps()
+        
+        if not sessions_with_steps:
+            return None
+        
+        # Return the most recently active session with steps
+        return sessions_with_steps[0].session_id
