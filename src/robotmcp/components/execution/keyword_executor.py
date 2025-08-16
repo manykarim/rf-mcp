@@ -78,8 +78,15 @@ class KeywordExecutor:
             try:
                 resolved_arguments = self.variable_resolver.resolve_arguments(arguments, session.variables)
                 logger.debug(f"Variable resolution: {arguments} → {resolved_arguments}")
+                
+                # ADDITIONAL DEBUG: Log types of resolved arguments
+                for i, (orig, resolved) in enumerate(zip(arguments, resolved_arguments)):
+                    logger.debug(f"Arg {i}: '{orig}' → '{resolved}' (type: {type(resolved).__name__})")
+                
             except Exception as var_error:
                 logger.error(f"Variable resolution failed for {arguments}: {var_error}")
+                import traceback
+                logger.error(f"Variable resolution traceback: {traceback.format_exc()}")
                 # Return error result for variable resolution failure
                 step.mark_failure(f"Variable resolution failed: {str(var_error)}")
                 return {
@@ -622,7 +629,18 @@ class KeywordExecutor:
             
             # Try to execute using BuiltIn library
             try:
-                result = builtin.run_keyword(keyword, *args)
+                # BUGFIX: Convert all arguments to strings for Robot Framework's BuiltIn.run_keyword()
+                # Robot Framework expects string arguments that it can then convert to appropriate types
+                string_args = []
+                for arg in args:
+                    if not isinstance(arg, str):
+                        string_arg = str(arg)
+                        logger.debug(f"Converting non-string argument {arg} (type: {type(arg).__name__}) to string '{string_arg}' for BuiltIn.run_keyword")
+                        string_args.append(string_arg)
+                    else:
+                        string_args.append(arg)
+                
+                result = builtin.run_keyword(keyword, *string_args)
                 return {
                     "success": True,
                     "output": str(result) if result is not None else "OK",

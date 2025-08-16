@@ -237,8 +237,16 @@ class DynamicKeywordDiscovery:
                         # Get converter for this type
                         converter = TypeConverter.converter_for(type_info)
                         
+                        # BUGFIX: Convert non-string arguments to strings before passing to RF TypeConverter
+                        # Robot Framework's TypeConverter expects string input that it converts to other types
+                        if not isinstance(arg_value, str):
+                            string_arg_value = str(arg_value)
+                            logger.debug(f"Converting non-string argument {arg_value} (type: {type(arg_value).__name__}) to string '{string_arg_value}' for RF TypeConverter")
+                        else:
+                            string_arg_value = arg_value
+                        
                         # Convert the argument
-                        converted_value = converter.convert(arg_value, param.name)
+                        converted_value = converter.convert(string_arg_value, param.name)
                         converted_args.append(converted_value)
                         
                         logger.debug(f"RF converted arg {i} '{param.name}': {arg_value} -> {converted_value} (type: {type(converted_value).__name__})")
@@ -893,7 +901,18 @@ class DynamicKeywordDiscovery:
             # Handle different types of method calls
             if keyword_info.is_builtin and hasattr(library.instance, '_context'):
                 # BuiltIn library methods might need context
-                result = method(*original_args)
+                # BUGFIX: Convert non-string arguments to strings for Robot Framework execution
+                # Robot Framework expects string arguments that it converts to appropriate types
+                string_args = []
+                for arg in original_args:
+                    if not isinstance(arg, str):
+                        string_arg = str(arg)
+                        logger.debug(f"Converting non-string argument {arg} (type: {type(arg).__name__}) to string '{string_arg}' for BuiltIn method with context")
+                        string_args.append(string_arg)
+                    else:
+                        string_args.append(arg)
+                
+                result = method(*string_args)
             else:
                 # Regular library methods - use centralized type conversion configuration
                 from robotmcp.config.library_registry import get_libraries_requiring_type_conversion
@@ -1039,7 +1058,17 @@ class DynamicKeywordDiscovery:
                 logger.debug(f"Executing keyword '{keyword_info.name}' from {keyword_info.library}")
             
             # Parse arguments using LibDoc information for accuracy
-            parsed_args = self._parse_arguments_for_keyword(effective_keyword_name, args, keyword_info.library)
+            # BUGFIX: Convert all arguments to strings before parsing since Robot Framework expects string inputs
+            string_args = []
+            for arg in args:
+                if not isinstance(arg, str):
+                    string_arg = str(arg)
+                    logger.debug(f"Converting non-string argument {arg} (type: {type(arg).__name__}) to string '{string_arg}' for RF argument parsing")
+                    string_args.append(string_arg)
+                else:
+                    string_args.append(arg)
+            
+            parsed_args = self._parse_arguments_for_keyword(effective_keyword_name, string_args, keyword_info.library)
             
             # Enhanced debug logging for named arguments
             logger.debug(f"NAMED_ARGS_DEBUG: Parsed arguments for {effective_keyword_name}: positional={parsed_args.positional}, named={list(parsed_args.named.keys()) if parsed_args.named else 'none'}")
