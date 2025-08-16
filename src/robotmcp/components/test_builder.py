@@ -155,28 +155,28 @@ class TestBuilder:
                             "steps": [
                                 {
                                     "keyword": step.keyword,
-                                    "arguments": step.arguments or [],
+                                    "arguments": [self._escape_robot_argument(arg) for arg in (step.arguments or [])],
                                     "comment": step.comment
                                 } for step in tc.steps
                             ],
                             "setup": {
                                 "keyword": tc.setup.keyword,
-                                "arguments": tc.setup.arguments or []
+                                "arguments": [self._escape_robot_argument(arg) for arg in (tc.setup.arguments or [])]
                             } if tc.setup else None,
                             "teardown": {
                                 "keyword": tc.teardown.keyword, 
-                                "arguments": tc.teardown.arguments or []
+                                "arguments": [self._escape_robot_argument(arg) for arg in (tc.teardown.arguments or [])]
                             } if tc.teardown else None
                         } for tc in suite.test_cases
                     ],
                     "imports": suite.imports or [],
                     "setup": {
                         "keyword": suite.setup.keyword,
-                        "arguments": suite.setup.arguments or []
+                        "arguments": [self._escape_robot_argument(arg) for arg in (suite.setup.arguments or [])]
                     } if suite.setup else None,
                     "teardown": {
                         "keyword": suite.teardown.keyword,
-                        "arguments": suite.teardown.arguments or []
+                        "arguments": [self._escape_robot_argument(arg) for arg in (suite.teardown.arguments or [])]
                     } if suite.teardown else None
                 },
                 "rf_text": rf_text,
