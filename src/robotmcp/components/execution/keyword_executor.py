@@ -10,6 +10,7 @@ from robotmcp.models.execution_models import ExecutionStep
 from robotmcp.models.config_models import ExecutionConfig
 from robotmcp.utils.argument_processor import ArgumentProcessor
 from robotmcp.utils.rf_native_type_converter import RobotFrameworkNativeConverter
+from robotmcp.utils.response_serializer import MCPResponseSerializer
 from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
 from robotmcp.components.variables.variable_resolver import VariableResolver
 
@@ -34,6 +35,7 @@ class KeywordExecutor:
         self.rf_converter = RobotFrameworkNativeConverter()
         self.override_registry = override_registry
         self.variable_resolver = VariableResolver()
+        self.response_serializer = MCPResponseSerializer()
     
     async def execute_keyword(
         self, 
@@ -129,9 +131,18 @@ class KeywordExecutor:
                     assign_to, result.get("result"), keyword, result.get("output")
                 )
                 if assignment_vars:
+                    # Store actual objects in session variables
                     session.variables.update(assignment_vars)
-                    # Add assignment info to result for response
-                    result["assigned_variables"] = assignment_vars
+                    
+                    # Add serialized assignment info to result for MCP response
+                    # This prevents serialization errors with complex objects
+                    serialized_assigned_vars = self.response_serializer.serialize_assigned_variables(assignment_vars)
+                    result["assigned_variables"] = serialized_assigned_vars
+                    
+                    # Log assignment for debugging
+                    for var_name, var_value in assignment_vars.items():
+                        logger.info(f"Assigned variable {var_name} = {type(var_value).__name__} (serialized for response)")
+                        logger.debug(f"Assignment detail: {var_name} -> {str(var_value)[:200]}")
             
             # Build response based on detail level
             response = await self._build_response_by_detail_level(
@@ -604,6 +615,7 @@ class KeywordExecutor:
                     var_value = args[0]
                     return {
                         "success": True,
+                        "result": var_value,  # Store actual return value
                         "output": var_value,
                         "variables": {"${VARIABLE}": var_value},
                         "state_updates": {}
@@ -614,6 +626,7 @@ class KeywordExecutor:
                 logger.info(f"Robot Log: {message}")
                 return {
                     "success": True,
+                    "result": None,  # Log doesn't return a value
                     "output": message,
                     "variables": {},
                     "state_updates": {}
@@ -624,6 +637,7 @@ class KeywordExecutor:
                     if args[0] == args[1]:
                         return {
                             "success": True,
+                            "result": True,  # Assertion passed
                             "output": f"'{args[0]}' == '{args[1]}'",
                             "variables": {},
                             "state_updates": {}
@@ -631,6 +645,7 @@ class KeywordExecutor:
                     else:
                         return {
                             "success": False,
+                            "result": False,  # Assertion failed
                             "error": f"'{args[0]}' != '{args[1]}'",
                             "output": "",
                             "variables": {},
@@ -653,6 +668,7 @@ class KeywordExecutor:
                 result = builtin.run_keyword(keyword, *string_args)
                 return {
                     "success": True,
+                    "result": result,  # Store the actual return value
                     "output": str(result) if result is not None else "OK",
                     "variables": {},
                     "state_updates": {}
@@ -752,23 +768,54 @@ class KeywordExecutor:
             base_response["error"] = result.get("error", "Unknown error")
         
         if detail_level == "minimal":
-            base_response["output"] = result.get("output", "")
+            # Serialize output to prevent MCP serialization errors with complex objects
+            raw_output = result.get("output", "")
+            base_response["output"] = self.response_serializer.serialize_for_response(raw_output)
+            # Include assigned variables in all detail levels for debugging
+            if "assigned_variables" in result:
+                base_response["assigned_variables"] = result["assigned_variables"]
             
         elif detail_level == "standard":
+            # Serialize session variables to prevent MCP serialization errors
+            serialized_session_vars = self.response_serializer.serialize_assigned_variables(dict(session.variables))
+            
+            # Serialize output for standard detail level
+            raw_output = result.get("output", "")
+            serialized_output = self.response_serializer.serialize_for_response(raw_output)
+            
             base_response.update({
-                "output": result.get("output", ""),
-                "session_variables": dict(session.variables),
+                "output": serialized_output,
+                "session_variables": serialized_session_vars,
                 "active_library": session.get_active_library()
             })
-            # Add resolved arguments for debugging if they differ from original
+            # Include assigned variables in standard detail level
+            if "assigned_variables" in result:
+                base_response["assigned_variables"] = result["assigned_variables"]
+            # Add resolved arguments for debugging if they differ from original (serialized)
             if resolved_arguments is not None and resolved_arguments != arguments:
-                base_response["resolved_arguments"] = resolved_arguments
+                serialized_resolved_args = [
+                    self.response_serializer.serialize_for_response(arg) for arg in resolved_arguments
+                ]
+                base_response["resolved_arguments"] = serialized_resolved_args
             
         elif detail_level == "full":
+            # Serialize session variables to prevent MCP serialization errors
+            serialized_session_vars = self.response_serializer.serialize_assigned_variables(dict(session.variables))
+            
+            # Serialize output for full detail level
+            raw_output = result.get("output", "")
+            serialized_output = self.response_serializer.serialize_for_response(raw_output)
+            
+            # Serialize state_updates to prevent MCP serialization errors
+            raw_state_updates = result.get("state_updates", {})
+            serialized_state_updates = {}
+            for key, value in raw_state_updates.items():
+                serialized_state_updates[key] = self.response_serializer.serialize_for_response(value)
+            
             base_response.update({
-                "output": result.get("output", ""),
-                "session_variables": dict(session.variables),
-                "state_updates": result.get("state_updates", {}),
+                "output": serialized_output,
+                "session_variables": serialized_session_vars,
+                "state_updates": serialized_state_updates,
                 "active_library": session.get_active_library(),
                 "browser_state": {
                     "browser_type": session.browser_state.browser_type,
@@ -779,9 +826,15 @@ class KeywordExecutor:
                 "step_count": session.step_count,
                 "duration": session.duration
             })
-            # Always include resolved arguments in full detail for debugging
+            # Include assigned variables in full detail level
+            if "assigned_variables" in result:
+                base_response["assigned_variables"] = result["assigned_variables"]
+            # Always include resolved arguments in full detail for debugging (serialized)
             if resolved_arguments is not None:
-                base_response["resolved_arguments"] = resolved_arguments
+                serialized_resolved_args = [
+                    self.response_serializer.serialize_for_response(arg) for arg in resolved_arguments
+                ]
+                base_response["resolved_arguments"] = serialized_resolved_args
         
         return base_response
 

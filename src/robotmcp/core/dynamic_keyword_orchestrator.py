@@ -970,16 +970,29 @@ class DynamicKeywordDiscovery:
                     value = parsed_args.positional[0] if parsed_args.positional else None
                     result = method(value)
                 else:
-                    # NAMED ARGUMENTS FIX: For other libraries, check for named arguments
-                    # This was the critical bug - line was ignoring named arguments completely
-                    logger.debug(f"Standard execution path for {keyword_info.name}: positional={parsed_args.positional}, named={list(parsed_args.named.keys()) if parsed_args.named else 'none'}")
+                    # OBJECT ARGUMENTS FIX: Libraries like XML need original object arguments, not string conversions
+                    libraries_needing_objects = ["XML"]
                     
-                    if parsed_args.named:
-                        result = method(*parsed_args.positional, **parsed_args.named)
-                        logger.debug(f"Successfully executed {keyword_info.name} with named arguments: {list(parsed_args.named.keys())}")
+                    if keyword_info.library in libraries_needing_objects:
+                        # Use original arguments to preserve object types (e.g., XML Elements)
+                        logger.debug(f"Object-preserving execution for {keyword_info.name} in {keyword_info.library}: using original args")
+                        if parsed_args.named:
+                            result = method(*original_args, **parsed_args.named)
+                            logger.debug(f"Successfully executed {keyword_info.name} with original args + named arguments")
+                        else:
+                            result = method(*original_args)
+                            logger.debug(f"Successfully executed {keyword_info.name} with original args only")
                     else:
-                        result = method(*parsed_args.positional)
-                        logger.debug(f"Successfully executed {keyword_info.name} with positional arguments only")
+                        # NAMED ARGUMENTS FIX: For other libraries, check for named arguments
+                        # This was the critical bug - line was ignoring named arguments completely
+                        logger.debug(f"Standard execution path for {keyword_info.name}: positional={parsed_args.positional}, named={list(parsed_args.named.keys()) if parsed_args.named else 'none'}")
+                        
+                        if parsed_args.named:
+                            result = method(*parsed_args.positional, **parsed_args.named)
+                            logger.debug(f"Successfully executed {keyword_info.name} with named arguments: {list(parsed_args.named.keys())}")
+                        else:
+                            result = method(*parsed_args.positional)
+                            logger.debug(f"Successfully executed {keyword_info.name} with positional arguments only")
             
             return {
                 "success": True,
