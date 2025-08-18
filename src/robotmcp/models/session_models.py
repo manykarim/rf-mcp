@@ -136,6 +136,10 @@ class ExecutionSession:
                 return lib
         return None
     
+    def get_session_type(self) -> 'SessionType':
+        """Get the session type."""
+        return self.session_type
+    
     def get_successful_steps(self) -> List[ExecutionStep]:
         """Get all successfully executed steps."""
         return [step for step in self.steps if step.is_successful]
@@ -527,6 +531,43 @@ class ExecutionSession:
                 logger.info(f"Auto-imported preferred library: {self.explicit_library_preference}")
             except ValueError as e:
                 logger.warning(f"Could not import preferred library {self.explicit_library_preference}: {e}")
+    
+    def validate_library_for_session(self, library_name: str) -> bool:
+        """Validate if a library is allowed in this session type."""
+        if self.session_type.value == "unknown":
+            return True  # Allow any library for unknown sessions
+        
+        profiles = self._get_session_profiles()
+        if self.session_type in profiles:
+            profile = profiles[self.session_type]
+            allowed_libraries = set(profile.core_libraries + profile.optional_libraries)
+            is_allowed = library_name in allowed_libraries
+            
+            if not is_allowed:
+                logger.warning(f"Library '{library_name}' not allowed in session type '{self.session_type.value}'. Allowed: {allowed_libraries}")
+            
+            return is_allowed
+        
+        return True  # Allow if no profile found
+
+    def get_excluded_libraries_for_session(self) -> Set[str]:
+        """Get libraries that are excluded from this session type."""
+        if self.session_type.value == "unknown":
+            return set()  # No exclusions for unknown sessions
+        
+        profiles = self._get_session_profiles()
+        if self.session_type in profiles:
+            profile = profiles[self.session_type]
+            allowed_libraries = set(profile.core_libraries + profile.optional_libraries)
+            
+            # Get all possible libraries and exclude the non-allowed ones
+            # For now, return a basic set of common web libraries that should be excluded from XML sessions
+            common_web_libraries = {"Browser", "SeleniumLibrary", "AppiumLibrary"}
+            excluded = common_web_libraries - allowed_libraries
+            
+            return excluded
+        
+        return set()
     
     def _resolve_library_conflicts(self) -> None:
         """Resolve library conflicts based on explicit preferences and session type."""

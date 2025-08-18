@@ -660,7 +660,7 @@ class DynamicKeywordDiscovery:
         return None
     
     def _find_keyword_with_session(self, keyword_name: str, active_library: str = None, session_id: str = None) -> Optional[KeywordInfo]:
-        """Find keyword respecting session search order."""
+        """Find keyword respecting session search order with strict boundary enforcement."""
         # If no session or session manager, use normal search
         if not session_id or not self.session_manager:
             return self.find_keyword(keyword_name, active_library)
@@ -669,20 +669,30 @@ class DynamicKeywordDiscovery:
         if not session:
             return self.find_keyword(keyword_name, active_library)
         
-        # Search in session's search order
+        # Get session configuration
         search_order = session.get_search_order()
-        logger.debug(f"Session '{session_id}' search order: {search_order}")
+        session_type = session.get_session_type()
         
-        # First try exact matches in search order
+        logger.debug(f"Session '{session_id}' search order: {search_order}, type: {session_type.value}")
+        
+        # CRITICAL FIX: Validate active_library against session boundaries
+        if active_library and active_library not in search_order:
+            logger.warning(f"Active library '{active_library}' not in session '{session_id}' search order {search_order}")
+            # For typed sessions, strictly enforce boundaries
+            if session_type.value != "unknown":
+                logger.info(f"Strict mode: ignoring out-of-bounds active_library '{active_library}' for session type '{session_type.value}'")
+                active_library = None
+        
+        # Search in session search order with exact matches first
         for lib_name in search_order:
             if lib_name in self.library_manager.libraries:
                 lib_keywords = self.get_keywords_by_library(lib_name)
                 for kw in lib_keywords:
                     if kw.name.lower() == keyword_name.lower():
-                        logger.debug(f"Found '{keyword_name}' in '{lib_name}' via search order")
+                        logger.info(f"Found '{keyword_name}' in '{lib_name}' via session search order (type: {session_type.value})")
                         return kw
         
-        # Try fuzzy matching in search order
+        # Try fuzzy matching within session boundaries
         normalized = keyword_name.lower().strip()
         variations = [
             normalized.replace(' ', ''),   # Remove spaces
@@ -696,15 +706,11 @@ class DynamicKeywordDiscovery:
                 for variation in variations:
                     for kw in lib_keywords:
                         if kw.name.lower().replace(' ', '') == variation:
-                            logger.debug(f"Found '{keyword_name}' in '{lib_name}' via fuzzy search order match")
+                            logger.info(f"Found '{keyword_name}' in '{lib_name}' via fuzzy search order match (type: {session_type.value})")
                             return kw
         
-        # If active_library specified and not in search order, check it too
-        if active_library and active_library not in search_order:
-            return self.find_keyword(keyword_name, active_library)
-        
-        # NO fallback to normal search - respect session boundaries
-        logger.debug(f"Keyword '{keyword_name}' not found in session '{session_id}' search order")
+        # REMOVED: No fallback to normal search - respect session boundaries strictly
+        logger.info(f"Keyword '{keyword_name}' not found within session '{session_id}' boundaries (type: {session_type.value}, search_order: {search_order})")
         return None
     
     def get_session_info(self, session_id: str) -> Optional[Dict[str, Any]]:

@@ -388,11 +388,17 @@ class KeywordExecutor:
                                     "state_updates": override_result.state_updates or {}
                                 }
             
-            # Determine library to use based on session configuration
+            # Determine library to use based on session configuration  
             web_automation_lib = session.get_web_automation_library()
             current_active = session.get_active_library()
-            
-            if web_automation_lib:
+            session_type = session.get_session_type()
+
+            # CRITICAL FIX: Respect session type boundaries
+            if session_type.value in ["xml_processing", "api_testing", "data_processing", "system_testing"]:
+                # Typed sessions should not use web automation auto-detection
+                logger.debug(f"Session type '{session_type.value}' - skipping web automation auto-detection")
+                
+            elif web_automation_lib:
                 # Session has a specific web automation library imported - use it
                 if web_automation_lib == "Browser" and (not current_active or current_active == "auto"):
                     browser_library_manager.set_active_library(session, "browser")
@@ -400,12 +406,16 @@ class KeywordExecutor:
                 elif web_automation_lib == "SeleniumLibrary" and (not current_active or current_active == "auto"):
                     browser_library_manager.set_active_library(session, "selenium")
                     logger.debug(f"Using session's web automation library: SeleniumLibrary")
-            elif not current_active or current_active == "auto":
-                # Session has no specific web library - use auto-detection as fallback
-                detected_library = browser_library_manager.detect_library_from_keyword(keyword_name, args)
-                if detected_library in ["browser", "selenium"]:
-                    browser_library_manager.set_active_library(session, detected_library)
-                    logger.debug(f"Auto-detected library for '{keyword_name}': {detected_library}")
+
+            elif session_type.value in ["web_automation", "mobile_testing", "unknown"]:
+                # Only auto-detect for web/mobile/unknown sessions
+                if not current_active or current_active == "auto":
+                    detected_library = browser_library_manager.detect_library_from_keyword(keyword_name, args)
+                    if detected_library in ["browser", "selenium"]:
+                        browser_library_manager.set_active_library(session, detected_library)
+                        logger.debug(f"Auto-detected library for '{keyword_name}': {detected_library}")
+            else:
+                logger.debug(f"Session type '{session_type.value}' - no web automation library handling needed")
             
             # Handle special built-in keywords first
             if keyword_name.lower() in ["set variable", "log", "should be equal"]:
