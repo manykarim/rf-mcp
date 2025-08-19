@@ -163,8 +163,11 @@ class VariableResolver:
         
         # Check if the entire argument is a single variable
         if self._is_single_variable(arg):
+            # Check for method calls or attribute access first
+            if self._has_method_call_or_attribute_access(arg):
+                return self._resolve_enhanced_variable_expression(arg, all_variables)
             # Handle both ${var} and ${var}[index] patterns
-            if '[' in arg and arg.endswith(']'):
+            elif '[' in arg and arg.endswith(']'):
                 # Handle multiple index access like ${var}[index1][index2]
                 return self._resolve_complex_indexed_access(arg, all_variables)
             else:
@@ -673,3 +676,207 @@ class VariableResolver:
                 }
         
         return preview
+    
+    def _has_method_call_or_attribute_access(self, arg: str) -> bool:
+        """Check if the argument contains method calls, attribute access, or indexing operations."""
+        if not arg.startswith('${') or not arg.endswith('}'):
+            return False
+        
+        # Extract content between ${ and }
+        content = arg[2:-1]
+        
+        # Check for method calls (contains parentheses), attribute access (contains dots), 
+        # or indexing inside the expression (contains brackets)
+        has_method_call = '(' in content
+        has_attribute_access = '.' in content and not content.replace('.', '').isdigit()
+        has_internal_indexing = '[' in content and ']' in content
+        
+        return has_method_call or has_attribute_access or has_internal_indexing
+    
+    def _resolve_enhanced_variable_expression(self, arg: str, variables: Dict[str, Any]) -> Any:
+        """
+        Resolve enhanced variable expressions with method calls and attribute access.
+        
+        Examples:
+        - ${response.json()}
+        - ${response.json()[0]['bookingid']}
+        - ${obj.method().attribute}
+        
+        Args:
+            arg: Variable expression like ${var.method()}
+            variables: Available variables
+            
+        Returns:
+            Result of the expression evaluation
+        """
+        try:
+            # Extract the expression content
+            expression = arg[2:-1]  # Remove ${ and }
+            logger.debug(f"Resolving enhanced expression: {expression}")
+            
+            # Parse the expression to find the base variable and operations
+            return self._evaluate_expression(expression, variables)
+            
+        except Exception as e:
+            logger.warning(f"Failed to resolve enhanced expression {arg}: {e}")
+            # Fall back to treating it as a simple variable name
+            var_name = arg[2:-1]
+            available_vars = [name.replace('${', '').replace('}', '') 
+                             for name in variables.keys() 
+                             if name.startswith('${')]
+            raise VariableResolutionError(var_name, available_vars)
+    
+    def _evaluate_expression(self, expression: str, variables: Dict[str, Any]) -> Any:
+        """
+        Safely evaluate a variable expression with method calls and attribute access.
+        
+        Args:
+            expression: Expression to evaluate (without ${ })
+            variables: Available variables
+            
+        Returns:
+            Result of evaluation
+        """
+        import re
+        
+        # Find the base variable name (everything before first . or [)
+        match = re.match(r'^([^.\[]+)', expression)
+        if not match:
+            raise ValueError(f"Cannot parse base variable from expression: {expression}")
+        
+        base_var_name = match.group(1)
+        
+        # Get the base variable value
+        normalized_name = self._normalize_variable_name(base_var_name)
+        if normalized_name not in variables:
+            available_vars = [name.replace('${', '').replace('}', '') 
+                             for name in variables.keys() 
+                             if name.startswith('${')]
+            raise VariableResolutionError(base_var_name, available_vars)
+        
+        base_value = variables[normalized_name]
+        logger.debug(f"Base variable {base_var_name} resolved to {type(base_value).__name__}")
+        
+        # Get the operations part (everything after base variable)
+        operations = expression[len(base_var_name):]
+        
+        # Apply operations sequentially
+        result = base_value
+        current_pos = 0
+        
+        while current_pos < len(operations):
+            char = operations[current_pos]
+            
+            if char == '.':
+                # Method call or attribute access
+                current_pos += 1
+                result, consumed = self._apply_method_or_attribute(result, operations[current_pos:])
+                current_pos += consumed
+                
+            elif char == '[':
+                # Index access
+                result, consumed = self._apply_index_access(result, operations[current_pos:])
+                current_pos += consumed
+                
+            else:
+                current_pos += 1
+        
+        logger.debug(f"Enhanced expression result: {result}")
+        return result
+    
+    def _apply_method_or_attribute(self, obj: Any, operations: str) -> tuple:
+        """
+        Apply method call or attribute access to an object.
+        
+        Returns:
+            (result, consumed_chars)
+        """
+        import re
+        
+        # Match method call: method_name() or method_name(args)
+        method_match = re.match(r'^([^.\[\(]+)\(([^)]*)\)', operations)
+        if method_match:
+            method_name = method_match.group(1)
+            args_str = method_match.group(2).strip()
+            
+            if hasattr(obj, method_name):
+                method = getattr(obj, method_name)
+                if callable(method):
+                    # Parse arguments if any
+                    if args_str:
+                        # Simple argument parsing - could be enhanced
+                        args = [arg.strip().strip('"\'') for arg in args_str.split(',')]
+                        result = method(*args)
+                    else:
+                        result = method()
+                    
+                    consumed = len(method_match.group(0))
+                    logger.debug(f"Called method {method_name}() on {type(obj).__name__}")
+                    return result, consumed
+                else:
+                    raise ValueError(f"'{method_name}' is not callable on {type(obj).__name__}")
+            else:
+                raise AttributeError(f"'{type(obj).__name__}' object has no attribute '{method_name}'")
+        
+        # Match attribute access: attribute_name
+        attr_match = re.match(r'^([^.\[\(]+)', operations)
+        if attr_match:
+            attr_name = attr_match.group(1)
+            
+            if hasattr(obj, attr_name):
+                result = getattr(obj, attr_name)
+                consumed = len(attr_name)
+                logger.debug(f"Accessed attribute {attr_name} on {type(obj).__name__}")
+                return result, consumed
+            else:
+                raise AttributeError(f"'{type(obj).__name__}' object has no attribute '{attr_name}'")
+        
+        raise ValueError(f"Cannot parse method/attribute from: {operations}")
+    
+    def _apply_index_access(self, obj: Any, operations: str) -> tuple:
+        """
+        Apply index access to an object.
+        
+        Returns:
+            (result, consumed_chars)
+        """
+        import re
+        
+        # Match index access: [index] or ['key'] or ["key"]
+        index_match = re.match(r'^\[([^\]]+)\]', operations)
+        if index_match:
+            index_str = index_match.group(1).strip()
+            
+            # Handle different index types
+            if index_str.startswith('"') and index_str.endswith('"'):
+                # String key
+                index = index_str[1:-1]  # Remove quotes
+            elif index_str.startswith("'") and index_str.endswith("'"):
+                # String key
+                index = index_str[1:-1]  # Remove quotes
+            elif index_str.isdigit():
+                # Integer index
+                index = int(index_str)
+            else:
+                # Try as string key first, then integer
+                try:
+                    index = int(index_str)
+                except ValueError:
+                    index = index_str
+            
+            # Apply index access
+            try:
+                result = obj[index]
+                consumed = len(index_match.group(0))
+                logger.debug(f"Accessed index [{index}] on {type(obj).__name__}")
+                return result, consumed
+            except (KeyError, IndexError, TypeError) as e:
+                raise ValueError(f"Cannot access index [{index}] on {type(obj).__name__}: {e}")
+        
+        raise ValueError(f"Cannot parse index access from: {operations}")
+    
+    def _normalize_variable_name(self, var_name: str) -> str:
+        """Normalize variable name to standard format with ${} wrapper."""
+        if not var_name.startswith('${'):
+            return f"${{{var_name}}}"
+        return var_name

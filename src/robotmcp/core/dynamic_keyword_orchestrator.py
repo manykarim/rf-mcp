@@ -970,8 +970,8 @@ class DynamicKeywordDiscovery:
                     value = parsed_args.positional[0] if parsed_args.positional else None
                     result = method(value)
                 else:
-                    # OBJECT ARGUMENTS FIX: Libraries like XML need original object arguments, not string conversions
-                    libraries_needing_objects = ["XML"]
+                    # OBJECT ARGUMENTS FIX: Libraries like XML, RequestsLibrary, Collections need original object arguments, not string conversions
+                    libraries_needing_objects = ["XML", "RequestsLibrary", "Collections"]
                     
                     if keyword_info.library in libraries_needing_objects:
                         # Use original arguments to preserve object types (e.g., XML Elements)
