@@ -678,3 +678,178 @@ class RobotFrameworkNativeConverter:
             }
         
         return analysis
+    
+    def get_appium_locator_guidance(self, error_message: str = None, keyword_name: str = None) -> Dict[str, Any]:
+        """
+        Provide AppiumLibrary locator strategy guidance for agents.
+        
+        Args:
+            error_message: Optional error message to analyze
+            keyword_name: Optional keyword name that failed
+            
+        Returns:
+            Dict with AppiumLibrary locator strategies and guidance
+        """
+        guidance = {
+            "locator_strategies": {
+                "id": "Element ID - e.g., 'id=my_element' or just 'my_element' (default behavior)",
+                "xpath": "XPath expression - e.g., '//*[@type=\"android.widget.EditText\"]'", 
+                "identifier": "Matches by @id attribute - e.g., 'identifier=my_element'",
+                "accessibility_id": "Accessibility options utilize - e.g., 'accessibility_id=button3'",
+                "class": "Matches by class - e.g., 'class=UIAPickerWheel'",
+                "name": "Matches by @name attribute - e.g., 'name=my_element' (Selendroid only)",
+                "android": "Android UI Automator - e.g., 'android=UiSelector().description(\"Apps\")'",
+                "ios": "iOS UI Automation - e.g., 'ios=.buttons().withName(\"Apps\")'",
+                "predicate": "iOS Predicate - e.g., 'predicate=name==\"login\"'",
+                "chain": "iOS Class Chain - e.g., 'chain=XCUIElementTypeWindow[1]/*'",
+                "css": "CSS selector in webview - e.g., 'css=.green_button'"
+            },
+            "common_examples": {
+                "By ID (default)": "my_element",
+                "By ID explicit": "id=my_element", 
+                "By XPath": "//*[@type='android.widget.EditText']",
+                "By XPath explicit": "xpath=//*[@text='Login']",
+                "By Accessibility ID": "accessibility_id=submit-button",
+                "By Class": "class=android.widget.Button",
+                "By Android UiAutomator": "android=UiSelector().description('Login')",
+                "By iOS Predicate": "predicate=name=='login_button'",
+                "By iOS Class Chain": "chain=XCUIElementTypeWindow[1]/XCUIElementTypeButton[2]",
+                "WebView CSS": "css=.login-form .submit-btn"
+            },
+            "default_behavior": {
+                "plain_text": "Plain text locators (e.g., 'my_element') are treated as ID lookups",
+                "key_attributes": "By default, locators match against key attributes (id for all elements)",
+                "xpath_detection": "XPath expressions should start with // or use explicit 'xpath=' prefix",
+                "strategy_prefix": "Use 'strategy=value' format for explicit strategy selection"
+            },
+            "platform_specific": {
+                "android": {
+                    "ui_automator": "Use 'android=UiSelector()...' for complex Android element queries",
+                    "examples": [
+                        "android=UiSelector().className('android.widget.Button').text('Login')",
+                        "android=UiSelector().resourceId('com.app:id/submit').enabled(true)",
+                        "android=UiSelector().description('Search').clickable(true)"
+                    ]
+                },
+                "ios": {
+                    "predicate": "Use 'predicate=' for iOS NSPredicate queries",
+                    "class_chain": "Use 'chain=' for iOS class chain queries",
+                    "examples": [
+                        "predicate=name BEGINSWITH 'login' AND visible == 1",
+                        "predicate=type == 'XCUIElementTypeButton' AND name == 'Submit'", 
+                        "chain=XCUIElementTypeWindow[1]/XCUIElementTypeButton[@name='Login']"
+                    ]
+                }
+            },
+            "webelement_support": {
+                "description": "AppiumLibrary v1.4+ supports WebElement objects",
+                "usage": [
+                    "Get elements with: Get WebElements or Get WebElement",
+                    "Use directly: Click Element ${element}",
+                    "List access: Click Element @{elements}[2]"
+                ],
+                "example": """
+*** Test Cases ***
+Use WebElement
+    @{elements}    Get WebElements    class=android.widget.Button
+    Click Element    @{elements}[0]
+                """
+            },
+            "tips": [
+                "Plain locators (e.g., 'login_btn') are treated as ID lookups by default",
+                "XPath expressions should start with // for automatic detection",
+                "Use accessibility_id for accessible elements (recommended for cross-platform)",
+                "Android UiAutomator provides powerful element selection capabilities",
+                "iOS predicates offer flexible element matching with NSPredicate syntax",
+                "WebView elements can use CSS selectors with 'css=' prefix",
+                "Always verify element visibility and state before interaction"
+            ]
+        }
+        
+        # Add specific guidance based on error analysis
+        if error_message and keyword_name:
+            guidance.update(self._analyze_appium_error(error_message, keyword_name))
+        
+        return guidance
+    
+    def _analyze_appium_error(self, error_message: str, keyword_name: str) -> Dict[str, Any]:
+        """Analyze AppiumLibrary specific errors and provide targeted guidance."""
+        analysis = {}
+        error_lower = error_message.lower()
+        
+        if "element not found" in error_lower or "no such element" in error_lower:
+            analysis["element_not_found_suggestions"] = [
+                "Verify the element exists on the current screen",
+                "Try different locator strategies (id, xpath, accessibility_id, class)",
+                "Check if element appears after app interaction or loading", 
+                "Use explicit waits (Wait Until Element Is Visible)",
+                "Verify app context is correct (native vs webview)",
+                "Check if element is scrollable into view",
+                "Use Appium Inspector to examine element attributes"
+            ]
+        
+        if "timeout" in error_lower or "wait" in error_lower:
+            analysis["timeout_suggestions"] = [
+                "Increase implicit wait time for dynamic content",
+                "Use explicit waits (Wait Until Element Is Visible/Enabled)",
+                "Check if element loads asynchronously after user actions",
+                "Verify locator strategy matches element attributes",
+                "Consider element loading time in mobile networks",
+                "Use Wait Until Page Contains Element for page-level waits"
+            ]
+        
+        if "context" in error_lower or "webview" in error_lower:
+            analysis["context_guidance"] = {
+                "issue": "May need to switch between native and webview contexts",
+                "solutions": [
+                    "Use 'Get Contexts' to list available contexts",
+                    "Switch to webview: 'Switch To Context    WEBVIEW_1'", 
+                    "Switch to native: 'Switch To Context    NATIVE_APP'",
+                    "Use CSS selectors only in webview context",
+                    "Use native locators (id, xpath) in native context"
+                ],
+                "example": """
+*** Test Cases ***
+Handle WebView
+    @{contexts}    Get Contexts
+    Switch To Context    WEBVIEW_1
+    Click Element    css=.login-button
+    Switch To Context    NATIVE_APP
+                """
+            }
+        
+        if "session" in error_lower or "driver" in error_lower:
+            analysis["session_guidance"] = {
+                "issue": "Mobile session or driver may not be properly initialized",
+                "solutions": [
+                    "Ensure Open Application was called with correct capabilities",
+                    "Check device connection and availability",
+                    "Verify Appium server is running and accessible",
+                    "Review device capabilities (platformName, deviceName, app path)",
+                    "Check if app installation is required"
+                ]
+            }
+        
+        if "stale" in error_lower or "reference" in error_lower:
+            analysis["stale_element_guidance"] = {
+                "issue": "Element reference has become stale (element no longer attached to DOM)",
+                "solutions": [
+                    "Re-find the element before interaction",
+                    "Avoid storing element references for long periods",
+                    "Use locator strings instead of WebElement objects when possible",
+                    "Refresh page or screen if element structure changed"
+                ]
+            }
+        
+        if "permission" in error_lower or "security" in error_lower:
+            analysis["permission_guidance"] = {
+                "issue": "App permissions or security restrictions may be blocking interaction",
+                "solutions": [
+                    "Grant required app permissions before testing",
+                    "Handle permission dialogs with explicit waits and clicks",
+                    "Check if device security settings block automation",
+                    "Verify app is properly signed for testing"
+                ]
+            }
+        
+        return analysis

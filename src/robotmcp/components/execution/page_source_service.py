@@ -555,9 +555,6 @@ class PageSourceService:
             Mobile app source and metadata
         """
         try:
-            # Import here to avoid circular dependency
-            from robot.libraries.BuiltIn import BuiltIn
-            
             # Check if AppiumLibrary is loaded
             if 'AppiumLibrary' not in session.imported_libraries:
                 return {
@@ -565,18 +562,38 @@ class PageSourceService:
                     "error": "AppiumLibrary not loaded in session"
                 }
             
-            # Get AppiumLibrary instance
-            builtin = BuiltIn()
-            
-            # Use AppiumLibrary's Get Source keyword
+            # FIXED: Use keyword discovery system instead of BuiltIn.run_keyword
+            # This avoids the "Cannot access execution context" error
             try:
-                source = builtin.run_keyword('Get Source')
-            except Exception as e:
-                logger.debug(f"Could not get mobile source: {e}")
-                return {
-                    "success": False,
-                    "error": f"No active mobile app session: {str(e)}"
-                }
+                from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
+                
+                keyword_discovery = get_keyword_discovery()
+                result = await keyword_discovery.execute_keyword("Get Source", [], session.variables)
+                
+                if result and result.get("success") and result.get("output"):
+                    source = result["output"]
+                elif result and result.get("success") and result.get("result"):
+                    source = result["result"]
+                else:
+                    error_msg = result.get('error', 'Unknown error') if result else 'No result from keyword discovery'
+                    logger.debug(f"Keyword discovery failed for Get Source: {error_msg}")
+                    # Fall back to direct library method call
+                    source = await self._get_mobile_source_direct(session)
+                    if not source:
+                        return {
+                            "success": False,
+                            "error": f"Failed to get mobile source: {error_msg}"
+                        }
+                        
+            except Exception as kd_error:
+                logger.debug(f"Keyword discovery failed for Get Source: {kd_error}")
+                # Fall back to direct library method call
+                source = await self._get_mobile_source_direct(session)
+                if not source:
+                    return {
+                        "success": False,
+                        "error": f"No active mobile app session: {str(kd_error)}"
+                    }
             
             if not source:
                 return {
@@ -759,3 +776,58 @@ class PageSourceService:
             "element_types": type_counts,
             "structure_type": parsed_source.get('type', 'unknown')
         }
+    
+    async def _get_mobile_source_direct(self, session: ExecutionSession) -> Optional[str]:
+        """
+        Fallback method to get mobile source via direct library method call.
+        
+        This method attempts to get the AppiumLibrary instance directly and call
+        the get_source method without going through Robot Framework's BuiltIn.run_keyword
+        which requires an execution context.
+        
+        Args:
+            session: ExecutionSession containing mobile configuration
+            
+        Returns:
+            str: Mobile app source XML or None if failed
+        """
+        try:
+            # Try to get AppiumLibrary instance from the library manager
+            from robotmcp.core.library_manager import LibraryManager
+            
+            library_manager = LibraryManager()
+            
+            # Check if AppiumLibrary is available in the loaded libraries
+            appium_lib = None
+            
+            # First, try to get it from the library manager's loaded libraries
+            if hasattr(library_manager, '_libraries'):
+                for lib_name, lib_instance in library_manager._libraries.items():
+                    if lib_name == "AppiumLibrary" or "appium" in lib_name.lower():
+                        appium_lib = lib_instance
+                        break
+            
+            # If not found, try importing and getting instance directly
+            if not appium_lib:
+                try:
+                    import importlib
+                    appium_module = importlib.import_module('AppiumLibrary')
+                    # This might not work as libraries usually need proper initialization
+                    logger.debug("AppiumLibrary module imported but instance not available")
+                    return None
+                except ImportError:
+                    logger.debug("AppiumLibrary not installed")
+                    return None
+            
+            # Call get_source method directly on the library instance
+            if appium_lib and hasattr(appium_lib, 'get_source'):
+                source = appium_lib.get_source()
+                logger.debug(f"Got mobile source directly from AppiumLibrary: {len(source) if source else 0} chars")
+                return source
+            else:
+                logger.debug("AppiumLibrary instance found but get_source method not available")
+                return None
+                
+        except Exception as e:
+            logger.debug(f"Direct mobile source retrieval failed: {e}")
+            return None

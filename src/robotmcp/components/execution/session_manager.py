@@ -185,10 +185,15 @@ class SessionManager:
             config = self.parse_mobile_requirements(scenario)
             session.mobile_config = config
             
-        # Set mobile-specific exclusions
+        # Set mobile-specific exclusions and ensure AppiumLibrary is properly tracked
         session.loaded_libraries.add('AppiumLibrary')
+        if 'AppiumLibrary' not in session.imported_libraries:
+            session.imported_libraries.append('AppiumLibrary')  # Track both loaded and imported
         
-        logger.info(f"Initialized mobile session: {session.session_id}")
+        # Set mobile session context
+        session.current_context = "NATIVE_APP"  # Default mobile context
+        
+        logger.info(f"Initialized mobile session: {session.session_id} with AppiumLibrary loaded")
     
     def parse_mobile_requirements(self, scenario: str) -> MobileConfig:
         """

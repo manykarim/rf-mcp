@@ -452,6 +452,13 @@ class KeywordExecutor:
             if keyword_name.lower() in ["set variable", "log", "should be equal"]:
                 return await self._execute_builtin_keyword(session, keyword_name, args)
             
+            # Handle mobile-specific keywords for mobile sessions
+            if session.is_mobile_session():
+                mobile_keywords = ['get source', 'get page source', 'capture page screenshot', 'get contexts', 'switch to context']
+                if keyword_name.lower() in mobile_keywords:
+                    logger.debug(f"Routing mobile keyword '{keyword_name}' to mobile execution path")
+                    return await self._execute_mobile_keyword(session, keyword_name, args)
+            
             # If library prefix is specified, use direct execution
             if library_prefix:
                 return await self._execute_with_library_prefix(session, keyword_name, args, library_prefix)
@@ -1093,4 +1100,140 @@ class KeywordExecutor:
             }
         
         return analysis
+    
+    async def _execute_mobile_keyword(
+        self, 
+        session: ExecutionSession, 
+        keyword_name: str, 
+        args: List[Any]
+    ) -> Dict[str, Any]:
+        """
+        Execute mobile-specific keywords through AppiumLibrary.
+        
+        This method handles mobile keywords that would otherwise fail with
+        "Cannot access execution context" when executed through BuiltIn.run_keyword.
+        
+        Args:
+            session: ExecutionSession containing mobile configuration
+            keyword_name: Mobile keyword name (e.g., "Get Source")
+            args: Keyword arguments
+            
+        Returns:
+            Execution result with status, output, and state
+        """
+        try:
+            logger.info(f"Executing mobile keyword: '{keyword_name}' with args: {args}")
+            
+            # Use keyword discovery system for mobile keywords
+            from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
+            
+            keyword_discovery = get_keyword_discovery()
+            result = await keyword_discovery.execute_keyword(keyword_name, args, session.variables)
+            
+            if result and result.get("success"):
+                # Process successful result
+                output = result.get("output", "")
+                result_value = result.get("result")
+                
+                # For Get Source, the result might be in either output or result field
+                if keyword_name.lower() in ["get source", "get page source"] and not output and result_value:
+                    output = str(result_value)
+                
+                response = {
+                    "success": True,
+                    "output": output,
+                    "result": result_value,
+                    "variables": result.get("variables", {}),
+                    "state_updates": result.get("state_updates", {})
+                }
+                
+                logger.info(f"Mobile keyword '{keyword_name}' executed successfully")
+                return response
+            else:
+                # Keyword discovery failed, try fallback
+                error_msg = result.get('error', 'Unknown error') if result else 'No result from keyword discovery'
+                logger.debug(f"Keyword discovery failed for mobile keyword '{keyword_name}': {error_msg}")
+                
+                # For Get Source, try direct library method call as fallback
+                if keyword_name.lower() == "get source":
+                    return await self._execute_get_source_fallback(session)
+                
+                return {
+                    "success": False,
+                    "error": f"Mobile keyword execution failed: {error_msg}",
+                    "output": "",
+                    "variables": {},
+                    "state_updates": {}
+                }
+                
+        except Exception as e:
+            logger.error(f"Error executing mobile keyword '{keyword_name}': {e}")
+            
+            # Try fallback for Get Source
+            if keyword_name.lower() == "get source":
+                try:
+                    return await self._execute_get_source_fallback(session)
+                except Exception as fallback_error:
+                    logger.error(f"Fallback also failed for Get Source: {fallback_error}")
+            
+            return {
+                "success": False,
+                "error": f"Mobile keyword execution error: {str(e)}",
+                "output": "",
+                "variables": {},
+                "state_updates": {}
+            }
+    
+    async def _execute_get_source_fallback(self, session: ExecutionSession) -> Dict[str, Any]:
+        """
+        Fallback method for Get Source using direct AppiumLibrary method call.
+        
+        Args:
+            session: ExecutionSession containing mobile configuration
+            
+        Returns:
+            Execution result
+        """
+        try:
+            from robotmcp.core.library_manager import LibraryManager
+            
+            library_manager = LibraryManager()
+            
+            # Try to get AppiumLibrary instance
+            appium_lib = None
+            if hasattr(library_manager, '_libraries'):
+                for lib_name, lib_instance in library_manager._libraries.items():
+                    if lib_name == "AppiumLibrary" or "appium" in lib_name.lower():
+                        appium_lib = lib_instance
+                        break
+            
+            if appium_lib and hasattr(appium_lib, 'get_source'):
+                source = appium_lib.get_source()
+                logger.info(f"Got mobile source via fallback: {len(source) if source else 0} chars")
+                
+                return {
+                    "success": True,
+                    "output": source,
+                    "result": source,
+                    "variables": {},
+                    "state_updates": {}
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "No active mobile app session: AppiumLibrary not properly loaded",
+                    "output": "",
+                    "variables": {},
+                    "state_updates": {}
+                }
+                
+        except Exception as e:
+            logger.error(f"Get Source fallback failed: {e}")
+            return {
+                "success": False,
+                "error": f"No active mobile app session: {str(e)}",
+                "output": "",
+                "variables": {},
+                "state_updates": {}
+            }
     

@@ -977,6 +977,57 @@ async def get_browser_locator_guidance(
 
 
 @mcp.tool
+async def get_appium_locator_guidance(
+    error_message: str = None, keyword_name: str = None
+) -> Dict[str, Any]:
+    """Get comprehensive AppiumLibrary locator strategy guidance for AI agents.
+
+    This tool helps AI agents understand AppiumLibrary's locator strategies and
+    provides context-aware suggestions for mobile element location and error resolution.
+
+    AppiumLibrary supports these locator strategies:
+    
+    **Basic Locators:**
+    - id: Element ID (e.g., 'id=my_element' or just 'my_element')
+    - xpath: XPath expression (e.g., '//*[@type="android.widget.EditText"]')
+    - identifier: Matches by @id attribute (e.g., 'identifier=my_element')
+    - accessibility_id: Accessibility options utilize (e.g., 'accessibility_id=button3')
+    - class: Matches by class (e.g., 'class=UIAPickerWheel')
+    - name: Matches by @name attribute (e.g., 'name=my_element') - Only valid for Selendroid
+
+    **Platform-Specific Locators:**
+    - android: Android UI Automator (e.g., 'android=UiSelector().description("Apps")')
+    - ios: iOS UI Automation (e.g., 'ios=.buttons().withName("Apps")')
+    - predicate: iOS Predicate (e.g., 'predicate=name=="login"')
+    - chain: iOS Class Chain (e.g., 'chain=XCUIElementTypeWindow[1]/*')
+
+    **WebView Locators:**
+    - css: CSS selector in webview (e.g., 'css=.green_button')
+
+    **Default Behavior:**
+    - By default, locators match against key attributes (id for all elements)
+    - Plain text (e.g., 'my_element') is treated as ID lookup
+    - XPath should start with // or use explicit 'xpath=' prefix
+
+    **WebElement Support:**
+    Starting with AppiumLibrary v1.4, you can pass WebElement objects:
+    - Get elements with: Get WebElements or Get WebElement
+    - Use directly: Click Element ${element}
+
+    Args:
+        error_message: Optional error message to analyze for specific guidance
+        keyword_name: Optional keyword name that failed for context-specific tips
+
+    Returns:
+        Comprehensive locator strategy guidance with examples, tips, and error-specific advice
+    """
+    from robotmcp.utils.rf_native_type_converter import RobotFrameworkNativeConverter
+
+    converter = RobotFrameworkNativeConverter()
+    return converter.get_appium_locator_guidance(error_message, keyword_name)
+
+
+@mcp.tool
 async def get_loaded_libraries() -> Dict[str, Any]:
     """Get status of all loaded Robot Framework libraries using both libdoc and inspection methods.
 
