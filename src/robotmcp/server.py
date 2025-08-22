@@ -816,29 +816,38 @@ async def initialize_context(
 
 @mcp.tool
 async def get_context_variables(session_id: str) -> Dict[str, Any]:
-    """Get all variables from a session's Robot Framework context.
+    """Get all variables from a session.
     
     Args:
         session_id: Session identifier
     
     Returns:
-        Dictionary containing all context variables
+        Dictionary containing all session variables
     """
     try:
-        from robotmcp.components.execution.robot_context_manager import get_context_manager
-        context_manager = get_context_manager()
+        # Get session
+        session = execution_engine.session_manager.get_session(session_id)
         
-        variables = context_manager.get_context_variables(session_id)
+        if not session:
+            return {
+                "success": False,
+                "error": f"Session '{session_id}' not found",
+                "session_id": session_id
+            }
+        
+        # Get session variables
+        variables = dict(session.variables)
         
         return {
             "success": True,
             "session_id": session_id,
             "variables": variables,
-            "variable_count": len(variables)
+            "variable_count": len(variables),
+            "note": "Using session-based variable system"
         }
         
     except Exception as e:
-        logger.error(f"Error getting context variables for session {session_id}: {e}")
+        logger.error(f"Error getting variables for session {session_id}: {e}")
         return {
             "success": False,
             "error": str(e),
