@@ -1,12 +1,14 @@
 """Main execution coordinator orchestrating all execution services."""
 
 import logging
+import os
 from typing import Any, Dict, List, Optional, Union
 
 from robotmcp.models.session_models import ExecutionSession
 from robotmcp.models.config_models import ExecutionConfig
 from robotmcp.components.browser import BrowserLibraryManager
 from robotmcp.components.execution import SessionManager, PageSourceService, KeywordExecutor, LocatorConverter
+from robotmcp.components.execution.suite_execution_service import SuiteExecutionService
 from robotmcp.utils.library_checker import LibraryAvailabilityChecker
 from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
 
@@ -34,6 +36,7 @@ class ExecutionCoordinator:
         self.page_source_service = PageSourceService(self.config)
         self.keyword_executor = KeywordExecutor(self.config, self.override_registry)
         self.locator_converter = LocatorConverter(self.config)
+        self.suite_execution_service = SuiteExecutionService(self.config)
         
         # Initialize additional components for backward compatibility
         self.library_checker = LibraryAvailabilityChecker()
@@ -458,7 +461,262 @@ class ExecutionCoordinator:
         # Clean up browser libraries
         self.browser_library_manager.cleanup()
         
+        # Clean up suite execution service
+        self.suite_execution_service.cleanup_all()
+        
         logger.info("ExecutionCoordinator cleanup completed")
+    
+    # ============================================
+    # SUITE EXECUTION METHODS
+    # ============================================
+    
+    async def run_suite_dry_run(
+        self,
+        session_id: str,
+        validation_level: str = "standard",
+        include_warnings: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Run test suite in dry run mode for validation.
+        
+        Args:
+            session_id: Session with generated test suite
+            validation_level: Validation depth ('minimal', 'standard', 'strict')
+            include_warnings: Include warnings in validation report
+            
+        Returns:
+            Structured validation results
+        """
+        try:
+            # Get session
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return {
+                    "success": False,
+                    "error": f"Session '{session_id}' not found",
+                    "tool": "run_test_suite_dry",
+                    "session_id": session_id
+                }
+            
+            # Generate suite content using TestBuilder
+            from robotmcp.components.test_builder import TestBuilder
+            test_builder = TestBuilder(self)
+            
+            suite_result = await test_builder.build_suite(
+                session_id=session_id,
+                test_name=f"DryRun_Test_{session_id}",
+                remove_library_prefixes=True
+            )
+            
+            if not suite_result.get("success", False):
+                return {
+                    "success": False,
+                    "error": f"Failed to generate test suite: {suite_result.get('error', 'Unknown error')}",
+                    "tool": "run_test_suite_dry",
+                    "session_id": session_id
+                }
+            
+            # Get suite content
+            suite_content = suite_result["rf_text"]
+            
+            # Execute dry run using suite execution service
+            options = {
+                "validation_level": validation_level,
+                "include_warnings": include_warnings
+            }
+            
+            result = await self.suite_execution_service.execute_dry_run(
+                suite_content, session_id, options
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error in run_suite_dry_run for session {session_id}: {e}")
+            return {
+                "success": False,
+                "error": f"Dry run execution failed: {str(e)}",
+                "tool": "run_test_suite_dry",
+                "session_id": session_id
+            }
+    
+    async def run_suite_dry_run_from_file(
+        self,
+        suite_file_path: str,
+        validation_level: str = "standard",
+        include_warnings: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Run test suite from file in dry run mode for validation.
+        
+        Args:
+            suite_file_path: Path to .robot file
+            validation_level: Validation depth ('minimal', 'standard', 'strict')
+            include_warnings: Include warnings in validation report
+            
+        Returns:
+            Structured validation results
+        """
+        try:
+            # Read suite content from file
+            with open(suite_file_path, 'r', encoding='utf-8') as f:
+                suite_content = f.read()
+            
+            # Execute dry run using suite execution service
+            options = {
+                "validation_level": validation_level,
+                "include_warnings": include_warnings
+            }
+            
+            result = await self.suite_execution_service.execute_dry_run(
+                suite_content, f"file_{os.path.basename(suite_file_path)}", options
+            )
+            
+            # Update result with file information
+            result["suite_file_path"] = suite_file_path
+            result["tool"] = "run_test_suite_dry"
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error in run_suite_dry_run_from_file for {suite_file_path}: {e}")
+            return {
+                "success": False,
+                "error": f"Dry run execution failed: {str(e)}",
+                "tool": "run_test_suite_dry",
+                "suite_file_path": suite_file_path
+            }
+    
+    async def run_suite_execution(
+        self,
+        session_id: str,
+        execution_options: Dict[str, Any] = None,
+        output_level: str = "standard",
+        capture_screenshots: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Run test suite in normal execution mode.
+        
+        Args:
+            session_id: Session with generated test suite
+            execution_options: Dict with RF options (tags, variables, etc.)
+            output_level: Response verbosity ('minimal', 'standard', 'detailed')
+            capture_screenshots: Enable screenshot capture on failures
+            
+        Returns:
+            Comprehensive execution results
+        """
+        try:
+            if execution_options is None:
+                execution_options = {}
+            
+            # Get session
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                return {
+                    "success": False,
+                    "error": f"Session '{session_id}' not found",
+                    "tool": "run_test_suite",
+                    "session_id": session_id
+                }
+            
+            # Generate suite content using TestBuilder
+            from robotmcp.components.test_builder import TestBuilder
+            test_builder = TestBuilder(self)
+            
+            suite_result = await test_builder.build_suite(
+                session_id=session_id,
+                test_name=f"Execution_Test_{session_id}",
+                remove_library_prefixes=True
+            )
+            
+            if not suite_result.get("success", False):
+                return {
+                    "success": False,
+                    "error": f"Failed to generate test suite: {suite_result.get('error', 'Unknown error')}",
+                    "tool": "run_test_suite",
+                    "session_id": session_id
+                }
+            
+            # Get suite content
+            suite_content = suite_result["rf_text"]
+            
+            # Prepare execution options
+            options = execution_options.copy()
+            options.update({
+                "output_level": output_level,
+                "capture_screenshots": capture_screenshots
+            })
+            
+            # Execute suite using suite execution service
+            result = await self.suite_execution_service.execute_normal(
+                suite_content, session_id, options
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error in run_suite_execution for session {session_id}: {e}")
+            return {
+                "success": False,
+                "error": f"Suite execution failed: {str(e)}",
+                "tool": "run_test_suite",
+                "session_id": session_id
+            }
+    
+    async def run_suite_execution_from_file(
+        self,
+        suite_file_path: str,
+        execution_options: Dict[str, Any] = None,
+        output_level: str = "standard",
+        capture_screenshots: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Run test suite from file in normal execution mode.
+        
+        Args:
+            suite_file_path: Path to .robot file
+            execution_options: Dict with RF options (tags, variables, etc.)
+            output_level: Response verbosity ('minimal', 'standard', 'detailed')
+            capture_screenshots: Enable screenshot capture on failures
+            
+        Returns:
+            Comprehensive execution results
+        """
+        try:
+            if execution_options is None:
+                execution_options = {}
+            
+            # Read suite content from file
+            with open(suite_file_path, 'r', encoding='utf-8') as f:
+                suite_content = f.read()
+            
+            # Prepare execution options
+            options = execution_options.copy()
+            options.update({
+                "output_level": output_level,
+                "capture_screenshots": capture_screenshots
+            })
+            
+            # Execute suite using suite execution service
+            result = await self.suite_execution_service.execute_normal(
+                suite_content, f"file_{os.path.basename(suite_file_path)}", options
+            )
+            
+            # Update result with file information
+            result["suite_file_path"] = suite_file_path
+            result["tool"] = "run_test_suite"
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error in run_suite_execution_from_file for {suite_file_path}: {e}")
+            return {
+                "success": False,
+                "error": f"Suite execution failed: {str(e)}",
+                "tool": "run_test_suite",
+                "suite_file_path": suite_file_path
+            }
     
     # ============================================
     # MISSING METHODS FOR BACKWARD COMPATIBILITY

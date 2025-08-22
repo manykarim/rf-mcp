@@ -873,6 +873,185 @@ async def get_loaded_libraries() -> Dict[str, Any]:
     return execution_engine.get_library_status()
 
 
+@mcp.tool
+async def run_test_suite_dry(
+    session_id: str = "",
+    suite_file_path: str = None,
+    validation_level: str = "standard",
+    include_warnings: bool = True
+) -> Dict[str, Any]:
+    """Validate test suite using Robot Framework dry run mode.
+    
+    RECOMMENDED WORKFLOW - SUITE VALIDATION:
+    This tool should be used AFTER build_test_suite to validate the generated suite:
+    1. ✅ build_test_suite - Generate .robot file from session steps
+    2. ✅ run_test_suite_dry (THIS TOOL) - Validate syntax and structure 
+    3. ➡️ run_test_suite - Execute if validation passes
+    
+    Enhanced Session Resolution:
+    - If session_id provided and valid: Uses that session's generated suite
+    - If session_id empty/invalid: Automatically finds most suitable session
+    - If suite_file_path provided: Validates specified file directly
+    
+    Validation Levels:
+    - minimal: Basic syntax checking only
+    - standard: Syntax + keyword verification + imports (default)
+    - strict: All checks + argument validation + structure analysis
+    
+    Args:
+        session_id: Session with executed steps (auto-resolves if empty/invalid)
+        suite_file_path: Direct path to .robot file (optional, overrides session)
+        validation_level: Validation depth ('minimal', 'standard', 'strict')
+        include_warnings: Include warnings in validation report
+        
+    Returns:
+        Structured validation results with issues, warnings, and suggestions
+    """
+    
+    # Session resolution with same logic as build_test_suite
+    from robotmcp.utils.session_resolution import SessionResolver
+    session_resolver = SessionResolver(execution_engine.session_manager)
+    
+    if suite_file_path:
+        # Direct file validation mode
+        logger.info(f"Running dry run validation on file: {suite_file_path}")
+        return await execution_engine.run_suite_dry_run_from_file(
+            suite_file_path, validation_level, include_warnings
+        )
+    else:
+        # Session-based validation mode  
+        resolution_result = session_resolver.resolve_session_with_fallback(session_id)
+        
+        if not resolution_result["success"]:
+            return {
+                "success": False,
+                "tool": "run_test_suite_dry",
+                "error": "No valid session or suite file for validation",
+                "error_details": resolution_result["error_guidance"],
+                "guidance": [
+                    "Create a session and execute some steps first",
+                    "Use build_test_suite to generate a test suite",
+                    "Or provide suite_file_path to validate an existing file"
+                ],
+                "recommendation": "Use build_test_suite first or provide suite_file_path"
+            }
+        
+        resolved_session_id = resolution_result["session_id"]
+        logger.info(f"Running dry run validation for session: {resolved_session_id}")
+        
+        result = await execution_engine.run_suite_dry_run(
+            resolved_session_id, validation_level, include_warnings
+        )
+        
+        # Add session resolution info to result
+        if resolution_result.get("fallback_used", False):
+            result["session_resolution"] = {
+                "fallback_used": True,
+                "original_session_id": session_id,
+                "resolved_session_id": resolved_session_id,
+                "message": f"Automatically used session '{resolved_session_id}' with {resolution_result['session_info']['step_count']} executed steps"
+            }
+        else:
+            result["session_resolution"] = {
+                "fallback_used": False,
+                "session_id": resolved_session_id
+            }
+        
+        return result
+
+
+@mcp.tool  
+async def run_test_suite(
+    session_id: str = "",
+    suite_file_path: str = None,
+    execution_options: Dict[str, Any] = None,
+    output_level: str = "standard",
+    capture_screenshots: bool = False
+) -> Dict[str, Any]:
+    """Execute test suite using Robot Framework normal execution.
+    
+    RECOMMENDED WORKFLOW - SUITE EXECUTION:
+    This tool should be used AFTER validation for full test execution:
+    1. ✅ build_test_suite - Generate .robot file from session steps
+    2. ✅ run_test_suite_dry - Validate syntax and structure
+    3. ✅ run_test_suite (THIS TOOL) - Execute validated test suite
+    
+    Enhanced Session Resolution:
+    - If session_id provided and valid: Uses that session's generated suite
+    - If session_id empty/invalid: Automatically finds most suitable session  
+    - If suite_file_path provided: Executes specified file directly
+    
+    Output Levels:
+    - minimal: Basic execution statistics only
+    - standard: Statistics + failed tests + output files (default)
+    - detailed: All information + execution details + timing
+    
+    Args:
+        session_id: Session with executed steps (auto-resolves if empty/invalid)
+        suite_file_path: Direct path to .robot file (optional, overrides session)
+        execution_options: Dict with RF options (variables, tags, loglevel, etc.)
+        output_level: Response verbosity ('minimal', 'standard', 'detailed')
+        capture_screenshots: Enable screenshot capture on failures
+        
+    Returns:
+        Comprehensive execution results with statistics and output files
+    """
+    
+    if execution_options is None:
+        execution_options = {}
+    
+    # Session resolution with same logic as build_test_suite
+    from robotmcp.utils.session_resolution import SessionResolver
+    session_resolver = SessionResolver(execution_engine.session_manager)
+    
+    if suite_file_path:
+        # Direct file execution mode
+        logger.info(f"Running suite execution on file: {suite_file_path}")
+        return await execution_engine.run_suite_execution_from_file(
+            suite_file_path, execution_options, output_level, capture_screenshots
+        )
+    else:
+        # Session-based execution mode
+        resolution_result = session_resolver.resolve_session_with_fallback(session_id)
+        
+        if not resolution_result["success"]:
+            return {
+                "success": False,
+                "tool": "run_test_suite",
+                "error": "No valid session or suite file for execution", 
+                "error_details": resolution_result["error_guidance"],
+                "guidance": [
+                    "Create a session and execute some steps first",
+                    "Use build_test_suite to generate a test suite",
+                    "Or provide suite_file_path to execute an existing file"
+                ],
+                "recommendation": "Use build_test_suite first or provide suite_file_path"
+            }
+        
+        resolved_session_id = resolution_result["session_id"]
+        logger.info(f"Running suite execution for session: {resolved_session_id}")
+        
+        result = await execution_engine.run_suite_execution(
+            resolved_session_id, execution_options, output_level, capture_screenshots
+        )
+        
+        # Add session resolution info to result
+        if resolution_result.get("fallback_used", False):
+            result["session_resolution"] = {
+                "fallback_used": True,
+                "original_session_id": session_id,
+                "resolved_session_id": resolved_session_id,
+                "message": f"Automatically used session '{resolved_session_id}' with {resolution_result['session_info']['step_count']} executed steps"
+            }
+        else:
+            result["session_resolution"] = {
+                "fallback_used": False,
+                "session_id": resolved_session_id
+            }
+        
+        return result
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     mcp.run()
