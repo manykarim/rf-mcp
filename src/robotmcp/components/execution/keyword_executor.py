@@ -13,6 +13,7 @@ from robotmcp.utils.rf_native_type_converter import RobotFrameworkNativeConverte
 from robotmcp.utils.response_serializer import MCPResponseSerializer
 from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
 from robotmcp.components.variables.variable_resolver import VariableResolver
+from robotmcp.components.execution.robot_context_manager import get_context_manager
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class KeywordExecutor:
         self.override_registry = override_registry
         self.variable_resolver = VariableResolver()
         self.response_serializer = MCPResponseSerializer()
+        self.context_manager = get_context_manager()
     
     async def execute_keyword(
         self, 
@@ -45,7 +47,8 @@ class KeywordExecutor:
         browser_library_manager: Any,  # BrowserLibraryManager
         detail_level: str = "minimal",
         library_prefix: str = None,
-        assign_to: Union[str, List[str]] = None
+        assign_to: Union[str, List[str]] = None,
+        use_context: bool = False
     ) -> Dict[str, Any]:
         """
         Execute a single Robot Framework keyword step with optional library prefix.
@@ -57,6 +60,8 @@ class KeywordExecutor:
             browser_library_manager: BrowserLibraryManager instance
             detail_level: Level of detail in response ('minimal', 'standard', 'full')
             library_prefix: Optional explicit library name to override session search order
+            assign_to: Optional variable assignment
+            use_context: If True, execute within full RF context
             
         Returns:
             Execution result with status, output, and state
@@ -76,33 +81,42 @@ class KeywordExecutor:
             # Mark step as running
             step.status = "running"
             
-            # Resolve variables in arguments before execution
-            try:
-                resolved_arguments = self.variable_resolver.resolve_arguments(arguments, session.variables)
-                logger.debug(f"Variable resolution: {arguments} → {resolved_arguments}")
+            # Check if we should use context mode
+            if use_context or session.is_context_mode():
+                # In context mode, don't resolve variables - let RF handle it
+                logger.info(f"Executing keyword in context mode: {keyword} with args: {arguments}")
+                result = await self._execute_keyword_with_context(
+                    session, keyword, arguments, assign_to
+                )
+                resolved_arguments = arguments  # For logging
+            else:
+                # Resolve variables in arguments before execution for non-context mode
+                try:
+                    resolved_arguments = self.variable_resolver.resolve_arguments(arguments, session.variables)
+                    logger.debug(f"Variable resolution: {arguments} → {resolved_arguments}")
+                    
+                    # ADDITIONAL DEBUG: Log types of resolved arguments
+                    for i, (orig, resolved) in enumerate(zip(arguments, resolved_arguments)):
+                        logger.debug(f"Arg {i}: '{orig}' → '{resolved}' (type: {type(resolved).__name__})")
+                    
+                except Exception as var_error:
+                    logger.error(f"Variable resolution failed for {arguments}: {var_error}")
+                    import traceback
+                    logger.error(f"Variable resolution traceback: {traceback.format_exc()}")
+                    # Return error result for variable resolution failure
+                    step.mark_failure(f"Variable resolution failed: {str(var_error)}")
+                    return {
+                        "success": False,
+                        "error": f"Variable resolution failed: {str(var_error)}",
+                        "keyword": keyword,
+                        "arguments": arguments,
+                        "step_id": step.step_id
+                    }
                 
-                # ADDITIONAL DEBUG: Log types of resolved arguments
-                for i, (orig, resolved) in enumerate(zip(arguments, resolved_arguments)):
-                    logger.debug(f"Arg {i}: '{orig}' → '{resolved}' (type: {type(resolved).__name__})")
+                logger.info(f"Executing keyword: {keyword} with resolved args: {resolved_arguments}")
                 
-            except Exception as var_error:
-                logger.error(f"Variable resolution failed for {arguments}: {var_error}")
-                import traceback
-                logger.error(f"Variable resolution traceback: {traceback.format_exc()}")
-                # Return error result for variable resolution failure
-                step.mark_failure(f"Variable resolution failed: {str(var_error)}")
-                return {
-                    "success": False,
-                    "error": f"Variable resolution failed: {str(var_error)}",
-                    "keyword": keyword,
-                    "arguments": arguments,
-                    "step_id": step.step_id
-                }
-            
-            logger.info(f"Executing keyword: {keyword} with resolved args: {resolved_arguments}")
-            
-            # Execute the keyword with library prefix support using resolved arguments
-            result = await self._execute_keyword_internal(session, step, browser_library_manager, library_prefix, resolved_arguments)
+                # Execute the keyword with library prefix support using resolved arguments
+                result = await self._execute_keyword_internal(session, step, browser_library_manager, library_prefix, resolved_arguments)
             
             # Update step status
             step.end_time = datetime.now()
@@ -455,6 +469,86 @@ class KeywordExecutor:
                 "output": "",
                 "variables": {},
                 "state_updates": {}
+            }
+    
+    async def _execute_keyword_with_context(
+        self,
+        session: ExecutionSession,
+        keyword: str,
+        arguments: List[Any],
+        assign_to: Optional[Union[str, List[str]]] = None
+    ) -> Dict[str, Any]:
+        """Execute keyword within full Robot Framework context.
+        
+        Args:
+            session: ExecutionSession to run in
+            keyword: Robot Framework keyword name
+            arguments: List of arguments for the keyword
+            assign_to: Optional variable assignment
+            
+        Returns:
+            Execution result with status, output, and state
+        """
+        try:
+            session_id = session.session_id
+            
+            # Ensure context exists for session
+            if not self.context_manager.get_session_info(session_id):
+                # Create context with session's loaded libraries
+                libraries = list(session.loaded_libraries)
+                context_result = self.context_manager.create_context(session_id, libraries)
+                if not context_result.get("success"):
+                    return {
+                        "success": False,
+                        "error": f"Failed to create context: {context_result.get('error')}",
+                        "keyword": keyword,
+                        "arguments": arguments
+                    }
+                
+                # Sync session variables to context
+                self.context_manager.set_context_variables(session_id, session.variables)
+            
+            # Execute keyword in context
+            result = self.context_manager.execute_in_context(
+                session_id=session_id,
+                keyword=keyword,
+                arguments=arguments,
+                assign_to=assign_to
+            )
+            
+            # Sync context variables back to session
+            if result.get("success"):
+                context_vars = result.get("variables", {})
+                session.variables.update(context_vars)
+                
+                # Handle assignment
+                if assign_to:
+                    assignment_vars = {}
+                    if isinstance(assign_to, str):
+                        var_name = self._normalize_variable_name(assign_to)
+                        if var_name in context_vars:
+                            assignment_vars[var_name] = context_vars[var_name]
+                    elif isinstance(assign_to, list):
+                        for name in assign_to:
+                            var_name = self._normalize_variable_name(name)
+                            if var_name in context_vars:
+                                assignment_vars[var_name] = context_vars[var_name]
+                    
+                    if assignment_vars:
+                        serialized_assigned_vars = self.response_serializer.serialize_assigned_variables(assignment_vars)
+                        result["assigned_variables"] = serialized_assigned_vars
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Context execution failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return {
+                "success": False,
+                "error": f"Context execution failed: {str(e)}",
+                "keyword": keyword,
+                "arguments": arguments
             }
     
     async def _execute_with_library_prefix(

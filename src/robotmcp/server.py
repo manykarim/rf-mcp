@@ -129,6 +129,7 @@ async def execute_step(
     detail_level: str = "minimal",
     scenario_hint: str = None,
     assign_to: Union[str, List[str]] = None,
+    use_context: bool = False,
 ) -> Dict[str, Any]:
     """Execute a single test step using Robot Framework API.
 
@@ -153,6 +154,9 @@ async def execute_step(
         assign_to: Variable name(s) to assign the keyword's return value to.
                   Single string for single assignment: "result" creates ${result}
                   List of strings for multi-assignment: ["first", "rest"] creates ${first}, ${rest}
+        use_context: If True, executes within full RF context (maintains variables, state across calls).
+                    This enables proper variable scoping, built-in keyword functionality, and
+                    library state persistence.
     """
     if arguments is None:
         arguments = []
@@ -164,6 +168,7 @@ async def execute_step(
         detail_level,
         scenario_hint=scenario_hint,
         assign_to=assign_to,
+        use_context=use_context,
     )
 
     # For proper MCP protocol compliance, failed steps should raise exceptions
@@ -744,6 +749,100 @@ async def set_library_search_order(
     except Exception as e:
         logger.error(f"Error setting library search order: {e}")
         return {"success": False, "error": str(e), "session_id": session_id}
+
+
+@mcp.tool
+async def initialize_context(
+    session_id: str,
+    libraries: List[str] = None,
+    variables: Dict[str, Any] = None
+) -> Dict[str, Any]:
+    """Initialize a full Robot Framework execution context for a session.
+    
+    This enables stateful execution with variable persistence and proper
+    RF context management across multiple keyword executions.
+    
+    Args:
+        session_id: Session identifier
+        libraries: List of libraries to import in the context
+        variables: Initial variables to set in the context
+    
+    Returns:
+        Context initialization status with session information
+    """
+    try:
+        # Get or create session
+        session = execution_engine.session_manager.get_or_create_session(session_id)
+        
+        # Enable context mode for the session
+        session.enable_context_mode()
+        
+        # Get context manager
+        from robotmcp.components.execution.robot_context_manager import get_context_manager
+        context_manager = get_context_manager()
+        
+        # Create context with specified libraries
+        context_result = context_manager.create_context(session_id, libraries)
+        
+        if not context_result.get("success"):
+            return {
+                "success": False,
+                "error": context_result.get("error", "Failed to create context"),
+                "session_id": session_id
+            }
+        
+        # Set initial variables if provided
+        if variables:
+            context_manager.set_context_variables(session_id, variables)
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "context_enabled": True,
+            "libraries_loaded": context_result.get("libraries_loaded", []),
+            "variables_set": list(variables.keys()) if variables else [],
+            "message": f"Robot Framework context initialized for session '{session_id}'"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error initializing context for session {session_id}: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "session_id": session_id
+        }
+
+
+@mcp.tool
+async def get_context_variables(session_id: str) -> Dict[str, Any]:
+    """Get all variables from a session's Robot Framework context.
+    
+    Args:
+        session_id: Session identifier
+    
+    Returns:
+        Dictionary containing all context variables
+    """
+    try:
+        from robotmcp.components.execution.robot_context_manager import get_context_manager
+        context_manager = get_context_manager()
+        
+        variables = context_manager.get_context_variables(session_id)
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "variables": variables,
+            "variable_count": len(variables)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting context variables for session {session_id}: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "session_id": session_id
+        }
 
 
 @mcp.tool

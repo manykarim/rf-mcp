@@ -60,6 +60,7 @@ class ExecutionSession:
     explicit_library_preference: Optional[str] = None  # For scenario-based explicit preferences
     scenario_text: Optional[str] = None  # Store original scenario for re-analysis
     auto_configured: bool = False  # Track if session was auto-configured
+    context_mode: bool = False  # Track if session uses full RF context mode
     
     def add_step(self, step: ExecutionStep) -> None:
         """Add a successful step to the session."""
@@ -89,6 +90,15 @@ class ExecutionSession:
     def get_variable(self, name: str, default: Any = None) -> Any:
         """Get a session variable."""
         return self.variables.get(name, default)
+    
+    def enable_context_mode(self) -> None:
+        """Enable full RF context mode for this session."""
+        self.context_mode = True
+        self.update_activity()
+    
+    def is_context_mode(self) -> bool:
+        """Check if session is in context mode."""
+        return self.context_mode
     
     def import_library(self, library_name: str, force: bool = False) -> None:
         """

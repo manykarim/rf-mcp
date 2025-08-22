@@ -71,7 +71,8 @@ class ExecutionCoordinator:
         detail_level: str = "minimal",
         library_prefix: str = None,
         scenario_hint: str = None,
-        assign_to: Union[str, List[str]] = None
+        assign_to: Union[str, List[str]] = None,
+        use_context: bool = False
     ) -> Dict[str, Any]:
         """
         Execute a single Robot Framework keyword step with intelligent library auto-configuration.
@@ -111,7 +112,8 @@ class ExecutionCoordinator:
                 browser_library_manager=self.browser_library_manager,
                 detail_level=detail_level,
                 library_prefix=library_prefix,
-                assign_to=assign_to
+                assign_to=assign_to,
+                use_context=use_context
             )
             
             return result
