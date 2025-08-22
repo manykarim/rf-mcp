@@ -757,55 +757,56 @@ async def initialize_context(
     libraries: List[str] = None,
     variables: Dict[str, Any] = None
 ) -> Dict[str, Any]:
-    """Initialize a full Robot Framework execution context for a session.
+    """Initialize a session with libraries and variables.
     
-    This enables stateful execution with variable persistence and proper
-    RF context management across multiple keyword executions.
+    NOTE: Full RF context mode is not yet implemented. This tool currently
+    initializes a session with the specified libraries and variables using
+    the existing session-based variable system.
     
     Args:
         session_id: Session identifier
-        libraries: List of libraries to import in the context
-        variables: Initial variables to set in the context
+        libraries: List of libraries to import in the session
+        variables: Initial variables to set in the session
     
     Returns:
-        Context initialization status with session information
+        Session initialization status with information
     """
     try:
         # Get or create session
         session = execution_engine.session_manager.get_or_create_session(session_id)
         
-        # Enable context mode for the session
-        session.enable_context_mode()
+        # Import libraries into session
+        if libraries:
+            for library in libraries:
+                try:
+                    session.import_library(library)
+                    logger.info(f"Imported {library} into session {session_id}")
+                except Exception as lib_error:
+                    logger.warning(f"Could not import {library}: {lib_error}")
         
-        # Get context manager
-        from robotmcp.components.execution.robot_context_manager import get_context_manager
-        context_manager = get_context_manager()
-        
-        # Create context with specified libraries
-        context_result = context_manager.create_context(session_id, libraries)
-        
-        if not context_result.get("success"):
-            return {
-                "success": False,
-                "error": context_result.get("error", "Failed to create context"),
-                "session_id": session_id
-            }
-        
-        # Set initial variables if provided
+        # Set initial variables in session
         if variables:
-            context_manager.set_context_variables(session_id, variables)
+            for name, value in variables.items():
+                # Normalize variable name to RF format
+                if not name.startswith('$'):
+                    var_name = f"${{{name}}}"
+                else:
+                    var_name = name
+                session.set_variable(var_name, value)
+                logger.info(f"Set variable {var_name} = {value} in session {session_id}")
         
         return {
             "success": True,
             "session_id": session_id,
-            "context_enabled": True,
-            "libraries_loaded": context_result.get("libraries_loaded", []),
+            "context_enabled": False,  # Context mode not fully implemented
+            "libraries_loaded": list(session.loaded_libraries),
             "variables_set": list(variables.keys()) if variables else [],
-            "message": f"Robot Framework context initialized for session '{session_id}'"
+            "message": f"Session '{session_id}' initialized with libraries and variables",
+            "note": "Using session-based variable system (context mode not available)"
         }
         
     except Exception as e:
-        logger.error(f"Error initializing context for session {session_id}: {e}")
+        logger.error(f"Error initializing session {session_id}: {e}")
         return {
             "success": False,
             "error": str(e),

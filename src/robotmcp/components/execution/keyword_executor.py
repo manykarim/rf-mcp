@@ -83,6 +83,12 @@ class KeywordExecutor:
             
             # Check if we should use context mode
             if use_context or session.is_context_mode():
+                # Context mode is not fully functional - fall back to normal mode
+                logger.warning(f"Context mode requested but not fully implemented, using normal mode for: {keyword}")
+                use_context = False
+                session.context_mode = False  # Disable context mode
+            
+            if False:  # Disabled context mode path
                 # In context mode, don't resolve variables - let RF handle it
                 logger.info(f"Executing keyword in context mode: {keyword} with args: {arguments}")
                 result = await self._execute_keyword_with_context(
