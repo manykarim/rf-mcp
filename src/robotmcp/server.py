@@ -780,6 +780,8 @@ async def initialize_context(
             for library in libraries:
                 try:
                     session.import_library(library)
+                    # Also add to loaded_libraries for tracking
+                    session.loaded_libraries.add(library)
                     logger.info(f"Imported {library} into session {session_id}")
                 except Exception as lib_error:
                     logger.warning(f"Could not import {library}: {lib_error}")
