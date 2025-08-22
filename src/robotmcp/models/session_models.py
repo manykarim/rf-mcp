@@ -13,6 +13,69 @@ from .browser_models import BrowserState
 logger = logging.getLogger(__name__)
 
 
+class PlatformType(Enum):
+    """Platform types for test automation."""
+    WEB = "web"
+    MOBILE = "mobile"
+    DESKTOP = "desktop"
+    API = "api"
+
+
+@dataclass
+class MobileConfig:
+    """Configuration for mobile testing sessions."""
+    platform_name: Optional[str] = None  # iOS or Android
+    device_name: Optional[str] = None
+    device_udid: Optional[str] = None
+    app_path: Optional[str] = None
+    app_package: Optional[str] = None
+    app_activity: Optional[str] = None
+    appium_server_url: str = "http://127.0.0.1:4723/"
+    automation_name: Optional[str] = None  # XCUITest, UiAutomator2, Espresso
+    platform_version: Optional[str] = None
+    no_reset: bool = False
+    full_reset: bool = False
+    bundle_id: Optional[str] = None  # iOS app bundle identifier
+    
+    def to_capabilities(self) -> Dict[str, Any]:
+        """Convert config to Appium capabilities dictionary."""
+        caps = {}
+        
+        # Required capabilities
+        if self.platform_name:
+            caps['platformName'] = self.platform_name
+        if self.device_name:
+            caps['appium:deviceName'] = self.device_name
+            
+        # Platform-specific capabilities
+        if self.platform_name == 'Android':
+            if self.app_package:
+                caps['appium:appPackage'] = self.app_package
+            if self.app_activity:
+                caps['appium:appActivity'] = self.app_activity
+            if self.automation_name:
+                caps['appium:automationName'] = self.automation_name or 'UiAutomator2'
+        elif self.platform_name == 'iOS':
+            if self.bundle_id:
+                caps['appium:bundleId'] = self.bundle_id
+            if self.automation_name:
+                caps['appium:automationName'] = self.automation_name or 'XCUITest'
+                
+        # Common optional capabilities
+        if self.app_path:
+            caps['appium:app'] = self.app_path
+        if self.device_udid:
+            caps['appium:udid'] = self.device_udid
+        if self.platform_version:
+            caps['appium:platformVersion'] = self.platform_version
+        if self.no_reset:
+            caps['appium:noReset'] = self.no_reset
+        if self.full_reset:
+            caps['appium:fullReset'] = self.full_reset
+            
+        return caps
+
+
 class SessionType(Enum):
     """Types of test automation sessions."""
     XML_PROCESSING = "xml_processing"
@@ -62,6 +125,12 @@ class ExecutionSession:
     auto_configured: bool = False  # Track if session was auto-configured
     context_mode: bool = False  # Track if session uses full RF context mode
     
+    # Mobile-specific fields
+    platform_type: PlatformType = PlatformType.WEB  # Default to web for backward compatibility
+    mobile_config: Optional[MobileConfig] = None
+    appium_session_id: Optional[str] = None
+    current_context: Optional[str] = None  # NATIVE_APP, WEBVIEW_*, etc.
+    
     def add_step(self, step: ExecutionStep) -> None:
         """Add a successful step to the session."""
         if step.is_successful:
@@ -99,6 +168,24 @@ class ExecutionSession:
     def is_context_mode(self) -> bool:
         """Check if session is in context mode."""
         return self.context_mode
+    
+    def is_mobile_session(self) -> bool:
+        """Check if this is a mobile testing session."""
+        return (self.platform_type == PlatformType.MOBILE or 
+                'AppiumLibrary' in self.imported_libraries or
+                self.session_type == SessionType.MOBILE_TESTING)
+    
+    def is_web_session(self) -> bool:
+        """Check if this is a web testing session."""
+        return (self.platform_type == PlatformType.WEB or 
+                self.is_browser_session())
+    
+    def set_mobile_config(self, config: MobileConfig) -> None:
+        """Set mobile configuration for the session."""
+        self.mobile_config = config
+        self.platform_type = PlatformType.MOBILE
+        self.session_type = SessionType.MOBILE_TESTING
+        self.update_activity()
     
     def import_library(self, library_name: str, force: bool = False) -> None:
         """

@@ -1,19 +1,36 @@
-"""Locator conversion service between different browser libraries."""
+"""Locator conversion service between different browser and mobile libraries."""
 
 import logging
 import re
-from typing import Optional, Dict, List
+import json
+from typing import Optional, Dict, List, Tuple
 
 from robotmcp.models.config_models import ExecutionConfig
+from robotmcp.models.session_models import PlatformType
 
 logger = logging.getLogger(__name__)
 
 
 class LocatorConverter:
-    """Converts locators between different browser automation libraries."""
+    """Converts locators between different browser and mobile automation libraries."""
+    
+    # Mobile locator strategies and their patterns
+    MOBILE_STRATEGIES = {
+        'accessibility_id': r'^accessibility_id=(.+)$',
+        'android_uiautomator': r'^android=(.+)$',
+        'android_viewtag': r'^android_viewtag=(.+)$',
+        'android_datamatcher': r'^android_datamatcher=(.+)$',
+        'ios_predicate': r'^-ios predicate string:(.+)$',
+        'ios_class_chain': r'^-ios class chain:(.+)$',
+        'image': r'^-image:(.+)$',
+        'id': r'^id=(.+)$',
+        'class': r'^class=(.+)$',
+        'xpath': r'^xpath=(.+)$|^//.+$'
+    }
     
     def __init__(self, config: Optional[ExecutionConfig] = None):
         self.config = config or ExecutionConfig()
+        self.platform_type = PlatformType.WEB  # Default platform
     
     def add_explicit_strategy_prefix(self, locator: str, for_test_suite: bool = False, target_library: str = "Browser") -> str:
         """
@@ -440,12 +457,153 @@ class LocatorConverter:
         
         return validation
     
+    def set_platform_type(self, platform: PlatformType) -> None:
+        """Set the platform type for locator conversion."""
+        self.platform_type = platform
+    
+    def is_mobile_locator(self, locator: str) -> bool:
+        """Check if a locator is mobile-specific."""
+        for pattern in self.MOBILE_STRATEGIES.values():
+            if re.match(pattern, locator):
+                # Check if it's a mobile-only strategy
+                mobile_only = ['accessibility_id', 'android_uiautomator', 'android_viewtag',
+                              'android_datamatcher', 'ios_predicate', 'ios_class_chain', 'image']
+                for strategy in mobile_only:
+                    if re.match(self.MOBILE_STRATEGIES[strategy], locator):
+                        return True
+        return False
+    
+    def validate_mobile_locator(self, locator: str, platform: str = None) -> Tuple[bool, List[str]]:
+        """
+        Validate a mobile locator.
+        
+        Args:
+            locator: Locator string to validate
+            platform: 'Android' or 'iOS' (optional)
+            
+        Returns:
+            Tuple of (is_valid, list_of_errors)
+        """
+        errors = []
+        
+        # Check if it matches any mobile strategy
+        matched = False
+        for strategy, pattern in self.MOBILE_STRATEGIES.items():
+            if re.match(pattern, locator):
+                matched = True
+                
+                # Platform-specific validation
+                if platform == 'Android' and strategy in ['ios_predicate', 'ios_class_chain']:
+                    errors.append(f"iOS-only locator strategy '{strategy}' used for Android")
+                elif platform == 'iOS' and strategy in ['android_uiautomator', 'android_viewtag', 'android_datamatcher']:
+                    errors.append(f"Android-only locator strategy '{strategy}' used for iOS")
+                    
+                # Validate specific strategies
+                if strategy == 'android_uiautomator':
+                    if not self._validate_uiautomator_syntax(locator):
+                        errors.append("Invalid UiAutomator syntax")
+                elif strategy == 'android_datamatcher':
+                    if not self._validate_datamatcher_syntax(locator):
+                        errors.append("Invalid data matcher JSON syntax")
+                elif strategy == 'ios_predicate':
+                    if not self._validate_predicate_syntax(locator):
+                        errors.append("Invalid iOS predicate syntax")
+                        
+                break
+                
+        if not matched:
+            errors.append(f"Locator does not match any known mobile strategy: {locator}")
+            
+        return len(errors) == 0, errors
+    
+    def _validate_uiautomator_syntax(self, locator: str) -> bool:
+        """Validate Android UiAutomator syntax."""
+        match = re.match(r'^android=(.+)$', locator)
+        if match:
+            selector = match.group(1)
+            # Basic validation - check for new UiSelector()
+            return 'new UiSelector()' in selector
+        return False
+    
+    def _validate_datamatcher_syntax(self, locator: str) -> bool:
+        """Validate Android data matcher JSON syntax."""
+        match = re.match(r'^android_datamatcher=(.+)$', locator)
+        if match:
+            json_str = match.group(1)
+            try:
+                json.loads(json_str)
+                return True
+            except json.JSONDecodeError:
+                return False
+        return False
+    
+    def _validate_predicate_syntax(self, locator: str) -> bool:
+        """Validate iOS predicate syntax."""
+        match = re.match(r'^-ios predicate string:(.+)$', locator)
+        if match:
+            predicate = match.group(1)
+            # Basic validation - check for common operators
+            return any(op in predicate for op in ['==', '!=', 'CONTAINS', 'BEGINSWITH', 'ENDSWITH', 'MATCHES'])
+        return False
+    
+    def convert_mobile_locator(self, locator: str, from_platform: str, to_platform: str) -> str:
+        """
+        Convert mobile locator between platforms if possible.
+        
+        Args:
+            locator: Locator to convert
+            from_platform: Source platform ('Android' or 'iOS')
+            to_platform: Target platform ('Android' or 'iOS')
+            
+        Returns:
+            Converted locator or original if conversion not possible
+        """
+        if from_platform == to_platform:
+            return locator
+            
+        # Try to convert common strategies
+        if locator.startswith('id='):
+            # ID works on both platforms
+            return locator
+        elif locator.startswith('class='):
+            # Class names are different between platforms
+            class_name = locator[6:]
+            if from_platform == 'Android' and to_platform == 'iOS':
+                # Convert Android class to iOS
+                conversions = {
+                    'android.widget.Button': 'XCUIElementTypeButton',
+                    'android.widget.TextView': 'XCUIElementTypeStaticText',
+                    'android.widget.EditText': 'XCUIElementTypeTextField',
+                    'android.widget.ImageView': 'XCUIElementTypeImage'
+                }
+                for android_class, ios_class in conversions.items():
+                    if android_class in class_name:
+                        return f'class={class_name.replace(android_class, ios_class)}'
+            elif from_platform == 'iOS' and to_platform == 'Android':
+                # Convert iOS class to Android
+                conversions = {
+                    'XCUIElementTypeButton': 'android.widget.Button',
+                    'XCUIElementTypeStaticText': 'android.widget.TextView',
+                    'XCUIElementTypeTextField': 'android.widget.EditText',
+                    'XCUIElementTypeImage': 'android.widget.ImageView'
+                }
+                for ios_class, android_class in conversions.items():
+                    if ios_class in class_name:
+                        return f'class={class_name.replace(ios_class, android_class)}'
+        elif locator.startswith('accessibility_id='):
+            # Accessibility ID works on both platforms
+            return locator
+            
+        # Platform-specific strategies cannot be converted
+        logger.warning(f"Cannot convert platform-specific locator from {from_platform} to {to_platform}: {locator}")
+        return locator
+    
     def get_supported_strategies(self, library_type: str) -> List[str]:
         """
         Get list of supported locator strategies for a library.
         
         Args:
-            library_type: Library type ("Browser" or "SeleniumLibrary")
+            library_type: Library type ("Browser", "SeleniumLibrary", or "AppiumLibrary")
             
         Returns:
             list: List of supported strategy names
@@ -458,6 +616,12 @@ class LocatorConverter:
             return [
                 "id", "name", "identifier", "class", "tag", "xpath", 
                 "css", "dom", "link", "partial link", "data", "jquery"
+            ]
+        elif library_type == "AppiumLibrary":
+            return [
+                "accessibility_id", "id", "class", "xpath",
+                "android_uiautomator", "android_viewtag", "android_datamatcher",
+                "ios_predicate", "ios_class_chain", "image"
             ]
         else:
             return []

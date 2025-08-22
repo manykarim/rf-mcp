@@ -1,9 +1,10 @@
-"""Page source management and filtering service."""
+"""Page source management and filtering service for web and mobile."""
 
 import logging
-from typing import Any, Dict, List, Optional
+import xml.etree.ElementTree as ET
+from typing import Any, Dict, List, Optional, Union
 
-from robotmcp.models.session_models import ExecutionSession
+from robotmcp.models.session_models import ExecutionSession, PlatformType
 from robotmcp.models.config_models import ExecutionConfig
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,7 @@ except ImportError:
 
 
 class PageSourceService:
-    """Manages page source retrieval, filtering, and context extraction."""
+    """Manages page source retrieval, filtering, and context extraction for web and mobile."""
     
     def __init__(self, config: Optional[ExecutionConfig] = None):
         self.config = config or ExecutionConfig()
@@ -166,7 +167,7 @@ class PageSourceService:
         filtering_level: str = "standard"
     ) -> Dict[str, Any]:
         """
-        Get page source for a session.
+        Get page source for a session (web or mobile).
         
         Args:
             session: ExecutionSession to get page source from
@@ -176,7 +177,11 @@ class PageSourceService:
             filtering_level: Filtering intensity when filtered=True ('minimal', 'standard', 'aggressive').
         """
         try:
-            # Try to get fresh page source using browser library
+            # Check if this is a mobile session
+            if session.is_mobile_session():
+                return await self._get_mobile_source(session, full_source, filtered, filtering_level)
+            
+            # Try to get fresh page source using browser library (web)
             page_source = ""
             try:
                 page_source = await self._get_page_source_unified_async(session, browser_library_manager)
@@ -529,3 +534,228 @@ class PageSourceService:
             list: List of supported filtering level names
         """
         return ["minimal", "standard", "aggressive"]
+    
+    async def _get_mobile_source(
+        self,
+        session: ExecutionSession,
+        full_source: bool = False,
+        filtered: bool = False,
+        filtering_level: str = "standard"
+    ) -> Dict[str, Any]:
+        """
+        Get source from mobile app using AppiumLibrary.
+        
+        Args:
+            session: Mobile session
+            full_source: Return complete source
+            filtered: Apply filtering
+            filtering_level: Filtering intensity
+            
+        Returns:
+            Mobile app source and metadata
+        """
+        try:
+            # Import here to avoid circular dependency
+            from robot.libraries.BuiltIn import BuiltIn
+            
+            # Check if AppiumLibrary is loaded
+            if 'AppiumLibrary' not in session.imported_libraries:
+                return {
+                    "success": False,
+                    "error": "AppiumLibrary not loaded in session"
+                }
+            
+            # Get AppiumLibrary instance
+            builtin = BuiltIn()
+            
+            # Use AppiumLibrary's Get Source keyword
+            try:
+                source = builtin.run_keyword('Get Source')
+            except Exception as e:
+                logger.debug(f"Could not get mobile source: {e}")
+                return {
+                    "success": False,
+                    "error": f"No active mobile app session: {str(e)}"
+                }
+            
+            if not source:
+                return {
+                    "success": False,
+                    "error": "No source available from mobile app"
+                }
+            
+            # Parse mobile source based on platform
+            platform = session.mobile_config.platform_name if session.mobile_config else None
+            
+            if platform == 'Android':
+                parsed_source = self._parse_android_source(source, filtered)
+            elif platform == 'iOS':
+                parsed_source = self._parse_ios_source(source, filtered)
+            else:
+                parsed_source = {"raw_source": source}
+            
+            result = {
+                "success": True,
+                "session_id": session.session_id,
+                "platform": platform,
+                "source_type": "mobile_app",
+                "source_length": len(source) if isinstance(source, str) else 0,
+                "current_context": session.current_context or "NATIVE_APP"
+            }
+            
+            if session.mobile_config:
+                result["app_info"] = {
+                    "package": session.mobile_config.app_package,
+                    "activity": session.mobile_config.app_activity,
+                    "device": session.mobile_config.device_name
+                }
+            
+            if full_source:
+                result["source"] = source
+                result["parsed_structure"] = parsed_source
+            else:
+                # Return preview
+                preview_size = self.config.PAGE_SOURCE_PREVIEW_SIZE
+                if isinstance(source, str) and len(source) > preview_size:
+                    result["source_preview"] = source[:preview_size] + "...[Truncated]"
+                else:
+                    result["source_preview"] = source
+                result["parsed_structure_summary"] = self._get_structure_summary(parsed_source)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error getting mobile source: {e}")
+            return {
+                "success": False,
+                "error": f"Failed to get mobile source: {str(e)}"
+            }
+    
+    def _parse_android_source(self, xml_source: str, filtered: bool = False) -> Dict[str, Any]:
+        """Parse Android UI XML hierarchy."""
+        try:
+            root = ET.fromstring(xml_source)
+            
+            def parse_element(elem, depth=0):
+                # Skip certain elements if filtering
+                if filtered and elem.tag in ['hierarchy', 'android.view.ViewGroup']:
+                    if not elem.get('resource-id') and not elem.get('content-desc'):
+                        # Skip container elements without IDs
+                        children = []
+                        for child in elem:
+                            children.extend(parse_element(child, depth))
+                        return children
+                
+                element_info = {
+                    'tag': elem.tag.split('.')[-1] if '.' in elem.tag else elem.tag,
+                    'class': elem.get('class', ''),
+                    'resource_id': elem.get('resource-id', ''),
+                    'text': elem.get('text', ''),
+                    'content_desc': elem.get('content-desc', ''),
+                    'enabled': elem.get('enabled') == 'true',
+                    'clickable': elem.get('clickable') == 'true',
+                    'bounds': elem.get('bounds', ''),
+                    'depth': depth
+                }
+                
+                # Only include non-empty fields
+                element_info = {k: v for k, v in element_info.items() if v or v is False}
+                
+                # Parse children
+                children = []
+                for child in elem:
+                    children.extend(parse_element(child, depth + 1))
+                
+                if children:
+                    element_info['children'] = children
+                    
+                return [element_info]
+            
+            parsed = parse_element(root)
+            return {"elements": parsed, "type": "android_xml"}
+            
+        except Exception as e:
+            logger.error(f"Error parsing Android source: {e}")
+            return {"error": str(e), "raw": xml_source[:500] if len(xml_source) > 500 else xml_source}
+    
+    def _parse_ios_source(self, source: Union[str, dict], filtered: bool = False) -> Dict[str, Any]:
+        """Parse iOS XCUITest hierarchy."""
+        try:
+            if isinstance(source, dict):
+                # Already parsed as dict
+                return {"elements": [source], "type": "ios_dict"}
+            elif isinstance(source, str):
+                # Try to parse as XML
+                root = ET.fromstring(source)
+                
+                def parse_element(elem, depth=0):
+                    element_info = {
+                        'type': elem.get('type', ''),
+                        'name': elem.get('name', ''),
+                        'label': elem.get('label', ''),
+                        'value': elem.get('value', ''),
+                        'enabled': elem.get('enabled') == 'true',
+                        'visible': elem.get('visible') == 'true',
+                        'x': elem.get('x', ''),
+                        'y': elem.get('y', ''),
+                        'width': elem.get('width', ''),
+                        'height': elem.get('height', ''),
+                        'depth': depth
+                    }
+                    
+                    # Only include non-empty fields
+                    element_info = {k: v for k, v in element_info.items() if v or v is False}
+                    
+                    # Parse children
+                    children = []
+                    for child in elem:
+                        children.append(parse_element(child, depth + 1))
+                    
+                    if children:
+                        element_info['children'] = children
+                        
+                    return element_info
+                
+                parsed = parse_element(root)
+                return {"elements": [parsed], "type": "ios_xml"}
+            else:
+                return {"raw": str(source), "type": "unknown"}
+                
+        except Exception as e:
+            logger.error(f"Error parsing iOS source: {e}")
+            return {"error": str(e), "raw": str(source)[:500] if len(str(source)) > 500 else str(source)}
+    
+    def _get_structure_summary(self, parsed_source: Dict[str, Any]) -> Dict[str, Any]:
+        """Get summary of parsed mobile structure."""
+        if 'error' in parsed_source:
+            return parsed_source
+            
+        elements = parsed_source.get('elements', [])
+        if not elements:
+            return {"element_count": 0}
+            
+        # Count different element types
+        def count_elements(elem_list):
+            counts = {}
+            total = 0
+            for elem in elem_list:
+                if isinstance(elem, dict):
+                    elem_type = elem.get('tag') or elem.get('type') or elem.get('class', 'unknown')
+                    counts[elem_type] = counts.get(elem_type, 0) + 1
+                    total += 1
+                    
+                    if 'children' in elem:
+                        child_counts, child_total = count_elements(elem['children'])
+                        for k, v in child_counts.items():
+                            counts[k] = counts.get(k, 0) + v
+                        total += child_total
+                        
+            return counts, total
+        
+        type_counts, total_count = count_elements(elements)
+        
+        return {
+            "total_elements": total_count,
+            "element_types": type_counts,
+            "structure_type": parsed_source.get('type', 'unknown')
+        }

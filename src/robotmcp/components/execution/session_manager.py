@@ -1,12 +1,13 @@
-"""Session management service."""
+"""Session management service with mobile platform detection."""
 
 import logging
 import uuid
+import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, List
 
 from robotmcp.models.config_models import ExecutionConfig
-from robotmcp.models.session_models import ExecutionSession
+from robotmcp.models.session_models import ExecutionSession, PlatformType, MobileConfig, SessionType
 
 logger = logging.getLogger(__name__)
 
@@ -130,13 +131,120 @@ class SessionManager:
         """Get list of all active session IDs."""
         return list(self.sessions.keys())
 
+    def detect_platform_from_scenario(self, scenario: str) -> PlatformType:
+        """
+        Detect platform type from scenario description.
+        
+        Args:
+            scenario: Natural language scenario description
+            
+        Returns:
+            Detected platform type
+        """
+        scenario_lower = scenario.lower()
+        
+        # Mobile indicators
+        mobile_keywords = ['app', 'mobile', 'android', 'ios', 'iphone', 'ipad', 
+                          'device', 'appium', 'emulator', 'simulator', 'apk',
+                          'bundle', 'tap', 'swipe', 'gesture']
+        
+        # Web indicators  
+        web_keywords = ['browser', 'web', 'website', 'url', 'page', 'chrome',
+                       'firefox', 'safari', 'edge', 'selenium', 'click link']
+        
+        # API indicators
+        api_keywords = ['api', 'rest', 'soap', 'endpoint', 'request', 'response',
+                       'json', 'xml', 'http', 'graphql']
+        
+        # Count keyword matches
+        mobile_score = sum(1 for keyword in mobile_keywords if keyword in scenario_lower)
+        web_score = sum(1 for keyword in web_keywords if keyword in scenario_lower)
+        api_score = sum(1 for keyword in api_keywords if keyword in scenario_lower)
+        
+        # Determine platform based on scores
+        if mobile_score > web_score and mobile_score > api_score:
+            return PlatformType.MOBILE
+        elif api_score > web_score:
+            return PlatformType.API
+        else:
+            return PlatformType.WEB  # Default to web
+    
+    def initialize_mobile_session(self, session: ExecutionSession, scenario: str = None) -> None:
+        """
+        Initialize session with mobile configuration.
+        
+        Args:
+            session: Session to initialize
+            scenario: Optional scenario text for parsing requirements
+        """
+        session.platform_type = PlatformType.MOBILE
+        session.session_type = SessionType.MOBILE_TESTING
+        
+        # Parse mobile requirements from scenario if provided
+        if scenario:
+            config = self.parse_mobile_requirements(scenario)
+            session.mobile_config = config
+            
+        # Set mobile-specific exclusions
+        session.loaded_libraries.add('AppiumLibrary')
+        
+        logger.info(f"Initialized mobile session: {session.session_id}")
+    
+    def parse_mobile_requirements(self, scenario: str) -> MobileConfig:
+        """
+        Parse mobile configuration from scenario text.
+        
+        Args:
+            scenario: Natural language scenario
+            
+        Returns:
+            MobileConfig with parsed requirements
+        """
+        config = MobileConfig()
+        scenario_lower = scenario.lower()
+        
+        # Detect platform
+        if 'android' in scenario_lower:
+            config.platform_name = 'Android'
+            config.automation_name = 'UiAutomator2'
+            
+            # Look for package/activity mentions
+            package_match = re.search(r'com\.\w+(?:\.\w+)*', scenario)
+            if package_match:
+                config.app_package = package_match.group(0)
+                
+        elif 'ios' in scenario_lower or 'iphone' in scenario_lower or 'ipad' in scenario_lower:
+            config.platform_name = 'iOS'
+            config.automation_name = 'XCUITest'
+            
+            # Look for bundle ID mentions
+            bundle_match = re.search(r'com\.\w+(?:\.\w+)*', scenario)
+            if bundle_match:
+                config.bundle_id = bundle_match.group(0)
+        
+        # Detect device name
+        if 'emulator' in scenario_lower:
+            config.device_name = 'emulator-5554'
+        elif 'simulator' in scenario_lower:
+            config.device_name = 'iPhone Simulator'
+        elif 'real device' in scenario_lower or 'physical device' in scenario_lower:
+            # Would need actual device UDID
+            pass
+            
+        # Detect app path
+        app_match = re.search(r'[\/\\][\w\/\\]+\.(apk|app|ipa)', scenario)
+        if app_match:
+            config.app_path = app_match.group(0)
+            
+        return config
+    
     def get_session_info(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get summary information about a session."""
         session = self.get_session(session_id)
         if not session:
             return None
 
-        return {
+        info = {
             "session_id": session.session_id,
             "created_at": session.created_at.isoformat(),
             "last_activity": session.last_activity.isoformat(),
@@ -146,9 +254,26 @@ class SessionManager:
             "active_library": session.get_active_library(),
             "has_browser_session": session.is_browser_session(),
             "variables_count": len(session.variables),
+            "platform_type": session.platform_type.value,
+            "is_mobile": session.is_mobile_session(),
             "current_url": session.browser_state.current_url,
             "browser_type": session.browser_state.browser_type,
         }
+        
+        # Add mobile-specific info if applicable
+        if session.is_mobile_session() and session.mobile_config:
+            info["mobile_config"] = {
+                "platform_name": session.mobile_config.platform_name,
+                "device_name": session.mobile_config.device_name,
+                "app_package": session.mobile_config.app_package,
+                "app_activity": session.mobile_config.app_activity,
+                "automation_name": session.mobile_config.automation_name,
+                "appium_server_url": session.mobile_config.appium_server_url
+            }
+            info["appium_session_id"] = session.appium_session_id
+            info["current_context"] = session.current_context
+            
+        return info
 
     def get_all_sessions_info(self) -> Dict[str, Dict[str, Any]]:
         """Get summary information about all sessions."""

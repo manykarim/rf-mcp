@@ -19,6 +19,9 @@ class LibraryManager:
         # Library exclusion rules - only one from each group can be loaded
         self.exclusion_groups = {
             'web_automation': ['Browser', 'SeleniumLibrary'],  # Browser OR Selenium, not both
+            'mobile_automation': ['AppiumLibrary'],  # Mobile testing library
+            # Note: AppiumLibrary can conflict with SeleniumLibrary for some keywords
+            # but they're in separate groups to allow advanced users to use both if needed
         }
         self.excluded_libraries: Set[str] = set()
         

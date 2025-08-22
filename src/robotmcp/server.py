@@ -11,6 +11,8 @@ from robotmcp.components.library_recommender import LibraryRecommender
 from robotmcp.components.nlp_processor import NaturalLanguageProcessor
 from robotmcp.components.state_manager import StateManager
 from robotmcp.components.test_builder import TestBuilder
+from robotmcp.models.session_models import PlatformType, MobileConfig
+from robotmcp.components.execution.mobile_capability_service import MobileCapabilityService
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,7 @@ library_recommender = LibraryRecommender()
 execution_engine = ExecutionCoordinator()
 state_manager = StateManager()
 test_builder = TestBuilder(execution_engine)
+mobile_capability_service = MobileCapabilityService()
 
 
 @mcp.tool
@@ -77,9 +80,17 @@ async def analyze_scenario(
 
     # Get or create session using execution coordinator
     session = execution_engine.session_manager.get_or_create_session(session_id)
-
-    # Auto-configure session based on scenario
-    session.configure_from_scenario(scenario)
+    
+    # Detect platform type from scenario
+    platform_type = execution_engine.session_manager.detect_platform_from_scenario(scenario)
+    
+    # Initialize mobile session if detected
+    if platform_type == PlatformType.MOBILE:
+        execution_engine.session_manager.initialize_mobile_session(session, scenario)
+        logger.info(f"Initialized mobile session for platform: {session.mobile_config.platform_name if session.mobile_config else 'Unknown'}")
+    else:
+        # Auto-configure session based on scenario (existing web flow)
+        session.configure_from_scenario(scenario)
 
     # Enhanced session info with guidance
     result["session_info"] = {
