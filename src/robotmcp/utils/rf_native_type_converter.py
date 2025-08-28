@@ -90,7 +90,7 @@ class RobotFrameworkNativeConverter:
             ParsedArguments with correctly converted types
         """
         if not RF_NATIVE_CONVERSION_AVAILABLE:
-            # Fallback to simple parsing
+            # Fallback to simple parsing without signature info
             return self._fallback_parse(args)
         
         # Get keyword info from LibDoc
@@ -132,8 +132,8 @@ class RobotFrameworkNativeConverter:
             
         except Exception as e:
             logger.debug(f"Robot Framework native parsing failed for {keyword_name}: {e}")
-            # Fallback to simple parsing
-            return self._fallback_parse(args)
+            # Fallback to simple parsing with signature info
+            return self._fallback_parse(args, keyword_info.args if keyword_info else None)
     
     def _get_keyword_info(self, keyword_name: str, library_name: Optional[str] = None):
         """Get keyword information from LibDoc storage."""
@@ -479,12 +479,38 @@ class RobotFrameworkNativeConverter:
             return value
     
     
-    def _fallback_parse(self, args: List[str]) -> ParsedArguments:
-        """Simple fallback parsing when Robot Framework native systems aren't available."""
+    def _fallback_parse(self, args: List[str], signature_args: List[str] = None) -> ParsedArguments:
+        """Simple fallback parsing when Robot Framework native systems aren't available.
+        
+        Args:
+            args: List of argument strings from user
+            signature_args: Optional keyword signature arguments for parameter validation
+            
+        Returns:
+            ParsedArguments with proper positional/named argument separation
+        """
         parsed = ParsedArguments()
         
+        # Build list of valid parameter names from signature
+        valid_param_names = set()
+        if signature_args:
+            for arg_str in signature_args:
+                if ':' in arg_str:
+                    param_name = arg_str.split(':', 1)[0].strip()
+                    if param_name.startswith('*'):
+                        param_name = param_name[1:]  # Remove * for varargs
+                    if param_name.startswith('*'):
+                        param_name = param_name[1:]  # Remove ** for kwargs
+                    if param_name and not param_name.startswith('*'):
+                        valid_param_names.add(param_name)
+                else:
+                    # Simple parameter name without type info
+                    param_name = arg_str.strip()
+                    if param_name and not param_name.startswith('*'):
+                        valid_param_names.add(param_name)
+        
         for arg in args:
-            if '=' in arg and self._looks_like_named_arg(arg):
+            if '=' in arg and self._looks_like_named_arg(arg, valid_param_names):
                 # Parse as named argument
                 key, value = arg.split('=', 1)
                 parsed.named[key.strip()] = value
