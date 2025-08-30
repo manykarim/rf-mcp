@@ -247,6 +247,78 @@ class LibraryManager:
             # Other errors still mean the module exists
             return True
     
+    def ensure_library_in_rf_context(self, library_name: str) -> bool:
+        """
+        Ensure library is properly registered in Robot Framework execution context.
+        
+        This is Phase 1 of the RequestsLibrary fix: Library Registration Fix.
+        The issue was that RequestsLibrary was loaded at Python module level but
+        not registered in Robot Framework's execution context.
+        
+        Args:
+            library_name: Name of library to register in RF context
+            
+        Returns:
+            True if library is registered successfully, False otherwise
+        """
+        try:
+            from robot.running.context import EXECUTION_CONTEXTS
+            
+            # Check if we have an active execution context
+            if not EXECUTION_CONTEXTS.current:
+                logger.warning(f"No active RF execution context for {library_name}")
+                return False
+                
+            current_context = EXECUTION_CONTEXTS.current
+            
+            # Check if library is already registered in RF context
+            try:
+                # Try to get the library instance from RF context
+                lib_instance = current_context.namespace.get_library_instance(library_name)
+                if lib_instance:
+                    logger.debug(f"{library_name} already registered in RF context")
+                    return True
+            except Exception:
+                # Library not found in RF context, need to register it
+                pass
+            
+            # Get the library instance from our manager
+            if library_name not in self.libraries:
+                logger.warning(f"{library_name} not loaded in library manager")
+                return False
+                
+            lib_info = self.libraries[library_name]
+            lib_instance = lib_info.instance
+            
+            if not lib_instance:
+                logger.warning(f"{library_name} has no instance in library manager")
+                return False
+            
+            # Register the library in RF execution context
+            # This is the critical fix - ensure the library is available to RF keyword resolution
+            # Use Robot Framework's native library import mechanism
+            current_context.namespace.import_library(
+                library_name,
+                args=[],
+                alias=None,
+                notify=True
+            )
+            
+            logger.info(f"Successfully registered {library_name} in RF execution context")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to register {library_name} in RF context: {e}")
+            import traceback
+            logger.debug(f"RF context registration traceback: {traceback.format_exc()}")
+            return False
+    
+    def get_library_instance(self, library_name: str) -> Any:
+        """Get the actual library instance for a given library name."""
+        if library_name not in self.libraries:
+            return None
+        return self.libraries[library_name].instance
+    
     def get_library_exclusion_info(self) -> Dict[str, Any]:
         """
         Get information about library exclusions.

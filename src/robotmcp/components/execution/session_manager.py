@@ -33,6 +33,9 @@ class SessionManager:
 
         session = ExecutionSession(session_id=session_id)
         self.sessions[session_id] = session
+        
+        # Add reference to session manager for Phase 2 synchronization
+        session._session_manager = self
 
         logger.info(f"Created new session: {session_id}")
         return session
@@ -49,7 +52,74 @@ class SessionManager:
         else:
             # Update activity timestamp
             session.update_activity()
+            # Ensure session manager reference exists for Phase 2
+            if not hasattr(session, '_session_manager') or session._session_manager is None:
+                session._session_manager = self
         return session
+
+    def synchronize_requests_library_state(self, session: ExecutionSession) -> bool:
+        """
+        Synchronize RequestsLibrary session state between MCP and RF contexts.
+        
+        This is Phase 2 of the RequestsLibrary fix: Session State Synchronization.
+        The issue is that RequestsLibrary session state is not properly initialized
+        in the MCP context, leading to 500 errors even when library registration works.
+        
+        Args:
+            session: ExecutionSession to synchronize
+            
+        Returns:
+            True if synchronization was successful, False otherwise
+        """
+        try:
+            from robot.running.context import EXECUTION_CONTEXTS
+            
+            # Check if we have an active RF context
+            if not EXECUTION_CONTEXTS.current:
+                logger.debug("No active RF execution context for RequestsLibrary sync")
+                return False
+            
+            rf_context = EXECUTION_CONTEXTS.current
+            
+            # Try to get the RequestsLibrary instance from RF context
+            try:
+                requests_lib = rf_context.namespace.get_library_instance('RequestsLibrary')
+                
+                if not requests_lib:
+                    logger.debug("RequestsLibrary not found in RF context during sync")
+                    return False
+                
+                # Ensure proper session state initialization for RequestsLibrary
+                if not hasattr(requests_lib, '_session_store'):
+                    logger.debug("Initializing RequestsLibrary session store")
+                    requests_lib._session_store = {}
+                
+                # Check if RequestsLibrary has a session attribute for default session
+                if not hasattr(requests_lib, 'session'):
+                    logger.debug("Initializing RequestsLibrary default session attribute")
+                    # RequestsLibrary creates sessions on demand, but we ensure the structure exists
+                    requests_lib.session = None  # This will be populated by RequestsLibrary when needed
+                
+                # Verify RequestsLibrary is in a working state
+                if hasattr(requests_lib, 'builtin'):
+                    logger.debug("RequestsLibrary has proper BuiltIn integration")
+                else:
+                    logger.debug("Setting up RequestsLibrary BuiltIn integration")
+                    from robot.libraries.BuiltIn import BuiltIn
+                    requests_lib.builtin = BuiltIn()
+                
+                logger.debug("RequestsLibrary session state synchronized successfully")
+                return True
+                
+            except Exception as e:
+                logger.warning(f"Failed to get RequestsLibrary instance during sync: {e}")
+                return False
+            
+        except Exception as e:
+            logger.error(f"RequestsLibrary session synchronization failed: {e}")
+            import traceback
+            logger.debug(f"RequestsLibrary sync traceback: {traceback.format_exc()}")
+            return False
 
     def remove_session(self, session_id: str) -> bool:
         """Remove a session."""

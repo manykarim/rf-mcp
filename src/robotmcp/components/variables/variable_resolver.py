@@ -10,6 +10,24 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+class ObjectPreservingArgument:
+    """
+    Wrapper for named parameters that should preserve object types.
+    
+    This maintains both the parameter name and the resolved object value,
+    allowing the argument processing pipeline to handle them correctly.
+    """
+    def __init__(self, param_name: str, value: Any):
+        self.param_name = param_name
+        self.value = value
+    
+    def __str__(self):
+        return f"{self.param_name}=<object:{type(self.value).__name__}>"
+    
+    def __repr__(self):
+        return f"ObjectPreservingArgument('{self.param_name}', {self.value!r})"
+
+
 class VariableResolutionError(Exception):
     """Exception raised when variable resolution fails."""
     
@@ -161,6 +179,21 @@ class VariableResolver:
             all_variables.update(self.builtin_variables)
         all_variables.update(variables)
         
+        # MINIMAL FIX: Special handling for named parameters with object variables
+        # Check if this is a named parameter where the value is entirely a variable
+        if '=' in arg and arg.count('=') == 1:
+            param_name, param_value = arg.split('=', 1)
+            if (param_value.startswith('${') and param_value.endswith('}') and 
+                '[' not in param_value and '.' not in param_value):
+                # This is a named parameter with a simple variable reference
+                var_name = param_value[2:-1]  # Remove ${ and }
+                if var_name in all_variables:
+                    resolved_value = all_variables[var_name]
+                    # If the resolved value is an object (dict/list), preserve it 
+                    if isinstance(resolved_value, (dict, list)):
+                        # Create a custom argument format that preserves the object
+                        return ObjectPreservingArgument(param_name, resolved_value)
+        
         # Check if the entire argument is a single variable
         if self._is_single_variable(arg):
             # Check for method calls or attribute access first
@@ -177,6 +210,53 @@ class VariableResolver:
         
         # Perform text substitution for variables within text
         return self._substitute_variables_in_text(arg, all_variables)
+    
+    def resolve_single_argument_with_object_preservation(self, 
+                                                       arg: str, 
+                                                       variables: Dict[str, Any],
+                                                       include_builtins: bool = True) -> Any:
+        """
+        Resolve variables in a single argument with object type preservation.
+        
+        This is the general solution to preserve object types when:
+        1. The argument is a named parameter (contains '=')
+        2. The parameter value is entirely a variable reference (e.g., 'json=${body}')
+        3. The variable resolves to a dict or list object
+        
+        This prevents objects from being stringified during variable resolution,
+        which is crucial for libraries that expect object parameters.
+        """
+        if not isinstance(arg, str):
+            return arg
+        
+        # Check if this is a named parameter with a variable value that should preserve object type
+        if '=' in arg and arg.count('=') == 1:
+            param_name, param_value = arg.split('=', 1)
+            
+            # Check if the parameter value is entirely a simple variable reference
+            if (param_value.startswith('${') and param_value.endswith('}') and 
+                '[' not in param_value and '.' not in param_value):
+                
+                # Combine variables with built-ins if requested
+                all_variables = {}
+                if include_builtins:
+                    all_variables.update(self.builtin_variables)
+                all_variables.update(variables)
+                
+                var_name = param_value[2:-1]  # Remove ${ and }
+                if var_name in all_variables:
+                    resolved_value = all_variables[var_name]
+                    
+                    # If the resolved value is a dict or list, preserve it as an object
+                    # by creating a special object-preserving argument structure
+                    if isinstance(resolved_value, (dict, list)):
+                        # For Robot Framework, we need to maintain the named parameter structure
+                        # but preserve the object. We'll use a special format that the
+                        # argument processor can understand.
+                        return ObjectPreservingArgument(param_name, resolved_value)
+        
+        # Fall back to standard resolution for all other cases
+        return self.resolve_single_argument(arg, variables, include_builtins)
     
     def _is_single_variable(self, text: str) -> bool:
         """Check if text is exactly one variable (e.g., '${var}' or '${var}[index1][index2]')."""

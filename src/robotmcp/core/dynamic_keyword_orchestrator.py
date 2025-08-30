@@ -83,25 +83,16 @@ class DynamicKeywordDiscovery:
         keywords = []
         
         if active_library:
-            # Get keywords ONLY from active library + built-ins
-            if active_library in ["Browser", "SeleniumLibrary"]:
-                try:
-                    keywords.extend(rf_doc_storage.get_keywords_by_library(active_library))
-                    logger.debug(f"LibDoc: Found {len([k for k in keywords if k.library == active_library])} keywords from {active_library}")
-                except Exception as e:
-                    logger.debug(f"LibDoc: Failed to get {active_library} keywords: {e}")
+            # CRITICAL FIX: Search in ALL session libraries, not just active_library
+            # This ensures RequestsLibrary keywords are found even when Browser is active
+            logger.debug(f"LibDoc: Active library filter '{active_library}' - searching all session libraries")
             
-            # Add built-in libraries using centralized registry
-            from robotmcp.config.library_registry import get_builtin_libraries
-            builtin_libraries = get_builtin_libraries()
-            
-            for builtin_lib in builtin_libraries.keys():
-                try:
-                    builtin_kws = rf_doc_storage.get_keywords_by_library(builtin_lib)
-                    keywords.extend(builtin_kws)
-                    logger.debug(f"LibDoc: Found {len(builtin_kws)} keywords from {builtin_lib}")
-                except:
-                    pass  # Library might not be loaded
+            # Get all keywords from session libraries (includes RequestsLibrary, Browser, etc.)
+            try:
+                keywords.extend(rf_doc_storage.get_all_keywords())
+                logger.debug(f"LibDoc: Found {len(keywords)} total keywords from all libraries")
+            except Exception as e:
+                logger.debug(f"LibDoc: Failed to get all keywords: {e}")
         else:
             # Get all keywords when no filter is specified
             keywords = rf_doc_storage.get_all_keywords()
@@ -147,7 +138,7 @@ class DynamicKeywordDiscovery:
         
         return None
     
-    def _execute_with_rf_type_conversion(self, method, keyword_info, original_args):
+    def _execute_with_rf_type_conversion(self, method, keyword_info, corrected_args):
         """Execute method using Robot Framework's native type conversion system."""
         try:
             from robot.running.arguments.typeconverters import TypeConverter
@@ -160,7 +151,7 @@ class DynamicKeywordDiscovery:
             sig = inspect.signature(method)
             
             # Smart detection: only process named arguments if we actually find valid ones
-            potential_named_args = any('=' in arg for arg in original_args)
+            potential_named_args = any('=' in arg for arg in corrected_args)
             
             if potential_named_args:
                 # Try to use the actual method signature for parameter validation (more reliable than KeywordInfo.args)
@@ -169,12 +160,12 @@ class DynamicKeywordDiscovery:
                     logger.debug(f"Method signature parameters for {keyword_info.name}: {param_names}")
                     
                     # Parse arguments to see if we actually have valid named arguments
-                    positional_args, named_args = self._split_args_using_method_signature(original_args, sig)
+                    positional_args, named_args = self._split_args_using_method_signature(corrected_args, sig)
                 except (AttributeError, TypeError):
                     # Fallback to the original KeywordInfo-based approach (for tests and edge cases)
                     logger.debug(f"Unable to inspect method signature, falling back to KeywordInfo.args approach")
                     if hasattr(keyword_info, 'args') and keyword_info.args:
-                        positional_args, named_args = self._split_args_into_positional_and_named(original_args, keyword_info.args)
+                        positional_args, named_args = self._split_args_into_positional_and_named(corrected_args, keyword_info.args)
                     else:
                         # No signature info available, fall back to positional-only
                         raise Exception("fallback_to_positional")
@@ -229,7 +220,7 @@ class DynamicKeywordDiscovery:
                 converted_args = []
                 param_list = list(sig.parameters.values())
                 
-                for i, (arg_value, param) in enumerate(zip(original_args, param_list)):
+                for i, (arg_value, param) in enumerate(zip(corrected_args, param_list)):
                     if param.annotation != inspect.Parameter.empty:
                         # Create TypeInfo from annotation
                         type_info = TypeInfo.from_type_hint(param.annotation)
@@ -270,7 +261,7 @@ class DynamicKeywordDiscovery:
             logger.debug(f"RF native type conversion failed for {keyword_info.name}: {e}")
             # Log more details for debugging
             logger.debug(f"Method signature: {inspect.signature(method) if 'inspect' in locals() else 'N/A'}")
-            logger.debug(f"Original args: {original_args}")
+            logger.debug(f"Corrected args: {corrected_args}")
             import traceback
             logger.debug(f"Full traceback: {traceback.format_exc()}")
             # CRITICAL: Even though execution failed, it DID execute - don't try again
@@ -307,7 +298,53 @@ class DynamicKeywordDiscovery:
         
         return positional, named
     
-    def _split_args_using_method_signature(self, original_args: List[str], method_signature) -> Tuple[List[str], Dict[str, str]]:
+    def _convert_rf_keyword_to_keyword_info(self, rf_kw_info) -> KeywordInfo:
+        """Convert RFKeywordInfo to our KeywordInfo format."""
+        from robotmcp.models.library_models import KeywordInfo
+        
+        # Find the actual method name by reverse lookup
+        method_name = self._find_method_name_for_keyword(rf_kw_info.name, rf_kw_info.library)
+        
+        return KeywordInfo(
+            name=rf_kw_info.name,
+            library=rf_kw_info.library,
+            method_name=method_name,
+            args=rf_kw_info.args,
+            defaults={},  # Could extract from args if needed
+            doc=rf_kw_info.doc,
+            short_doc=rf_kw_info.short_doc,
+            tags=rf_kw_info.tags,
+            is_builtin=False  # RF LibDoc keywords are typically not built-in
+        )
+    
+    def _find_method_name_for_keyword(self, keyword_name: str, library_name: str) -> str:
+        """Find the actual Python method name for a keyword (handles decorators)."""
+        try:
+            if library_name in self.library_manager.libraries:
+                library = self.library_manager.libraries[library_name]
+                if library.instance:
+                    # Check all methods for robot_name matching the keyword
+                    for attr_name in dir(library.instance):
+                        if attr_name.startswith('_'):
+                            continue
+                        try:
+                            method = getattr(library.instance, attr_name)
+                            if callable(method) and hasattr(method, 'robot_name'):
+                                if method.robot_name == keyword_name:
+                                    return attr_name
+                            # Also check converted method names
+                            converted_name = ' '.join(word.capitalize() for word in attr_name.split('_'))
+                            if converted_name == keyword_name:
+                                return attr_name
+                        except:
+                            continue
+        except Exception as e:
+            logger.debug(f"Method name lookup failed for {keyword_name}: {e}")
+        
+        # Fallback to simple conversion
+        return keyword_name.lower().replace(' ', '_')
+    
+    def _split_args_using_method_signature(self, corrected_args: List[str], method_signature) -> Tuple[List[str], Dict[str, str]]:
         """
         Split arguments into positional and named using the actual method signature.
         This is more reliable than using KeywordInfo.args which may be outdated or incorrect.
@@ -318,7 +355,7 @@ class DynamicKeywordDiscovery:
         # Get parameter names from the actual method signature
         param_names = list(method_signature.parameters.keys())
         
-        for arg in original_args:
+        for arg in corrected_args:
             if '=' in arg:
                 # Potential named argument
                 param_name, param_value = arg.split('=', 1)
@@ -534,9 +571,9 @@ class DynamicKeywordDiscovery:
         """Parse Robot Framework-style arguments (internal method for compatibility)."""
         return self.argument_processor.parse_arguments(args)
     
-    def _parse_arguments_for_keyword(self, keyword_name: str, args: List[str], library_name: str = None) -> ParsedArguments:
+    def _parse_arguments_for_keyword(self, keyword_name: str, args: List[str], library_name: str = None, session_variables: Dict[str, Any] = None) -> ParsedArguments:
         """Parse arguments using LibDoc information for a specific keyword."""
-        return self.argument_processor.parse_arguments_for_keyword(keyword_name, args, library_name)
+        return self.argument_processor.parse_arguments_for_keyword(keyword_name, args, library_name, session_variables)
     
     def _parse_arguments_with_rf_spec(self, keyword_info: KeywordInfo, args: List[str]) -> ParsedArguments:
         """Parse arguments using Robot Framework's native ArgumentSpec if available."""
@@ -592,7 +629,11 @@ class DynamicKeywordDiscovery:
         }
     
     async def _ensure_session_libraries(self, session_id: str, keyword_name: str) -> None:
-        """Ensure required libraries are loaded for the session."""
+        """
+        Ensure required libraries are loaded for the session.
+        
+        Phase 3 Enhancement: Improved RequestsLibrary loading consistency.
+        """
         if not self.session_manager:
             logger.debug("No session manager available, skipping session library loading")
             return
@@ -621,6 +662,22 @@ class DynamicKeywordDiscovery:
                     self.keyword_discovery.add_keywords_to_cache(lib_info)
                     session.mark_library_loaded(lib_name)
         
+        # Phase 3 Fix: Proactive RequestsLibrary loading for HTTP keywords
+        # Check if this is an HTTP-related keyword BEFORE trying to find it
+        if self._is_http_keyword(keyword_name):
+            logger.info(f"Phase 3: '{keyword_name}' is HTTP keyword, checking if RequestsLibrary is loaded")
+            if 'RequestsLibrary' not in self.library_manager.libraries:
+                logger.warning(f"Phase 3: RequestsLibrary NOT in library manager, attempting to load for '{keyword_name}'")
+                if self.library_manager.load_library_on_demand('RequestsLibrary', self.keyword_discovery):
+                    lib_info = self.library_manager.libraries['RequestsLibrary']
+                    self.keyword_discovery.add_keywords_to_cache(lib_info)
+                    session.mark_library_loaded('RequestsLibrary')
+                    logger.info(f"Phase 3: Successfully loaded RequestsLibrary for '{keyword_name}'")
+                else:
+                    logger.error(f"Phase 3: Failed to load RequestsLibrary for '{keyword_name}' - library loading failed")
+            else:
+                logger.info(f"Phase 3: RequestsLibrary already loaded for '{keyword_name}'")
+        
         # Try to load library on-demand if keyword is not found
         if not self.find_keyword(keyword_name):
             # Try to determine which library might have this keyword, respecting session context
@@ -630,6 +687,39 @@ class DynamicKeywordDiscovery:
                     lib_info = self.library_manager.libraries[potential_library]
                     self.keyword_discovery.add_keywords_to_cache(lib_info)
                     session.mark_library_loaded(potential_library)
+    
+    def _is_http_keyword(self, keyword_name: str) -> bool:
+        """
+        Check if a keyword is HTTP-related and likely needs RequestsLibrary.
+        
+        Phase 3 Addition: More precise HTTP keyword detection.
+        """
+        keyword_lower = keyword_name.lower()
+        
+        # Exact HTTP keyword matches (case-insensitive)
+        exact_http_keywords = {
+            'post', 'get', 'put', 'delete', 'patch', 'head', 'options',
+            'create session', 'delete all sessions', 'get request', 'post request',
+            'put request', 'delete request', 'patch request', 'head request',
+            'options request', 'post on session', 'get on session', 'put on session',
+            'delete on session', 'patch on session', 'head on session', 'options on session'
+        }
+        
+        if keyword_lower in exact_http_keywords:
+            return True
+        
+        # HTTP-related patterns
+        http_patterns = [
+            r'\b(get|post|put|delete|patch|head|options)\s*(request|on\s*session)?\b',
+            r'\bcreate\s*session\b',
+            r'\bdelete\s*(all\s*)?sessions?\b'
+        ]
+        
+        for pattern in http_patterns:
+            if re.search(pattern, keyword_lower):
+                return True
+        
+        return False
     
     def _guess_library_for_keyword(self, keyword_name: str, session: 'ExecutionSession' = None) -> Optional[str]:
         """Guess which library might contain a keyword based on name patterns, respecting session context."""
@@ -643,10 +733,13 @@ class DynamicKeywordDiscovery:
                 logger.debug(f"Session has {web_lib}, using it for '{keyword_name}' instead of auto-detection")
                 return web_lib
         
+        # Phase 3 Enhancement: Use the more precise HTTP keyword detection
+        if self._is_http_keyword(keyword_name):
+            return 'RequestsLibrary'
+        
         # Common keyword patterns to library mappings
         patterns = {
             r'\b(click|fill|navigate|browser|page|screenshot)\b': 'Browser',
-            r'\b(get request|post|put|delete|create session)\b': 'RequestsLibrary',
             r'\b(parse xml|get element|xpath)\b': 'XML',
             r'\b(run process|start process|terminate)\b': 'Process',
             r'\b(create file|remove file|directory)\b': 'OperatingSystem',
@@ -675,21 +768,43 @@ class DynamicKeywordDiscovery:
         
         logger.debug(f"Session '{session_id}' search order: {search_order}, type: {session_type.value}")
         
-        # CRITICAL FIX: Validate active_library against session boundaries
+        # Phase 3 Enhancement: Handle active_library conflicts with session search order
         if active_library and active_library not in search_order:
             logger.warning(f"Active library '{active_library}' not in session '{session_id}' search order {search_order}")
-            # For typed sessions, strictly enforce boundaries
-            if session_type.value != "unknown":
-                logger.info(f"Strict mode: ignoring out-of-bounds active_library '{active_library}' for session type '{session_type.value}'")
-                active_library = None
+            # Phase 3: Instead of ignoring, search session libraries first, then active library as fallback
+            logger.info(f"Phase 3: Will prioritize session search order over active_library '{active_library}'")
+            # Don't nullify active_library - use it as fallback after session search
         
-        # Search in session search order with exact matches first
+        # Search in session search order with exact matches first using LibDoc (decorator-aware)
         for lib_name in search_order:
             if lib_name in self.library_manager.libraries:
+                # CRITICAL FIX: Use LibDoc-based search which handles decorators correctly
+                try:
+                    from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
+                    rf_doc_storage = get_rf_doc_storage()
+                    
+                    logger.info(f"SESSION SEARCH DEBUG: Looking for '{keyword_name}' in library '{lib_name}'")
+                    if rf_doc_storage.is_available():
+                        lib_keywords = rf_doc_storage.get_keywords_by_library(lib_name)
+                        logger.info(f"SESSION SEARCH DEBUG: Found {len(lib_keywords)} keywords in '{lib_name}' via LibDoc")
+                        for kw in lib_keywords:
+                            if kw.name.lower() == keyword_name.lower():
+                                logger.info(f"Found '{keyword_name}' in '{lib_name}' via session search order using LibDoc (type: {session_type.value})")
+                                # Convert to our KeywordInfo format
+                                return self._convert_rf_keyword_to_keyword_info(kw)
+                        logger.info(f"SESSION SEARCH DEBUG: '{keyword_name}' not found in {lib_name} LibDoc keywords")
+                    else:
+                        logger.info(f"SESSION SEARCH DEBUG: LibDoc not available")
+                except Exception as e:
+                    logger.warning(f"LibDoc search failed for {lib_name}: {e}")
+                    import traceback
+                    logger.debug(f"LibDoc traceback: {traceback.format_exc()}")
+                
+                # Fallback to inspection-based search
                 lib_keywords = self.get_keywords_by_library(lib_name)
                 for kw in lib_keywords:
                     if kw.name.lower() == keyword_name.lower():
-                        logger.info(f"Found '{keyword_name}' in '{lib_name}' via session search order (type: {session_type.value})")
+                        logger.info(f"Found '{keyword_name}' in '{lib_name}' via session search order (inspection fallback)")
                         return kw
         
         # Try fuzzy matching within session boundaries
@@ -709,9 +824,172 @@ class DynamicKeywordDiscovery:
                             logger.info(f"Found '{keyword_name}' in '{lib_name}' via fuzzy search order match (type: {session_type.value})")
                             return kw
         
-        # REMOVED: No fallback to normal search - respect session boundaries strictly
-        logger.info(f"Keyword '{keyword_name}' not found within session '{session_id}' boundaries (type: {session_type.value}, search_order: {search_order})")
+        # Phase 3 Enhancement: If keyword not found in session search order, try active_library as fallback
+        if active_library and active_library not in search_order:
+            logger.info(f"Phase 3: Trying active_library '{active_library}' as fallback for '{keyword_name}'")
+            # Try the active library that wasn't in session search order
+            fallback_keyword = self.find_keyword(keyword_name, active_library)
+            if fallback_keyword:
+                logger.info(f"Phase 3: Found '{keyword_name}' in fallback active_library '{active_library}'")
+                return fallback_keyword
+        
+        # Phase 3 Enhancement: If still not found, try searching ALL session libraries directly
+        for lib_name in search_order:
+            if lib_name in self.library_manager.libraries:
+                fallback_keyword = self.find_keyword(keyword_name, lib_name)
+                if fallback_keyword:
+                    logger.info(f"Phase 3: Found '{keyword_name}' in session library '{lib_name}' via direct search")
+                    return fallback_keyword
+        
+        logger.info(f"Keyword '{keyword_name}' not found within session '{session_id}' boundaries or fallback (type: {session_type.value}, search_order: {search_order})")
         return None
+    
+    def _get_diagnostic_info(self, keyword_name: str, session_id: str = None, active_library: str = None) -> Dict[str, Any]:
+        """
+        Phase 4: Gather comprehensive diagnostic information for keyword execution failures.
+        
+        Args:
+            keyword_name: The keyword that failed to execute
+            session_id: Session ID for context
+            active_library: Active library for context
+            
+        Returns:
+            Dictionary with diagnostic information
+        """
+        diagnostics = {
+            "keyword_analysis": {
+                "is_http_keyword": self._is_http_keyword(keyword_name),
+                "keyword_variations": [
+                    keyword_name,
+                    keyword_name.lower(),
+                    keyword_name.replace(' ', ''),
+                    keyword_name.replace('_', ' ')
+                ]
+            },
+            "library_status": {
+                "loaded_libraries": list(self.library_manager.libraries.keys()),
+                "failed_imports": self.library_manager.failed_imports,
+                "total_libraries": len(self.library_manager.libraries),
+                "requests_library_loaded": 'RequestsLibrary' in self.library_manager.libraries
+            },
+            "session_info": {},
+            "search_analysis": {
+                "active_library": active_library,
+                "active_library_available": active_library in self.library_manager.libraries if active_library else None
+            }
+        }
+        
+        # Phase 4: Session-specific diagnostics
+        if session_id and self.session_manager:
+            session = self.session_manager.get_session(session_id)
+            if session:
+                search_order = session.get_search_order()
+                session_type = session.get_session_type()
+                
+                diagnostics["session_info"] = {
+                    "session_id": session_id,
+                    "session_type": session_type.value,
+                    "search_order": search_order,
+                    "active_library_in_search_order": active_library in search_order if active_library else None,
+                    "imported_libraries": session.imported_libraries,
+                    "loaded_libraries": list(session.loaded_libraries),
+                    "step_count": session.step_count
+                }
+                
+                # Check if keyword exists in any session library
+                diagnostics["search_analysis"]["keyword_found_in_libraries"] = {}
+                for lib_name in search_order:
+                    if lib_name in self.library_manager.libraries:
+                        found = bool(self.find_keyword(keyword_name, lib_name))
+                        diagnostics["search_analysis"]["keyword_found_in_libraries"][lib_name] = found
+        
+        # Phase 4: RequestsLibrary specific diagnostics for HTTP keywords
+        if self._is_http_keyword(keyword_name):
+            diagnostics["http_keyword_diagnostics"] = {
+                "requests_library_status": self._get_requests_library_status(),
+                "phase_analysis": {
+                    "phase1_rf_registration": self._check_requests_library_rf_registration(),
+                    "phase2_session_state": self._check_requests_library_session_state(session_id),
+                    "phase3_library_loading": 'RequestsLibrary' in self.library_manager.libraries
+                }
+            }
+        
+        return diagnostics
+    
+    def _get_requests_library_status(self) -> Dict[str, Any]:
+        """Get detailed RequestsLibrary status for diagnostics."""
+        if 'RequestsLibrary' not in self.library_manager.libraries:
+            return {"loaded": False, "reason": "Not loaded in library manager"}
+        
+        lib_info = self.library_manager.libraries['RequestsLibrary']
+        return {
+            "loaded": True,
+            "instance_available": lib_info.instance is not None,
+            "keywords_count": len(lib_info.keywords) if hasattr(lib_info, 'keywords') else "unknown",
+            "import_time": lib_info.import_time if hasattr(lib_info, 'import_time') else None
+        }
+    
+    def _check_requests_library_rf_registration(self) -> Dict[str, Any]:
+        """Check Phase 1: RequestsLibrary RF context registration."""
+        try:
+            from robot.running.context import EXECUTION_CONTEXTS
+            
+            if not EXECUTION_CONTEXTS.current:
+                return {"status": "no_rf_context", "registered": False}
+            
+            rf_context = EXECUTION_CONTEXTS.current
+            try:
+                requests_lib = rf_context.namespace.get_library_instance('RequestsLibrary')
+                return {
+                    "status": "success" if requests_lib else "not_registered",
+                    "registered": bool(requests_lib),
+                    "rf_context_available": True
+                }
+            except Exception as e:
+                return {
+                    "status": "error",
+                    "registered": False, 
+                    "rf_context_available": True,
+                    "error": str(e)
+                }
+        except Exception as e:
+            return {
+                "status": "no_rf_context",
+                "registered": False,
+                "rf_context_available": False,
+                "error": str(e)
+            }
+    
+    def _check_requests_library_session_state(self, session_id: str = None) -> Dict[str, Any]:
+        """Check Phase 2: RequestsLibrary session state synchronization."""
+        if not session_id or not self.session_manager:
+            return {"status": "no_session", "synchronized": False}
+        
+        session = self.session_manager.get_session(session_id)
+        if not session:
+            return {"status": "session_not_found", "synchronized": False}
+        
+        # Check if session manager has synchronization capability
+        has_sync_method = hasattr(self.session_manager, 'synchronize_requests_library_state')
+        
+        if not has_sync_method:
+            return {"status": "no_sync_method", "synchronized": False}
+        
+        try:
+            # Attempt synchronization check
+            sync_result = self.session_manager.synchronize_requests_library_state(session)
+            return {
+                "status": "success" if sync_result else "sync_failed",
+                "synchronized": sync_result,
+                "has_sync_method": True
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "synchronized": False,
+                "has_sync_method": True,
+                "error": str(e)
+            }
     
     def get_session_info(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get information about a session."""
@@ -872,7 +1150,7 @@ class DynamicKeywordDiscovery:
         return common / max(len(a), len(b))
     
     # Execution methods (delegated from the original implementation)
-    def _execute_direct_method_call(self, keyword_info: KeywordInfo, parsed_args: ParsedArguments, original_args: List[str], session_variables: Dict[str, Any]) -> Dict[str, Any]:
+    def _execute_direct_method_call(self, keyword_info: KeywordInfo, parsed_args: ParsedArguments, corrected_args: List[str], session_variables: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a keyword by calling its method directly."""
         try:
             # Get library instance
@@ -910,7 +1188,7 @@ class DynamicKeywordDiscovery:
                 # BUGFIX: Convert non-string arguments to strings for Robot Framework execution
                 # Robot Framework expects string arguments that it converts to appropriate types
                 string_args = []
-                for arg in original_args:
+                for arg in corrected_args:
                     if not isinstance(arg, str):
                         string_arg = str(arg)
                         logger.debug(f"Converting non-string argument {arg} (type: {type(arg).__name__}) to string '{string_arg}' for BuiltIn method with context")
@@ -926,18 +1204,18 @@ class DynamicKeywordDiscovery:
                 
                 if keyword_info.library in type_conversion_libraries:
                     # Enhanced logging for named arguments debugging
-                    has_potential_named_args = any('=' in arg for arg in original_args)
-                    logger.debug(f"NAMED_ARGS_DEBUG: {keyword_info.name} from {keyword_info.library} - args={original_args}, has_potential_named={has_potential_named_args}")
+                    has_potential_named_args = any('=' in arg for arg in corrected_args)
+                    logger.debug(f"NAMED_ARGS_DEBUG: {keyword_info.name} from {keyword_info.library} - args={corrected_args}, has_potential_named={has_potential_named_args}")
                     
                     try:
                         # Use Robot Framework's native type conversion system for libraries that need it
-                        conversion_result = self._execute_with_rf_type_conversion(method, keyword_info, original_args)
+                        conversion_result = self._execute_with_rf_type_conversion(method, keyword_info, corrected_args)
                         logger.debug(f"NAMED_ARGS_DEBUG: Type conversion result for {keyword_info.name}: {conversion_result[0] if conversion_result else 'None'}")
                         if conversion_result[0] == 'executed':  # Successfully converted and executed
                             result = conversion_result[1]  # Use the result as-is
                         elif conversion_result[0] == 'not_available':
-                            # Type conversion not available, fallback to our argument processing
-                            parsed = self.argument_processor.parse_arguments_for_keyword(keyword_info.name, original_args, keyword_info.library)
+                            # Type conversion not available, use pre-parsed corrected arguments
+                            parsed = parsed_args  # Use the corrected arguments from the caller
                             pos_args = parsed.positional
                             kwargs = parsed.named
                             
@@ -947,10 +1225,10 @@ class DynamicKeywordDiscovery:
                                 result = method(*pos_args)
                     except Exception as lib_error:
                         logger.debug(f"{keyword_info.library} execution failed: {lib_error}")
-                        # NAMED ARGUMENTS FIX: Instead of re-raising, try the parsed arguments approach
-                        # This ensures named arguments are preserved when type conversion fails
-                        logger.info(f"Type conversion failed for {keyword_info.name}, falling back to parsed argument processing")
-                        parsed = self.argument_processor.parse_arguments_for_keyword(keyword_info.name, original_args, keyword_info.library)
+                        # NAMED ARGUMENTS FIX: Use the already parsed and corrected arguments
+                        # This ensures named arguments are preserved and argument ordering is fixed
+                        logger.info(f"Type conversion failed for {keyword_info.name}, using pre-parsed corrected arguments")
+                        parsed = parsed_args  # Use the corrected arguments from the caller
                         pos_args = parsed.positional
                         kwargs = parsed.named
                         
@@ -977,10 +1255,10 @@ class DynamicKeywordDiscovery:
                         # Use original arguments to preserve object types (e.g., XML Elements)
                         logger.debug(f"Object-preserving execution for {keyword_info.name} in {keyword_info.library}: using original args")
                         if parsed_args.named:
-                            result = method(*original_args, **parsed_args.named)
+                            result = method(*corrected_args, **parsed_args.named)
                             logger.debug(f"Successfully executed {keyword_info.name} with original args + named arguments")
                         else:
-                            result = method(*original_args)
+                            result = method(*corrected_args)
                             logger.debug(f"Successfully executed {keyword_info.name} with original args only")
                     else:
                         # NAMED ARGUMENTS FIX: For other libraries, check for named arguments
@@ -1051,14 +1329,26 @@ class DynamicKeywordDiscovery:
                 else:
                     error_msg += " in any loaded library"
                 
-            return {
+            # Phase 4: Enhanced error handling and diagnostics
+            try:
+                diagnostic_info = self._get_diagnostic_info(effective_keyword_name, session_id, active_library)
+                print(f"PHASE4_DEBUG: Generated diagnostics for '{effective_keyword_name}': {list(diagnostic_info.keys())}")
+            except Exception as diag_error:
+                print(f"PHASE4_DEBUG: Diagnostics generation failed for '{effective_keyword_name}': {diag_error}")
+                diagnostic_info = {"diagnostic_error": str(diag_error)}
+            
+            result = {
                 "success": False,
                 "error": error_msg,
                 "suggestions": self.get_keyword_suggestions(effective_keyword_name, 3),
                 "library_prefix": effective_library_prefix,
                 "active_library_filter": active_library,
-                "session_id": session_id
+                "session_id": session_id,
+                "diagnostics": diagnostic_info,  # Phase 4: Enhanced diagnostics
+                "source": "orchestrator"  # Phase 4: Debug - identify source
             }
+            print(f"PHASE4_DEBUG: Orchestrator returning error response with diagnostics: {list(result.keys())}")
+            return result
         
         # Record keyword usage for session management and update search order
         if session_id:
@@ -1087,13 +1377,17 @@ class DynamicKeywordDiscovery:
                 else:
                     string_args.append(arg)
             
-            parsed_args = self._parse_arguments_for_keyword(effective_keyword_name, string_args, keyword_info.library)
+            parsed_args = self._parse_arguments_for_keyword(effective_keyword_name, string_args, keyword_info.library, session_variables)
             
             # Enhanced debug logging for named arguments
             logger.debug(f"NAMED_ARGS_DEBUG: Parsed arguments for {effective_keyword_name}: positional={parsed_args.positional}, named={list(parsed_args.named.keys()) if parsed_args.named else 'none'}")
             
-            # Execute the keyword
-            result = self._execute_direct_method_call(keyword_info, parsed_args, args, session_variables or {})
+            # Reconstruct corrected arguments from parsed_args for execution
+            corrected_args = parsed_args.positional + [f"{k}={v}" for k, v in parsed_args.named.items()]
+            logger.debug(f"Using corrected arguments for execution: {args} → {corrected_args}")
+            
+            # Execute the keyword with corrected arguments
+            result = self._execute_direct_method_call(keyword_info, parsed_args, corrected_args, session_variables or {})
             result["session_id"] = session_id
             return result
             

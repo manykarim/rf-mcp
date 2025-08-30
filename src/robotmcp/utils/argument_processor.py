@@ -18,14 +18,18 @@ class ArgumentProcessor:
     def __init__(self):
         self.rf_native_converter = RobotFrameworkNativeConverter()
     
-    def parse_arguments_for_keyword(self, keyword_name: str, args: List[str], library_name: str = None) -> ParsedArguments:
+    def parse_arguments_for_keyword(self, keyword_name: str, args: List[str], library_name: str = None, session_variables: Dict[str, Any] = None) -> ParsedArguments:
         """
         Parse arguments for a specific keyword using Robot Framework's native type conversion.
         
         This is the most accurate method as it uses Robot Framework's own argument
         resolution and type conversion systems.
         """
-        return self.rf_native_converter.parse_and_convert_arguments(keyword_name, args, library_name)
+        # Pass library_name and session_variables to the rf_native_converter
+        logger.debug(f"ArgumentProcessor: Parsing {keyword_name} from {library_name} with args: {args}")
+        result = self.rf_native_converter.parse_and_convert_arguments(keyword_name, args, library_name, session_variables)
+        logger.debug(f"ArgumentProcessor: Parsed result: {result}")
+        return result
     
     def parse_arguments(self, args: List[str]) -> ParsedArguments:
         """

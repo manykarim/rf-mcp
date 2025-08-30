@@ -8,6 +8,26 @@ from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
 
 logger = logging.getLogger(__name__)
 
+# RequestsLibrary signature cache (extracted from original decorated methods)
+REQUESTS_LIBRARY_SIGNATURES = {
+    # Session management
+    "Create Session": ["alias", "url", "headers=None", "cookies=None", "auth=None", "timeout=None", "proxies=None", "verify=False", "debug=0", "max_retries=3", "backoff_factor=0.1", "disable_warnings=0", "retry_status_list=[]", "retry_method_list=['PUT', 'DELETE', 'OPTIONS', 'HEAD', 'GET', 'TRACE']"],
+    
+    # Session-based methods
+    "GET On Session": ["alias", "url", "params=None", "expected_status=None", "msg=None"],
+    "POST On Session": ["alias", "url", "data=None", "json=None", "expected_status=None", "msg=None"],
+    "PUT On Session": ["alias", "url", "data=None", "json=None", "expected_status=None", "msg=None"],
+    "PATCH On Session": ["alias", "url", "data=None", "json=None", "expected_status=None", "msg=None"],
+    "DELETE On Session": ["alias", "url", "expected_status=None", "msg=None"],
+    
+    # Session-less methods (direct URL calls)
+    "GET": ["url", "params=None", "expected_status=None", "msg=None", "**kwargs"],
+    "POST": ["url", "data=None", "json=None", "params=None", "expected_status=None", "msg=None", "**kwargs"],
+    "PUT": ["url", "data=None", "json=None", "params=None", "expected_status=None", "msg=None", "**kwargs"],
+    "PATCH": ["url", "data=None", "json=None", "params=None", "expected_status=None", "msg=None", "**kwargs"],
+    "DELETE": ["url", "params=None", "expected_status=None", "msg=None", "**kwargs"],
+}
+
 # SeleniumLibrary locator strategies for error guidance
 SELENIUM_LOCATOR_STRATEGIES = {
     "id": "Element id (e.g., 'id:example')",
@@ -69,71 +89,308 @@ class RobotFrameworkNativeConverter:
     def __init__(self):
         self.rf_storage = get_rf_doc_storage()
     
+    def _extract_requests_library_signature(self, keyword_name: str, library_name: str = None) -> Optional[List[str]]:
+        """
+        Extract original signature for RequestsLibrary decorated methods.
+        
+        RequestsLibrary methods are decorated with @warn_if_equal_symbol_in_url_on_session
+        which masks their real signatures from LibDoc. This method recovers the original
+        signatures by examining decorator closures or using cached signature information.
+        """
+        # First check if we have cached signature for this keyword
+        if library_name == "RequestsLibrary" and keyword_name in REQUESTS_LIBRARY_SIGNATURES:
+            logger.debug(f"Using cached signature for RequestsLibrary.{keyword_name}")
+            return REQUESTS_LIBRARY_SIGNATURES[keyword_name]
+        
+        # Try to extract from actual method via decorator closure
+        try:
+            if library_name == "RequestsLibrary":
+                from RequestsLibrary import RequestsLibrary
+                import inspect
+                
+                rf_lib = RequestsLibrary()
+                method_name = keyword_name.lower().replace(' ', '_')
+                
+                if hasattr(rf_lib, method_name):
+                    method = getattr(rf_lib, method_name)
+                    
+                    # Extract original signature from decorator closure
+                    if hasattr(method, '__closure__') and method.__closure__:
+                        for cell in method.__closure__:
+                            try:
+                                content = cell.cell_contents
+                                if (callable(content) and 
+                                    hasattr(content, '__name__') and 
+                                    content.__name__ == method_name):
+                                    
+                                    original_sig = inspect.signature(content)
+                                    # Convert to signature args format
+                                    signature_args = []
+                                    for name, param in original_sig.parameters.items():
+                                        if name != 'self':
+                                            if param.default is param.empty:
+                                                signature_args.append(name)
+                                            else:
+                                                signature_args.append(f"{name}={param.default}")
+                                    
+                                    logger.debug(f"Extracted signature for {keyword_name}: {signature_args}")
+                                    return signature_args
+                                    
+                            except Exception as cell_error:
+                                logger.debug(f"Error examining closure cell: {cell_error}")
+                                continue
+                                
+        except Exception as e:
+            logger.debug(f"Error extracting RequestsLibrary signature for {keyword_name}: {e}")
+        
+        return None
+    
+    def _is_dictionary_literal(self, arg_str: str) -> bool:
+        """Check if the argument string contains a dictionary literal that needs conversion."""
+        if '=' not in arg_str:
+            return False
+        
+        param_name, param_value = arg_str.split('=', 1)
+        param_value = param_value.strip()
+        
+        # Check for dictionary-like patterns
+        dict_patterns = [
+            param_value == '{}',  # Empty dict
+            param_value.startswith('{') and param_value.endswith('}'),  # Dict literal
+            param_value.startswith('[') and param_value.endswith(']'),  # List literal
+        ]
+        
+        return any(dict_patterns)
+    
+    def _looks_like_named_parameter(self, arg_str: str) -> bool:
+        """Check if argument looks like a named parameter (param=value)."""
+        if '=' not in arg_str:
+            return False
+        
+        param_name = arg_str.split('=', 1)[0].strip()
+        
+        # Named parameters should have valid Python identifier names
+        # Avoid splitting on '=' inside strings, URLs, etc.
+        return (param_name.isidentifier() and 
+                not arg_str.startswith('http') and 
+                not arg_str.count('=') > 10)  # Avoid complex expressions
+    
+    def _process_object_preserving_args(self, keyword_name: str, args: List[Any]) -> List[Any]:
+        """
+        Proper solution: Handle ObjectPreservingArgument objects correctly for RF execution.
+        
+        Robot Framework's ArgumentResolver expects to receive arguments in a format that
+        allows proper separation of positional and named arguments. For named parameters
+        with object values, we need to return both the parameter name and the object value
+        in a way that RF can process.
+        """
+        from robotmcp.components.variables.variable_resolver import ObjectPreservingArgument
+        
+        processed_args = []
+        
+        for arg in args:
+            if isinstance(arg, ObjectPreservingArgument):
+                # CORRECT FIX: Return a special format that preserves the object
+                # This will be handled by the argument resolution system properly
+                processed_args.append((arg.param_name, arg.value))
+            else:
+                processed_args.append(str(arg) if not isinstance(arg, str) else arg)
+        
+        return processed_args
+    
     def parse_and_convert_arguments(
         self, 
         keyword_name: str, 
-        args: List[str], 
-        library_name: Optional[str] = None
+        args: List[Any], 
+        library_name: Optional[str] = None,
+        session_variables: Optional[Dict[str, Any]] = None
     ) -> ParsedArguments:
         """
-        Parse and convert arguments using Robot Framework's native systems.
+        Parse and convert arguments using Robot Framework's native ArgumentResolver.
         
-        This is the most accurate approach as it uses the exact same logic
-        that Robot Framework uses internally for keyword execution.
+        This uses RF's native argument resolution system which handles:
+        - Positional vs named argument separation
+        - Type conversion based on method signatures
+        - Decorator-aware keyword resolution
+        - ObjectPreservingArgument objects for object type preservation
         
         Args:
             keyword_name: Name of the keyword
-            args: List of argument strings from user
+            args: List of arguments from user (may include ObjectPreservingArgument objects)
             library_name: Optional library name for disambiguation
             
         Returns:
             ParsedArguments with correctly converted types
         """
+        # Handle ObjectPreservingArgument objects from variable resolution
+        processed_args = self._process_object_preserving_args(keyword_name, args)
+        return self._parse_with_rf_native_resolver(keyword_name, processed_args, library_name, session_variables)
+    
+    def _parse_with_rf_native_resolver(self, keyword_name: str, args: List[Any], library_name: Optional[str] = None, session_variables: Optional[Dict[str, Any]] = None) -> ParsedArguments:
+        """Use Robot Framework's native argument resolution - GENERAL SOLUTION."""
         if not RF_NATIVE_CONVERSION_AVAILABLE:
-            # Fallback to simple parsing without signature info
+            logger.debug(f"RF native parsing not available, using fallback for {keyword_name}")
             return self._fallback_parse(args)
         
-        # Get keyword info from LibDoc
-        keyword_info = self._get_keyword_info(keyword_name, library_name)
-        
-        if not keyword_info or not keyword_info.args:
-            # No signature info available, use fallback
-            logger.debug(f"No LibDoc signature for {keyword_name}, using fallback")
-            return self._fallback_parse(args)
-        
+        # GENERAL SOLUTION: Use RF's native Variables and ArgumentResolver
         try:
-            # Create Robot Framework ArgumentSpec from LibDoc signature
-            spec = self._create_argument_spec(keyword_info.args)
+            from robot.variables import Variables
+            from robot.running.arguments import ArgumentSpec
+            from robot.running.arguments.argumentresolver import ArgumentResolver
             
-            # Pre-parse named arguments from the args list using signature information
-            positional_args, named_args = self._split_args_into_positional_and_named(args, keyword_info.args)
-            
-            # Use Robot Framework's ArgumentResolver
-            resolver = ArgumentResolver(spec)
-            resolved_positional, resolved_named = resolver.resolve(positional_args, named_args)
-            
-            # Apply type conversion using Robot Framework's native converters
-            converted_positional = self._convert_positional_args(resolved_positional, keyword_info.args)
-            
-            # Handle different formats that RF ArgumentResolver might return
-            if isinstance(resolved_named, dict):
-                converted_named = self._convert_named_args(resolved_named, keyword_info.args)
+            # Step 1: Create Variables instance and resolve all variables in args
+            variables = Variables()
+            # Add session variables to enable ${variable} resolution
+            if session_variables:
+                for var_name, var_value in session_variables.items():
+                    # Store variables in RF format (with ${} syntax)
+                    if not var_name.startswith('${'):
+                        var_name = f'${{{var_name}}}'
+                    variables[var_name] = var_value
+                    logger.debug(f"Added session variable: {var_name} = {var_value} (type: {type(var_value)})")
+                logger.debug(f"Session variables loaded: {len(session_variables)} variables")
             else:
-                # If it's not a dict, convert to dict first
-                named_dict = dict(resolved_named) if resolved_named else {}
-                converted_named = self._convert_named_args(named_dict, keyword_info.args)
+                logger.debug(f"No session variables provided for {keyword_name}")
             
-            # Build result
+            resolved_args = []
+            for arg in args:
+                if isinstance(arg, tuple) and len(arg) == 2:
+                    # Handle ObjectPreservingArgument tuples (already resolved)
+                    param_name, param_value = arg
+                    resolved_args.append(f"{param_name}={param_value}")
+                elif isinstance(arg, str) and '${' in arg:
+                    # This is where the fix happens - use RF's native variable resolution
+                    try:
+                        resolved_arg = variables.replace_string(arg)
+                        resolved_args.append(resolved_arg)
+                        logger.debug(f"RF variable resolution: '{arg}' -> '{resolved_arg}'")
+                    except Exception as var_error:
+                        logger.debug(f"Variable resolution failed for '{arg}': {var_error}")
+                        resolved_args.append(str(arg))
+                else:
+                    resolved_args.append(str(arg) if not isinstance(arg, str) else arg)
+            
+            # Step 2: Parse named parameters from resolved strings
+            # This handles cases like "headers={'key': 'value'}" -> param_name="headers", value={'key': 'value'}
+            final_positional = []
+            final_named = {}
+            
+            for arg_str in resolved_args:
+                if isinstance(arg_str, str) and '=' in arg_str and self._looks_like_named_parameter(arg_str):
+                    param_name, param_value_str = arg_str.split('=', 1)
+                    param_name = param_name.strip()
+                    param_value_str = param_value_str.strip()
+                    
+                    # Try to parse the value as a Python literal (dict, list, etc.)
+                    try:
+                        import ast
+                        param_value = ast.literal_eval(param_value_str)
+                        final_named[param_name] = param_value
+                        logger.debug(f"Parsed named parameter: {param_name}={param_value} (type: {type(param_value)})")
+                    except (ValueError, SyntaxError):
+                        # If not a literal, keep as string
+                        final_named[param_name] = param_value_str
+                        logger.debug(f"Named parameter as string: {param_name}='{param_value_str}'")
+                else:
+                    final_positional.append(arg_str)
+            
+            # Step 3: Create result
             result = ParsedArguments()
-            result.positional = converted_positional
-            result.named = converted_named
+            result.positional = final_positional
+            result.named = final_named
             
+            logger.debug(f"GENERAL RF SOLUTION - {keyword_name}: positional={final_positional}, named={final_named}")
             return result
             
         except Exception as e:
-            logger.debug(f"Robot Framework native parsing failed for {keyword_name}: {e}")
-            # Fallback to simple parsing with signature info
-            return self._fallback_parse(args, keyword_info.args if keyword_info else None)
+            logger.debug(f"RF native resolution failed for {keyword_name}: {e}")
+            # Fallback to original logic
+            pass
+        
+        try:
+            # Use Robot Framework's native LibDoc to get keyword signature
+            from robot.libdoc import LibraryDocumentation
+            
+            if library_name:
+                lib_doc = LibraryDocumentation(library_name)
+                keyword_doc = None
+                
+                # Find the specific keyword
+                for kw_doc in lib_doc.keywords:
+                    if kw_doc.name == keyword_name:
+                        keyword_doc = kw_doc
+                        break
+                
+                if keyword_doc and hasattr(keyword_doc, 'args') and keyword_doc.args:
+                    # Check if signature is decorator-masked (e.g., *args, **kwargs)
+                    arg_strings = [str(arg) for arg in keyword_doc.args]
+                    is_decorator_masked = (
+                        len(arg_strings) <= 2 and 
+                        any('*args' in arg or '**kwargs' in arg for arg in arg_strings)
+                    )
+                    
+                    if not is_decorator_masked:
+                        # Use RF's native ArgumentSpec and ArgumentResolver for clean signatures
+                        from robot.running.arguments import ArgumentSpec
+                        from robot.running.arguments.argumentresolver import ArgumentResolver
+                        
+                        spec = ArgumentSpec(arg_strings)
+                        resolver = ArgumentResolver(spec)
+                        
+                        # Convert our tuple format to RF-compatible format
+                        rf_args = []
+                        object_params = {}
+                        
+                        for arg in args:
+                            if isinstance(arg, tuple) and len(arg) == 2:
+                                # This is an ObjectPreservingArgument tuple (param_name, value)
+                                param_name, param_value = arg
+                                object_params[param_name] = param_value
+                                # Add to RF args in named parameter format
+                                rf_args.append(f"{param_name}=__OBJECT_PLACEHOLDER__")
+                            else:
+                                # Handle named parameters that might need type conversion
+                                arg_str = str(arg)
+                                if '=' in arg_str and self._is_dictionary_literal(arg_str):
+                                    # Convert dictionary literals like "headers={}" to actual dicts
+                                    param_name, param_value_str = arg_str.split('=', 1)
+                                    try:
+                                        # Safely evaluate the dictionary literal
+                                        import ast
+                                        param_value = ast.literal_eval(param_value_str)
+                                        object_params[param_name] = param_value
+                                        rf_args.append(f"{param_name}=__OBJECT_PLACEHOLDER__")
+                                    except (ValueError, SyntaxError):
+                                        # If it's not a valid literal, keep as string
+                                        rf_args.append(arg_str)
+                                else:
+                                    rf_args.append(arg_str)
+                        
+                        # Resolve arguments using RF native logic
+                        positional, named = resolver.resolve(rf_args)
+                        
+                        # Replace object placeholders with actual objects
+                        for i, (key, value) in enumerate(named):
+                            if value == "__OBJECT_PLACEHOLDER__" and key in object_params:
+                                named[i] = (key, object_params[key])
+                        
+                        logger.debug(f"RF native resolution for {keyword_name}: pos={len(positional)}, named={len(named)}")
+                        
+                        result = ParsedArguments()
+                        result.positional = positional
+                        result.named = dict(named) if named else {}
+                        
+                        return result
+                    else:
+                        logger.debug(f"Decorator-masked signature detected for {keyword_name}, using custom extraction")
+                        # Fall through to signature extraction logic
+        except Exception as e:
+            logger.debug(f"RF native parsing failed for {keyword_name}: {e}")
+        
+        # Fallback to simple parsing
+        return self._fallback_parse(args)
+    
+    # REMOVED: Complex signature awareness logic - replaced by general RF native solution above
     
     def _get_keyword_info(self, keyword_name: str, library_name: Optional[str] = None):
         """Get keyword information from LibDoc storage."""
@@ -237,13 +494,110 @@ class RobotFrameworkNativeConverter:
             var_named=var_named
         )
     
+    def _detect_argument_ordering_violation(self, args: List[str], signature_args: List[str] = None) -> Dict[str, Any]:
+        """
+        Detect Robot Framework argument ordering violations and provide helpful error messages.
+        
+        Returns dict with 'violation', 'message', 'suggestion', and 'fix_examples' keys.
+        """
+        found_named_at = None
+        
+        for i, arg in enumerate(args):
+            if '=' in arg and self._looks_like_named_arg(arg, self._get_valid_param_names(signature_args)):
+                if found_named_at is None:
+                    found_named_at = i
+            elif found_named_at is not None:
+                # Found positional after named - violation!
+                return {
+                    'violation': True,
+                    'message': f"Positional argument '{arg}' found after named argument at position {found_named_at}",
+                    'rf_error': f"Keyword got positional argument after named arguments",
+                    'suggestion': "Robot Framework requires all arguments after a named argument to also be named",
+                    'user_pattern': args,
+                    'fix_examples': self._generate_fix_examples(args, signature_args)
+                }
+        
+        return {'violation': False}
+    
+    def _get_valid_param_names(self, signature_args: List[str] = None) -> set:
+        """Extract valid parameter names from signature args."""
+        if not signature_args:
+            return set()
+        
+        valid_params = set()
+        for sig_arg in signature_args:
+            if '=' in sig_arg:
+                param_name = sig_arg.split('=', 1)[0].strip()
+            else:
+                param_name = sig_arg.strip()
+            valid_params.add(param_name)
+        
+        return valid_params
+    
+    def _generate_fix_examples(self, args: List[str], signature_args: List[str] = None) -> List[Dict[str, Any]]:
+        """Generate example fixes for invalid argument patterns."""
+        examples = []
+        
+        # Option 1: Convert all to positional (remove named syntax)
+        positional_fix = []
+        for arg in args:
+            if '=' in arg and self._looks_like_named_arg(arg, self._get_valid_param_names(signature_args)):
+                value = arg.split('=', 1)[1]
+                positional_fix.append(value)
+            else:
+                positional_fix.append(arg)
+        
+        examples.append({
+            'name': 'All positional arguments',
+            'args': positional_fix,
+            'description': 'Remove parameter names, keep only values in correct order'
+        })
+        
+        # Option 2: Move named arguments to end
+        positional_args = []
+        named_args = []
+        
+        for arg in args:
+            if '=' in arg and self._looks_like_named_arg(arg, self._get_valid_param_names(signature_args)):
+                named_args.append(arg)
+            else:
+                positional_args.append(arg)
+        
+        reordered = positional_args + named_args
+        examples.append({
+            'name': 'Reorder arguments (named at end)',
+            'args': reordered,
+            'description': 'Move all named arguments to the end'
+        })
+        
+        return examples
+
     def _split_args_into_positional_and_named(self, args: List[str], signature_args: List[str] = None) -> tuple[List[str], Dict[str, str]]:
         """
         Split user arguments into positional and named arguments.
         
         Uses LibDoc signature information to accurately distinguish between
         locator strings (like "name=firstname") and actual named arguments.
+        
+        Raises helpful error messages for argument ordering violations.
         """
+        # Check for argument ordering violations and auto-fix if needed
+        violation_check = self._detect_argument_ordering_violation(args, signature_args)
+        if violation_check.get('violation'):
+            # Auto-fix: Use the reordered arguments (move named args to end)
+            fix_examples = violation_check['fix_examples']
+            if fix_examples:
+                fixed_args = fix_examples[1]['args'] if len(fix_examples) > 1 else fix_examples[0]['args']  # Prefer reordering
+                logger.info(f"AUTO-FIX: Detected invalid argument pattern for {signature_args}. "
+                           f"Automatically fixed: {args} → {fixed_args}")
+                args = fixed_args
+            else:
+                # If no fix examples available, still raise the error
+                error_msg = f"Invalid argument pattern: {violation_check['rf_error']}\n\n"
+                error_msg += f"Problem: {violation_check['message']}\n"
+                error_msg += f"Suggestion: {violation_check['suggestion']}"
+                raise ValueError(error_msg)
+        
         positional = []
         named = {}
         

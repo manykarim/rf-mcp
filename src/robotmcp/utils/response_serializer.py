@@ -130,6 +130,15 @@ class MCPResponseSerializer:
         if isinstance(obj, bytes):
             return self._serialize_bytes(obj)
 
+        # Handle requests.Response objects specially - create a serialized representation
+        # but preserve key information for method calls
+        try:
+            import requests
+            if isinstance(obj, requests.models.Response):
+                return self._serialize_requests_response(obj)
+        except ImportError:
+            pass  # requests not available, continue with normal processing
+
         # Handle other iterables (but not strings)
         if hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
             try:
@@ -271,6 +280,77 @@ class MCPResponseSerializer:
                 "_length": len(data),
                 "_preview": base64.b64encode(data[:50]).decode('ascii') + "...",
                 "_truncated": True
+            }
+
+    def _serialize_requests_response(self, response) -> Dict[str, Any]:
+        """
+        Serialize requests.Response object with key information preserved.
+        
+        This provides a serialized representation suitable for MCP responses
+        while preserving important attributes for debugging and analysis.
+        """
+        try:
+            # Extract key information from the Response object
+            result = {
+                "_type": "requests_response",
+                "_original_type": "Response",
+                "status_code": response.status_code,
+                "reason": response.reason,
+                "url": str(response.url),
+                "headers": dict(response.headers),
+                "encoding": response.encoding,
+                "apparent_encoding": response.apparent_encoding,
+            }
+            
+            # Try to get JSON content safely
+            try:
+                json_content = response.json()
+                # Limit JSON size for performance
+                json_str = json.dumps(json_content)
+                if len(json_str) > 1000:
+                    result["json_preview"] = json_str[:1000] + "..."
+                    result["json_truncated"] = True
+                else:
+                    result["json"] = json_content
+            except Exception as e:
+                result["json_error"] = f"Could not parse JSON: {e}"
+            
+            # Add text content preview
+            try:
+                text_content = response.text
+                if len(text_content) > 500:
+                    result["text_preview"] = text_content[:500] + "..."
+                    result["text_truncated"] = True
+                    result["text_length"] = len(text_content)
+                else:
+                    result["text"] = text_content
+            except Exception as e:
+                result["text_error"] = f"Could not get text content: {e}"
+                
+            # Add content info
+            if hasattr(response, 'content'):
+                result["content_length"] = len(response.content) if response.content else 0
+                
+            # Add timing info if available
+            if hasattr(response, 'elapsed'):
+                result["elapsed_seconds"] = response.elapsed.total_seconds()
+                
+            # Add cookies info if available
+            if hasattr(response, 'cookies') and response.cookies:
+                result["cookies"] = dict(response.cookies)
+                
+            return result
+            
+        except Exception as e:
+            logger.warning(f"Failed to serialize requests.Response: {e}")
+            # Fallback to basic info
+            return {
+                "_type": "requests_response_error",
+                "_original_type": "Response", 
+                "_error": str(e),
+                "_string_repr": str(response)[:100],
+                "status_code": getattr(response, 'status_code', 'unknown'),
+                "url": str(getattr(response, 'url', 'unknown'))
             }
 
     def _serialize_object_with_dict(self, obj: Any, depth: int) -> Dict[str, Any]:

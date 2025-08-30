@@ -1,6 +1,7 @@
 """Keyword execution service."""
 
 import logging
+import sys
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
@@ -14,6 +15,7 @@ from robotmcp.utils.response_serializer import MCPResponseSerializer
 from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
 from robotmcp.components.variables.variable_resolver import VariableResolver
 from robotmcp.components.execution.robot_context_manager import get_context_manager
+from robotmcp.components.execution.rf_native_context_manager import get_rf_native_context_manager
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,7 @@ class KeywordExecutor:
         self.variable_resolver = VariableResolver()
         self.response_serializer = MCPResponseSerializer()
         self.context_manager = get_context_manager()
+        self.rf_native_context = get_rf_native_context_manager()
     
     async def execute_keyword(
         self, 
@@ -66,7 +69,12 @@ class KeywordExecutor:
         Returns:
             Execution result with status, output, and state
         """
+        
         try:
+            # PHASE 1.2: Pre-execution Library Registration
+            # Ensure required library is registered before keyword execution
+            self._ensure_library_registration(keyword, session)
+            
             # Create execution step
             step = ExecutionStep(
                 step_id=str(uuid.uuid4()),
@@ -82,28 +90,32 @@ class KeywordExecutor:
             step.status = "running"
             
             # Check if we should use context mode
-            if use_context or session.is_context_mode():
-                # Context mode is not fully functional - fall back to normal mode
-                logger.warning(f"Context mode requested but not fully implemented, using normal mode for: {keyword}")
-                use_context = False
-                session.context_mode = False  # Disable context mode
+            # Enable context mode for keywords that require RF execution context
+            context_required_keywords = [
+                "evaluate", "set test variable", "set suite variable", "set global variable",
+                "create dictionary", "get variable value", "variable should exist",
+                "call method", "run keyword if", "run keyword unless", "run keywords"
+            ]
             
-            if False:  # Disabled context mode path
-                # In context mode, don't resolve variables - let RF handle it
-                logger.info(f"Executing keyword in context mode: {keyword} with args: {arguments}")
+            keyword_requires_context = keyword.lower() in context_required_keywords
+            
+            if use_context or session.is_context_mode() or keyword_requires_context:
+                # Use RF native context mode for keywords that require it
+                logger.info(f"Executing keyword in RF native context mode: {keyword} with args: {arguments}")
                 result = await self._execute_keyword_with_context(
                     session, keyword, arguments, assign_to
                 )
-                resolved_arguments = arguments  # For logging
+                resolved_arguments = arguments  # For logging - RF handles variable resolution
             else:
                 # Resolve variables in arguments before execution for non-context mode
                 try:
                     resolved_arguments = self.variable_resolver.resolve_arguments(arguments, session.variables)
                     logger.debug(f"Variable resolution: {arguments} → {resolved_arguments}")
                     
-                    # ADDITIONAL DEBUG: Log types of resolved arguments
-                    for i, (orig, resolved) in enumerate(zip(arguments, resolved_arguments)):
-                        logger.debug(f"Arg {i}: '{orig}' → '{resolved}' (type: {type(resolved).__name__})")
+                    # FINAL SOLUTION: Store and immediately inject objects for all execution paths
+                    resolved_arguments = self._store_and_reference_objects(resolved_arguments, session)
+                    resolved_arguments = self._inject_objects_for_execution(resolved_arguments, session)
+                    # Object injection completed successfully
                     
                 except Exception as var_error:
                     logger.error(f"Variable resolution failed for {arguments}: {var_error}")
@@ -151,10 +163,22 @@ class KeywordExecutor:
                     assign_to, result.get("result"), keyword, result.get("output")
                 )
                 if assignment_vars:
-                    # Store actual objects in session variables
+                    # DUAL STORAGE IMPLEMENTATION:
+                    # 1. Store ORIGINAL objects in session variables for RF execution context
                     session.variables.update(assignment_vars)
                     
-                    # Add serialized assignment info to result for MCP response
+                    # DEBUG: Verify what we actually stored in session variables
+                    for var_name, var_value in assignment_vars.items():
+                        logger.info(f"STORED IN SESSION: {var_name} = {type(var_value).__name__}")
+                        logger.debug(f"Session storage detail: {var_name} -> {str(var_value)[:100]}")
+                        # Verify what's actually in session.variables after update
+                        actual_stored = session.variables.get(var_name)
+                        logger.info(f"SESSION VERIFICATION: {var_name} stored as {type(actual_stored).__name__}")
+                    
+                    # 2. Store raw objects for RF Variables system (needed for ${response.json()})
+                    result["assigned_variables_raw"] = assignment_vars
+                    
+                    # 3. Add serialized assignment info to result for MCP response compatibility
                     # This prevents serialization errors with complex objects
                     serialized_assigned_vars = self.response_serializer.serialize_assigned_variables(assignment_vars)
                     result["assigned_variables"] = serialized_assigned_vars
@@ -215,6 +239,14 @@ class KeywordExecutor:
         if not assign_to:
             return {}
         
+        # DEBUG: Log what we receive for tracing serialization issue
+        logger.debug(f"VARIABLE_ASSIGNMENT_DEBUG: {keyword} result_value type: {type(result_value)}")
+        logger.debug(f"VARIABLE_ASSIGNMENT_DEBUG: {keyword} result_value: {str(result_value)[:200]}")
+        
+        # Check if result_value is already serialized (RequestsLibrary Response issue)
+        if isinstance(result_value, dict) and result_value.get('_type') == 'requests_response':
+            logger.warning(f"SERIALIZATION_WARNING: {keyword} result_value is already serialized Response object!")
+        
         # If result_value is None but output exists, try to use output
         # This handles cases where the result is in output but not result field
         value_to_assign = result_value
@@ -271,6 +303,74 @@ class KeywordExecutor:
                 variables[var_name] = value_to_assign
         
         return variables
+    
+    def _ensure_library_registration(self, keyword: str, session: Any) -> None:
+        """
+        Ensure required library is registered in RF context before keyword execution.
+        
+        This is Phase 1.2 of the RequestsLibrary fix: Pre-execution Library Registration.
+        We determine which library is needed for a keyword and ensure it's registered
+        in the Robot Framework execution context.
+        """
+        try:
+            # Determine library from keyword
+            library_name = self._get_library_for_keyword(keyword)
+            
+            if library_name and library_name == 'RequestsLibrary':
+                # Get the library manager from keyword discovery
+                library_manager = self.keyword_discovery.library_manager
+                
+                # Ensure RequestsLibrary is loaded in our manager
+                if library_name not in library_manager.libraries:
+                    logger.info(f"Loading {library_name} on demand for keyword: {keyword}")
+                    library_manager.load_library_on_demand(library_name, self.keyword_discovery)
+                
+                # Ensure RequestsLibrary is properly registered in RF context
+                registration_success = library_manager.ensure_library_in_rf_context(library_name)
+                
+                if registration_success:
+                    logger.debug(f"Successfully ensured {library_name} registration for keyword: {keyword}")
+                    
+                    # PHASE 2: Session State Synchronization
+                    # After successful registration, synchronize session state
+                    session_manager = getattr(session, '_session_manager', None)
+                    if session_manager:
+                        sync_success = session_manager.synchronize_requests_library_state(session)
+                        if sync_success:
+                            logger.debug(f"RequestsLibrary session state synchronized for keyword: {keyword}")
+                        else:
+                            logger.debug(f"RequestsLibrary session synchronization skipped for keyword: {keyword}")
+                    
+                else:
+                    logger.warning(f"Failed to register {library_name} in RF context for keyword: {keyword}")
+            
+        except Exception as e:
+            logger.error(f"Library registration check failed for {keyword}: {e}")
+            # Don't fail execution for this - let the keyword execution handle library issues
+    
+    def _get_library_for_keyword(self, keyword: str) -> Optional[str]:
+        """Determine which library provides a given keyword."""
+        
+        # Handle explicit library prefixes (e.g., "RequestsLibrary.POST")
+        if '.' in keyword:
+            parts = keyword.split('.')
+            if len(parts) == 2:
+                library_name, _ = parts
+                return library_name
+        
+        # Map common HTTP keywords to RequestsLibrary
+        requests_keywords = {
+            'POST', 'GET', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS',
+            'POST On Session', 'GET On Session', 'PUT On Session', 'DELETE On Session',
+            'Create Session', 'Delete All Sessions'
+        }
+        
+        if keyword in requests_keywords:
+            return 'RequestsLibrary'
+        
+        # For other keywords, we could extend this mapping
+        # For now, return None for non-RequestsLibrary keywords
+        return None
     
     def _normalize_variable_name(self, name: str) -> str:
         """Normalize variable name to Robot Framework format."""
@@ -491,7 +591,10 @@ class KeywordExecutor:
         arguments: List[Any],
         assign_to: Optional[Union[str, List[str]]] = None
     ) -> Dict[str, Any]:
-        """Execute keyword within full Robot Framework context.
+        """Execute keyword within full Robot Framework native context.
+        
+        This uses RF's native execution context to enable proper execution of
+        keywords like Evaluate, Set Test Variable, etc. that require RF context.
         
         Args:
             session: ExecutionSession to run in
@@ -505,61 +608,48 @@ class KeywordExecutor:
         try:
             session_id = session.session_id
             
-            # Ensure context exists for session
-            if not self.context_manager.get_session_info(session_id):
-                # Create context with session's loaded libraries
-                libraries = list(session.loaded_libraries)
-                context_result = self.context_manager.create_context(session_id, libraries)
+            logger.info(f"RF NATIVE CONTEXT: Executing {keyword} with native RF context for session {session_id}")
+            
+            # Create or get RF native context for session
+            context_info = self.rf_native_context.get_session_context_info(session_id)
+            if not context_info["context_exists"]:
+                # Create RF native context with session's loaded libraries
+                libraries = list(session.loaded_libraries) if hasattr(session, 'loaded_libraries') else []
+                context_result = self.rf_native_context.create_context_for_session(session_id, libraries)
                 if not context_result.get("success"):
+                    logger.error(f"RF native context creation failed: {context_result.get('error')}")
                     return {
                         "success": False,
-                        "error": f"Failed to create context: {context_result.get('error')}",
+                        "error": f"Failed to create RF native context: {context_result.get('error')}",
                         "keyword": keyword,
                         "arguments": arguments
                     }
-                
-                # Sync session variables to context
-                self.context_manager.set_context_variables(session_id, session.variables)
+                logger.info(f"Created RF native context for session {session_id} with libraries: {libraries}")
             
-            # Execute keyword in context
-            result = self.context_manager.execute_in_context(
+            # Execute keyword using RF native context with session variables
+            result = self.rf_native_context.execute_keyword_with_context(
                 session_id=session_id,
-                keyword=keyword,
+                keyword_name=keyword,
                 arguments=arguments,
-                assign_to=assign_to
+                assign_to=assign_to,
+                session_variables=dict(session.variables)  # Pass original objects to RF Variables
             )
             
-            # Sync context variables back to session
-            if result.get("success"):
-                context_vars = result.get("variables", {})
-                session.variables.update(context_vars)
-                
-                # Handle assignment
-                if assign_to:
-                    assignment_vars = {}
-                    if isinstance(assign_to, str):
-                        var_name = self._normalize_variable_name(assign_to)
-                        if var_name in context_vars:
-                            assignment_vars[var_name] = context_vars[var_name]
-                    elif isinstance(assign_to, list):
-                        for name in assign_to:
-                            var_name = self._normalize_variable_name(name)
-                            if var_name in context_vars:
-                                assignment_vars[var_name] = context_vars[var_name]
-                    
-                    if assignment_vars:
-                        serialized_assigned_vars = self.response_serializer.serialize_assigned_variables(assignment_vars)
-                        result["assigned_variables"] = serialized_assigned_vars
+            # Update session variables from RF native context
+            if result.get("success") and "variables" in result:
+                session.variables.update(result["variables"])
+                logger.debug(f"Updated session variables from RF native context: {len(result['variables'])} variables")
             
+            logger.info(f"RF NATIVE CONTEXT: {keyword} executed with result: {result.get('success')}")
             return result
             
         except Exception as e:
-            logger.error(f"Context execution failed: {e}")
+            logger.error(f"RF native context execution failed: {e}")
             import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"RF native context traceback: {traceback.format_exc()}")
             return {
                 "success": False,
-                "error": f"Context execution failed: {str(e)}",
+                "error": f"RF native context execution failed: {str(e)}",
                 "keyword": keyword,
                 "arguments": arguments
             }
@@ -761,18 +851,25 @@ class KeywordExecutor:
             
             # Try to execute using BuiltIn library
             try:
-                # BUGFIX: Convert all arguments to strings for Robot Framework's BuiltIn.run_keyword()
-                # Robot Framework expects string arguments that it can then convert to appropriate types
-                string_args = []
-                for arg in args:
-                    if not isinstance(arg, str):
-                        string_arg = str(arg)
-                        logger.debug(f"Converting non-string argument {arg} (type: {type(arg).__name__}) to string '{string_arg}' for BuiltIn.run_keyword")
-                        string_args.append(string_arg)
-                    else:
-                        string_args.append(arg)
+                # ENHANCEMENT: Use RF native type converter for proper argument processing
+                # This handles RequestsLibrary and other complex libraries with named arguments
+                logger.info(f"BUILTIN KEYWORD EXECUTION PATH: {keyword} with args: {args}")
+                print(f"🔍 BUILTIN PATH: {keyword} with args: {args}", file=sys.stderr)
+                print(f"🔍 BUILTIN ARGS TYPES: {[type(arg).__name__ for arg in args]}", file=sys.stderr)
+                try:
+                    processed_args = self.rf_converter.parse_and_convert_arguments(keyword, args, session.session_id)
+                    logger.info(f"RF converter processed {keyword} args: {args} → {processed_args}")
+                    print(f"🔍 RF CONVERTER SUCCESS: {processed_args}", file=sys.stderr)
+                except Exception as converter_error:
+                    logger.warning(f"RF converter failed for {keyword}: {converter_error}, falling back to basic processing")
+                    print(f"🔍 RF CONVERTER FAILED: {converter_error}", file=sys.stderr)
+                    processed_args = args
                 
-                result = builtin.run_keyword(keyword, *string_args)
+                # DUAL HANDLING: RequestsLibrary needs object arguments, others need string arguments
+                # FINAL SOLUTION: Inject objects directly before keyword execution
+                final_args = self._inject_objects_for_execution(processed_args, session)
+                
+                result = builtin.run_keyword(keyword, *final_args)
                 return {
                     "success": True,
                     "result": result,  # Store the actual return value
@@ -781,23 +878,351 @@ class KeywordExecutor:
                     "state_updates": {}
                 }
             except Exception as e:
+                # Phase 4: Add comprehensive diagnostics for keyword execution failures
+                diagnostics = self._get_keyword_failure_diagnostics(keyword, args, str(e), session)
                 return {
                     "success": False,
                     "error": f"Built-in keyword execution failed: {str(e)}",
                     "output": "",
                     "variables": {},
-                    "state_updates": {}
+                    "state_updates": {},
+                    "diagnostics": diagnostics  # Phase 4: Enhanced diagnostics
                 }
                 
         except Exception as e:
             logger.error(f"Error executing built-in keyword {keyword}: {e}")
+            # Phase 4: Add diagnostics for outer exception handler too
+            diagnostics = self._get_keyword_failure_diagnostics(keyword, args, str(e), session)
             return {
                 "success": False,
                 "error": f"Built-in keyword execution failed: {str(e)}",
                 "output": "",
                 "variables": {},
-                "state_updates": {}
+                "state_updates": {},
+                "diagnostics": diagnostics  # Phase 4: Enhanced diagnostics
             }
+    
+    def _get_keyword_failure_diagnostics(self, keyword: str, args: List[str], error_message: str, session: ExecutionSession) -> Dict[str, Any]:
+        """
+        Phase 4: Get comprehensive diagnostic information for keyword execution failures.
+        
+        Args:
+            keyword: The keyword that failed
+            args: Arguments provided to the keyword
+            error_message: The error message from the failure
+            session: ExecutionSession for context
+            
+        Returns:
+            Dictionary with diagnostic information
+        """
+        # Use the orchestrator's diagnostic capabilities
+        from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
+        orchestrator = get_keyword_discovery()
+        
+        # Get comprehensive diagnostics from the orchestrator
+        diagnostics = orchestrator._get_diagnostic_info(
+            keyword_name=keyword,
+            session_id=session.session_id,
+            active_library=session.get_active_library()
+        )
+        
+        # Add keyword executor specific information
+        diagnostics["execution_context"] = {
+            "execution_path": "builtin_keyword_executor",
+            "provided_arguments": args,
+            "argument_count": len(args),
+            "execution_error": error_message,
+            "session_type": session.get_session_type().value
+        }
+        
+        # Add Robot Framework specific diagnostics
+        try:
+            from robot.running.context import EXECUTION_CONTEXTS
+            rf_context_available = bool(EXECUTION_CONTEXTS.current)
+            diagnostics["robot_framework_context"] = {
+                "execution_context_available": rf_context_available
+            }
+        except:
+            diagnostics["robot_framework_context"] = {
+                "execution_context_available": False
+            }
+        
+        return diagnostics
+    
+    def _keyword_expects_object_arguments(self, keyword: str, arg_index: int, arg_value: Any) -> bool:
+        """
+        Determine if a keyword expects object arguments at a specific position.
+        
+        This is critical for RequestsLibrary which expects dict/list objects for json/data parameters,
+        while most other keywords expect string arguments.
+        """
+        keyword_lower = keyword.lower()
+        
+        # Debug output
+        print(f"🔍 OBJECT CHECK: keyword={keyword_lower}, arg_index={arg_index}, arg_value={arg_value}, type={type(arg_value).__name__}", file=sys.stderr)
+        
+        # RequestsLibrary keywords that accept object parameters
+        requests_keywords_with_objects = {
+            'post': ['json', 'data'],
+            'put': ['json', 'data'], 
+            'patch': ['json', 'data'],
+            'post on session': ['json', 'data'],
+            'put on session': ['json', 'data'],
+            'patch on session': ['json', 'data'],
+        }
+        
+        if keyword_lower in requests_keywords_with_objects:
+            # Check if this is a dict or list object that should be preserved
+            if isinstance(arg_value, (dict, list)):
+                print(f"🔍 PRESERVING OBJECT: RequestsLibrary keyword {keyword} detected with {type(arg_value).__name__} argument", file=sys.stderr)
+                logger.debug(f"RequestsLibrary keyword {keyword} detected with {type(arg_value).__name__} argument - preserving as object")
+                return True
+        
+        print(f"🔍 CONVERTING TO STRING: keyword={keyword}, arg will be converted", file=sys.stderr)
+        # For other complex argument structures that might need objects
+        # Add more library-specific logic here as needed
+        
+        return False
+    
+    def _process_object_preserving_arguments(self, args: List[Any]) -> List[Any]:
+        """
+        Handle ObjectPreservingArgument objects for Robot Framework execution.
+        
+        Robot Framework's argument resolver expects named parameters to be handled
+        differently than simple string formatting. For object values, we need to 
+        pass them as separate arguments or use RF's native parameter handling.
+        """
+        from robotmcp.components.variables.variable_resolver import ObjectPreservingArgument
+        
+        processed_args = []
+        
+        for arg in args:
+            if isinstance(arg, ObjectPreservingArgument):
+                # CORRECT APPROACH: For RF execution, we need to preserve the object
+                # and pass it in a way that RF's ArgumentResolver can handle.
+                # Instead of converting to string, we store the object and use a reference
+                # that will be resolved during actual keyword execution.
+                
+                # Store object in temporary session storage for later injection
+                processed_args.append(arg)  # Keep the ObjectPreservingArgument object
+            else:
+                processed_args.append(arg)
+        
+        return processed_args
+    
+    def _store_and_reference_objects(self, args: List[Any], session: Any) -> List[str]:
+        """
+        FINAL SOLUTION: Store ObjectPreservingArgument objects in session and replace with references.
+        
+        This stores the actual objects in the session's temporary storage and replaces
+        them with placeholder references that can be injected back later.
+        """
+        from robotmcp.components.variables.variable_resolver import ObjectPreservingArgument
+        
+        processed_args = []
+        
+        for arg in args:
+            if isinstance(arg, ObjectPreservingArgument):
+                # Create a unique reference ID for this object
+                import uuid
+                ref_id = f"__OBJ_REF_{uuid.uuid4().hex[:8]}"
+                
+                # Store the actual object in session temporary storage
+                if not hasattr(session, '_temp_objects'):
+                    session._temp_objects = {}
+                session._temp_objects[ref_id] = arg.value
+                
+                # Replace with a reference that includes the parameter name
+                processed_args.append(f"{arg.param_name}=${{{ref_id}}}")
+                
+                # Also store the reference in session variables for RF to resolve
+                session.variables[ref_id] = arg.value
+                
+            else:
+                processed_args.append(arg)
+        
+        return processed_args
+    
+    def _inject_objects_for_execution(self, args: List[str], session: Any) -> List[Any]:
+        """
+        FINAL SOLUTION: Inject actual objects directly at execution time.
+        
+        This replaces object reference placeholders with the actual objects
+        right before the keyword is executed, bypassing all the complex
+        variable resolution issues.
+        """
+        # Inject objects for RequestsLibrary and other libraries expecting object parameters
+        final_args = []
+        
+        for arg in args:
+            # Handle URL parameter conversion to positional format
+            if isinstance(arg, str) and arg.startswith('url=') and '${__OBJ_REF_' not in arg:
+                # Convert URL from named to positional for RequestsLibrary
+                url_value = arg[4:]  # Remove 'url=' prefix
+                final_args.append(url_value)
+            elif isinstance(arg, str) and '${__OBJ_REF_' in arg:
+                # This argument contains an object reference - extract and inject the object
+                import re
+                
+                # Find object reference patterns in the argument
+                ref_pattern = r'\$\{(__OBJ_REF_[^}]+)\}'
+                matches = re.findall(ref_pattern, arg)
+                
+                if matches:
+                    # Replace each reference with the actual object
+                    processed_arg = arg
+                    for ref_id in matches:
+                        if hasattr(session, '_temp_objects') and ref_id in session._temp_objects:
+                            actual_object = session._temp_objects[ref_id]
+                            
+                            # If the entire argument is just the reference, replace with the object
+                            if processed_arg == f"${{{ref_id}}}":
+                                final_args.append(actual_object)
+                                break
+                            # If it's a named parameter, inject the object as the value
+                            elif '=' in processed_arg and f"${{{ref_id}}}" in processed_arg:
+                                param_name = processed_arg.split('=')[0]
+                                # Use tuple format for RF named args with objects
+                                final_args.append((param_name, actual_object))
+                                break
+                    else:
+                        # No replacement made, keep as string
+                        final_args.append(arg)
+                else:
+                    final_args.append(arg)
+            else:
+                final_args.append(arg)
+        
+        return final_args
+    
+    def _process_arguments_with_rf_native_resolver(
+        self, 
+        keyword: str, 
+        args: List[Any], 
+        session: Any
+    ) -> List[Any]:
+        """
+        Process arguments using Robot Framework's native ArgumentResolver patterns.
+        
+        This is the general solution that handles:
+        1. ObjectPreservingArgument objects from variable resolution
+        2. Proper argument formatting (named vs positional parameters)
+        3. Type preservation for object parameters
+        
+        This works for ANY library that expects object parameters, not just RequestsLibrary.
+        """
+        from robotmcp.components.variables.variable_resolver import ObjectPreservingArgument
+        
+        processed_args = []
+        
+        for i, arg in enumerate(args):
+            if isinstance(arg, ObjectPreservingArgument):
+                # This is a named parameter with an object value
+                print(f"🔍 PROCESSING OBJECT ARG: {arg.param_name}={arg.value} (type: {type(arg.value).__name__})", file=sys.stderr)
+                
+                # For Robot Framework, we need to handle named parameters properly
+                # The RF ArgumentResolver expects either:
+                # 1. Positional args followed by named args like: ['value1', 'param2=value2']
+                # 2. Or kwargs-style processing
+                
+                # Keep it as named parameter but preserve the object
+                processed_args.append(f"{arg.param_name}={arg.value}")
+                
+            elif isinstance(arg, str) and '=' in arg and arg.count('=') == 1:
+                # This is a string-based named parameter, handle URL parameter specially
+                param_name, param_value = arg.split('=', 1)
+                
+                # For common first positional parameters like 'url', convert to positional
+                if param_name == 'url' and i == 0:  # First argument and it's URL
+                    print(f"🔍 CONVERTING URL TO POSITIONAL: {param_value}", file=sys.stderr)
+                    processed_args.append(param_value)
+                else:
+                    # Keep as named parameter
+                    processed_args.append(arg)
+                    
+            else:
+                # Regular argument (positional or already processed)
+                if not isinstance(arg, str):
+                    # Convert non-string args to string
+                    processed_args.append(str(arg))
+                else:
+                    processed_args.append(arg)
+        
+        return processed_args
+    
+    def _fix_stringified_objects_for_requests_library(
+        self, 
+        keyword: str, 
+        original_args: List[str], 
+        resolved_args: List[str], 
+        session_variables: Dict[str, Any]
+    ) -> List[Any]:
+        """
+        Fix stringified objects and argument format for RequestsLibrary keywords.
+        
+        This fixes two issues:
+        1. Variable resolution converts objects to strings (e.g., json=${body} becomes "json={'key': 'value'}")
+        2. Named parameters need proper formatting for RequestsLibrary (e.g., "url=value" → "value", "json=object" → object)
+        """
+        keyword_lower = keyword.lower()
+        
+        # Only apply this fix for RequestsLibrary keywords that expect object parameters
+        requests_keywords_with_objects = {
+            'post', 'put', 'patch', 'post on session', 'put on session', 'patch on session'
+        }
+        
+        if keyword_lower not in requests_keywords_with_objects:
+            return resolved_args
+        
+        # Get the expected signature for this keyword
+        from robotmcp.utils.rf_native_type_converter import REQUESTS_LIBRARY_SIGNATURES
+        signature = REQUESTS_LIBRARY_SIGNATURES.get(keyword.upper(), [])
+        
+        print(f"🔍 REQUESTS SIGNATURE: {keyword.upper()} → {signature}", file=sys.stderr)
+        
+        fixed_args = []
+        for i, (orig_arg, resolved_arg) in enumerate(zip(original_args, resolved_args)):
+            # Check if this was a named parameter
+            if ('=' in orig_arg and '=' in str(resolved_arg) and
+                orig_arg.count('=') == 1 and str(resolved_arg).count('=') == 1):
+                
+                orig_param_name, orig_param_value = orig_arg.split('=', 1)
+                resolved_param_name, resolved_param_value = str(resolved_arg).split('=', 1)
+                
+                print(f"🔍 PROCESSING PARAM: {orig_param_name}={orig_param_value}", file=sys.stderr)
+                
+                # Handle URL parameter (first positional parameter for session-less methods)
+                if orig_param_name == 'url' and keyword_lower in ['post', 'put', 'patch', 'get', 'delete']:
+                    # URL should be positional, not named
+                    print(f"🔍 CONVERTING URL TO POSITIONAL: {resolved_param_value}", file=sys.stderr)
+                    fixed_args.append(resolved_param_value)
+                    continue
+                
+                # Handle object parameters (json, data)
+                if orig_param_name in ['json', 'data']:
+                    # Check if original was a variable reference that should have been an object
+                    if (orig_param_value.startswith('${') and orig_param_value.endswith('}') and 
+                        '[' not in orig_param_value):
+                        
+                        var_name = orig_param_value[2:-1]  # Remove ${ and }
+                        if var_name in session_variables:
+                            original_value = session_variables[var_name]
+                            
+                            # If the original value is a dict/list but got stringified, restore it
+                            if isinstance(original_value, (dict, list)):
+                                print(f"🔍 RESTORING OBJECT FOR {orig_param_name}: {orig_param_value} → object", file=sys.stderr)
+                                # Keep it as named parameter but with restored object
+                                fixed_args.append(f"{orig_param_name}={original_value}")
+                                continue
+                
+                # Default: keep named parameter as-is
+                fixed_args.append(resolved_arg)
+            else:
+                # Non-named parameter, keep as-is
+                fixed_args.append(resolved_arg)
+        
+        print(f"🔍 FINAL FIXED ARGS: {fixed_args}", file=sys.stderr)
+        return fixed_args
 
     def _extract_browser_state_updates(self, keyword: str, args: List[str], result: Any) -> Dict[str, Any]:
         """Extract state updates from Browser Library keyword execution."""
@@ -883,8 +1308,12 @@ class KeywordExecutor:
                 base_response["assigned_variables"] = result["assigned_variables"]
             
         elif detail_level == "standard":
-            # Serialize session variables to prevent MCP serialization errors
-            serialized_session_vars = self.response_serializer.serialize_assigned_variables(dict(session.variables))
+            # DUAL STORAGE: Keep ORIGINAL objects in session for RF, serialize ONLY for MCP response
+            # Do NOT serialize session.variables as they need to remain original for RF execution
+            session_vars_for_response = {}
+            for var_name, var_value in session.variables.items():
+                # Only serialize for MCP response display, but keep originals in session.variables
+                session_vars_for_response[var_name] = self.response_serializer.serialize_for_response(var_value)
             
             # Serialize output for standard detail level
             raw_output = result.get("output", "")
@@ -892,10 +1321,10 @@ class KeywordExecutor:
             
             base_response.update({
                 "output": serialized_output,
-                "session_variables": serialized_session_vars,
+                "session_variables": session_vars_for_response,  # Serialized for MCP response only
                 "active_library": session.get_active_library()
             })
-            # Include assigned variables in standard detail level
+            # Include assigned variables in standard detail level (serialized for MCP)
             if "assigned_variables" in result:
                 base_response["assigned_variables"] = result["assigned_variables"]
             # Add resolved arguments for debugging if they differ from original (serialized)
@@ -906,8 +1335,11 @@ class KeywordExecutor:
                 base_response["resolved_arguments"] = serialized_resolved_args
             
         elif detail_level == "full":
-            # Serialize session variables to prevent MCP serialization errors
-            serialized_session_vars = self.response_serializer.serialize_assigned_variables(dict(session.variables))
+            # DUAL STORAGE: Keep ORIGINAL objects in session for RF, serialize ONLY for MCP response
+            session_vars_for_response = {}
+            for var_name, var_value in session.variables.items():
+                # Only serialize for MCP response display, but keep originals in session.variables
+                session_vars_for_response[var_name] = self.response_serializer.serialize_for_response(var_value)
             
             # Serialize output for full detail level
             raw_output = result.get("output", "")
@@ -921,7 +1353,7 @@ class KeywordExecutor:
             
             base_response.update({
                 "output": serialized_output,
-                "session_variables": serialized_session_vars,
+                "session_variables": session_vars_for_response,  # Serialized for MCP response only
                 "state_updates": serialized_state_updates,
                 "active_library": session.get_active_library(),
                 "browser_state": {
