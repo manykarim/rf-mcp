@@ -262,6 +262,25 @@ class RobotFrameworkDocStorage:
             
         return list(self.keyword_cache.values())
     
+    def get_keywords_from_libraries(self, library_names: List[str]) -> List[RFKeywordInfo]:
+        """Get keywords from specific libraries in the order provided.
+        
+        Args:
+            library_names: List of library names to get keywords from
+            
+        Returns:
+            List of RFKeywordInfo objects from the specified libraries
+        """
+        if not HAS_LIBDOC:
+            return []
+            
+        keywords = []
+        for library_name in library_names:
+            if library_name in self.libraries:
+                keywords.extend(self.libraries[library_name].keywords.values())
+        
+        return keywords
+    
     def search_keywords(self, pattern: str) -> List[RFKeywordInfo]:
         """Search for keywords matching a pattern."""
         if not HAS_LIBDOC:

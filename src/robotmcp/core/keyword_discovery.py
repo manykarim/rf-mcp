@@ -165,8 +165,8 @@ class KeywordDiscovery:
         
         return keywords_removed
     
-    def find_keyword(self, keyword_name: str, active_library: str = None) -> Optional[KeywordInfo]:
-        """Find a keyword by name with fuzzy matching, optionally filtering by active library."""
+    def find_keyword(self, keyword_name: str, active_library: str = None, session_libraries: List[str] = None) -> Optional[KeywordInfo]:
+        """Find a keyword by name with fuzzy matching, optionally filtering by active library and session libraries."""
         if not keyword_name:
             return None
         
@@ -179,9 +179,45 @@ class KeywordDiscovery:
                 logger.debug(f"Found exact library match: {keyword_name} in {active_library}")
                 return self.keyword_cache[library_specific_key]
         
-        # Create a filtered cache if active_library is specified
+        # PHASE 1: Session-aware keyword filtering
         search_cache = self.keyword_cache
-        if active_library:
+        
+        # Priority 1: Filter by session libraries (if provided)
+        if session_libraries:
+            logger.debug(f"Session-aware keyword filtering for '{keyword_name}' in libraries: {session_libraries}")
+            
+            # Get library priorities for proper ordering
+            from robotmcp.config.library_registry import get_library_config
+            
+            # Sort session libraries by priority (lower number = higher priority)
+            prioritized_libraries = []
+            for lib_name in session_libraries:
+                lib_config = get_library_config(lib_name)
+                priority = lib_config.load_priority if lib_config else 999
+                prioritized_libraries.append((priority, lib_name))
+            
+            sorted_session_libs = [lib for priority, lib in sorted(prioritized_libraries, key=lambda x: x[0])]
+            logger.debug(f"Priority-ordered session libraries: {sorted_session_libs}")
+            
+            # Filter cache to only include session libraries
+            session_filtered_cache = {}
+            for cache_key, keyword_info in self.keyword_cache.items():
+                if keyword_info.library in session_libraries:
+                    session_filtered_cache[cache_key] = keyword_info
+            
+            search_cache = session_filtered_cache
+            logger.debug(f"Session filtering: {len(search_cache)} keywords from session libraries")
+            
+            # Try exact match in session libraries with priority order
+            for lib_name in sorted_session_libs:
+                for cache_key, keyword_info in search_cache.items():
+                    if (keyword_info.library == lib_name and 
+                        keyword_info.name.lower() == normalized):
+                        logger.debug(f"Session-aware exact match: {keyword_name} from {lib_name} (priority {get_library_config(lib_name).load_priority if get_library_config(lib_name) else 999})")
+                        return keyword_info
+        
+        # Priority 2: Filter by active library (if provided and no session libraries)
+        elif active_library:
             # Filter keywords to only include those from the active library or built-in libraries
             builtin_libraries = ['BuiltIn', 'Collections', 'String', 'DateTime', 'OperatingSystem', 'Process']
             filtered_cache = {}
@@ -191,15 +227,7 @@ class KeywordDiscovery:
                     filtered_cache[cache_key] = keyword_info
             
             search_cache = filtered_cache
-            logger.debug(f"Filtering keyword search to library '{active_library}' - {len(search_cache)} keywords available")
-            
-            # Debug: Show which keywords are available for "open browser"
-            open_browser_candidates = [
-                f"{info.library}.{info.name}" for key, info in search_cache.items() 
-                if "open browser" in key or info.name.lower() == "open browser"
-            ]
-            if open_browser_candidates:
-                logger.debug(f"Available 'Open Browser' candidates after filtering: {open_browser_candidates}")
+            logger.debug(f"Active library filtering to '{active_library}' - {len(search_cache)} keywords available")
         
         # Try exact match first (simple key for backward compatibility)
         if normalized in search_cache:

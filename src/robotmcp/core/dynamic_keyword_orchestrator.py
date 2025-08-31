@@ -63,63 +63,126 @@ class DynamicKeywordDiscovery:
         logger.info(f"Initialized {len(self.library_manager.libraries)} libraries with {len(self.keyword_discovery.keyword_cache)} keywords")
     
     # Public API methods
-    def find_keyword(self, keyword_name: str, active_library: str = None) -> Optional[KeywordInfo]:
-        """Find a keyword by name with fuzzy matching, optionally filtering by active library."""
+    def find_keyword(self, keyword_name: str, active_library: str = None, session_libraries: List[str] = None) -> Optional[KeywordInfo]:
+        """Find a keyword by name with fuzzy matching, optionally filtering by active library and session libraries."""
         # Try LibDoc-based storage first if available (more accurate)
         try:
             from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
             rf_doc_storage = get_rf_doc_storage()
             
             if rf_doc_storage.is_available():
-                libdoc_result = self._find_keyword_libdoc(keyword_name, active_library, rf_doc_storage)
+                libdoc_result = self._find_keyword_libdoc(keyword_name, active_library, rf_doc_storage, session_libraries)
                 if libdoc_result:
                     return libdoc_result
         except Exception as e:
             logger.debug(f"LibDoc keyword search failed, falling back to inspection: {e}")
         
-        # Fall back to inspection-based discovery
-        return self.keyword_discovery.find_keyword(keyword_name, active_library)
+        # Fall back to inspection-based discovery with session libraries
+        return self.keyword_discovery.find_keyword(keyword_name, active_library, session_libraries)
     
-    def _find_keyword_libdoc(self, keyword_name: str, active_library: str, rf_doc_storage) -> Optional[KeywordInfo]:
-        """Find keyword using LibDoc storage with library filtering."""
+    def _find_keyword_libdoc(self, keyword_name: str, active_library: str, rf_doc_storage, session_libraries: List[str] = None) -> Optional[KeywordInfo]:
+        """Find keyword using LibDoc storage with session library filtering and priority ordering."""
         if not keyword_name:
             return None
             
-        # Get keywords to search based on active library filter
-        keywords = []
-        
-        if active_library:
-            # CRITICAL FIX: Search in ALL session libraries, not just active_library
-            # This ensures RequestsLibrary keywords are found even when Browser is active
-            logger.debug(f"LibDoc: Active library filter '{active_library}' - searching all session libraries")
+        # PHASE 1 IMPLEMENTATION: Session-aware keyword resolution
+        # Priority 1: Search in session libraries first (if provided)
+        if session_libraries:
+            logger.debug(f"LibDoc: Session-aware search for '{keyword_name}' in libraries: {session_libraries}")
             
-            # Get all keywords from session libraries (includes RequestsLibrary, Browser, etc.)
-            try:
-                keywords.extend(rf_doc_storage.get_all_keywords())
-                logger.debug(f"LibDoc: Found {len(keywords)} total keywords from all libraries")
-            except Exception as e:
-                logger.debug(f"LibDoc: Failed to get all keywords: {e}")
-        else:
-            # Get all keywords when no filter is specified
-            keywords = rf_doc_storage.get_all_keywords()
+            # Get library priorities for proper ordering
+            from robotmcp.config.library_registry import get_library_config
+            
+            # Sort session libraries by priority (lower number = higher priority)
+            prioritized_libraries = []
+            for lib_name in session_libraries:
+                lib_config = get_library_config(lib_name)
+                priority = lib_config.load_priority if lib_config else 999
+                prioritized_libraries.append((priority, lib_name))
+            
+            # Sort by priority and extract library names
+            sorted_session_libs = [lib for priority, lib in sorted(prioritized_libraries, key=lambda x: x[0])]
+            logger.debug(f"LibDoc: Priority-ordered session libraries: {sorted_session_libs}")
+            
+            # Search in session libraries first, respecting priority order
+            session_keywords = rf_doc_storage.get_keywords_from_libraries(sorted_session_libs)
+            
+            # Find exact match in session libraries first (highest priority first)
+            for lib_name in sorted_session_libs:
+                for kw in session_keywords:
+                    if kw.library == lib_name and kw.name.lower() == keyword_name.lower():
+                        logger.debug(f"LibDoc: Found '{keyword_name}' in session library '{lib_name}' (priority {get_library_config(lib_name).load_priority if get_library_config(lib_name) else 999})")
+                        return self._convert_libdoc_to_keyword_info(kw)
+            
+            # Try fuzzy matching in session libraries if no exact match
+            for lib_name in sorted_session_libs:
+                fuzzy_result = self._fuzzy_match_in_library(keyword_name, session_keywords, lib_name)
+                if fuzzy_result:
+                    logger.debug(f"LibDoc: Fuzzy match '{keyword_name}' -> '{fuzzy_result.name}' in session library '{lib_name}'")
+                    return fuzzy_result
+                    
+            logger.debug(f"LibDoc: No match for '{keyword_name}' in session libraries, checking if fallback to global search is needed")
         
-        # Search for exact match first
+        # Priority 2: Fallback to global search only if needed and allowed
+        # This maintains compatibility while prioritizing session libraries
+        if active_library:
+            logger.debug(f"LibDoc: Active library filter '{active_library}' specified, including in global search")
+            
+        # Get all keywords for global fallback (when session libraries don't have the keyword)
+        try:
+            keywords = rf_doc_storage.get_all_keywords()
+            logger.debug(f"LibDoc: Global fallback search - found {len(keywords)} total keywords")
+        except Exception as e:
+            logger.debug(f"LibDoc: Failed to get keywords for global fallback: {e}")
+            return None
+        
+        # Global search for exact match (fallback)
         for kw in keywords:
             if kw.name.lower() == keyword_name.lower():
-                # Convert LibDoc keyword to our KeywordInfo format
-                return KeywordInfo(
-                    name=kw.name,
-                    library=kw.library,
-                    method_name=kw.name.replace(' ', '_').lower(),
-                    doc=kw.doc,
-                    short_doc=kw.short_doc,
-                    args=kw.args,
-                    defaults={},  # LibDoc doesn't provide defaults in same format
-                    tags=kw.tags,
-                    is_builtin=(kw.library in BUILTIN_LIBRARIES)
-                )
+                logger.debug(f"LibDoc: Global fallback found '{keyword_name}' in '{kw.library}'")
+                return self._convert_libdoc_to_keyword_info(kw)
         
-        # Try fuzzy matching with name variations
+        # Global fuzzy matching (fallback)
+        fuzzy_result = self._fuzzy_match_global(keyword_name, keywords)
+        if fuzzy_result:
+            logger.debug(f"LibDoc: Global fuzzy match '{keyword_name}' -> '{fuzzy_result.name}' in '{fuzzy_result.library}'")
+            return fuzzy_result
+        
+        logger.debug(f"LibDoc: No match found for '{keyword_name}' in any library")
+        return None
+    
+    def _convert_libdoc_to_keyword_info(self, kw) -> KeywordInfo:
+        """Convert RF LibDoc keyword to our KeywordInfo format."""
+        return KeywordInfo(
+            name=kw.name,
+            library=kw.library,
+            method_name=kw.name.replace(' ', '_').lower(),
+            doc=kw.doc,
+            short_doc=kw.short_doc,
+            args=kw.args,
+            defaults={},  # LibDoc doesn't provide defaults in same format
+            tags=kw.tags,
+            is_builtin=(kw.library in BUILTIN_LIBRARIES)
+        )
+    
+    def _fuzzy_match_in_library(self, keyword_name: str, keywords: List, target_library: str) -> Optional[KeywordInfo]:
+        """Perform fuzzy matching for a keyword within a specific library."""
+        normalized = keyword_name.lower().strip()
+        variations = [
+            normalized.replace(' ', ''),   # Remove spaces
+            normalized.replace('_', ' '),  # Replace underscores
+            normalized.replace('-', ' '),  # Replace hyphens
+        ]
+        
+        for variation in variations:
+            for kw in keywords:
+                if kw.library == target_library and kw.name.lower().replace(' ', '') == variation:
+                    return self._convert_libdoc_to_keyword_info(kw)
+        
+        return None
+    
+    def _fuzzy_match_global(self, keyword_name: str, keywords: List) -> Optional[KeywordInfo]:
+        """Perform fuzzy matching globally across all keywords."""
         normalized = keyword_name.lower().strip()
         variations = [
             normalized.replace(' ', ''),   # Remove spaces
@@ -130,17 +193,7 @@ class DynamicKeywordDiscovery:
         for variation in variations:
             for kw in keywords:
                 if kw.name.lower().replace(' ', '') == variation:
-                    return KeywordInfo(
-                        name=kw.name,
-                        library=kw.library,
-                        method_name=kw.name.replace(' ', '_').lower(),
-                        doc=kw.doc,
-                        short_doc=kw.short_doc,
-                        args=kw.args,
-                        defaults={},
-                        tags=kw.tags,
-                        is_builtin=(kw.library in BUILTIN_LIBRARIES)
-                    )
+                    return self._convert_libdoc_to_keyword_info(kw)
         
         return None
     
@@ -553,7 +606,23 @@ class DynamicKeywordDiscovery:
                       pattern_lower in info.library.lower()]
     
     def get_keywords_by_library(self, library_name: str) -> List[KeywordInfo]:
-        """Get all keywords from a specific library."""
+        """Get all keywords from a specific library with enhanced validation."""
+        
+        # First, ensure library is loaded
+        if library_name not in self.libraries:
+            logger.warning(f"Library '{library_name}' not loaded for keyword discovery")
+            
+            # Try to load on demand
+            if not self.library_manager.load_library_on_demand(library_name, self.keyword_discovery):
+                logger.error(f"Failed to load library '{library_name}' on demand")
+                return []
+            
+            # Add keywords to cache after loading
+            if library_name in self.libraries:
+                lib_info = self.libraries[library_name]
+                self.keyword_discovery.add_keywords_to_cache(lib_info)
+        
+        # Use enhanced keyword discovery
         return self.keyword_discovery.get_keywords_by_library(library_name)
     
     def get_all_keywords(self) -> List[KeywordInfo]:

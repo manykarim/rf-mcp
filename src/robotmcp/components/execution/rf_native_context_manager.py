@@ -78,11 +78,10 @@ class RobotFrameworkNativeContextManager:
                     variables.current = variables
                     logger.info("Added 'current' attribute to Variables pointing to self for BuiltIn compatibility")
                 
-                # Try the simplest possible approach
-                # Create a basic test suite (this is closer to how RF actually works)
+                # Create a basic test suite with proper output directory setup
                 suite = TestSuite(name=f"MCP_Session_{session_id}")
                 
-                # Set a minimal source path to avoid full_name issues
+                # Set a minimal source path to avoid full_name issues  
                 from pathlib import Path
                 suite.source = Path(f"MCP_Session_{session_id}.robot")
                 
@@ -93,11 +92,24 @@ class RobotFrameworkNativeContextManager:
                 # Create minimal namespace with correct parameter order: variables, suite, resource, languages
                 namespace = Namespace(variables, suite, suite.resource, Languages())
                 
-                # Create simple output (try without settings first)
+                # Create simple output with proper output directory for Browser Library
                 try:
                     from robot.conf import RobotSettings
-                    settings = RobotSettings(output=None)  # Disable actual output
+                    import tempfile
+                    import os
+                    
+                    # Create temporary output directory for Browser Library
+                    temp_output_dir = tempfile.mkdtemp(prefix="rf_mcp_")
+                    
+                    # Create settings with output directory - this fixes Browser Library initialization
+                    settings = RobotSettings(outputdir=temp_output_dir, output=None)
                     output = Output(settings)
+                    
+                    # Set OUTPUTDIR variable for Browser Library compatibility
+                    # Browser Library uses BuiltIn().get_variable_value("${OUTPUTDIR}")
+                    variables["${OUTPUTDIR}"] = temp_output_dir
+                    logger.info(f"Created RF context with output directory: {temp_output_dir}")
+                    logger.info(f"Set ${{OUTPUTDIR}} variable to: {temp_output_dir}")
                 except Exception:
                     # If Output still fails, try a different approach
                     logger.warning("Could not create Output, using minimal logging")
@@ -129,26 +141,42 @@ class RobotFrameworkNativeContextManager:
                 logger.info(f"Importing libraries into RF context: {libraries}")
                 for lib_name in libraries:
                     try:
-                        # Try using namespace's native import_library method
-                        namespace.import_library(lib_name, None, None)
+                        # Use correct Robot Framework namespace.import_library API
+                        # Signature: import_library(self, name, args=(), alias=None, notify=True)
+                        namespace.import_library(lib_name, args=(), alias=None)
                         imported_libraries.append(lib_name)
-                        logger.info(f"Successfully imported {lib_name} into RF context using namespace.import_library")
+                        logger.info(f"Successfully imported {lib_name} into RF context using correct API")
                             
                     except Exception as e:
                         logger.warning(f"Failed to import library {lib_name} into RF context: {e}")
-                        # Try alternative approach - get from library manager if available
+                        logger.warning(f"Import error type: {type(e).__name__}")
+                        import traceback
+                        logger.warning(f"Import traceback: {traceback.format_exc()}")
+                        
+                        # For Browser Library specifically, try to avoid the problematic import
+                        if lib_name == "Browser" and ("list index out of range" in str(e) or "index out of range" in str(e)):
+                            logger.info(f"Skipping Browser Library import due to index error - will try alternative approach")
+                            continue
+                        
+                        # Try alternative approach with library arguments from library manager
                         try:
                             from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
                             orchestrator = get_keyword_discovery()
                             if lib_name in orchestrator.library_manager.libraries:
                                 lib_info = orchestrator.library_manager.libraries[lib_name]
-                                if lib_info.instance:
-                                    # For libraries we already have loaded, try direct import
-                                    namespace.import_library(lib_name, None, None)
-                                    imported_libraries.append(lib_name)
-                                    logger.info(f"Imported {lib_name} from library manager into RF context")
+                                # Try with any library-specific arguments if available
+                                lib_args = getattr(lib_info, 'args', ()) or ()
+                                namespace.import_library(lib_name, args=lib_args, alias=None)
+                                imported_libraries.append(lib_name)
+                                logger.info(f"Imported {lib_name} from library manager with args {lib_args}")
+                            else:
+                                # Library not in manager, try basic import one more time
+                                namespace.import_library(lib_name)
+                                imported_libraries.append(lib_name)
+                                logger.info(f"Imported {lib_name} with basic call")
                         except Exception as fallback_error:
                             logger.warning(f"Fallback import also failed for {lib_name}: {fallback_error}")
+                            logger.warning(f"Fallback error type: {type(fallback_error).__name__}")
 
             # Store context info
             self._session_contexts[session_id] = {

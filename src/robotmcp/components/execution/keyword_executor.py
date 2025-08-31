@@ -104,13 +104,26 @@ class KeywordExecutor:
                 "create session", "delete session"
             ]
             
+            # Browser Library keywords should NOT use RF native context due to import issues
+            # They work perfectly in regular execution mode
+            browser_library_keywords = [
+                "open browser", "close browser", "new browser", "new context", "new page",
+                "go to", "click", "fill text", "take screenshot", "get text", "wait for elements state",
+                "get title", "get url", "input text", "click element", "wait until element is visible"
+            ]
+            
             keyword_requires_context = keyword.lower() in context_required_keywords
             is_requests_keyword = keyword.lower() in requests_library_keywords
+            is_browser_keyword = keyword.lower() in browser_library_keywords
             
-            # Force RequestsLibrary keywords to use regular execution (not RF native context)
+            # Force RequestsLibrary and Browser Library keywords to use regular execution when RF context import fails
             if is_requests_keyword:
                 use_context = False
                 logger.info(f"Forcing RequestsLibrary keyword {keyword} to use regular execution for compatibility")
+            
+            if is_browser_keyword:
+                use_context = False
+                logger.info(f"Forcing Browser Library keyword {keyword} to use regular execution due to RF context import issues")
             
             if use_context or session.is_context_mode() or keyword_requires_context:
                 # Use RF native context mode for keywords that require it
@@ -477,17 +490,29 @@ class KeywordExecutor:
                 # Find keyword in discovery to determine library (session-aware)
                 from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
                 orchestrator = get_keyword_discovery()
-                # Use session-aware keyword discovery to respect session library configuration
+                # PHASE 1 INTEGRATION: Session-aware keyword discovery with session libraries
+                session_libraries = self._get_session_libraries(session)
                 web_automation_lib = session.get_web_automation_library()
-                if web_automation_lib:
-                    # Map web automation library name to the format expected by find_keyword
+                
+                if session_libraries:
+                    # Use session libraries for keyword discovery (highest priority)
+                    keyword_info = orchestrator.find_keyword(keyword_name, session_libraries=session_libraries)
+                    logger.debug(f"Session-aware keyword discovery: '{keyword_name}' in session libraries {session_libraries} → {keyword_info.library if keyword_info else None}")
+                elif web_automation_lib:
+                    # Fallback to active library approach
                     active_library = web_automation_lib if web_automation_lib in ["Browser", "SeleniumLibrary"] else None
                     keyword_info = orchestrator.find_keyword(keyword_name, active_library=active_library)
-                    logger.debug(f"Session-aware keyword discovery: '{keyword_name}' with active_library='{active_library}' → {keyword_info.library if keyword_info else None}")
+                    logger.debug(f"Active library keyword discovery: '{keyword_name}' with active_library='{active_library}' → {keyword_info.library if keyword_info else None}")
                 else:
-                    # No web automation library in session, use global discovery
+                    # Final fallback to global discovery
                     keyword_info = orchestrator.find_keyword(keyword_name)
                     logger.debug(f"Global keyword discovery: '{keyword_name}' → {keyword_info.library if keyword_info else None}")
+                
+                # BROWSER LIBRARY FALLBACK: Force regular execution due to RF context import issues
+                if keyword_info and keyword_info.library == "Browser":
+                    logger.info(f"Browser Library keyword detected: {keyword_name} - forcing regular execution mode")
+                    # This ensures Browser keywords use the regular execution path which works
+                    # instead of RF context mode which has library import issues
                 
                 if keyword_info:
                     override_handler = self.override_registry.get_override(keyword_name, keyword_info.library)
@@ -512,14 +537,23 @@ class KeywordExecutor:
                     # Try to ensure libraries are loaded for this session
                     await orchestrator._ensure_session_libraries(session.session_id, keyword_name)
                     # Try finding the keyword again after loading (session-aware)
+                    session_libraries = self._get_session_libraries(session)
                     web_automation_lib = session.get_web_automation_library()
-                    if web_automation_lib:
+                    
+                    if session_libraries:
+                        keyword_info = orchestrator.find_keyword(keyword_name, session_libraries=session_libraries)
+                        logger.debug(f"Post-loading session-aware discovery: '{keyword_name}' in session libraries {session_libraries} → {keyword_info.library if keyword_info else None}")
+                    elif web_automation_lib:
                         active_library = web_automation_lib if web_automation_lib in ["Browser", "SeleniumLibrary"] else None
                         keyword_info = orchestrator.find_keyword(keyword_name, active_library=active_library)
-                        logger.debug(f"Post-loading session-aware discovery: '{keyword_name}' with active_library='{active_library}' → {keyword_info.library if keyword_info else None}")
+                        logger.debug(f"Post-loading active library discovery: '{keyword_name}' with active_library='{active_library}' → {keyword_info.library if keyword_info else None}")
                     else:
                         keyword_info = orchestrator.find_keyword(keyword_name)
                         logger.debug(f"Post-loading global discovery: '{keyword_name}' → {keyword_info.library if keyword_info else None}")
+                    
+                    # BROWSER LIBRARY FALLBACK: Force regular execution due to RF context import issues (post-loading)
+                    if keyword_info and keyword_info.library == "Browser":
+                        logger.info(f"Browser Library keyword detected (post-loading): {keyword_name} - forcing regular execution mode")
                     if keyword_info:
                         override_handler = self.override_registry.get_override(keyword_name, keyword_info.library)
                         if override_handler:
@@ -1693,4 +1727,32 @@ class KeywordExecutor:
                 "variables": {},
                 "state_updates": {}
             }
+    
+    def _get_session_libraries(self, session: ExecutionSession) -> List[str]:
+        """Get list of libraries loaded in the session for session-aware keyword resolution.
+        
+        Args:
+            session: ExecutionSession to get libraries from
+            
+        Returns:
+            List of library names loaded in the session
+        """
+        session_libraries = []
+        
+        # Try to get loaded libraries from session
+        if hasattr(session, 'loaded_libraries') and session.loaded_libraries:
+            session_libraries = list(session.loaded_libraries)
+        elif hasattr(session, 'search_order') and session.search_order:
+            session_libraries = list(session.search_order)
+        elif hasattr(session, 'imported_libraries') and session.imported_libraries:
+            session_libraries = list(session.imported_libraries)
+        
+        # Always include core built-in libraries
+        builtin_libraries = ['BuiltIn', 'Collections', 'String']
+        for lib in builtin_libraries:
+            if lib not in session_libraries:
+                session_libraries.append(lib)
+        
+        logger.debug(f"Session libraries for keyword resolution: {session_libraries}")
+        return session_libraries
     

@@ -233,19 +233,30 @@ class ExecutionSession:
             
             self.update_activity()
     
-    def _ensure_library_loaded_immediately(self, library_name: str) -> None:
+    def _ensure_library_loaded_immediately(self, library_name: str) -> bool:
         """
-        Ensure library is immediately loaded in LibraryManager when imported to session.
+        Ensure a library is immediately loaded and available for keyword discovery.
         
-        This is the core fix for the keyword resolution issue - libraries are now
-        loaded immediately when imported, ensuring discovery operations work correctly.
+        Enhanced version with better validation and error reporting.
+        
+        Returns:
+            bool: True if library is loaded successfully, False otherwise
         """
         try:
+            # Check if already loaded
+            if hasattr(self, '_session_manager') and self._session_manager:
+                # Get orchestrator through session manager if available
+                execution_coordinator = getattr(self._session_manager, 'execution_coordinator', None)
+                if execution_coordinator and library_name in execution_coordinator.keyword_discovery.libraries:
+                    logger.debug(f"Library '{library_name}' already loaded")
+                    self.loaded_libraries.add(library_name)
+                    return True
+            
             # Get the orchestrator to access library manager
             from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
             orchestrator = get_keyword_discovery()
             
-            # Check if library is already loaded
+            # Check if library is already loaded in orchestrator
             if library_name not in orchestrator.library_manager.libraries:
                 logger.info(f"Loading {library_name} immediately for session {self.session_id} import")
                 
@@ -255,7 +266,7 @@ class ExecutionSession:
                     orchestrator.keyword_discovery
                 )
                 
-                if success:
+                if success and library_name in orchestrator.library_manager.libraries:
                     # Add keywords to cache
                     lib_info = orchestrator.library_manager.libraries[library_name]
                     orchestrator.keyword_discovery.add_keywords_to_cache(lib_info)
@@ -264,17 +275,19 @@ class ExecutionSession:
                     self.loaded_libraries.add(library_name)
                     
                     logger.info(f"Successfully loaded {library_name} immediately for session import")
+                    return True
                 else:
-                    logger.warning(f"Failed to load {library_name} immediately for session import")
+                    logger.error(f"Failed to load {library_name} immediately - library loading failed")
+                    return False
             else:
                 # Already loaded, just mark it in session
                 self.loaded_libraries.add(library_name)
                 logger.debug(f"{library_name} already loaded in LibraryManager")
+                return True
                 
         except Exception as e:
-            # Don't fail the import if library loading fails - log and continue
             logger.error(f"Error loading {library_name} immediately for session {self.session_id}: {e}")
-            # Still allow the import to proceed
+            return False
     
     def get_web_automation_library(self) -> Optional[str]:
         """Get the web automation library imported in this session."""

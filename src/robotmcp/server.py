@@ -35,25 +35,30 @@ async def _ensure_all_session_libraries_loaded():
     """
     Ensure all imported session libraries are loaded in LibraryManager.
     
-    CRITICAL FIX: This addresses the library loading synchronization gap that causes
-    misleading 'keyword not found' errors while keywords actually execute successfully.
+    Enhanced validation to prevent keyword filtering issues and provide better error reporting.
     """
     try:
         session_manager = execution_engine.session_manager
-        # Access sessions directly from the dictionary
         all_sessions = session_manager.sessions.values()
         
         for session in all_sessions:
             for library_name in session.imported_libraries:
-                # Trigger the immediate loading for each imported library
-                session._ensure_library_loaded_immediately(library_name)
+                # Check if library is loaded in the orchestrator
+                if library_name not in execution_engine.keyword_discovery.libraries:
+                    logger.warning(f"Session library '{library_name}' not loaded in orchestrator, attempting to load")
+                    session._ensure_library_loaded_immediately(library_name)
+                    
+                    # Verify loading succeeded
+                    if library_name not in execution_engine.keyword_discovery.libraries:
+                        logger.error(f"Failed to load session library '{library_name}' - may cause keyword filtering issues")
+                else:
+                    logger.debug(f"Session library '{library_name}' already loaded in orchestrator")
                 
-        logger.debug("Ensured all session libraries are loaded for discovery operations")
+        logger.debug("Validated all session libraries are loaded for discovery operations")
         
     except Exception as e:
-        # Don't fail the discovery operation if library loading fails
-        logger.warning(f"Error ensuring session libraries loaded: {e}")
-        # Continue with discovery anyway
+        logger.error(f"Error ensuring session libraries loaded: {e}")
+        # Don't fail the discovery operation, but log the issue for debugging
 
 
 @mcp.tool

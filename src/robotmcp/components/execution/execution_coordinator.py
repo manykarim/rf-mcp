@@ -786,17 +786,48 @@ class ExecutionCoordinator:
         keyword_discovery = self.keyword_executor.keyword_discovery
         
         if library_name:
+            # Validate library is loaded before filtering
+            if library_name not in keyword_discovery.libraries:
+                logger.warning(f"Library '{library_name}' not loaded, attempting on-demand loading")
+                
+                # Try to load the library
+                if not keyword_discovery.library_manager.load_library_on_demand(library_name, keyword_discovery.keyword_discovery):
+                    logger.error(f"Failed to load library '{library_name}' on demand")
+                    return []  # Return empty list if library can't be loaded
+            
             # Get keywords from specific library using LibraryManager
             keywords_from_lib = keyword_discovery.get_keywords_by_library(library_name)
             result = []
             
-            # DEBUG: Test with completely hardcoded data
-            logger.info(f"SERIALIZATION_DEBUG: Returning hardcoded test data")
-            return [
-                {"name": "Open Browser", "library": "SeleniumLibrary"},
-                {"name": "Close Browser", "library": "SeleniumLibrary"},
-                {"name": "Click Element", "library": "SeleniumLibrary"}
-            ]
+            for keyword_info in keywords_from_lib:
+                # Ensure all values are JSON-serializable for MCP protocol
+                keyword_dict = {
+                    "name": str(keyword_info.name),
+                    "library": str(keyword_info.library),
+                    "args": [str(arg) for arg in keyword_info.args],
+                    "short_doc": str(keyword_info.short_doc),
+                    "tags": [str(tag) for tag in keyword_info.tags],
+                    "is_builtin": bool(getattr(keyword_info, 'is_builtin', False))
+                }
+                
+                # Enrich with LibDoc data if available
+                if self.rf_doc_storage.is_available():
+                    try:
+                        libdoc_keywords = self.rf_doc_storage.get_keywords_by_library(library_name)
+                        for libdoc_kw in libdoc_keywords:
+                            if libdoc_kw.name == keyword_info.name:
+                                keyword_dict.update({
+                                    "is_deprecated": libdoc_kw.is_deprecated,
+                                    "arg_types": libdoc_kw.arg_types
+                                })
+                                break
+                    except Exception:
+                        pass  # LibDoc enrichment is optional
+                
+                result.append(keyword_dict)
+            
+            logger.info(f"Retrieved {len(result)} keywords for library '{library_name}'")
+            return result
         else:
             # Get all keywords from all loaded libraries using LibraryManager
             keywords = []

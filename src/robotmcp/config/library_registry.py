@@ -275,7 +275,8 @@ ROBOT_FRAMEWORK_LIBRARIES: Dict[str, LibraryConfig] = {
         categories=[LibraryCategory.MOBILE, LibraryCategory.TESTING],
         installation_command='pip install robotframework-appiumlibrary',
         dependencies=['appium'],
-        load_priority=25
+        load_priority=25,
+        default_enabled=False  # PHASE 3: Disable by default to prevent conflicts with web testing
     ),
     
     'SSHLibrary': LibraryConfig(

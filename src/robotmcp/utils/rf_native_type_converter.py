@@ -414,29 +414,53 @@ class RobotFrameworkNativeConverter:
             logger.debug(f"RF_NATIVE_CONVERTER: Processing args: {args}")
             logger.debug(f"RF_NATIVE_CONVERTER: Session variables: {list(session_variables.keys()) if session_variables else 'None'}")
             
+            # PHASE 1: Get keyword argument specification to validate named arguments
+            keyword_spec = self._get_keyword_argument_spec(keyword_name, library_name)
+            valid_param_names = set()
+            if keyword_spec:
+                # Get all valid parameter names from the keyword specification
+                if hasattr(keyword_spec, 'positional'):
+                    valid_param_names.update(keyword_spec.positional)
+                if hasattr(keyword_spec, 'named_only') and keyword_spec.named_only:
+                    valid_param_names.update(keyword_spec.named_only)
+                if hasattr(keyword_spec, 'positional_or_named') and keyword_spec.positional_or_named:
+                    valid_param_names.update(keyword_spec.positional_or_named)
+                logger.debug(f"Valid parameter names for {keyword_name}: {valid_param_names}")
+            
             for arg in args:
                 if isinstance(arg, tuple) and len(arg) == 2:
                     # Handle ObjectPreservingArgument tuples (already resolved)
                     param_name, param_value = arg
                     named_args[param_name] = param_value
                 elif isinstance(arg, str) and '=' in arg:
-                    # Check if this looks like a named parameter
+                    # CRITICAL FIX: Only treat as named parameter if the parameter name exists in the keyword spec
                     parts = arg.split('=', 1)
                     if len(parts) == 2 and parts[0].strip().isidentifier():
                         param_name = parts[0].strip()
                         param_value_str = parts[1].strip()
                         
-                        # Use RF's native variable resolution on the value part
-                        try:
-                            # This is the key: use RF's replace_scalar for object preservation
-                            resolved_value = variables.replace_scalar(param_value_str)
-                            named_args[param_name] = resolved_value
-                            logger.debug(f"RF native resolution: {param_name}={resolved_value} (type: {type(resolved_value)})")
-                        except Exception as var_error:
-                            logger.debug(f"Variable resolution failed for '{param_value_str}': {var_error}")
-                            named_args[param_name] = param_value_str
+                        # Check if this parameter name is valid for this keyword
+                        if valid_param_names and param_name in valid_param_names:
+                            # Valid named parameter - treat as named argument
+                            try:
+                                resolved_value = variables.replace_scalar(param_value_str)
+                                named_args[param_name] = resolved_value
+                                logger.debug(f"RF named argument: {param_name}={resolved_value} (type: {type(resolved_value)})")
+                            except Exception as var_error:
+                                logger.debug(f"Variable resolution failed for '{param_value_str}': {var_error}")
+                                named_args[param_name] = param_value_str
+                        else:
+                            # Parameter name not in keyword spec OR no spec available - treat as positional
+                            logger.debug(f"'{param_name}' not in valid parameters {valid_param_names} for {keyword_name}, treating '{arg}' as positional")
+                            try:
+                                resolved_arg = variables.replace_scalar(arg)
+                                positional_args.append(resolved_arg)
+                                logger.debug(f"RF positional resolution: '{arg}' -> {resolved_arg} (type: {type(resolved_arg)})")
+                            except Exception as var_error:
+                                logger.debug(f"Variable resolution failed for '{arg}': {var_error}")
+                                positional_args.append(arg)
                     else:
-                        # Not a valid named parameter, treat as positional
+                        # Not a valid named parameter format, treat as positional
                         try:
                             resolved_arg = variables.replace_scalar(arg)
                             positional_args.append(resolved_arg)
@@ -1222,6 +1246,55 @@ class RobotFrameworkNativeConverter:
         
         return analysis
     
+    def _get_keyword_argument_spec(self, keyword_name: str, library_name: Optional[str] = None):
+        """Get Robot Framework ArgumentSpec for a keyword to validate named arguments.
+        
+        This is the general solution using RF's native APIs to get accurate parameter information.
+        
+        Args:
+            keyword_name: Name of the keyword
+            library_name: Optional library name for disambiguation
+            
+        Returns:
+            ArgumentSpec object if found, None otherwise
+        """
+        if not RF_NATIVE_CONVERSION_AVAILABLE:
+            logger.debug(f"RF native APIs not available, cannot get ArgumentSpec for {keyword_name}")
+            return None
+        
+        try:
+            from robot.running.testlibraries import TestLibrary
+            from robot.running.arguments import ArgumentSpec
+            
+            if library_name:
+                # Load library using RF's native TestLibrary
+                test_lib = TestLibrary(library_name)
+                
+                # Find the specific keyword
+                keyword_handler = None
+                for handler in test_lib.handlers:
+                    if handler.name == keyword_name:
+                        keyword_handler = handler
+                        break
+                
+                if keyword_handler and hasattr(keyword_handler, 'arguments'):
+                    # Get the ArgumentSpec from the keyword handler
+                    arguments = keyword_handler.arguments
+                    if hasattr(arguments, 'positional') and hasattr(arguments, 'named_only'):
+                        logger.debug(f"Found ArgumentSpec for {keyword_name} from {library_name}: positional={arguments.positional}, named={getattr(arguments, 'named_only', None)}")
+                        return arguments
+                    else:
+                        logger.debug(f"Invalid ArgumentSpec structure for {keyword_name} from {library_name}")
+                else:
+                    logger.debug(f"No keyword handler found for {keyword_name} in {library_name}")
+            else:
+                logger.debug(f"No library_name provided, cannot get ArgumentSpec for {keyword_name}")
+                
+        except Exception as e:
+            logger.debug(f"Failed to get ArgumentSpec for {keyword_name} from {library_name}: {e}")
+        
+        return None
+    
     def get_appium_locator_guidance(self, error_message: str = None, keyword_name: str = None) -> Dict[str, Any]:
         """
         Provide AppiumLibrary locator strategy guidance for agents.
@@ -1396,3 +1469,52 @@ Handle WebView
             }
         
         return analysis
+    
+    def _get_keyword_argument_spec(self, keyword_name: str, library_name: Optional[str] = None):
+        """Get Robot Framework ArgumentSpec for a keyword to validate named arguments.
+        
+        This is the general solution using RF's native APIs to get accurate parameter information.
+        
+        Args:
+            keyword_name: Name of the keyword
+            library_name: Optional library name for disambiguation
+            
+        Returns:
+            ArgumentSpec object if found, None otherwise
+        """
+        if not RF_NATIVE_CONVERSION_AVAILABLE:
+            logger.debug(f"RF native APIs not available, cannot get ArgumentSpec for {keyword_name}")
+            return None
+        
+        try:
+            from robot.running.testlibraries import TestLibrary
+            from robot.running.arguments import ArgumentSpec
+            
+            if library_name:
+                # Load library using RF's native TestLibrary
+                test_lib = TestLibrary(library_name)
+                
+                # Find the specific keyword
+                keyword_handler = None
+                for handler in test_lib.handlers:
+                    if handler.name == keyword_name:
+                        keyword_handler = handler
+                        break
+                
+                if keyword_handler and hasattr(keyword_handler, 'arguments'):
+                    # Get the ArgumentSpec from the keyword handler
+                    arguments = keyword_handler.arguments
+                    if hasattr(arguments, 'positional') and hasattr(arguments, 'named_only'):
+                        logger.debug(f"Found ArgumentSpec for {keyword_name} from {library_name}: positional={arguments.positional}, named={getattr(arguments, 'named_only', None)}")
+                        return arguments
+                    else:
+                        logger.debug(f"Invalid ArgumentSpec structure for {keyword_name} from {library_name}")
+                else:
+                    logger.debug(f"No keyword handler found for {keyword_name} in {library_name}")
+            else:
+                logger.debug(f"No library_name provided, cannot get ArgumentSpec for {keyword_name}")
+                
+        except Exception as e:
+            logger.debug(f"Failed to get ArgumentSpec for {keyword_name} from {library_name}: {e}")
+        
+        return None
