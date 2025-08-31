@@ -466,7 +466,11 @@ class VariableResolver:
         
         if not remaining:
             # No indexing, just resolve the variable
-            return self._resolve_variable_reference(var_name, variables)
+            # Check if var_name contains method calls or attribute access
+            if self._has_method_call_or_attribute_access_in_name(var_name):
+                return self._evaluate_expression(var_name, variables)
+            else:
+                return self._resolve_variable_reference(var_name, variables)
         
         # Parse multiple index expressions
         indices = []
@@ -499,7 +503,11 @@ class VariableResolver:
             current_pos = end_pos + 1
         
         # Start with the base variable and apply each index in sequence
-        current_value = self._resolve_variable_reference(var_name, variables)
+        # Check if var_name contains method calls or attribute access before resolving
+        if self._has_method_call_or_attribute_access_in_name(var_name):
+            current_value = self._evaluate_expression(var_name, variables)
+        else:
+            current_value = self._resolve_variable_reference(var_name, variables)
         
         for i, index_expr in enumerate(indices):
             try:
@@ -770,6 +778,16 @@ class VariableResolver:
         has_method_call = '(' in content
         has_attribute_access = '.' in content and not content.replace('.', '').isdigit()
         has_internal_indexing = '[' in content and ']' in content
+        
+        return has_method_call or has_attribute_access or has_internal_indexing
+    
+    def _has_method_call_or_attribute_access_in_name(self, var_name: str) -> bool:
+        """Check if a variable name (without ${}) contains method calls or attribute access."""
+        # Check for method calls (contains parentheses), attribute access (contains dots),
+        # or indexing inside the variable name (contains brackets)
+        has_method_call = '(' in var_name
+        has_attribute_access = '.' in var_name and not var_name.replace('.', '').isdigit()
+        has_internal_indexing = '[' in var_name and ']' in var_name
         
         return has_method_call or has_attribute_access or has_internal_indexing
     

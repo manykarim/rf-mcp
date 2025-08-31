@@ -18,6 +18,10 @@ class ExecutionStep:
     result: Optional[Any] = None
     variables: Dict[str, Any] = field(default_factory=dict)
     
+    # Variable assignment tracking for test suite generation
+    assigned_variables: List[str] = field(default_factory=list)  # Variables assigned from this step
+    assignment_type: Optional[str] = None  # "single", "multiple", "none"
+    
     def mark_running(self) -> None:
         """Mark the step as currently running."""
         self.status = "running"

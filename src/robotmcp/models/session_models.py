@@ -124,6 +124,7 @@ class ExecutionSession:
     scenario_text: Optional[str] = None  # Store original scenario for re-analysis
     auto_configured: bool = False  # Track if session was auto-configured
     context_mode: bool = False  # Track if session uses full RF context mode
+    libraries_loaded: bool = False  # Track if session libraries have been loaded into library manager
     
     # Mobile-specific fields
     platform_type: PlatformType = PlatformType.WEB  # Default to web for backward compatibility
@@ -189,10 +190,13 @@ class ExecutionSession:
     
     def import_library(self, library_name: str, force: bool = False) -> None:
         """
-        Mark a library as imported in this session.
+        Mark a library as imported in this session and ensure it's loaded in LibraryManager.
         
         Enforces exclusion rules - Browser Library and SeleniumLibrary cannot
         coexist in the same session, unless force=True is used to switch libraries.
+        
+        CRITICAL FIX: Now triggers immediate library loading to ensure consistency
+        between discovery and execution operations.
         
         Args:
             library_name: Name of the library to import
@@ -223,7 +227,54 @@ class ExecutionSession:
                                 self.imported_libraries.remove(existing_lib)
             
             self.imported_libraries.append(library_name)
+            
+            # CRITICAL FIX: Trigger immediate library loading
+            self._ensure_library_loaded_immediately(library_name)
+            
             self.update_activity()
+    
+    def _ensure_library_loaded_immediately(self, library_name: str) -> None:
+        """
+        Ensure library is immediately loaded in LibraryManager when imported to session.
+        
+        This is the core fix for the keyword resolution issue - libraries are now
+        loaded immediately when imported, ensuring discovery operations work correctly.
+        """
+        try:
+            # Get the orchestrator to access library manager
+            from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
+            orchestrator = get_keyword_discovery()
+            
+            # Check if library is already loaded
+            if library_name not in orchestrator.library_manager.libraries:
+                logger.info(f"Loading {library_name} immediately for session {self.session_id} import")
+                
+                # Load library on demand
+                success = orchestrator.library_manager.load_library_on_demand(
+                    library_name, 
+                    orchestrator.keyword_discovery
+                )
+                
+                if success:
+                    # Add keywords to cache
+                    lib_info = orchestrator.library_manager.libraries[library_name]
+                    orchestrator.keyword_discovery.add_keywords_to_cache(lib_info)
+                    
+                    # Mark as loaded in session
+                    self.loaded_libraries.add(library_name)
+                    
+                    logger.info(f"Successfully loaded {library_name} immediately for session import")
+                else:
+                    logger.warning(f"Failed to load {library_name} immediately for session import")
+            else:
+                # Already loaded, just mark it in session
+                self.loaded_libraries.add(library_name)
+                logger.debug(f"{library_name} already loaded in LibraryManager")
+                
+        except Exception as e:
+            # Don't fail the import if library loading fails - log and continue
+            logger.error(f"Error loading {library_name} immediately for session {self.session_id}: {e}")
+            # Still allow the import to proceed
     
     def get_web_automation_library(self) -> Optional[str]:
         """Get the web automation library imported in this session."""

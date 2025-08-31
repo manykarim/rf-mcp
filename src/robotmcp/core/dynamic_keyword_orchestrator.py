@@ -14,6 +14,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Define builtin libraries constant for keyword classification
+BUILTIN_LIBRARIES = {
+    'BuiltIn', 'Collections', 'DateTime', 'Dialogs', 'OperatingSystem', 
+    'Process', 'Screenshot', 'String', 'Telnet', 'XML'
+}
+
 
 class DynamicKeywordDiscovery:
     """Main orchestrator for dynamic Robot Framework keyword discovery and management."""
@@ -110,7 +116,7 @@ class DynamicKeywordDiscovery:
                     args=kw.args,
                     defaults={},  # LibDoc doesn't provide defaults in same format
                     tags=kw.tags,
-                    is_builtin=(kw.library in builtin_libraries)
+                    is_builtin=(kw.library in BUILTIN_LIBRARIES)
                 )
         
         # Try fuzzy matching with name variations
@@ -133,7 +139,7 @@ class DynamicKeywordDiscovery:
                         args=kw.args,
                         defaults={},
                         tags=kw.tags,
-                        is_builtin=(kw.library in builtin_libraries)
+                        is_builtin=(kw.library in BUILTIN_LIBRARIES)
                     )
         
         return None
@@ -606,6 +612,37 @@ class DynamicKeywordDiscovery:
         return self._parse_arguments(args)
     
     
+    
+    def _get_session_library_loading_info(self, session_id: str = None, active_library: str = None) -> Dict[str, Any]:
+        """
+        Get information about session library loading status for improved error messages.
+        
+        IMPROVEMENT: This helps distinguish between 'keyword not found' vs 'library not loaded' errors.
+        """
+        info = {
+            "has_unloaded_session_libraries": False,
+            "session_libraries": [],
+            "loaded_libraries": [],
+            "active_library": active_library,
+            "session_id": session_id
+        }
+        
+        try:
+            if session_id and self.session_manager:
+                session = self.session_manager.get_session(session_id)
+                if session:
+                    info["session_libraries"] = list(session.imported_libraries)
+                    info["loaded_libraries"] = list(self.library_manager.libraries.keys())
+                    
+                    # Check if session has imported libraries that aren't loaded
+                    unloaded_libs = set(session.imported_libraries) - set(self.library_manager.libraries.keys())
+                    info["has_unloaded_session_libraries"] = len(unloaded_libs) > 0
+                    info["unloaded_libraries"] = list(unloaded_libs)
+                    
+        except Exception as e:
+            logger.debug(f"Error getting session library loading info: {e}")
+            
+        return info
     
     # Library management methods
     def get_library_exclusion_info(self) -> Dict[str, Any]:
@@ -1320,14 +1357,25 @@ class DynamicKeywordDiscovery:
             keyword_info = self._find_keyword_with_session(effective_keyword_name, active_library, session_id)
         
         if not keyword_info:
+            # IMPROVEMENT: Provide more helpful error messages
             if effective_library_prefix:
                 error_msg = f"Keyword '{effective_keyword_name}' not found in library '{effective_library_prefix}'"
+                error_msg += f". Check if {effective_library_prefix} is properly loaded or use execute_step which triggers library loading automatically."
             else:
-                error_msg = f"Keyword '{effective_keyword_name}' not found"
-                if active_library:
-                    error_msg += f" in active library '{active_library}' or built-in libraries"
+                # Check if this might be a library loading issue
+                session_libraries_info = self._get_session_library_loading_info(session_id, active_library)
+                
+                if session_libraries_info.get("has_unloaded_session_libraries"):
+                    error_msg = f"Keyword '{effective_keyword_name}' not found - library loading issue detected"
+                    error_msg += f". Session has imported libraries {session_libraries_info.get('session_libraries', [])} "
+                    error_msg += f"but only {session_libraries_info.get('loaded_libraries', [])} are loaded in LibraryManager. "
+                    error_msg += "Try: 1) Use initialize_context to load libraries, or 2) Libraries should auto-load on import."
                 else:
-                    error_msg += " in any loaded library"
+                    error_msg = f"Keyword '{effective_keyword_name}' not found"
+                    if active_library:
+                        error_msg += f" in active library '{active_library}' or built-in libraries"
+                    else:
+                        error_msg += " in any loaded library"
                 
             # Phase 4: Enhanced error handling and diagnostics
             try:
@@ -1368,9 +1416,22 @@ class DynamicKeywordDiscovery:
             
             # Parse arguments using LibDoc information for accuracy
             # BUGFIX: Convert all arguments to strings before parsing since Robot Framework expects string inputs
+            logger.debug(f"ORCHESTRATOR: Before string conversion, args={args}, types={[type(arg).__name__ for arg in args]}")
             string_args = []
             for arg in args:
                 if not isinstance(arg, str):
+                    # Special handling for tuples from variable resolution (like ('json', {'test': 'value'}))
+                    if isinstance(arg, tuple) and len(arg) == 2:
+                        # This is a named parameter tuple - convert back to name=value format
+                        param_name, param_value = arg
+                        if isinstance(param_name, str) and param_name.isidentifier():
+                            # For named parameters, we need to create a special format that preserves the object
+                            # Use ObjectPreservingArgument format that RF converter can understand
+                            string_args.append(arg)  # Keep the tuple as-is for RF converter
+                            logger.debug(f"Preserving named parameter tuple {arg} for RF converter")
+                            continue
+                    
+                    # Default conversion for other non-string types
                     string_arg = str(arg)
                     logger.debug(f"Converting non-string argument {arg} (type: {type(arg).__name__}) to string '{string_arg}' for RF argument parsing")
                     string_args.append(string_arg)

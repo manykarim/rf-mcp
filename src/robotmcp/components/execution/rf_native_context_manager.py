@@ -123,6 +123,33 @@ class RobotFrameworkNativeContextManager:
                 output = getattr(ctx, 'output', None)
                 suite = ctx.suite
             
+            # Import libraries into the RF namespace
+            imported_libraries = []
+            if libraries:
+                logger.info(f"Importing libraries into RF context: {libraries}")
+                for lib_name in libraries:
+                    try:
+                        # Try using namespace's native import_library method
+                        namespace.import_library(lib_name, None, None)
+                        imported_libraries.append(lib_name)
+                        logger.info(f"Successfully imported {lib_name} into RF context using namespace.import_library")
+                            
+                    except Exception as e:
+                        logger.warning(f"Failed to import library {lib_name} into RF context: {e}")
+                        # Try alternative approach - get from library manager if available
+                        try:
+                            from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
+                            orchestrator = get_keyword_discovery()
+                            if lib_name in orchestrator.library_manager.libraries:
+                                lib_info = orchestrator.library_manager.libraries[lib_name]
+                                if lib_info.instance:
+                                    # For libraries we already have loaded, try direct import
+                                    namespace.import_library(lib_name, None, None)
+                                    imported_libraries.append(lib_name)
+                                    logger.info(f"Imported {lib_name} from library manager into RF context")
+                        except Exception as fallback_error:
+                            logger.warning(f"Fallback import also failed for {lib_name}: {fallback_error}")
+
             # Store context info
             self._session_contexts[session_id] = {
                 "context": ctx,
@@ -131,7 +158,8 @@ class RobotFrameworkNativeContextManager:
                 "output": output,
                 "suite": suite,
                 "created_at": datetime.now(),
-                "libraries": libraries or []
+                "libraries": libraries or [],
+                "imported_libraries": imported_libraries
             }
             
             # Set as active context
@@ -235,6 +263,114 @@ class RobotFrameworkNativeContextManager:
                 "arguments": arguments
             }
     
+    def _execute_any_keyword_generic(self, keyword_name: str, arguments: List[str], namespace) -> Any:
+        """
+        Execute any keyword using Robot Framework's native keyword resolution.
+        
+        This is a generic approach that works with any library and avoids the
+        'Keyword object has no attribute body' issue in RF 7.x by using direct
+        keyword execution instead of run_keyword.
+        """
+        try:
+            # Use RF's native keyword resolution through the namespace
+            # This is the most generic approach that works with any library
+            
+            # Try to resolve the keyword using RF's namespace
+            try:
+                keyword = namespace.get_keyword(keyword_name)
+                if keyword:
+                    logger.info(f"Found keyword '{keyword_name}' via namespace resolution")
+                    
+                    # Execute the keyword directly using its method
+                    if hasattr(keyword, 'method') and callable(keyword.method):
+                        return keyword.method(*arguments)
+                    elif hasattr(keyword, 'run'):
+                        # Some keywords have a run method
+                        return keyword.run(*arguments)
+                    else:
+                        # Fallback: try to get the actual callable
+                        if hasattr(keyword, '_handler') and callable(keyword._handler):
+                            return keyword._handler(*arguments)
+                        elif hasattr(keyword, 'keyword') and callable(keyword.keyword):
+                            return keyword.keyword(*arguments)
+                            
+            except Exception as e:
+                logger.debug(f"Namespace resolution failed for {keyword_name}: {e}")
+            
+            # Fallback: Manual library search
+            from robot.running import EXECUTION_CONTEXTS
+            ctx = EXECUTION_CONTEXTS.current
+            
+            if ctx and hasattr(ctx, 'namespace') and hasattr(ctx.namespace, 'libraries'):
+                # Handle different RF versions - libraries might be dict or other collection
+                libraries = ctx.namespace.libraries
+                if hasattr(libraries, 'items'):
+                    # It's a dict-like object
+                    for lib_name, lib_instance in libraries.items():
+                        try:
+                            self._try_execute_from_library(keyword_name, arguments, lib_name, lib_instance)
+                        except Exception as e:
+                            logger.debug(f"Failed to execute {keyword_name} from {lib_name}: {e}")
+                            continue
+                elif hasattr(libraries, '__iter__'):
+                    # It's an iterable (like odict_values)
+                    for lib_instance in libraries:
+                        if hasattr(lib_instance, '__class__'):
+                            lib_name = lib_instance.__class__.__name__
+                            try:
+                                result = self._try_execute_from_library(keyword_name, arguments, lib_name, lib_instance)
+                                if result is not None:
+                                    return result
+                            except Exception as e:
+                                logger.debug(f"Failed to execute {keyword_name} from {lib_name}: {e}")
+                                continue
+            
+            # If we get here, try the final fallback approach
+            return self._final_fallback_execution(keyword_name, arguments)
+            
+        except Exception as e:
+            logger.error(f"Generic keyword execution failed for {keyword_name}: {e}")
+            raise
+    
+    def _try_execute_from_library(self, keyword_name: str, arguments: List[str], lib_name: str, lib_instance) -> Any:
+        """Try to execute keyword from a specific library instance."""
+        # Check if this library has the keyword
+        if hasattr(lib_instance, keyword_name.replace(' ', '_').lower()):
+            method = getattr(lib_instance, keyword_name.replace(' ', '_').lower())
+            if callable(method):
+                logger.info(f"Executing {keyword_name} from {lib_name} via direct method")
+                return method(*arguments)
+        
+        # Try different naming conventions
+        for method_name in [
+            keyword_name.replace(' ', '_'),
+            keyword_name.replace(' ', '').lower(),
+            keyword_name.lower().replace(' ', '_')
+        ]:
+            if hasattr(lib_instance, method_name):
+                method = getattr(lib_instance, method_name)
+                if callable(method):
+                    logger.info(f"Executing {keyword_name} as {method_name} from {lib_name}")
+                    return method(*arguments)
+        
+        return None
+    
+    def _final_fallback_execution(self, keyword_name: str, arguments: List[str]) -> Any:
+        """Final fallback execution using BuiltIn library."""
+        from robot.libraries.BuiltIn import BuiltIn
+        builtin = BuiltIn()
+        
+        # Check if it's a BuiltIn method
+        method_name = keyword_name.replace(' ', '_').lower()
+        if hasattr(builtin, method_name):
+            method = getattr(builtin, method_name)
+            if callable(method):
+                logger.info(f"Executing {keyword_name} as BuiltIn method")
+                return method(*arguments)
+        
+        # If nothing worked, raise an error
+        raise RuntimeError(f"Keyword '{keyword_name}' could not be resolved or executed")
+    
     def _execute_with_native_resolution(
         self,
         keyword_name: str,
@@ -258,24 +394,9 @@ class RobotFrameworkNativeContextManager:
             
             builtin = BuiltIn()
             
-            # Handle specific keywords directly to avoid run_keyword issues
-            if keyword_name.lower() == "evaluate":
-                if not arguments:
-                    raise ValueError("Evaluate keyword requires an expression argument")
-                result = builtin.evaluate(arguments[0])
-            elif keyword_name.lower() == "set variable":
-                if not arguments:
-                    raise ValueError("Set Variable keyword requires a value argument")
-                result = builtin.set_variable(*arguments)
-            elif keyword_name.lower() == "create dictionary":
-                # Handle dictionary creation properly
-                result = builtin.create_dictionary(*arguments)
-            else:
-                # For other keywords, try BuiltIn.run_keyword
-                if arguments:
-                    result = builtin.run_keyword(keyword_name, *arguments)
-                else:
-                    result = builtin.run_keyword(keyword_name)
+            # Use generic keyword execution approach that works with RF 7.x
+            # Instead of run_keyword, use direct keyword resolution and execution
+            result = self._execute_any_keyword_generic(keyword_name, arguments, namespace)
             
             # Handle variable assignment using RF's native variable system
             assigned_vars = {}

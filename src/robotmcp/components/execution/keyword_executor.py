@@ -97,7 +97,20 @@ class KeywordExecutor:
                 "call method", "run keyword if", "run keyword unless", "run keywords"
             ]
             
+            # RequestsLibrary keywords should NOT use RF native context since they work
+            # perfectly in regular execution mode and RF native context has library import issues
+            requests_library_keywords = [
+                "get", "post", "put", "delete", "patch", "head", "options",
+                "create session", "delete session"
+            ]
+            
             keyword_requires_context = keyword.lower() in context_required_keywords
+            is_requests_keyword = keyword.lower() in requests_library_keywords
+            
+            # Force RequestsLibrary keywords to use regular execution (not RF native context)
+            if is_requests_keyword:
+                use_context = False
+                logger.info(f"Forcing RequestsLibrary keyword {keyword} to use regular execution for compatibility")
             
             if use_context or session.is_context_mode() or keyword_requires_context:
                 # Use RF native context mode for keywords that require it
@@ -166,6 +179,10 @@ class KeywordExecutor:
                     # DUAL STORAGE IMPLEMENTATION:
                     # 1. Store ORIGINAL objects in session variables for RF execution context
                     session.variables.update(assignment_vars)
+                    
+                    # NEW: Store assignment info in ExecutionStep for test suite generation
+                    step.assigned_variables = list(assignment_vars.keys())
+                    step.assignment_type = "multiple" if isinstance(assign_to, list) else "single"
                     
                     # DEBUG: Verify what we actually stored in session variables
                     for var_name, var_value in assignment_vars.items():
@@ -613,8 +630,16 @@ class KeywordExecutor:
             # Create or get RF native context for session
             context_info = self.rf_native_context.get_session_context_info(session_id)
             if not context_info["context_exists"]:
-                # Create RF native context with session's loaded libraries
-                libraries = list(session.loaded_libraries) if hasattr(session, 'loaded_libraries') else []
+                # Create RF native context with session's library search order
+                # Use search_order if available, otherwise try loaded_libraries
+                if hasattr(session, 'search_order') and session.search_order:
+                    libraries = list(session.search_order)
+                elif hasattr(session, 'loaded_libraries') and session.loaded_libraries:
+                    libraries = list(session.loaded_libraries)
+                else:
+                    libraries = []
+                
+                logger.info(f"Creating RF native context with libraries: {libraries}")
                 context_result = self.rf_native_context.create_context_for_session(session_id, libraries)
                 if not context_result.get("success"):
                     logger.error(f"RF native context creation failed: {context_result.get('error')}")
@@ -857,7 +882,7 @@ class KeywordExecutor:
                 print(f"🔍 BUILTIN PATH: {keyword} with args: {args}", file=sys.stderr)
                 print(f"🔍 BUILTIN ARGS TYPES: {[type(arg).__name__ for arg in args]}", file=sys.stderr)
                 try:
-                    processed_args = self.rf_converter.parse_and_convert_arguments(keyword, args, session.session_id)
+                    processed_args = self.rf_converter.parse_and_convert_arguments(keyword, args, library_name=None, session_variables=session.variables)
                     logger.info(f"RF converter processed {keyword} args: {args} → {processed_args}")
                     print(f"🔍 RF CONVERTER SUCCESS: {processed_args}", file=sys.stderr)
                 except Exception as converter_error:

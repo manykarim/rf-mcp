@@ -2,7 +2,7 @@
 
 import logging
 from typing import Any, Dict, List, Optional, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import re
 
@@ -27,6 +27,9 @@ class TestCaseStep:
     keyword: str
     arguments: List[str]
     comment: Optional[str] = None
+    # Variable assignment tracking for test suite generation
+    assigned_variables: List[str] = field(default_factory=list)
+    assignment_type: Optional[str] = None  # "single", "multiple", "none"
 
 @dataclass
 class GeneratedTestCase:
@@ -156,7 +159,10 @@ class TestBuilder:
                                 {
                                     "keyword": step.keyword,
                                     "arguments": [self._escape_robot_argument(arg) for arg in (step.arguments or [])],
-                                    "comment": step.comment
+                                    "comment": step.comment,
+                                    "assigned_variables": step.assigned_variables,
+                                    "assignment_type": step.assignment_type,
+                                    "has_assignment": bool(step.assigned_variables)
                                 } for step in tc.steps
                             ],
                             "setup": {
@@ -217,7 +223,10 @@ class TestBuilder:
                     "keyword": step.keyword,
                     "arguments": step.arguments,
                     "status": step.status,
-                    "step_id": step.step_id
+                    "step_id": step.step_id,
+                    # Include variable assignment information for test suite generation
+                    "assigned_variables": step.assigned_variables,
+                    "assignment_type": step.assignment_type
                 }
                 
                 # Add optional fields if available
@@ -254,6 +263,8 @@ class TestBuilder:
         for step in steps:
             keyword = step.get("keyword", "")
             arguments = step.get("arguments", [])
+            assigned_variables = step.get("assigned_variables", [])
+            assignment_type = step.get("assignment_type")
             
             # Handle import statements separately
             if keyword.lower() == "import library":
@@ -261,8 +272,11 @@ class TestBuilder:
                     imports.add(arguments[0])
                 continue
             
-            # Apply optimizations
-            optimized_step = await self._optimize_step(keyword, arguments, test_steps, session_id)
+            # Apply optimizations with assignment information
+            optimized_step = await self._optimize_step(
+                keyword, arguments, test_steps, session_id,
+                assigned_variables, assignment_type
+            )
             
             if optimized_step:  # Only add if not filtered out by optimization
                 test_steps.append(optimized_step)
@@ -327,7 +341,9 @@ class TestBuilder:
         keyword: str,
         arguments: List[str],
         existing_steps: List[TestCaseStep],
-        session_id: str = None
+        session_id: str = None,
+        assigned_variables: List[str] = None,
+        assignment_type: str = None
     ) -> Optional[TestCaseStep]:
         """Apply optimization rules to a step."""
         
@@ -357,7 +373,9 @@ class TestBuilder:
         return TestCaseStep(
             keyword=keyword,
             arguments=processed_arguments,
-            comment=comment
+            comment=comment,
+            assigned_variables=assigned_variables or [],
+            assignment_type=assignment_type
         )
 
 
@@ -794,7 +812,23 @@ class TestBuilder:
             
             # Test steps
             for step in test_case.steps:
-                step_line = f"    {step.keyword}"
+                # Generate variable assignment syntax if applicable
+                if step.assigned_variables and step.assignment_type:
+                    if step.assignment_type == "single" and len(step.assigned_variables) == 1:
+                        # Single assignment: ${var}    Keyword    args
+                        var_assignment = step.assigned_variables[0]
+                        step_line = f"    {var_assignment}    {step.keyword}"
+                    elif step.assignment_type == "multiple" and len(step.assigned_variables) > 1:
+                        # Multiple assignment: ${var1}    ${var2}    Keyword    args
+                        var_assignments = "    ".join(step.assigned_variables)
+                        step_line = f"    {var_assignments}    {step.keyword}"
+                    else:
+                        # Fallback to standard format
+                        step_line = f"    {step.keyword}"
+                else:
+                    # Standard keyword without assignment
+                    step_line = f"    {step.keyword}"
+                
                 if step.arguments:
                     # Convert locators for consistency if using execution engine
                     processed_args = step.arguments.copy()

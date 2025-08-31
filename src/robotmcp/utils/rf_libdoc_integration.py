@@ -119,6 +119,22 @@ class RobotFrameworkDocStorage:
         if hasattr(kw_doc, 'args') and kw_doc.args:
             args = [str(arg) for arg in kw_doc.args]
             
+            # Check if signature is decorator-masked (e.g., *args, **kwargs)
+            is_decorator_masked = (
+                len(args) <= 2 and 
+                any('*args' in arg or '**kwargs' in arg for arg in args)
+            )
+            
+            # If decorator-masked, try hybrid signature extraction
+            if is_decorator_masked:
+                try:
+                    hybrid_args = self._extract_hybrid_signature(kw_doc.name, library_name)
+                    if hybrid_args and len(hybrid_args) > 2:
+                        args = hybrid_args
+                        logger.debug(f"Used hybrid extraction for {kw_doc.name}: {args}")
+                except Exception as e:
+                    logger.debug(f"Hybrid extraction failed for {kw_doc.name}: {e}")
+            
         if hasattr(kw_doc, 'arg_types') and kw_doc.arg_types:
             arg_types = [str(arg_type) for arg_type in kw_doc.arg_types]
         
@@ -285,6 +301,159 @@ class RobotFrameworkDocStorage:
                 return None
         
         return keyword_info
+    
+    def _extract_hybrid_signature(self, keyword_name: str, library_name: str) -> Optional[List[str]]:
+        """
+        Extract keyword signature using hybrid RF native + closure inspection approach.
+        
+        For decorated keywords showing *args, **kwargs, tries to extract the original
+        signature using Robot Framework's TestLibrary and closure inspection.
+        """
+        try:
+            from robot.running.testlibraries import TestLibrary
+            
+            # Load library using Robot Framework's native TestLibrary
+            lib = TestLibrary.from_name(library_name)
+            
+            # Find the keyword
+            keyword_obj = None
+            for kw in lib.keywords:
+                if kw.name == keyword_name:
+                    keyword_obj = kw
+                    break
+            
+            if not keyword_obj or not hasattr(keyword_obj, 'args'):
+                return None
+            
+            args_spec = keyword_obj.args
+            
+            # Check if this is a decorated keyword (generic *args, **kwargs)
+            if self._is_decorated_keyword(args_spec):
+                # Use closure inspection for decorated keywords
+                return self._extract_from_closure(keyword_obj, keyword_name, library_name)
+            else:
+                # Use native RF ArgumentSpec for non-decorated keywords
+                return self._extract_from_argumentspec(args_spec)
+        
+        except Exception as e:
+            logger.debug(f"Hybrid signature extraction failed for {keyword_name}: {e}")
+            return None
+    
+    def _is_decorated_keyword(self, args_spec) -> bool:
+        """
+        Detect if keyword is decorated by checking for generic signature pattern.
+        
+        Decorated keywords show:
+        - var_positional = 'args' 
+        - var_named = 'kwargs'
+        - positional_or_named = () (empty)
+        """
+        return (
+            args_spec.var_positional == 'args' and
+            args_spec.var_named == 'kwargs' and 
+            len(args_spec.positional_or_named) == 0
+        )
+    
+    def _extract_from_argumentspec(self, args_spec) -> List[str]:
+        """Extract signature from RF ArgumentSpec (for non-decorated keywords)."""
+        signature = []
+        
+        # Required positional args (no defaults)
+        required_positional = []
+        for name in args_spec.positional:
+            if name not in args_spec.defaults:
+                required_positional.append(name)
+        
+        # Args with defaults (can be positional or named)
+        optional_args = []
+        for name in args_spec.positional_or_named:
+            if name in args_spec.defaults:
+                default = args_spec.defaults[name]
+                optional_args.append(f"{name}={default}")
+            elif name not in required_positional:  # Not already added as required
+                optional_args.append(name)
+        
+        # Combine in order: required positional, optional, *args, **kwargs
+        signature.extend(required_positional)
+        signature.extend(optional_args)
+        
+        # Add *args if present
+        if args_spec.var_positional:
+            signature.append(f"*{args_spec.var_positional}")
+        
+        # Add **kwargs if present
+        if args_spec.var_named:
+            signature.append(f"**{args_spec.var_named}")
+        
+        return signature
+    
+    def _extract_from_closure(self, keyword_obj, keyword_name: str, library_name: str) -> Optional[List[str]]:
+        """Extract signature from method closure (for decorated keywords)."""
+        try:
+            # Check different possible attributes for the handler function
+            handler = None
+            if hasattr(keyword_obj, 'method'):
+                handler = keyword_obj.method
+            elif hasattr(keyword_obj, '_handler'):
+                handler = keyword_obj._handler
+            elif hasattr(keyword_obj, 'handler'):
+                handler = keyword_obj.handler
+            
+            if not handler:
+                return None
+            
+            # For RequestsLibrary, try to find the original function in closure
+            if library_name == "RequestsLibrary" and hasattr(handler, '__closure__') and handler.__closure__:
+                
+                # Map keyword names to method names
+                keyword_to_method = {
+                    "POST On Session": "post_on_session",
+                    "POST": "session_less_post",
+                    "GET On Session": "get_on_session", 
+                    "GET": "session_less_get",
+                    "PUT On Session": "put_on_session",
+                    "PUT": "session_less_put",
+                    "PATCH On Session": "patch_on_session",
+                    "PATCH": "session_less_patch",
+                    "DELETE On Session": "delete_on_session",
+                    "DELETE": "session_less_delete",
+                }
+                
+                method_name = keyword_to_method.get(keyword_name)
+                if method_name:
+                    
+                    for cell in handler.__closure__:
+                        try:
+                            content = cell.cell_contents
+                            if (callable(content) and 
+                                hasattr(content, '__name__') and 
+                                content.__name__ == method_name):
+                                
+                                import inspect
+                                original_sig = inspect.signature(content)
+                                
+                                # Convert to signature args format
+                                signature_args = []
+                                for name, param in original_sig.parameters.items():
+                                    if name != 'self':
+                                        if param.kind == inspect.Parameter.VAR_KEYWORD:
+                                            signature_args.append(f"**{name}")
+                                        elif param.kind == inspect.Parameter.VAR_POSITIONAL:
+                                            signature_args.append(f"*{name}")
+                                        elif param.default is param.empty:
+                                            signature_args.append(name)
+                                        else:
+                                            signature_args.append(f"{name}={param.default}")
+                                
+                                return signature_args
+                                
+                        except Exception:
+                            continue
+        
+        except Exception as e:
+            logger.debug(f"Closure inspection failed for {keyword_name}: {e}")
+        
+        return None
     
     def refresh_library(self, library_name: str) -> bool:
         """Refresh documentation for a specific library."""

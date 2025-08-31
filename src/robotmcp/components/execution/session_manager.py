@@ -333,6 +333,9 @@ class SessionManager:
             "is_mobile": session.is_mobile_session(),
             "current_url": session.browser_state.current_url,
             "browser_type": session.browser_state.browser_type,
+            "libraries_loaded": getattr(session, 'libraries_loaded', False),
+            "search_order": getattr(session, 'search_order', []),
+            "loaded_libraries": list(getattr(session, 'loaded_libraries', set())),
         }
         
         # Add mobile-specific info if applicable

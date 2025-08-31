@@ -30,6 +30,32 @@ test_builder = TestBuilder(execution_engine)
 mobile_capability_service = MobileCapabilityService()
 
 
+# Helper functions
+async def _ensure_all_session_libraries_loaded():
+    """
+    Ensure all imported session libraries are loaded in LibraryManager.
+    
+    CRITICAL FIX: This addresses the library loading synchronization gap that causes
+    misleading 'keyword not found' errors while keywords actually execute successfully.
+    """
+    try:
+        session_manager = execution_engine.session_manager
+        # Access sessions directly from the dictionary
+        all_sessions = session_manager.sessions.values()
+        
+        for session in all_sessions:
+            for library_name in session.imported_libraries:
+                # Trigger the immediate loading for each imported library
+                session._ensure_library_loaded_immediately(library_name)
+                
+        logger.debug("Ensured all session libraries are loaded for discovery operations")
+        
+    except Exception as e:
+        # Don't fail the discovery operation if library loading fails
+        logger.warning(f"Error ensuring session libraries loaded: {e}")
+        # Continue with discovery anyway
+
+
 @mcp.tool
 async def analyze_scenario(
     scenario: str, context: str = "web", session_id: str = None
@@ -489,11 +515,26 @@ async def get_library_status(library_name: str) -> Dict[str, Any]:
 
 
 @mcp.tool
+async def test_simple_list() -> List[Dict[str, Any]]:
+    """Test tool to verify MCP serialization works."""
+    return [{"test": "value1"}, {"test": "value2"}]
+
+
+@mcp.tool
+async def test_simple_dict() -> Dict[str, Any]:
+    """Test tool to verify MCP dict serialization works."""
+    return {"test": "single_value", "count": 123}
+
+
+@mcp.tool
 async def get_available_keywords(library_name: str = None) -> List[Dict[str, Any]]:
     """Get available Robot Framework keywords with native RF libdoc short documentation, optionally filtered by library.
 
     Uses Robot Framework's native libdoc API to provide accurate short_doc, argument types, and metadata.
     Falls back to inspection-based discovery if libdoc is not available.
+
+    CRITICAL FIX: Now ensures all session libraries are loaded before discovery to fix
+    keyword resolution synchronization issue.
 
     NOTE: This tool initializes library discovery and can be used as a fallback if you need to call
     check_library_availability without following the recommended 3-step workflow.
@@ -514,6 +555,9 @@ async def get_available_keywords(library_name: str = None) -> List[Dict[str, Any
 
     Related tools: Use analyze_scenario → recommend_libraries → check_library_availability for optimal workflow.
     """
+    # CRITICAL FIX: Ensure all session libraries are loaded before discovery
+    await _ensure_all_session_libraries_loaded()
+    
     return execution_engine.get_available_keywords(library_name)
 
 
@@ -524,6 +568,8 @@ async def search_keywords(pattern: str) -> List[Dict[str, Any]]:
     Uses Robot Framework's native libdoc API for accurate search results and documentation.
     Searches through keyword names, documentation, short_doc, and tags.
 
+    CRITICAL FIX: Now ensures all session libraries are loaded before search.
+
     Args:
         pattern: Search pattern to match against keyword names, documentation, or tags
 
@@ -531,6 +577,9 @@ async def search_keywords(pattern: str) -> List[Dict[str, Any]]:
         List of matching keywords with native RF libdoc metadata including short_doc,
         argument types, deprecation status, and enhanced tag information.
     """
+    # CRITICAL FIX: Ensure all session libraries are loaded before search
+    await _ensure_all_session_libraries_loaded()
+    
     return execution_engine.search_keywords(pattern)
 
 

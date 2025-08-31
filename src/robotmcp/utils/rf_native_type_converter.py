@@ -8,25 +8,8 @@ from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
 
 logger = logging.getLogger(__name__)
 
-# RequestsLibrary signature cache (extracted from original decorated methods)
-REQUESTS_LIBRARY_SIGNATURES = {
-    # Session management
-    "Create Session": ["alias", "url", "headers=None", "cookies=None", "auth=None", "timeout=None", "proxies=None", "verify=False", "debug=0", "max_retries=3", "backoff_factor=0.1", "disable_warnings=0", "retry_status_list=[]", "retry_method_list=['PUT', 'DELETE', 'OPTIONS', 'HEAD', 'GET', 'TRACE']"],
-    
-    # Session-based methods
-    "GET On Session": ["alias", "url", "params=None", "expected_status=None", "msg=None"],
-    "POST On Session": ["alias", "url", "data=None", "json=None", "expected_status=None", "msg=None"],
-    "PUT On Session": ["alias", "url", "data=None", "json=None", "expected_status=None", "msg=None"],
-    "PATCH On Session": ["alias", "url", "data=None", "json=None", "expected_status=None", "msg=None"],
-    "DELETE On Session": ["alias", "url", "expected_status=None", "msg=None"],
-    
-    # Session-less methods (direct URL calls)
-    "GET": ["url", "params=None", "expected_status=None", "msg=None", "**kwargs"],
-    "POST": ["url", "data=None", "json=None", "params=None", "expected_status=None", "msg=None", "**kwargs"],
-    "PUT": ["url", "data=None", "json=None", "params=None", "expected_status=None", "msg=None", "**kwargs"],
-    "PATCH": ["url", "data=None", "json=None", "params=None", "expected_status=None", "msg=None", "**kwargs"],
-    "DELETE": ["url", "params=None", "expected_status=None", "msg=None", "**kwargs"],
-}
+# Note: Hardcoded REQUESTS_LIBRARY_SIGNATURES cache removed
+# Now using Robot Framework native APIs with hybrid extraction approach
 
 # SeleniumLibrary locator strategies for error guidance
 SELENIUM_LOCATOR_STRATEGIES = {
@@ -91,58 +74,217 @@ class RobotFrameworkNativeConverter:
     
     def _extract_requests_library_signature(self, keyword_name: str, library_name: str = None) -> Optional[List[str]]:
         """
-        Extract original signature for RequestsLibrary decorated methods.
+        Extract keyword signature using Robot Framework native APIs.
         
-        RequestsLibrary methods are decorated with @warn_if_equal_symbol_in_url_on_session
-        which masks their real signatures from LibDoc. This method recovers the original
-        signatures by examining decorator closures or using cached signature information.
+        Uses hybrid approach:
+        1. Native RF ArgumentSpec for non-decorated keywords
+        2. Closure inspection for decorated keywords  
+        3. No hardcoded cache dependency
         """
-        # First check if we have cached signature for this keyword
-        if library_name == "RequestsLibrary" and keyword_name in REQUESTS_LIBRARY_SIGNATURES:
-            logger.debug(f"Using cached signature for RequestsLibrary.{keyword_name}")
-            return REQUESTS_LIBRARY_SIGNATURES[keyword_name]
+        return self._extract_keyword_signature_hybrid(keyword_name, library_name)
+
+    def _extract_keyword_signature_hybrid(self, keyword_name: str, library_name: str = None) -> Optional[List[str]]:
+        """
+        Hybrid signature extraction using RF native APIs with closure fallback.
         
-        # Try to extract from actual method via decorator closure
+        This is the general solution that works with any Robot Framework library:
+        1. Load library using RF native TestLibrary
+        2. Check if keyword uses native ArgumentSpec or is decorated
+        3. Extract using appropriate method
+        """
+        if not library_name:
+            return None
+            
         try:
-            if library_name == "RequestsLibrary":
-                from RequestsLibrary import RequestsLibrary
-                import inspect
+            # Load library using Robot Framework's native TestLibrary
+            from robot.running.testlibraries import TestLibrary
+            
+            lib = TestLibrary.from_name(library_name)
+            
+            # Find the keyword in the library
+            keyword_obj = None
+            for kw in lib.keywords:
+                if kw.name == keyword_name:
+                    keyword_obj = kw
+                    break
+            
+            if not keyword_obj:
+                logger.debug(f"Keyword '{keyword_name}' not found in library '{library_name}'")
+                return None
+            
+            if not hasattr(keyword_obj, 'args'):
+                logger.debug(f"Keyword '{keyword_name}' has no args attribute")
+                return None
                 
-                rf_lib = RequestsLibrary()
-                method_name = keyword_name.lower().replace(' ', '_')
+            args_spec = keyword_obj.args
+            
+            # Check if this is a decorated keyword (shows generic *args, **kwargs)
+            if self._is_decorated_keyword(args_spec):
+                logger.debug(f"Detected decorated keyword '{keyword_name}' - using closure inspection")
+                return self._extract_from_closure(keyword_obj, keyword_name, library_name)
+            else:
+                logger.debug(f"Detected native keyword '{keyword_name}' - using ArgumentSpec")
+                return self._extract_from_argumentspec(args_spec)
                 
-                if hasattr(rf_lib, method_name):
-                    method = getattr(rf_lib, method_name)
-                    
-                    # Extract original signature from decorator closure
-                    if hasattr(method, '__closure__') and method.__closure__:
-                        for cell in method.__closure__:
-                            try:
-                                content = cell.cell_contents
-                                if (callable(content) and 
-                                    hasattr(content, '__name__') and 
-                                    content.__name__ == method_name):
-                                    
-                                    original_sig = inspect.signature(content)
-                                    # Convert to signature args format
-                                    signature_args = []
-                                    for name, param in original_sig.parameters.items():
-                                        if name != 'self':
-                                            if param.default is param.empty:
-                                                signature_args.append(name)
-                                            else:
-                                                signature_args.append(f"{name}={param.default}")
-                                    
-                                    logger.debug(f"Extracted signature for {keyword_name}: {signature_args}")
-                                    return signature_args
-                                    
-                            except Exception as cell_error:
-                                logger.debug(f"Error examining closure cell: {cell_error}")
-                                continue
-                                
         except Exception as e:
-            logger.debug(f"Error extracting RequestsLibrary signature for {keyword_name}: {e}")
+            logger.debug(f"Error in hybrid extraction for {keyword_name}: {e}")
+            return None
+
+    def _is_decorated_keyword(self, args_spec) -> bool:
+        """
+        Detect if keyword is decorated by checking ArgumentSpec pattern.
         
+        Decorated keywords show:
+        - var_positional = 'args' 
+        - var_named = 'kwargs'
+        - positional_or_named = () (empty)
+        
+        This indicates the original signature is masked by decoration.
+        """
+        try:
+            return (
+                args_spec.var_positional == 'args' and
+                args_spec.var_named == 'kwargs' and 
+                len(args_spec.positional_or_named) == 0
+            )
+        except Exception:
+            return False
+
+    def _extract_from_argumentspec(self, args_spec) -> List[str]:
+        """
+        Extract signature from Robot Framework's native ArgumentSpec.
+        
+        This works for non-decorated keywords and provides full signature details
+        including positional args, named args, defaults, *args, and **kwargs.
+        """
+        signature = []
+        
+        try:
+            # Required positional args (no defaults)
+            required_positional = []
+            for name in args_spec.positional:
+                if name not in args_spec.defaults:
+                    required_positional.append(name)
+            
+            # Args with defaults (can be positional or named)
+            optional_args = []
+            for name in args_spec.positional_or_named:
+                if name in args_spec.defaults:
+                    default = args_spec.defaults[name]
+                    optional_args.append(f"{name}={default}")
+                elif name not in required_positional:  # Not already added as required
+                    optional_args.append(name)
+            
+            # Combine in order: required positional, optional, *args, **kwargs
+            signature.extend(required_positional)
+            signature.extend(optional_args)
+            
+            # Add *args if present
+            if args_spec.var_positional:
+                signature.append(f"*{args_spec.var_positional}")
+            
+            # Add **kwargs if present
+            if args_spec.var_named:
+                signature.append(f"**{args_spec.var_named}")
+            
+            logger.debug(f"Native ArgumentSpec extraction result: {signature}")
+            return signature
+            
+        except Exception as e:
+            logger.debug(f"Error extracting from ArgumentSpec: {e}")
+            return []
+
+    def _extract_from_closure(self, keyword_obj, keyword_name: str, library_name: str) -> Optional[List[str]]:
+        """
+        Extract signature from decorated keyword using closure inspection.
+        
+        This is only used when ArgumentSpec shows generic *args, **kwargs
+        due to decoration masking the real signature.
+        """
+        try:
+            # Check different possible attributes for the handler function
+            handler = None
+            if hasattr(keyword_obj, 'method'):
+                handler = keyword_obj.method
+            elif hasattr(keyword_obj, '_handler'):
+                handler = keyword_obj._handler
+            elif hasattr(keyword_obj, 'handler'):
+                handler = keyword_obj.handler
+            
+            if not handler:
+                return None
+            
+            # For RequestsLibrary, use existing closure inspection logic
+            if library_name == "RequestsLibrary" and hasattr(handler, '__closure__') and handler.__closure__:
+                return self._extract_requestslibrary_from_closure(handler, keyword_name)
+            
+            # For other libraries, could extend closure inspection here
+            # but most libraries don't use decorators that mask signatures
+            
+        except Exception as e:
+            logger.debug(f"Error in closure extraction: {e}")
+            
+        return None
+
+    def _extract_requestslibrary_from_closure(self, handler, keyword_name: str) -> Optional[List[str]]:
+        """
+        Extract RequestsLibrary signature from closure using existing logic.
+        
+        This maintains the current working closure inspection for RequestsLibrary
+        decorated methods while making it part of the hybrid system.
+        """
+        try:
+            import inspect
+            
+            # Map keyword names to actual method names  
+            keyword_to_method = {
+                "POST On Session": "post_on_session",
+                "POST": "session_less_post",
+                "GET On Session": "get_on_session", 
+                "GET": "session_less_get",
+                "PUT On Session": "put_on_session",
+                "PUT": "session_less_put",
+                "PATCH On Session": "patch_on_session",
+                "PATCH": "session_less_patch",
+                "DELETE On Session": "delete_on_session",
+                "DELETE": "session_less_delete",
+            }
+            
+            method_name = keyword_to_method.get(keyword_name)
+            if not method_name:
+                return None
+            
+            # Extract from closure cells
+            for cell in handler.__closure__:
+                try:
+                    content = cell.cell_contents
+                    if (callable(content) and 
+                        hasattr(content, '__name__') and 
+                        content.__name__ == method_name):
+                        
+                        original_sig = inspect.signature(content)
+                        # Convert to signature args format
+                        signature_args = []
+                        for name, param in original_sig.parameters.items():
+                            if name != 'self':
+                                if param.kind == inspect.Parameter.VAR_KEYWORD:
+                                    signature_args.append(f"**{name}")
+                                elif param.kind == inspect.Parameter.VAR_POSITIONAL:
+                                    signature_args.append(f"*{name}")
+                                elif param.default is param.empty:
+                                    signature_args.append(name)
+                                else:
+                                    signature_args.append(f"{name}={param.default}")
+                        
+                        logger.debug(f"Closure extraction for {keyword_name}: {signature_args}")
+                        return signature_args
+                        
+                except Exception as cell_error:
+                    continue
+                    
+        except Exception as e:
+            logger.debug(f"RequestsLibrary closure extraction error: {e}")
+            
         return None
     
     def _is_dictionary_literal(self, arg_str: str) -> bool:
@@ -193,6 +335,15 @@ class RobotFrameworkNativeConverter:
                 # CORRECT FIX: Return a special format that preserves the object
                 # This will be handled by the argument resolution system properly
                 processed_args.append((arg.param_name, arg.value))
+            elif isinstance(arg, tuple) and len(arg) == 2:
+                # Handle named parameter tuples (like ('json', {'test': 'value'}))
+                param_name, param_value = arg
+                if isinstance(param_name, str) and param_name.isidentifier():
+                    # Preserve the tuple as-is for named parameter handling
+                    processed_args.append(arg)
+                else:
+                    # Not a valid named parameter tuple, convert to string
+                    processed_args.append(str(arg))
             else:
                 processed_args.append(str(arg) if not isinstance(arg, str) else arg)
         
@@ -252,54 +403,66 @@ class RobotFrameworkNativeConverter:
             else:
                 logger.debug(f"No session variables provided for {keyword_name}")
             
-            resolved_args = []
+            # Use Robot Framework's native argument resolution approach
+            # Instead of custom logic, let RF handle variable resolution and argument parsing
+            
+            # For named arguments like "json=${body}", we need to parse them properly
+            # RF's approach is to separate the name and value, then resolve variables
+            positional_args = []
+            named_args = {}
+            
+            logger.debug(f"RF_NATIVE_CONVERTER: Processing args: {args}")
+            logger.debug(f"RF_NATIVE_CONVERTER: Session variables: {list(session_variables.keys()) if session_variables else 'None'}")
+            
             for arg in args:
                 if isinstance(arg, tuple) and len(arg) == 2:
                     # Handle ObjectPreservingArgument tuples (already resolved)
                     param_name, param_value = arg
-                    resolved_args.append(f"{param_name}={param_value}")
-                elif isinstance(arg, str) and '${' in arg:
-                    # This is where the fix happens - use RF's native variable resolution
-                    try:
-                        resolved_arg = variables.replace_string(arg)
-                        resolved_args.append(resolved_arg)
-                        logger.debug(f"RF variable resolution: '{arg}' -> '{resolved_arg}'")
-                    except Exception as var_error:
-                        logger.debug(f"Variable resolution failed for '{arg}': {var_error}")
-                        resolved_args.append(str(arg))
+                    named_args[param_name] = param_value
+                elif isinstance(arg, str) and '=' in arg:
+                    # Check if this looks like a named parameter
+                    parts = arg.split('=', 1)
+                    if len(parts) == 2 and parts[0].strip().isidentifier():
+                        param_name = parts[0].strip()
+                        param_value_str = parts[1].strip()
+                        
+                        # Use RF's native variable resolution on the value part
+                        try:
+                            # This is the key: use RF's replace_scalar for object preservation
+                            resolved_value = variables.replace_scalar(param_value_str)
+                            named_args[param_name] = resolved_value
+                            logger.debug(f"RF native resolution: {param_name}={resolved_value} (type: {type(resolved_value)})")
+                        except Exception as var_error:
+                            logger.debug(f"Variable resolution failed for '{param_value_str}': {var_error}")
+                            named_args[param_name] = param_value_str
+                    else:
+                        # Not a valid named parameter, treat as positional
+                        try:
+                            resolved_arg = variables.replace_scalar(arg)
+                            positional_args.append(resolved_arg)
+                            logger.debug(f"RF positional resolution: '{arg}' -> {resolved_arg} (type: {type(resolved_arg)})")
+                        except Exception as var_error:
+                            logger.debug(f"Variable resolution failed for '{arg}': {var_error}")
+                            positional_args.append(arg)
                 else:
-                    resolved_args.append(str(arg) if not isinstance(arg, str) else arg)
+                    # Positional argument
+                    if isinstance(arg, str) and '${' in arg:
+                        try:
+                            resolved_arg = variables.replace_scalar(arg)
+                            positional_args.append(resolved_arg)
+                            logger.debug(f"RF positional resolution: '{arg}' -> {resolved_arg} (type: {type(resolved_arg)})")
+                        except Exception as var_error:
+                            logger.debug(f"Variable resolution failed for '{arg}': {var_error}")
+                            positional_args.append(arg)
+                    else:
+                        positional_args.append(arg)
             
-            # Step 2: Parse named parameters from resolved strings
-            # This handles cases like "headers={'key': 'value'}" -> param_name="headers", value={'key': 'value'}
-            final_positional = []
-            final_named = {}
-            
-            for arg_str in resolved_args:
-                if isinstance(arg_str, str) and '=' in arg_str and self._looks_like_named_parameter(arg_str):
-                    param_name, param_value_str = arg_str.split('=', 1)
-                    param_name = param_name.strip()
-                    param_value_str = param_value_str.strip()
-                    
-                    # Try to parse the value as a Python literal (dict, list, etc.)
-                    try:
-                        import ast
-                        param_value = ast.literal_eval(param_value_str)
-                        final_named[param_name] = param_value
-                        logger.debug(f"Parsed named parameter: {param_name}={param_value} (type: {type(param_value)})")
-                    except (ValueError, SyntaxError):
-                        # If not a literal, keep as string
-                        final_named[param_name] = param_value_str
-                        logger.debug(f"Named parameter as string: {param_name}='{param_value_str}'")
-                else:
-                    final_positional.append(arg_str)
-            
-            # Step 3: Create result
+            # Create result using Robot Framework's native approach
             result = ParsedArguments()
-            result.positional = final_positional
-            result.named = final_named
+            result.positional = positional_args
+            result.named = named_args
             
-            logger.debug(f"GENERAL RF SOLUTION - {keyword_name}: positional={final_positional}, named={final_named}")
+            logger.debug(f"RF NATIVE SOLUTION - {keyword_name}: positional={positional_args}, named={named_args}")
             return result
             
         except Exception as e:
