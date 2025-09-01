@@ -126,6 +126,11 @@ uv sync
 pip install -e .
 ```
 
+### Hint: When using a venv 
+
+If you are using a virtual environment (venv) for your project, I recommend to install the `rf-mcp` package within the same venv.
+When starting the MCP server, make sure to use the Python interpreter from that venv.
+
 ---
 
 ## 🔧 MCP Integration
@@ -383,35 +388,112 @@ Get comprehensive SeleniumLibrary locator strategies and troubleshooting.
 
 ```robot
 *** Settings ***
-Documentation    Test user login functionality with form validation
-Library          Browser
-Library          BuiltIn
-Force Tags       automated    web    login
+Documentation     Test suite for validating the complete checkout process on Sauce Demo website
+Library           Browser
+Library           Collections
+Force Tags        e2e  checkout  smoke
 
 *** Variables ***
-${LOGIN_URL}     https://example.com/login
-${USERNAME}      testuser
-${PASSWORD}      testpass123
+${URL}                      https://www.saucedemo.com/
+${USERNAME}                 standard_user
+${PASSWORD}                 secret_sauce
+${FIRST_NAME}               John
+${LAST_NAME}                Doe
+${POSTAL_CODE}              12345
+${EXPECTED_SUCCESS_MSG}     Thank you for your order!
 
 *** Test Cases ***
-User Login Test
-    [Documentation]    Verify successful login with valid credentials
-    [Tags]    smoke    critical
+Complete Checkout Process Test
+    [Documentation]    Validates the complete checkout process on Sauce Demo:
+    ...    1. Opens the website
+    ...    2. Logs in with valid credentials
+    ...    3. Adds items to cart
+    ...    4. Completes checkout process
     
-    # Browser Setup
-    New Browser         chromium    headless=False
-    New Page            ${LOGIN_URL}
+    # Setup and login
+    Open Browser And Navigate To Login Page
+    Login With Valid Credentials
+    Verify Successful Login
     
-    # Login Actions
-    Fill Text           css=input[name='username']    ${USERNAME}
-    Fill Text           css=input[name='password']    ${PASSWORD}
-    Click               css=button[type='submit']
+    # Add items to cart
+    Add Item To Cart    id=add-to-cart-sauce-labs-backpack
+    Verify Item Count In Cart    1
+    Add Item To Cart    id=add-to-cart-sauce-labs-bike-light
+    Verify Item Count In Cart    2
     
-    # Verification
-    Wait For Elements State    css=.dashboard    visible    timeout=10s
-    Get Text                   css=.welcome-message    ==    Welcome, ${USERNAME}!
+    # Checkout process
+    Go To Cart
+    Start Checkout
+    Fill Checkout Information
+    Complete Checkout
     
-    [Teardown]    Close Browser
+    # Verify successful checkout
+    Verify Checkout Success
+    
+    # Cleanup
+    Close Browser
+
+*** Keywords ***
+Open Browser And Navigate To Login Page
+    New Browser    chromium    headless=False
+    New Context    viewport={'width': 1280, 'height': 720}
+    New Page    ${URL}
+    
+Login With Valid Credentials
+    Fill Text    id=user-name    ${USERNAME}
+    Fill Text    id=password    ${PASSWORD}
+    Click    id=login-button
+
+Verify Successful Login
+    Wait For Elements State    .inventory_list    visible
+    ${current_url}=    Get Url
+    Should Contain    ${current_url}    inventory.html
+
+Add Item To Cart
+    [Arguments]    ${item_id}
+    Click    ${item_id}
+
+Verify Item Count In Cart
+    [Arguments]    ${expected_count}
+    ${cart_count}=    Get Text    .shopping_cart_badge
+    Should Be Equal As Strings    ${cart_count}    ${expected_count}
+
+Go To Cart
+    Click    .shopping_cart_link
+
+Start Checkout
+    Click    id=checkout
+
+Fill Checkout Information
+    Fill Text    id=first-name    ${FIRST_NAME}
+    Fill Text    id=last-name    ${LAST_NAME}
+    Fill Text    id=postal-code    ${POSTAL_CODE}
+    Click    id=continue
+
+Complete Checkout
+    Click    id=finish
+
+Verify Checkout Success
+    ${success_message}=    Get Text    h2
+    Should Be Equal As Strings    ${success_message}    ${EXPECTED_SUCCESS_MSG}
+```
+
+Original prompt:
+```bash
+Use RobotMCP to create a TestSuite and execute it step wise.
+
+- Open https://www.saucedemo.com/
+- Login with valid user
+- Assert login was successful
+- Add item to cart
+- Assert item was added to cart
+- Add another item to cart
+- Assert another item was added to cart
+- Checkout
+- Assert checkout was successful
+
+Execute step by step and build final test suite afterwards.
+Make a clean and maintainable test suite
 ```
 
 ---
