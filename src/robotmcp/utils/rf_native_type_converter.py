@@ -417,6 +417,8 @@ class RobotFrameworkNativeConverter:
             # PHASE 1: Get keyword argument specification to validate named arguments
             keyword_spec = self._get_keyword_argument_spec(keyword_name, library_name)
             valid_param_names = set()
+            has_kwargs = False
+            
             if keyword_spec:
                 # Get all valid parameter names from the keyword specification
                 if hasattr(keyword_spec, 'positional'):
@@ -425,7 +427,11 @@ class RobotFrameworkNativeConverter:
                     valid_param_names.update(keyword_spec.named_only)
                 if hasattr(keyword_spec, 'positional_or_named') and keyword_spec.positional_or_named:
                     valid_param_names.update(keyword_spec.positional_or_named)
-                logger.debug(f"Valid parameter names for {keyword_name}: {valid_param_names}")
+                
+                # CRITICAL: Check if keyword accepts **kwargs
+                has_kwargs = hasattr(keyword_spec, 'var_named') and keyword_spec.var_named is not None
+                
+                logger.debug(f"ArgumentSpec analysis for {keyword_name}: valid_params={valid_param_names}, has_kwargs={has_kwargs} (var_named='{getattr(keyword_spec, 'var_named', None)}')")
             
             for arg in args:
                 if isinstance(arg, tuple) and len(arg) == 2:
@@ -433,7 +439,7 @@ class RobotFrameworkNativeConverter:
                     param_name, param_value = arg
                     named_args[param_name] = param_value
                 elif isinstance(arg, str) and '=' in arg:
-                    # CRITICAL FIX: Only treat as named parameter if the parameter name exists in the keyword spec
+                    # ENHANCED FIX: Handle **kwargs properly
                     parts = arg.split('=', 1)
                     if len(parts) == 2 and parts[0].strip().isidentifier():
                         param_name = parts[0].strip()
@@ -441,17 +447,27 @@ class RobotFrameworkNativeConverter:
                         
                         # Check if this parameter name is valid for this keyword
                         if valid_param_names and param_name in valid_param_names:
-                            # Valid named parameter - treat as named argument
+                            # Valid explicit parameter - treat as named argument
                             try:
                                 resolved_value = variables.replace_scalar(param_value_str)
                                 named_args[param_name] = resolved_value
-                                logger.debug(f"RF named argument: {param_name}={resolved_value} (type: {type(resolved_value)})")
+                                logger.debug(f"RF explicit named argument: {param_name}={resolved_value} (type: {type(resolved_value)})")
+                            except Exception as var_error:
+                                logger.debug(f"Variable resolution failed for '{param_value_str}': {var_error}")
+                                named_args[param_name] = param_value_str
+                        elif has_kwargs:
+                            # **KWARGS FIX**: Keyword accepts **kwargs and this is not an explicit parameter
+                            # Treat as **kwargs argument (named argument)
+                            try:
+                                resolved_value = variables.replace_scalar(param_value_str)
+                                named_args[param_name] = resolved_value
+                                logger.debug(f"RF **kwargs argument: {param_name}={resolved_value} (type: {type(resolved_value)})")
                             except Exception as var_error:
                                 logger.debug(f"Variable resolution failed for '{param_value_str}': {var_error}")
                                 named_args[param_name] = param_value_str
                         else:
-                            # Parameter name not in keyword spec OR no spec available - treat as positional
-                            logger.debug(f"'{param_name}' not in valid parameters {valid_param_names} for {keyword_name}, treating '{arg}' as positional")
+                            # No **kwargs support and parameter name not explicit - treat as positional
+                            logger.debug(f"'{param_name}' not in valid parameters {valid_param_names} for {keyword_name}, no **kwargs, treating '{arg}' as positional")
                             try:
                                 resolved_arg = variables.replace_scalar(arg)
                                 positional_args.append(resolved_arg)
@@ -1249,46 +1265,52 @@ class RobotFrameworkNativeConverter:
     def _get_keyword_argument_spec(self, keyword_name: str, library_name: Optional[str] = None):
         """Get Robot Framework ArgumentSpec for a keyword to validate named arguments.
         
-        This is the general solution using RF's native APIs to get accurate parameter information.
+        ENHANCED: Now properly handles **kwargs using DynamicArgumentParser.
+        
+        This is the general solution using RF's native APIs to get accurate parameter information
+        including proper **kwargs detection for keywords like AppiumLibrary.Open Application.
         
         Args:
             keyword_name: Name of the keyword
             library_name: Optional library name for disambiguation
             
         Returns:
-            ArgumentSpec object if found, None otherwise
+            ArgumentSpec object with proper var_named (**kwargs) support, None otherwise
         """
         if not RF_NATIVE_CONVERSION_AVAILABLE:
             logger.debug(f"RF native APIs not available, cannot get ArgumentSpec for {keyword_name}")
             return None
         
         try:
-            from robot.running.testlibraries import TestLibrary
-            from robot.running.arguments import ArgumentSpec
-            
-            if library_name:
-                # Load library using RF's native TestLibrary
-                test_lib = TestLibrary(library_name)
+            # Method 1: LibDoc + DynamicArgumentParser for **kwargs support (primary method)
+            # NOTE: TestLibrary approach skipped due to init parameter requirement issues
+            try:
+                from robot.libdoc import LibraryDocumentation
+                from robot.running.arguments.argumentparser import DynamicArgumentParser
                 
-                # Find the specific keyword
-                keyword_handler = None
-                for handler in test_lib.handlers:
-                    if handler.name == keyword_name:
-                        keyword_handler = handler
-                        break
-                
-                if keyword_handler and hasattr(keyword_handler, 'arguments'):
-                    # Get the ArgumentSpec from the keyword handler
-                    arguments = keyword_handler.arguments
-                    if hasattr(arguments, 'positional') and hasattr(arguments, 'named_only'):
-                        logger.debug(f"Found ArgumentSpec for {keyword_name} from {library_name}: positional={arguments.positional}, named={getattr(arguments, 'named_only', None)}")
-                        return arguments
-                    else:
-                        logger.debug(f"Invalid ArgumentSpec structure for {keyword_name} from {library_name}")
-                else:
-                    logger.debug(f"No keyword handler found for {keyword_name} in {library_name}")
-            else:
-                logger.debug(f"No library_name provided, cannot get ArgumentSpec for {keyword_name}")
+                if library_name:
+                    libdoc = LibraryDocumentation(library_name)
+                    
+                    # Find the keyword in LibDoc
+                    for kw in libdoc.keywords:
+                        if kw.name == keyword_name:
+                            if kw.args:
+                                # Convert libdoc args to list of strings
+                                arg_strings = [str(arg) for arg in kw.args]
+                                logger.debug(f"LibDoc args for {keyword_name}: {arg_strings}")
+                                
+                                # Use DynamicArgumentParser to properly parse **kwargs
+                                parser = DynamicArgumentParser()
+                                try:
+                                    spec = parser.parse(arg_strings, keyword_name)
+                                    logger.debug(f"DynamicArgumentParser result for {keyword_name}: var_named='{spec.var_named}', positional={spec.positional_or_named}")
+                                    return spec
+                                except Exception as parse_error:
+                                    logger.debug(f"DynamicArgumentParser failed for {keyword_name}: {parse_error}")
+                            break
+                        
+            except Exception as libdoc_error:
+                logger.debug(f"LibDoc approach failed for {keyword_name}: {libdoc_error}")
                 
         except Exception as e:
             logger.debug(f"Failed to get ArgumentSpec for {keyword_name} from {library_name}: {e}")
@@ -1473,46 +1495,52 @@ Handle WebView
     def _get_keyword_argument_spec(self, keyword_name: str, library_name: Optional[str] = None):
         """Get Robot Framework ArgumentSpec for a keyword to validate named arguments.
         
-        This is the general solution using RF's native APIs to get accurate parameter information.
+        ENHANCED: Now properly handles **kwargs using DynamicArgumentParser.
+        
+        This is the general solution using RF's native APIs to get accurate parameter information
+        including proper **kwargs detection for keywords like AppiumLibrary.Open Application.
         
         Args:
             keyword_name: Name of the keyword
             library_name: Optional library name for disambiguation
             
         Returns:
-            ArgumentSpec object if found, None otherwise
+            ArgumentSpec object with proper var_named (**kwargs) support, None otherwise
         """
         if not RF_NATIVE_CONVERSION_AVAILABLE:
             logger.debug(f"RF native APIs not available, cannot get ArgumentSpec for {keyword_name}")
             return None
         
         try:
-            from robot.running.testlibraries import TestLibrary
-            from robot.running.arguments import ArgumentSpec
-            
-            if library_name:
-                # Load library using RF's native TestLibrary
-                test_lib = TestLibrary(library_name)
+            # Method 1: LibDoc + DynamicArgumentParser for **kwargs support (primary method)
+            # NOTE: TestLibrary approach skipped due to init parameter requirement issues
+            try:
+                from robot.libdoc import LibraryDocumentation
+                from robot.running.arguments.argumentparser import DynamicArgumentParser
                 
-                # Find the specific keyword
-                keyword_handler = None
-                for handler in test_lib.handlers:
-                    if handler.name == keyword_name:
-                        keyword_handler = handler
-                        break
-                
-                if keyword_handler and hasattr(keyword_handler, 'arguments'):
-                    # Get the ArgumentSpec from the keyword handler
-                    arguments = keyword_handler.arguments
-                    if hasattr(arguments, 'positional') and hasattr(arguments, 'named_only'):
-                        logger.debug(f"Found ArgumentSpec for {keyword_name} from {library_name}: positional={arguments.positional}, named={getattr(arguments, 'named_only', None)}")
-                        return arguments
-                    else:
-                        logger.debug(f"Invalid ArgumentSpec structure for {keyword_name} from {library_name}")
-                else:
-                    logger.debug(f"No keyword handler found for {keyword_name} in {library_name}")
-            else:
-                logger.debug(f"No library_name provided, cannot get ArgumentSpec for {keyword_name}")
+                if library_name:
+                    libdoc = LibraryDocumentation(library_name)
+                    
+                    # Find the keyword in LibDoc
+                    for kw in libdoc.keywords:
+                        if kw.name == keyword_name:
+                            if kw.args:
+                                # Convert libdoc args to list of strings
+                                arg_strings = [str(arg) for arg in kw.args]
+                                logger.debug(f"LibDoc args for {keyword_name}: {arg_strings}")
+                                
+                                # Use DynamicArgumentParser to properly parse **kwargs
+                                parser = DynamicArgumentParser()
+                                try:
+                                    spec = parser.parse(arg_strings, keyword_name)
+                                    logger.debug(f"DynamicArgumentParser result for {keyword_name}: var_named='{spec.var_named}', positional={spec.positional_or_named}")
+                                    return spec
+                                except Exception as parse_error:
+                                    logger.debug(f"DynamicArgumentParser failed for {keyword_name}: {parse_error}")
+                            break
+                        
+            except Exception as libdoc_error:
+                logger.debug(f"LibDoc approach failed for {keyword_name}: {libdoc_error}")
                 
         except Exception as e:
             logger.debug(f"Failed to get ArgumentSpec for {keyword_name} from {library_name}: {e}")
