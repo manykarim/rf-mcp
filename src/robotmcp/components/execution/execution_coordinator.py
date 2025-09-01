@@ -800,15 +800,24 @@ class ExecutionCoordinator:
             result = []
             
             for keyword_info in keywords_from_lib:
-                # Ensure all values are JSON-serializable for MCP protocol
+                # CRITICAL FIX: Enhanced MCP serialization with null-safety and validation
                 keyword_dict = {
-                    "name": str(keyword_info.name),
-                    "library": str(keyword_info.library),
-                    "args": [str(arg) for arg in keyword_info.args],
-                    "short_doc": str(keyword_info.short_doc),
-                    "tags": [str(tag) for tag in keyword_info.tags],
+                    "name": str(keyword_info.name if keyword_info.name else ""),
+                    "library": str(keyword_info.library if keyword_info.library else ""),
+                    "args": [str(arg) for arg in (keyword_info.args if keyword_info.args else [])],
+                    "short_doc": str(keyword_info.short_doc if keyword_info.short_doc else ""),
+                    "tags": [str(tag) for tag in (keyword_info.tags if keyword_info.tags else [])],
                     "is_builtin": bool(getattr(keyword_info, 'is_builtin', False))
                 }
+                
+                # CRITICAL FIX: Validate no complex objects remain
+                for key, value in keyword_dict.items():
+                    if not isinstance(value, (str, int, bool, list)):
+                        logger.warning(f"Non-serializable value in keyword_dict[{key}]: {type(value)}")
+                        keyword_dict[key] = str(value)  # Force string conversion
+                    elif isinstance(value, list):
+                        # Ensure list elements are also serializable
+                        keyword_dict[key] = [str(item) for item in value]
                 
                 # Enrich with LibDoc data if available
                 if self.rf_doc_storage.is_available():
@@ -832,15 +841,24 @@ class ExecutionCoordinator:
             # Get all keywords from all loaded libraries using LibraryManager
             keywords = []
             for keyword_info in keyword_discovery.get_all_keywords():
-                # CRITICAL FIX: Ensure all values are JSON-serializable for MCP protocol
+                # CRITICAL FIX: Enhanced MCP serialization with null-safety and validation
                 keyword_dict = {
-                    "name": str(getattr(keyword_info, 'name', str(keyword_info))),
-                    "library": str(getattr(keyword_info, 'library', '')),
-                    "args": [str(arg) for arg in getattr(keyword_info, 'args', [])],
-                    "short_doc": str(getattr(keyword_info, 'short_doc', '')),
-                    "tags": [str(tag) for tag in getattr(keyword_info, 'tags', [])],
+                    "name": str(keyword_info.name if keyword_info.name else ""),
+                    "library": str(keyword_info.library if keyword_info.library else ""),
+                    "args": [str(arg) for arg in (keyword_info.args if keyword_info.args else [])],
+                    "short_doc": str(keyword_info.short_doc if keyword_info.short_doc else ""),
+                    "tags": [str(tag) for tag in (keyword_info.tags if keyword_info.tags else [])],
                     "is_builtin": bool(getattr(keyword_info, 'is_builtin', False))
                 }
+                
+                # CRITICAL FIX: Validate no complex objects remain
+                for key, value in keyword_dict.items():
+                    if not isinstance(value, (str, int, bool, list)):
+                        logger.warning(f"Non-serializable value in keyword_dict[{key}]: {type(value)}")
+                        keyword_dict[key] = str(value)  # Force string conversion
+                    elif isinstance(value, list):
+                        # Ensure list elements are also serializable
+                        keyword_dict[key] = [str(item) for item in value]
                 
                 # ENHANCEMENT: Try to enrich with LibDoc data if available
                 if self.rf_doc_storage.is_available():

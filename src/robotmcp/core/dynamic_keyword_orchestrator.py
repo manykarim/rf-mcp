@@ -123,12 +123,22 @@ class DynamicKeywordDiscovery:
                     
             logger.debug(f"LibDoc: No match for '{keyword_name}' in session libraries, checking if fallback to global search is needed")
         
-        # Priority 2: Fallback to global search only if needed and allowed
-        # This maintains compatibility while prioritizing session libraries
+        # CRITICAL FIX: Session Library Isolation
+        # If session libraries are specified, NEVER fall back to global search
+        # This ensures session boundaries are respected for ALL session types
+        if session_libraries:
+            logger.debug(f"LibDoc: Session libraries specified {session_libraries} - no global fallback allowed")
+            logger.debug(f"LibDoc: Keyword '{keyword_name}' not found in session libraries - returning None for strict session isolation")
+            return None
+        
+        # Priority 2: Global search only allowed when no session libraries are specified
+        # This maintains compatibility for non-session-aware operations
+        logger.debug(f"LibDoc: No session libraries specified - allowing global search")
+        
         if active_library:
             logger.debug(f"LibDoc: Active library filter '{active_library}' specified, including in global search")
             
-        # Get all keywords for global fallback (when session libraries don't have the keyword)
+        # Get all keywords for global fallback (only when no session libraries)
         try:
             keywords = rf_doc_storage.get_all_keywords()
             logger.debug(f"LibDoc: Global fallback search - found {len(keywords)} total keywords")
@@ -295,11 +305,37 @@ class DynamicKeywordDiscovery:
                         else:
                             string_arg_value = arg_value
                         
-                        # Convert the argument
-                        converted_value = converter.convert(string_arg_value, param.name)
-                        converted_args.append(converted_value)
+                        # Convert the argument - handle both parameter objects and strings
+                        param_name = param.name if hasattr(param, 'name') else str(param)
                         
-                        logger.debug(f"RF converted arg {i} '{param.name}': {arg_value} -> {converted_value} (type: {type(converted_value).__name__})")
+                        try:
+                            converted_value = converter.convert(string_arg_value, param_name)
+                            converted_args.append(converted_value)
+                            logger.debug(f"RF converted arg {i} '{param_name}': {arg_value} -> {converted_value} (type: {type(converted_value).__name__})")
+                        except Exception as conversion_error:
+                            # Enhanced error handling for type conversion failures
+                            error_msg = str(conversion_error)
+                            
+                            # Check if this looks like a misplaced named argument
+                            if '=' in string_arg_value and 'does not have member' in error_msg:
+                                # This looks like a named argument that was treated as positional
+                                logger.debug(f"Type conversion failed for '{param_name}' with value '{string_arg_value}' - appears to be misplaced named argument")
+                                raise ValueError(
+                                    f"Argument '{param_name}' got value '{string_arg_value}' which appears to be a misplaced named argument. "
+                                    f"Original error: {error_msg}"
+                                )
+                            elif "'str' object has no attribute 'name'" in error_msg:
+                                # This is the specific error we're trying to fix
+                                logger.debug(f"Caught 'str' object error for parameter '{param_name}' with value '{string_arg_value}'")
+                                raise ValueError(
+                                    f"Parameter '{param_name}' received invalid value '{string_arg_value}'. "
+                                    f"This may be a misplaced named argument or invalid type conversion. "
+                                    f"Original error: {error_msg}"
+                                )
+                            else:
+                                # Re-raise other conversion errors with better context
+                                raise ValueError(f"Type conversion failed for parameter '{param_name}' with value '{string_arg_value}': {error_msg}")
+                        
                     else:
                         # No type annotation, use as-is
                         converted_args.append(arg_value)
@@ -520,11 +556,12 @@ class DynamicKeywordDiscovery:
                     # Get converter for this type
                     converter = TypeConverter.converter_for(type_info)
                     
-                    # Convert the argument
-                    converted_value = converter.convert(arg_value, param.name)
+                    # Convert the argument - handle both parameter objects and strings
+                    param_name = param.name if hasattr(param, 'name') else str(param)
+                    converted_value = converter.convert(arg_value, param_name)
                     converted_args.append(converted_value)
                     
-                    logger.debug(f"RF converted positional arg {i} '{param.name}': {arg_value} -> {converted_value} (type: {type(converted_value).__name__})")
+                    logger.debug(f"RF converted positional arg {i} '{param_name}': {arg_value} -> {converted_value} (type: {type(converted_value).__name__})")
                 else:
                     # No type annotation, use as-is
                     converted_args.append(arg_value)

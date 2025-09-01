@@ -288,13 +288,13 @@ class PageSourceService:
             
             if library_type == "browser":
                 # Use Browser Library via keyword discovery
-                result = await keyword_discovery.execute_keyword("Get Page Source", [], session.variables)
+                result = await keyword_discovery.execute_keyword("Get Page Source", [], session.variables, session_id=session.session_id)
                 if result and result.get("success") and result.get("output"):
                     return result["output"]
                     
             elif library_type == "selenium":
                 # Use SeleniumLibrary via keyword discovery  
-                result = await keyword_discovery.execute_keyword("Get Source", [], session.variables)
+                result = await keyword_discovery.execute_keyword("Get Source", [], session.variables, session_id=session.session_id)
                 if result and result.get("success") and result.get("output"):
                     return result["output"]
                     
@@ -331,11 +331,11 @@ class PageSourceService:
             library, library_type = browser_library_manager.get_active_browser_library(session)
             
             if library_type == "browser":
-                result = await keyword_discovery.execute_keyword("Get Url", [], session.variables)
+                result = await keyword_discovery.execute_keyword("Get Url", [], session.variables, session_id=session.session_id)
                 if result and result.get("success") and result.get("output"):
                     return result["output"]
             elif library_type == "selenium":
-                result = await keyword_discovery.execute_keyword("Get Location", [], session.variables)
+                result = await keyword_discovery.execute_keyword("Get Location", [], session.variables, session_id=session.session_id)
                 if result and result.get("success") and result.get("output"):
                     return result["output"]
                     
@@ -353,11 +353,11 @@ class PageSourceService:
             library, library_type = browser_library_manager.get_active_browser_library(session)
             
             if library_type == "browser":
-                result = await keyword_discovery.execute_keyword("Get Title", [], session.variables)
+                result = await keyword_discovery.execute_keyword("Get Title", [], session.variables, session_id=session.session_id)
                 if result and result.get("success") and result.get("output"):
                     return result["output"]
             elif library_type == "selenium":
-                result = await keyword_discovery.execute_keyword("Get Title", [], session.variables)  
+                result = await keyword_discovery.execute_keyword("Get Title", [], session.variables, session_id=session.session_id)  
                 if result and result.get("success") and result.get("output"):
                     return result["output"]
                     
@@ -568,7 +568,7 @@ class PageSourceService:
                 from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
                 
                 keyword_discovery = get_keyword_discovery()
-                result = await keyword_discovery.execute_keyword("Get Source", [], session.variables)
+                result = await keyword_discovery.execute_keyword("Get Source", [], session.variables, session_id=session.session_id)
                 
                 if result and result.get("success") and result.get("output"):
                     source = result["output"]

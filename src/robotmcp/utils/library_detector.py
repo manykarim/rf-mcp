@@ -114,10 +114,37 @@ def detect_library_from_keyword(keyword: str, keyword_discovery=None) -> Optiona
         logger.debug(f"Pattern detection: '{keyword}' -> BuiltIn")
         return "BuiltIn"
     
-    # AppiumLibrary keywords (mobile testing)
+    # PRIORITY 1: AppiumLibrary keywords (mobile testing) - COMPREHENSIVE LIST
+    # Checked BEFORE Browser Library to prevent mis-detection
     elif any(kw in keyword_lower for kw in [
-        'open application', 'close application', 'tap', 'swipe', 'scroll',
-        'input text into element', 'get device'
+        # Application lifecycle
+        'open application', 'close application', 'launch application', 'quit application',
+        'remove application', 'reset application', 'background application', 'activate application',
+        
+        # Source and page operations (CRITICAL: includes 'get source')
+        'get source', 'get page source', 'capture page screenshot', 'save screenshot',
+        
+        # Element interaction
+        'tap', 'click element', 'press keycode', 'long press', 'swipe', 'scroll',
+        'input text', 'input password', 'clear text', 'set text', 'input text into element',
+        
+        # Element queries
+        'get text', 'get element attribute', 'get element location', 'get element size',
+        'element should be visible', 'element should not be visible', 'element should be enabled',
+        
+        # Waits and conditions
+        'wait until element is visible', 'wait until page contains element',
+        'wait until element is enabled', 'wait until page does not contain element',
+        
+        # Context and session
+        'get contexts', 'get current context', 'switch to context',
+        
+        # Device operations
+        'shake', 'lock', 'unlock', 'get orientation', 'set orientation',
+        'get network connection status', 'set network connection status', 'get device',
+        
+        # Advanced mobile features
+        'execute script', 'install app', 'remove app', 'get app strings', 'end test'
     ]):
         logger.debug(f"Pattern detection: '{keyword}' -> AppiumLibrary")
         return "AppiumLibrary"

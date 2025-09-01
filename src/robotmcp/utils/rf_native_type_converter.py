@@ -466,7 +466,7 @@ class RobotFrameworkNativeConverter:
                                 logger.debug(f"Variable resolution failed for '{param_value_str}': {var_error}")
                                 named_args[param_name] = param_value_str
                         else:
-                            # No **kwargs support and parameter name not explicit - treat as positional
+                            # No **kwargs support and parameter name not explicit - treat as positional (Robot Framework standard behavior)
                             logger.debug(f"'{param_name}' not in valid parameters {valid_param_names} for {keyword_name}, no **kwargs, treating '{arg}' as positional")
                             try:
                                 resolved_arg = variables.replace_scalar(arg)

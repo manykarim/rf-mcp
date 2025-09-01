@@ -589,13 +589,19 @@ class KeywordExecutor:
                     browser_library_manager.set_active_library(session, "selenium")
                     logger.debug(f"Using session's web automation library: SeleniumLibrary")
 
-            elif session_type.value in ["web_automation", "mobile_testing", "unknown"]:
-                # Only auto-detect for web/mobile/unknown sessions
+            elif session_type.value in ["web_automation", "unknown"]:
+                # Only auto-detect for web/unknown sessions (REMOVED mobile_testing)
                 if not current_active or current_active == "auto":
                     detected_library = browser_library_manager.detect_library_from_keyword(keyword_name, args)
                     if detected_library in ["browser", "selenium"]:
                         browser_library_manager.set_active_library(session, detected_library)
                         logger.debug(f"Auto-detected library for '{keyword_name}': {detected_library}")
+            
+            elif session_type.value == "mobile_testing":
+                # CRITICAL FIX: Mobile sessions should NEVER auto-detect web libraries
+                # They should only use their configured session libraries
+                logger.debug(f"Mobile session - using only session libraries, no web auto-detection")
+                # Let execution flow through session-aware keyword resolution only
             else:
                 logger.debug(f"Session type '{session_type.value}' - no web automation library handling needed")
             
