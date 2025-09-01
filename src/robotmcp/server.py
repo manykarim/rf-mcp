@@ -6,13 +6,16 @@ from typing import Any, Dict, List, Union
 from fastmcp import FastMCP
 
 from robotmcp.components.execution import ExecutionCoordinator
+from robotmcp.components.execution.mobile_capability_service import (
+    MobileCapabilityService,
+)
 from robotmcp.components.keyword_matcher import KeywordMatcher
 from robotmcp.components.library_recommender import LibraryRecommender
 from robotmcp.components.nlp_processor import NaturalLanguageProcessor
 from robotmcp.components.state_manager import StateManager
 from robotmcp.components.test_builder import TestBuilder
-from robotmcp.models.session_models import PlatformType, MobileConfig
-from robotmcp.components.execution.mobile_capability_service import MobileCapabilityService
+from robotmcp.models.session_models import PlatformType
+from robotmcp.utils.server_integration import initialize_enhanced_serialization
 
 logger = logging.getLogger(__name__)
 
@@ -29,33 +32,44 @@ state_manager = StateManager()
 test_builder = TestBuilder(execution_engine)
 mobile_capability_service = MobileCapabilityService()
 
+# Initialize enhanced serialization system
+initialize_enhanced_serialization(execution_engine)
+
 
 # Helper functions
 async def _ensure_all_session_libraries_loaded():
     """
     Ensure all imported session libraries are loaded in LibraryManager.
-    
+
     Enhanced validation to prevent keyword filtering issues and provide better error reporting.
     """
     try:
         session_manager = execution_engine.session_manager
         all_sessions = session_manager.sessions.values()
-        
+
         for session in all_sessions:
             for library_name in session.imported_libraries:
                 # Check if library is loaded in the orchestrator
                 if library_name not in execution_engine.keyword_discovery.libraries:
-                    logger.warning(f"Session library '{library_name}' not loaded in orchestrator, attempting to load")
+                    logger.warning(
+                        f"Session library '{library_name}' not loaded in orchestrator, attempting to load"
+                    )
                     session._ensure_library_loaded_immediately(library_name)
-                    
+
                     # Verify loading succeeded
                     if library_name not in execution_engine.keyword_discovery.libraries:
-                        logger.error(f"Failed to load session library '{library_name}' - may cause keyword filtering issues")
+                        logger.error(
+                            f"Failed to load session library '{library_name}' - may cause keyword filtering issues"
+                        )
                 else:
-                    logger.debug(f"Session library '{library_name}' already loaded in orchestrator")
-                
-        logger.debug("Validated all session libraries are loaded for discovery operations")
-        
+                    logger.debug(
+                        f"Session library '{library_name}' already loaded in orchestrator"
+                    )
+
+        logger.debug(
+            "Validated all session libraries are loaded for discovery operations"
+        )
+
     except Exception as e:
         logger.error(f"Error ensuring session libraries loaded: {e}")
         # Don't fail the discovery operation, but log the issue for debugging
@@ -69,11 +83,11 @@ async def analyze_scenario(
 
     CRITICAL: This tool ALWAYS creates a session for your test execution.
     Use the returned session_id in ALL subsequent tool calls (execute_step, build_test_suite, etc.)
-    
+
     RECOMMENDED WORKFLOW - STEP 1 OF 4:
     This tool should be used as the FIRST step in the Robot Framework automation workflow:
     1. ✅ analyze_scenario (THIS TOOL) - Creates session and understands requirements
-    2. ➡️ recommend_libraries - Get targeted library suggestions  
+    2. ➡️ recommend_libraries - Get targeted library suggestions
     3. ➡️ execute_step - Execute steps using the SAME session_id
     4. ➡️ build_test_suite - Build suite using the SAME session_id
 
@@ -111,14 +125,18 @@ async def analyze_scenario(
 
     # Get or create session using execution coordinator
     session = execution_engine.session_manager.get_or_create_session(session_id)
-    
+
     # Detect platform type from scenario
-    platform_type = execution_engine.session_manager.detect_platform_from_scenario(scenario)
-    
+    platform_type = execution_engine.session_manager.detect_platform_from_scenario(
+        scenario
+    )
+
     # Initialize mobile session if detected
     if platform_type == PlatformType.MOBILE:
         execution_engine.session_manager.initialize_mobile_session(session, scenario)
-        logger.info(f"Initialized mobile session for platform: {session.mobile_config.platform_name if session.mobile_config else 'Unknown'}")
+        logger.info(
+            f"Initialized mobile session for platform: {session.mobile_config.platform_name if session.mobile_config else 'Unknown'}"
+        )
     else:
         # Auto-configure session based on scenario (existing web flow)
         session.configure_from_scenario(scenario)
@@ -134,7 +152,7 @@ async def analyze_scenario(
         "libraries_loaded": list(session.loaded_libraries),
         "next_step_guidance": f"Use session_id='{session_id}' in all subsequent tool calls",
         "status": "active",
-        "ready_for_execution": True
+        "ready_for_execution": True,
     }
 
     logger.info(
@@ -250,7 +268,7 @@ async def get_application_state(
     )
 
 
-@mcp.tool
+@mcp.tool(enabled=False)
 async def suggest_next_step(
     current_state: Dict[str, Any],
     test_objective: str,
@@ -305,14 +323,15 @@ async def build_test_suite(
     """
     if tags is None:
         tags = []
-    
+
     # Import session resolver here to avoid circular imports
     from robotmcp.utils.session_resolution import SessionResolver
+
     session_resolver = SessionResolver(execution_engine.session_manager)
-    
+
     # Resolve session with intelligent fallback
     resolution_result = session_resolver.resolve_session_with_fallback(session_id)
-    
+
     if not resolution_result["success"]:
         # Return enhanced error with guidance
         return {
@@ -322,38 +341,38 @@ async def build_test_suite(
             "guidance": [
                 "Create a session and execute some steps first",
                 "Use the session_id returned by analyze_scenario",
-                "Check session status with get_session_validation_status"
+                "Check session status with get_session_validation_status",
             ],
             "validation_summary": {"passed": 0, "failed": 0},
-            "recommendation": "Start with analyze_scenario() to create a properly configured session"
+            "recommendation": "Start with analyze_scenario() to create a properly configured session",
         }
-    
+
     # Use resolved session ID
     resolved_session_id = resolution_result["session_id"]
-    
+
     # Build the test suite with resolved session
     result = await test_builder.build_suite(
         resolved_session_id, test_name, tags, documentation, remove_library_prefixes
     )
-    
+
     # Add session resolution info to result
     if resolution_result.get("fallback_used", False):
         result["session_resolution"] = {
             "fallback_used": True,
             "original_session_id": session_id,
             "resolved_session_id": resolved_session_id,
-            "message": f"Automatically used session '{resolved_session_id}' with {resolution_result['session_info']['step_count']} executed steps"
+            "message": f"Automatically used session '{resolved_session_id}' with {resolution_result['session_info']['step_count']} executed steps",
         }
     else:
         result["session_resolution"] = {
             "fallback_used": False,
-            "session_id": resolved_session_id
+            "session_id": resolved_session_id,
         }
-    
+
     return result
 
 
-@mcp.tool
+@mcp.tool(enabled=False)
 async def validate_scenario(
     parsed_scenario: Dict[str, Any], available_libraries: List[str] = None
 ) -> Dict[str, Any]:
@@ -506,7 +525,7 @@ async def check_library_availability(libraries: List[str]) -> Dict[str, Any]:
     return execution_engine.check_library_requirements(libraries)
 
 
-@mcp.tool
+@mcp.tool(enabled=False)
 async def get_library_status(library_name: str) -> Dict[str, Any]:
     """Get detailed installation status for a specific library.
 
@@ -517,18 +536,6 @@ async def get_library_status(library_name: str) -> Dict[str, Any]:
         Dict with detailed status and installation information
     """
     return execution_engine.get_installation_status(library_name)
-
-
-@mcp.tool
-async def test_simple_list() -> List[Dict[str, Any]]:
-    """Test tool to verify MCP serialization works."""
-    return [{"test": "value1"}, {"test": "value2"}]
-
-
-@mcp.tool
-async def test_simple_dict() -> Dict[str, Any]:
-    """Test tool to verify MCP dict serialization works."""
-    return {"test": "single_value", "count": 123}
 
 
 @mcp.tool
@@ -562,7 +569,7 @@ async def get_available_keywords(library_name: str = None) -> List[Dict[str, Any
     """
     # CRITICAL FIX: Ensure all session libraries are loaded before discovery
     await _ensure_all_session_libraries_loaded()
-    
+
     return execution_engine.get_available_keywords(library_name)
 
 
@@ -584,7 +591,7 @@ async def search_keywords(pattern: str) -> List[Dict[str, Any]]:
     """
     # CRITICAL FIX: Ensure all session libraries are loaded before search
     await _ensure_all_session_libraries_loaded()
-    
+
     return execution_engine.search_keywords(pattern)
 
 
@@ -713,46 +720,51 @@ async def get_session_validation_status(session_id: str = "") -> Dict[str, Any]:
     """
     # Import session resolver here to avoid circular imports
     from robotmcp.utils.session_resolution import SessionResolver
+
     session_resolver = SessionResolver(execution_engine.session_manager)
-    
+
     # Resolve session with intelligent fallback
     resolution_result = session_resolver.resolve_session_with_fallback(session_id)
-    
+
     if not resolution_result["success"]:
         # Return enhanced error with guidance
         return {
             "success": False,
             "error": f"Session '{session_id}' not found",
             "error_details": resolution_result["error_guidance"],
-            "available_sessions": resolution_result["error_guidance"]["available_sessions"],
-            "sessions_with_steps": resolution_result["error_guidance"]["sessions_with_steps"],
-            "recommendation": "Use analyze_scenario() to create a session first"
+            "available_sessions": resolution_result["error_guidance"][
+                "available_sessions"
+            ],
+            "sessions_with_steps": resolution_result["error_guidance"][
+                "sessions_with_steps"
+            ],
+            "recommendation": "Use analyze_scenario() to create a session first",
         }
-    
+
     # Use resolved session ID
     resolved_session_id = resolution_result["session_id"]
-    
+
     # Get validation status for resolved session
     result = execution_engine.get_session_validation_status(resolved_session_id)
-    
+
     # Add session resolution info to result
     if resolution_result.get("fallback_used", False):
         result["session_resolution"] = {
             "fallback_used": True,
             "original_session_id": session_id,
             "resolved_session_id": resolved_session_id,
-            "message": f"Automatically checked session '{resolved_session_id}'"
+            "message": f"Automatically checked session '{resolved_session_id}'",
         }
     else:
         result["session_resolution"] = {
             "fallback_used": False,
-            "session_id": resolved_session_id
+            "session_id": resolved_session_id,
         }
-    
+
     return result
 
 
-@mcp.tool
+@mcp.tool(enabled=False)
 async def validate_test_readiness(session_id: str = "default") -> Dict[str, Any]:
     """Check if session is ready for test suite generation.
 
@@ -818,28 +830,26 @@ async def set_library_search_order(
 
 @mcp.tool
 async def initialize_context(
-    session_id: str,
-    libraries: List[str] = None,
-    variables: Dict[str, Any] = None
+    session_id: str, libraries: List[str] = None, variables: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     """Initialize a session with libraries and variables.
-    
+
     NOTE: Full RF context mode is not yet implemented. This tool currently
     initializes a session with the specified libraries and variables using
     the existing session-based variable system.
-    
+
     Args:
         session_id: Session identifier
         libraries: List of libraries to import in the session
         variables: Initial variables to set in the session
-    
+
     Returns:
         Session initialization status with information
     """
     try:
         # Get or create session
         session = execution_engine.session_manager.get_or_create_session(session_id)
-        
+
         # Import libraries into session
         if libraries:
             for library in libraries:
@@ -850,18 +860,20 @@ async def initialize_context(
                     logger.info(f"Imported {library} into session {session_id}")
                 except Exception as lib_error:
                     logger.warning(f"Could not import {library}: {lib_error}")
-        
+
         # Set initial variables in session
         if variables:
             for name, value in variables.items():
                 # Normalize variable name to RF format
-                if not name.startswith('$'):
+                if not name.startswith("$"):
                     var_name = f"${{{name}}}"
                 else:
                     var_name = name
                 session.set_variable(var_name, value)
-                logger.info(f"Set variable {var_name} = {value} in session {session_id}")
-        
+                logger.info(
+                    f"Set variable {var_name} = {value} in session {session_id}"
+                )
+
         return {
             "success": True,
             "session_id": session_id,
@@ -869,57 +881,49 @@ async def initialize_context(
             "libraries_loaded": list(session.loaded_libraries),
             "variables_set": list(variables.keys()) if variables else [],
             "message": f"Session '{session_id}' initialized with libraries and variables",
-            "note": "Using session-based variable system (context mode not available)"
+            "note": "Using session-based variable system (context mode not available)",
         }
-        
+
     except Exception as e:
         logger.error(f"Error initializing session {session_id}: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "session_id": session_id
-        }
+        return {"success": False, "error": str(e), "session_id": session_id}
 
 
 @mcp.tool
 async def get_context_variables(session_id: str) -> Dict[str, Any]:
     """Get all variables from a session.
-    
+
     Args:
         session_id: Session identifier
-    
+
     Returns:
         Dictionary containing all session variables
     """
     try:
         # Get session
         session = execution_engine.session_manager.get_session(session_id)
-        
+
         if not session:
             return {
                 "success": False,
                 "error": f"Session '{session_id}' not found",
-                "session_id": session_id
+                "session_id": session_id,
             }
-        
+
         # Get session variables
         variables = dict(session.variables)
-        
+
         return {
             "success": True,
             "session_id": session_id,
             "variables": variables,
             "variable_count": len(variables),
-            "note": "Using session-based variable system"
+            "note": "Using session-based variable system",
         }
-        
+
     except Exception as e:
         logger.error(f"Error getting variables for session {session_id}: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "session_id": session_id
-        }
+        return {"success": False, "error": str(e), "session_id": session_id}
 
 
 @mcp.tool
@@ -1040,7 +1044,7 @@ async def get_appium_locator_guidance(
     provides context-aware suggestions for mobile element location and error resolution.
 
     AppiumLibrary supports these locator strategies:
-    
+
     **Basic Locators:**
     - id: Element ID (e.g., 'id=my_element' or just 'my_element')
     - xpath: XPath expression (e.g., '//*[@type="android.widget.EditText"]')
@@ -1105,40 +1109,41 @@ async def run_test_suite_dry(
     session_id: str = "",
     suite_file_path: str = None,
     validation_level: str = "standard",
-    include_warnings: bool = True
+    include_warnings: bool = True,
 ) -> Dict[str, Any]:
     """Validate test suite using Robot Framework dry run mode.
-    
+
     RECOMMENDED WORKFLOW - SUITE VALIDATION:
     This tool should be used AFTER build_test_suite to validate the generated suite:
     1. ✅ build_test_suite - Generate .robot file from session steps
-    2. ✅ run_test_suite_dry (THIS TOOL) - Validate syntax and structure 
+    2. ✅ run_test_suite_dry (THIS TOOL) - Validate syntax and structure
     3. ➡️ run_test_suite - Execute if validation passes
-    
+
     Enhanced Session Resolution:
     - If session_id provided and valid: Uses that session's generated suite
     - If session_id empty/invalid: Automatically finds most suitable session
     - If suite_file_path provided: Validates specified file directly
-    
+
     Validation Levels:
     - minimal: Basic syntax checking only
     - standard: Syntax + keyword verification + imports (default)
     - strict: All checks + argument validation + structure analysis
-    
+
     Args:
         session_id: Session with executed steps (auto-resolves if empty/invalid)
         suite_file_path: Direct path to .robot file (optional, overrides session)
         validation_level: Validation depth ('minimal', 'standard', 'strict')
         include_warnings: Include warnings in validation report
-        
+
     Returns:
         Structured validation results with issues, warnings, and suggestions
     """
-    
+
     # Session resolution with same logic as build_test_suite
     from robotmcp.utils.session_resolution import SessionResolver
+
     session_resolver = SessionResolver(execution_engine.session_manager)
-    
+
     if suite_file_path:
         # Direct file validation mode
         logger.info(f"Running dry run validation on file: {suite_file_path}")
@@ -1146,9 +1151,9 @@ async def run_test_suite_dry(
             suite_file_path, validation_level, include_warnings
         )
     else:
-        # Session-based validation mode  
+        # Session-based validation mode
         resolution_result = session_resolver.resolve_session_with_fallback(session_id)
-        
+
         if not resolution_result["success"]:
             return {
                 "success": False,
@@ -1158,79 +1163,80 @@ async def run_test_suite_dry(
                 "guidance": [
                     "Create a session and execute some steps first",
                     "Use build_test_suite to generate a test suite",
-                    "Or provide suite_file_path to validate an existing file"
+                    "Or provide suite_file_path to validate an existing file",
                 ],
-                "recommendation": "Use build_test_suite first or provide suite_file_path"
+                "recommendation": "Use build_test_suite first or provide suite_file_path",
             }
-        
+
         resolved_session_id = resolution_result["session_id"]
         logger.info(f"Running dry run validation for session: {resolved_session_id}")
-        
+
         result = await execution_engine.run_suite_dry_run(
             resolved_session_id, validation_level, include_warnings
         )
-        
+
         # Add session resolution info to result
         if resolution_result.get("fallback_used", False):
             result["session_resolution"] = {
                 "fallback_used": True,
                 "original_session_id": session_id,
                 "resolved_session_id": resolved_session_id,
-                "message": f"Automatically used session '{resolved_session_id}' with {resolution_result['session_info']['step_count']} executed steps"
+                "message": f"Automatically used session '{resolved_session_id}' with {resolution_result['session_info']['step_count']} executed steps",
             }
         else:
             result["session_resolution"] = {
                 "fallback_used": False,
-                "session_id": resolved_session_id
+                "session_id": resolved_session_id,
             }
-        
+
         return result
 
 
-@mcp.tool  
+@mcp.tool
 async def run_test_suite(
     session_id: str = "",
     suite_file_path: str = None,
     execution_options: Dict[str, Any] = None,
     output_level: str = "standard",
-    capture_screenshots: bool = False
+    capture_screenshots: bool = False,
 ) -> Dict[str, Any]:
     """Execute test suite using Robot Framework normal execution.
-    
+
     RECOMMENDED WORKFLOW - SUITE EXECUTION:
     This tool should be used AFTER validation for full test execution:
     1. ✅ build_test_suite - Generate .robot file from session steps
     2. ✅ run_test_suite_dry - Validate syntax and structure
     3. ✅ run_test_suite (THIS TOOL) - Execute validated test suite
-    
+
     Enhanced Session Resolution:
     - If session_id provided and valid: Uses that session's generated suite
-    - If session_id empty/invalid: Automatically finds most suitable session  
+    - If session_id empty/invalid: Automatically finds most suitable session
     - If suite_file_path provided: Executes specified file directly
-    
+
     Output Levels:
     - minimal: Basic execution statistics only
     - standard: Statistics + failed tests + output files (default)
     - detailed: All information + execution details + timing
-    
+
     Args:
         session_id: Session with executed steps (auto-resolves if empty/invalid)
         suite_file_path: Direct path to .robot file (optional, overrides session)
         execution_options: Dict with RF options (variables, tags, loglevel, etc.)
         output_level: Response verbosity ('minimal', 'standard', 'detailed')
         capture_screenshots: Enable screenshot capture on failures
-        
+
     Returns:
         Comprehensive execution results with statistics and output files
     """
-    
+
     if execution_options is None:
         execution_options = {}
-    
+
     # Session resolution with same logic as build_test_suite
     from robotmcp.utils.session_resolution import SessionResolver
+
     session_resolver = SessionResolver(execution_engine.session_manager)
-    
+
     if suite_file_path:
         # Direct file execution mode
         logger.info(f"Running suite execution on file: {suite_file_path}")
@@ -1240,42 +1246,42 @@ async def run_test_suite(
     else:
         # Session-based execution mode
         resolution_result = session_resolver.resolve_session_with_fallback(session_id)
-        
+
         if not resolution_result["success"]:
             return {
                 "success": False,
                 "tool": "run_test_suite",
-                "error": "No valid session or suite file for execution", 
+                "error": "No valid session or suite file for execution",
                 "error_details": resolution_result["error_guidance"],
                 "guidance": [
                     "Create a session and execute some steps first",
                     "Use build_test_suite to generate a test suite",
-                    "Or provide suite_file_path to execute an existing file"
+                    "Or provide suite_file_path to execute an existing file",
                 ],
-                "recommendation": "Use build_test_suite first or provide suite_file_path"
+                "recommendation": "Use build_test_suite first or provide suite_file_path",
             }
-        
+
         resolved_session_id = resolution_result["session_id"]
         logger.info(f"Running suite execution for session: {resolved_session_id}")
-        
+
         result = await execution_engine.run_suite_execution(
             resolved_session_id, execution_options, output_level, capture_screenshots
         )
-        
+
         # Add session resolution info to result
         if resolution_result.get("fallback_used", False):
             result["session_resolution"] = {
                 "fallback_used": True,
                 "original_session_id": session_id,
                 "resolved_session_id": resolved_session_id,
-                "message": f"Automatically used session '{resolved_session_id}' with {resolution_result['session_info']['step_count']} executed steps"
+                "message": f"Automatically used session '{resolved_session_id}' with {resolution_result['session_info']['step_count']} executed steps",
             }
         else:
             result["session_resolution"] = {
                 "fallback_used": False,
-                "session_id": resolved_session_id
+                "session_id": resolved_session_id,
             }
-        
+
         return result
 
 

@@ -1,20 +1,21 @@
 """Session-related data models."""
 
+import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set
 from enum import Enum
-import re
-import logging
+from typing import Any, Dict, List, Optional, Set
 
-from .execution_models import ExecutionStep
 from .browser_models import BrowserState
+from .execution_models import ExecutionStep
 
 logger = logging.getLogger(__name__)
 
 
 class PlatformType(Enum):
     """Platform types for test automation."""
+
     WEB = "web"
     MOBILE = "mobile"
     DESKTOP = "desktop"
@@ -24,6 +25,7 @@ class PlatformType(Enum):
 @dataclass
 class MobileConfig:
     """Configuration for mobile testing sessions."""
+
     platform_name: Optional[str] = None  # iOS or Android
     device_name: Optional[str] = None
     device_udid: Optional[str] = None
@@ -36,48 +38,49 @@ class MobileConfig:
     no_reset: bool = False
     full_reset: bool = False
     bundle_id: Optional[str] = None  # iOS app bundle identifier
-    
+
     def to_capabilities(self) -> Dict[str, Any]:
         """Convert config to Appium capabilities dictionary."""
         caps = {}
-        
+
         # Required capabilities
         if self.platform_name:
-            caps['platformName'] = self.platform_name
+            caps["platformName"] = self.platform_name
         if self.device_name:
-            caps['appium:deviceName'] = self.device_name
-            
+            caps["appium:deviceName"] = self.device_name
+
         # Platform-specific capabilities
-        if self.platform_name == 'Android':
+        if self.platform_name == "Android":
             if self.app_package:
-                caps['appium:appPackage'] = self.app_package
+                caps["appium:appPackage"] = self.app_package
             if self.app_activity:
-                caps['appium:appActivity'] = self.app_activity
+                caps["appium:appActivity"] = self.app_activity
             if self.automation_name:
-                caps['appium:automationName'] = self.automation_name or 'UiAutomator2'
-        elif self.platform_name == 'iOS':
+                caps["appium:automationName"] = self.automation_name or "UiAutomator2"
+        elif self.platform_name == "iOS":
             if self.bundle_id:
-                caps['appium:bundleId'] = self.bundle_id
+                caps["appium:bundleId"] = self.bundle_id
             if self.automation_name:
-                caps['appium:automationName'] = self.automation_name or 'XCUITest'
-                
+                caps["appium:automationName"] = self.automation_name or "XCUITest"
+
         # Common optional capabilities
         if self.app_path:
-            caps['appium:app'] = self.app_path
+            caps["appium:app"] = self.app_path
         if self.device_udid:
-            caps['appium:udid'] = self.device_udid
+            caps["appium:udid"] = self.device_udid
         if self.platform_version:
-            caps['appium:platformVersion'] = self.platform_version
+            caps["appium:platformVersion"] = self.platform_version
         if self.no_reset:
-            caps['appium:noReset'] = self.no_reset
+            caps["appium:noReset"] = self.no_reset
         if self.full_reset:
-            caps['appium:fullReset'] = self.full_reset
-            
+            caps["appium:fullReset"] = self.full_reset
+
         return caps
 
 
 class SessionType(Enum):
     """Types of test automation sessions."""
+
     XML_PROCESSING = "xml_processing"
     WEB_AUTOMATION = "web_automation"
     API_TESTING = "api_testing"
@@ -93,6 +96,7 @@ class SessionType(Enum):
 @dataclass
 class SessionProfile:
     """Configuration for a session type."""
+
     session_type: SessionType
     core_libraries: List[str] = field(default_factory=list)
     optional_libraries: List[str] = field(default_factory=list)
@@ -104,6 +108,7 @@ class SessionProfile:
 @dataclass
 class ExecutionSession:
     """Manages execution state for a test session with intelligent library management."""
+
     session_id: str
     suite: Optional[Any] = None
     steps: List[ExecutionStep] = field(default_factory=list)
@@ -113,106 +118,117 @@ class ExecutionSession:
     browser_state: BrowserState = field(default_factory=BrowserState)
     created_at: datetime = field(default_factory=datetime.now)
     last_activity: datetime = field(default_factory=datetime.now)
-    
+
     # New fields from ActiveSession
     session_type: SessionType = SessionType.UNKNOWN
     loaded_libraries: Set[str] = field(default_factory=set)
     keywords_used: List[str] = field(default_factory=list)
     search_order: List[str] = field(default_factory=list)
     request_count: int = 0
-    explicit_library_preference: Optional[str] = None  # For scenario-based explicit preferences
+    explicit_library_preference: Optional[str] = (
+        None  # For scenario-based explicit preferences
+    )
     scenario_text: Optional[str] = None  # Store original scenario for re-analysis
     auto_configured: bool = False  # Track if session was auto-configured
     context_mode: bool = False  # Track if session uses full RF context mode
-    libraries_loaded: bool = False  # Track if session libraries have been loaded into library manager
-    
+    libraries_loaded: bool = (
+        False  # Track if session libraries have been loaded into library manager
+    )
+
     # Mobile-specific fields
-    platform_type: PlatformType = PlatformType.WEB  # Default to web for backward compatibility
+    platform_type: PlatformType = (
+        PlatformType.WEB
+    )  # Default to web for backward compatibility
     mobile_config: Optional[MobileConfig] = None
     appium_session_id: Optional[str] = None
     current_context: Optional[str] = None  # NATIVE_APP, WEBVIEW_*, etc.
-    
+
     def add_step(self, step: ExecutionStep) -> None:
         """Add a successful step to the session."""
         if step.is_successful:
             self.steps.append(step)
             self.last_activity = datetime.now()
-    
+
     def update_activity(self) -> None:
         """Update the last activity timestamp."""
         self.last_activity = datetime.now()
-    
+
     def is_browser_session(self) -> bool:
         """Check if this session has browser automation capabilities."""
-        return (self.browser_state.has_browser_session() or 
-                'Browser' in self.imported_libraries or 
-                'SeleniumLibrary' in self.imported_libraries)
-    
+        return (
+            self.browser_state.has_browser_session()
+            or "Browser" in self.imported_libraries
+            or "SeleniumLibrary" in self.imported_libraries
+        )
+
     def get_active_library(self) -> Optional[str]:
         """Get the currently active browser automation library."""
         return self.browser_state.active_library
-    
+
     def set_variable(self, name: str, value: Any) -> None:
         """Set a session variable."""
         self.variables[name] = value
         self.update_activity()
-    
+
     def get_variable(self, name: str, default: Any = None) -> Any:
         """Get a session variable."""
         return self.variables.get(name, default)
-    
+
     def enable_context_mode(self) -> None:
         """Enable full RF context mode for this session."""
         self.context_mode = True
         self.update_activity()
-    
+
     def is_context_mode(self) -> bool:
         """Check if session is in context mode."""
         return self.context_mode
-    
+
     def is_mobile_session(self) -> bool:
         """Check if this is a mobile testing session."""
-        return (self.platform_type == PlatformType.MOBILE or 
-                'AppiumLibrary' in self.imported_libraries or
-                self.session_type == SessionType.MOBILE_TESTING)
-    
+        return (
+            self.platform_type == PlatformType.MOBILE
+            or "AppiumLibrary" in self.imported_libraries
+            or self.session_type == SessionType.MOBILE_TESTING
+        )
+
     def is_web_session(self) -> bool:
         """Check if this is a web testing session."""
-        return (self.platform_type == PlatformType.WEB or 
-                self.is_browser_session())
-    
+        return self.platform_type == PlatformType.WEB or self.is_browser_session()
+
     def set_mobile_config(self, config: MobileConfig) -> None:
         """Set mobile configuration for the session."""
         self.mobile_config = config
         self.platform_type = PlatformType.MOBILE
         self.session_type = SessionType.MOBILE_TESTING
         self.update_activity()
-    
+
     def import_library(self, library_name: str, force: bool = False) -> None:
         """
         Mark a library as imported in this session and ensure it's loaded in LibraryManager.
-        
+
         Enforces exclusion rules - Browser Library and SeleniumLibrary cannot
         coexist in the same session, unless force=True is used to switch libraries.
-        
+
         CRITICAL FIX: Now triggers immediate library loading to ensure consistency
         between discovery and execution operations.
-        
+
         Args:
             library_name: Name of the library to import
             force: If True, allows switching between mutually exclusive libraries
-            
+
         Raises:
             ValueError: If trying to import a conflicting library without force=True
         """
         if library_name not in self.imported_libraries:
             # Enforce web automation library exclusion
-            web_automation_libs = ['Browser', 'SeleniumLibrary']
-            
+            web_automation_libs = ["Browser", "SeleniumLibrary"]
+
             if library_name in web_automation_libs:
                 # Check if another web automation library is already imported
-                existing_web_libs = [lib for lib in self.imported_libraries if lib in web_automation_libs]
-                
+                existing_web_libs = [
+                    lib for lib in self.imported_libraries if lib in web_automation_libs
+                ]
+
                 if existing_web_libs and library_name not in existing_web_libs:
                     if not force:
                         existing_lib = existing_web_libs[0]
@@ -225,297 +241,354 @@ class ExecutionSession:
                         for existing_lib in existing_web_libs:
                             if existing_lib in self.imported_libraries:
                                 self.imported_libraries.remove(existing_lib)
-            
+
             self.imported_libraries.append(library_name)
-            
+
             # CRITICAL FIX: Trigger immediate library loading
             self._ensure_library_loaded_immediately(library_name)
-            
+
             self.update_activity()
-    
+
     def _ensure_library_loaded_immediately(self, library_name: str) -> bool:
         """
         Ensure a library is immediately loaded and available for keyword discovery.
-        
+
         Enhanced version with better validation and error reporting.
-        
+
         Returns:
             bool: True if library is loaded successfully, False otherwise
         """
         try:
             # Check if already loaded
-            if hasattr(self, '_session_manager') and self._session_manager:
+            if hasattr(self, "_session_manager") and self._session_manager:
                 # Get orchestrator through session manager if available
-                execution_coordinator = getattr(self._session_manager, 'execution_coordinator', None)
-                if execution_coordinator and library_name in execution_coordinator.keyword_discovery.libraries:
+                execution_coordinator = getattr(
+                    self._session_manager, "execution_coordinator", None
+                )
+                if (
+                    execution_coordinator
+                    and library_name
+                    in execution_coordinator.keyword_discovery.libraries
+                ):
                     logger.debug(f"Library '{library_name}' already loaded")
                     self.loaded_libraries.add(library_name)
                     return True
-            
+
             # Get the orchestrator to access library manager
             from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
+
             orchestrator = get_keyword_discovery()
-            
+
             # Check if library is already loaded in orchestrator
             if library_name not in orchestrator.library_manager.libraries:
-                logger.info(f"Loading {library_name} immediately for session {self.session_id} import")
-                
+                logger.info(
+                    f"Loading {library_name} immediately for session {self.session_id} import"
+                )
+
                 # Load library on demand
                 success = orchestrator.library_manager.load_library_on_demand(
-                    library_name, 
-                    orchestrator.keyword_discovery
+                    library_name, orchestrator.keyword_discovery
                 )
-                
+
                 if success and library_name in orchestrator.library_manager.libraries:
                     # Add keywords to cache
                     lib_info = orchestrator.library_manager.libraries[library_name]
                     orchestrator.keyword_discovery.add_keywords_to_cache(lib_info)
-                    
+
                     # Mark as loaded in session
                     self.loaded_libraries.add(library_name)
-                    
-                    logger.info(f"Successfully loaded {library_name} immediately for session import")
+
+                    logger.info(
+                        f"Successfully loaded {library_name} immediately for session import"
+                    )
                     return True
                 else:
-                    logger.error(f"Failed to load {library_name} immediately - library loading failed")
+                    logger.error(
+                        f"Failed to load {library_name} immediately - library loading failed"
+                    )
                     return False
             else:
                 # Already loaded, just mark it in session
                 self.loaded_libraries.add(library_name)
                 logger.debug(f"{library_name} already loaded in LibraryManager")
                 return True
-                
+
         except Exception as e:
-            logger.error(f"Error loading {library_name} immediately for session {self.session_id}: {e}")
+            logger.error(
+                f"Error loading {library_name} immediately for session {self.session_id}: {e}"
+            )
             return False
-    
+
     def get_web_automation_library(self) -> Optional[str]:
         """Get the web automation library imported in this session."""
-        web_automation_libs = ['Browser', 'SeleniumLibrary']
+        web_automation_libs = ["Browser", "SeleniumLibrary"]
         for lib in self.imported_libraries:
             if lib in web_automation_libs:
                 return lib
         return None
-    
-    def get_session_type(self) -> 'SessionType':
+
+    def get_session_type(self) -> "SessionType":
         """Get the session type."""
         return self.session_type
-    
+
     def get_successful_steps(self) -> List[ExecutionStep]:
         """Get all successfully executed steps."""
         return [step for step in self.steps if step.is_successful]
-    
+
     def get_failed_steps(self) -> List[ExecutionStep]:
         """Get all failed steps (Note: failed steps are not added to self.steps)."""
         # This would need to be tracked separately if needed
         return []
-    
+
     @property
     def step_count(self) -> int:
         """Get the total number of successful steps."""
         return len(self.steps)
-    
+
     @property
     def duration(self) -> float:
         """Calculate session duration in seconds."""
         return (self.last_activity - self.created_at).total_seconds()
-    
+
     def cleanup(self) -> None:
         """Clean up session resources."""
         self.browser_state.reset()
         self.steps.clear()
         # Keep variables and imported_libraries for potential reuse
-    
+
     # ===============================
     # Session Profiles (from SessionManager)
     # ===============================
-    
+
     @classmethod
     def _get_session_profiles(cls) -> Dict[SessionType, SessionProfile]:
         """Get predefined session profiles."""
         return {
             SessionType.XML_PROCESSING: SessionProfile(
                 session_type=SessionType.XML_PROCESSING,
-                core_libraries=["BuiltIn", "XML", "Collections", "String", "OperatingSystem"],
-                optional_libraries=["DateTime", "Process"],
-                search_order=["XML", "BuiltIn", "Collections", "String", "OperatingSystem"],
-                keywords_patterns=[
-                    r'\b(parse|xml|xpath|element|attribute)\b',
-                    r'\b(get element|set element|xml)\b'
+                core_libraries=[
+                    "BuiltIn",
+                    "XML",
+                    "Collections",
+                    "String",
+                    "OperatingSystem",
                 ],
-                description="XML file processing and manipulation"
+                optional_libraries=["DateTime", "Process"],
+                search_order=[
+                    "XML",
+                    "BuiltIn",
+                    "Collections",
+                    "String",
+                    "OperatingSystem",
+                ],
+                keywords_patterns=[
+                    r"\b(parse|xml|xpath|element|attribute)\b",
+                    r"\b(get element|set element|xml)\b",
+                ],
+                description="XML file processing and manipulation",
             ),
-            
             SessionType.WEB_AUTOMATION: SessionProfile(
                 session_type=SessionType.WEB_AUTOMATION,
                 core_libraries=["BuiltIn", "Browser", "Collections", "String"],
                 optional_libraries=["XML", "DateTime", "Screenshot"],
                 search_order=["Browser", "BuiltIn", "Collections", "String", "XML"],
                 keywords_patterns=[
-                    r'\b(click|fill|navigate|browser|page|element|locator)\b',
-                    r'\b(new page|go to|wait for|screenshot)\b',
-                    r'\b(get text|get attribute|should contain)\b'
+                    r"\b(click|fill|navigate|browser|page|element|locator)\b",
+                    r"\b(new page|go to|wait for|screenshot)\b",
+                    r"\b(get text|get attribute|should contain)\b",
                 ],
-                description="Web browser automation testing"
+                description="Web browser automation testing",
             ),
-            
             SessionType.API_TESTING: SessionProfile(
                 session_type=SessionType.API_TESTING,
                 core_libraries=["BuiltIn", "RequestsLibrary", "Collections", "String"],
                 optional_libraries=["XML", "DateTime"],
-                search_order=["RequestsLibrary", "BuiltIn", "Collections", "String", "XML"],
-                keywords_patterns=[
-                    r'\b(get request|post|put|delete|api|http)\b',
-                    r'\b(create session|request|response|status)\b',
-                    r'\b(json|rest|endpoint)\b'
+                search_order=[
+                    "RequestsLibrary",
+                    "BuiltIn",
+                    "Collections",
+                    "String",
+                    "XML",
                 ],
-                description="API and HTTP testing"
+                keywords_patterns=[
+                    r"\b(get request|post|put|delete|api|http)\b",
+                    r"\b(create session|request|response|status)\b",
+                    r"\b(json|rest|endpoint)\b",
+                ],
+                description="API and HTTP testing",
             ),
-            
             SessionType.DATA_PROCESSING: SessionProfile(
                 session_type=SessionType.DATA_PROCESSING,
                 core_libraries=["BuiltIn", "Collections", "String", "DateTime", "XML"],
                 optional_libraries=["OperatingSystem", "Process"],
                 search_order=["Collections", "String", "DateTime", "XML", "BuiltIn"],
                 keywords_patterns=[
-                    r'\b(create list|append|remove|sort|filter)\b',
-                    r'\b(convert to|get from|set to)\b',
-                    r'\b(data|process|transform)\b'
+                    r"\b(create list|append|remove|sort|filter)\b",
+                    r"\b(convert to|get from|set to)\b",
+                    r"\b(data|process|transform)\b",
                 ],
-                description="Data processing and manipulation"
+                description="Data processing and manipulation",
             ),
-            
             SessionType.SYSTEM_TESTING: SessionProfile(
                 session_type=SessionType.SYSTEM_TESTING,
                 core_libraries=["BuiltIn", "OperatingSystem", "Process", "Collections"],
                 optional_libraries=["String", "DateTime", "SSHLibrary"],
                 search_order=["OperatingSystem", "Process", "BuiltIn", "Collections"],
                 keywords_patterns=[
-                    r'\b(run process|start process|terminate|kill)\b',
-                    r'\b(create file|remove file|directory|path)\b',
-                    r'\b(environment|variable|system)\b'
+                    r"\b(run process|start process|terminate|kill)\b",
+                    r"\b(create file|remove file|directory|path)\b",
+                    r"\b(environment|variable|system)\b",
                 ],
-                description="System and process testing"
+                description="System and process testing",
             ),
-            
             SessionType.MOBILE_TESTING: SessionProfile(
                 session_type=SessionType.MOBILE_TESTING,
                 core_libraries=["BuiltIn", "AppiumLibrary", "Collections", "String"],
                 optional_libraries=["XML", "DateTime", "Screenshot", "ImageLibrary"],
-                search_order=["AppiumLibrary", "BuiltIn", "Collections", "String", "XML"],
-                keywords_patterns=[
-                    r'\b(mobile|android|ios|device|app)\b',
-                    r'\b(tap|swipe|scroll|pinch|zoom)\b',
-                    r'\b(install|launch|close)\s+(app|application)\b',
-                    r'\b(appium|mobile\s*automation)\b'
+                search_order=[
+                    "AppiumLibrary",
+                    "BuiltIn",
+                    "Collections",
+                    "String",
+                    "XML",
                 ],
-                description="Mobile application testing with Appium"
+                keywords_patterns=[
+                    r"\b(mobile|android|ios|device|app)\b",
+                    r"\b(tap|swipe|scroll|pinch|zoom)\b",
+                    r"\b(install|launch|close)\s+(app|application)\b",
+                    r"\b(appium|mobile\s*automation)\b",
+                ],
+                description="Mobile application testing with Appium",
             ),
-            
             SessionType.DATABASE_TESTING: SessionProfile(
                 session_type=SessionType.DATABASE_TESTING,
                 core_libraries=["BuiltIn", "DatabaseLibrary", "Collections", "String"],
                 optional_libraries=["DateTime", "XML", "OperatingSystem"],
                 search_order=["DatabaseLibrary", "BuiltIn", "Collections", "String"],
                 keywords_patterns=[
-                    r'\b(database|sql|query|table|record)\b',
-                    r'\b(connect|disconnect|execute|select|insert|update|delete)\b',
-                    r'\b(mysql|postgresql|sqlite|oracle|mongodb)\b',
-                    r'\b(transaction|commit|rollback)\b'
+                    r"\b(database|sql|query|table|record)\b",
+                    r"\b(connect|disconnect|execute|select|insert|update|delete)\b",
+                    r"\b(mysql|postgresql|sqlite|oracle|mongodb)\b",
+                    r"\b(transaction|commit|rollback)\b",
                 ],
-                description="Database testing and validation"
+                description="Database testing and validation",
             ),
-            
             SessionType.VISUAL_TESTING: SessionProfile(
                 session_type=SessionType.VISUAL_TESTING,
                 core_libraries=["BuiltIn", "ImageLibrary", "Collections", "String"],
-                optional_libraries=["Browser", "SeleniumLibrary", "Screenshot", "DateTime"],
-                search_order=["ImageLibrary", "Browser", "BuiltIn", "Collections", "String"],
-                keywords_patterns=[
-                    r'\b(image|screenshot|visual|compare|pixel)\b',
-                    r'\b(capture|template|match|similarity)\b',
-                    r'\b(visual\s*testing|image\s*comparison)\b'
+                optional_libraries=[
+                    "Browser",
+                    "SeleniumLibrary",
+                    "Screenshot",
+                    "DateTime",
                 ],
-                description="Visual testing and image comparison"
-            )
+                search_order=[
+                    "ImageLibrary",
+                    "Browser",
+                    "BuiltIn",
+                    "Collections",
+                    "String",
+                ],
+                keywords_patterns=[
+                    r"\b(image|screenshot|visual|compare|pixel)\b",
+                    r"\b(capture|template|match|similarity)\b",
+                    r"\b(visual\s*testing|image\s*comparison)\b",
+                ],
+                description="Visual testing and image comparison",
+            ),
         }
-    
+
     # ===============================
     # Scenario-Based Library Detection
     # ===============================
-    
+
     def detect_explicit_library_preference(self, scenario_text: str) -> Optional[str]:
         """Detect explicit library preference from scenario text with enhanced patterns and confidence scoring."""
         if not scenario_text:
             return None
-        
+
         text_lower = scenario_text.lower()
         library_scores = {}
-        
+
         # Enhanced Selenium patterns (highest priority for explicit mentions)
         selenium_patterns = [
-            (r'\b(use|using|with|via|through)\s+(selenium|seleniumlibrary|selenium\s*library)\b', 10),
-            (r'\btest\s+automation\s+with\s+selenium\b', 8),
-            (r'\bseleniumlibrary\b', 9),
-            (r'\bwebdriver\b', 6),  # WebDriver often implies Selenium
-            (r'\bselenium\b(?!.*browser)(?!.*grid)', 7),  # Selenium mentioned but not "selenium browser" or "selenium grid"
-            (r'\b(selenium|webdriver)\s+(automation|testing|framework)\b', 8),
-            (r'\bchrome\s*driver|firefox\s*driver|edge\s*driver\b', 5),
+            (
+                r"\b(use|using|with|via|through)\s+(selenium|seleniumlibrary|selenium\s*library)\b",
+                10,
+            ),
+            (r"\btest\s+automation\s+with\s+selenium\b", 8),
+            (r"\bseleniumlibrary\b", 9),
+            (r"\bwebdriver\b", 6),  # WebDriver often implies Selenium
+            (
+                r"\bselenium\b(?!.*browser)(?!.*grid)",
+                7,
+            ),  # Selenium mentioned but not "selenium browser" or "selenium grid"
+            (r"\b(selenium|webdriver)\s+(automation|testing|framework)\b", 8),
+            (r"\bchrome\s*driver|firefox\s*driver|edge\s*driver\b", 5),
         ]
-        
+
         # Enhanced Browser Library patterns
         browser_patterns = [
-            (r'\b(use|using|with|via|through)\s+(browser|browserlibrary|browser\s*library|playwright)\b', 10),
-            (r'\btest\s+automation\s+with\s+(browser\s*library|playwright)\b', 8),
-            (r'\bbrowser\s*library\b', 9),
-            (r'\bplaywright\b', 8),
-            (r'\b(modern|new)\s+(browser|web)\s+(automation|testing)\b', 6),
-            (r'\b(chromium|firefox|webkit)\s+(browser|automation)\b', 7),
-            (r'\b(headless|headed)\s+(browser|testing)\b', 5),
-            (r'\basync\s+(browser|web)\s+automation\b', 6),
+            (
+                r"\b(use|using|with|via|through)\s+(browser|browserlibrary|browser\s*library|playwright)\b",
+                10,
+            ),
+            (r"\btest\s+automation\s+with\s+(browser\s*library|playwright)\b", 8),
+            (r"\bbrowser\s*library\b", 9),
+            (r"\bplaywright\b", 8),
+            (r"\b(modern|new)\s+(browser|web)\s+(automation|testing)\b", 6),
+            (r"\b(chromium|firefox|webkit)\s+(browser|automation)\b", 7),
+            (r"\b(headless|headed)\s+(browser|testing)\b", 5),
+            (r"\basync\s+(browser|web)\s+automation\b", 6),
         ]
-        
+
         # Enhanced API testing patterns
         api_patterns = [
-            (r'\b(use|using|with)\s+(requests|requestslibrary|requests\s*library)\b', 10),
-            (r'\btest\s+automation\s+with\s+requests\b', 8),
-            (r'\brequestslibrary\b', 9),
-            (r'\b(rest|http)\s+(api|testing|automation)\b', 7),
-            (r'\b(post|get|put|delete)\s+(request|endpoint)\b', 6),
-            (r'\bjson\s+(api|response|request)\b', 5),
-            (r'\bapi\s+(automation|testing|validation)\b', 6),
+            (
+                r"\b(use|using|with)\s+(requests|requestslibrary|requests\s*library)\b",
+                10,
+            ),
+            (r"\btest\s+automation\s+with\s+requests\b", 8),
+            (r"\brequestslibrary\b", 9),
+            (r"\b(rest|http)\s+(api|testing|automation)\b", 7),
+            (r"\b(post|get|put|delete)\s+(request|endpoint)\b", 6),
+            (r"\bjson\s+(api|response|request)\b", 5),
+            (r"\bapi\s+(automation|testing|validation)\b", 6),
         ]
-        
+
         # Enhanced XML processing patterns
         xml_patterns = [
-            (r'\b(use|using|with)\s+(xml|xmllibrary|xml\s*library)\b', 10),
-            (r'\btest\s+automation\s+with\s+xml\b', 8),
-            (r'\bxmllibrary\b', 9),
-            (r'\b(xml|xpath)\s+(processing|parsing|manipulation)\b', 7),
-            (r'\b(parse|process|manipulate)\s+xml\b', 6),
-            (r'\bxml\s+(validation|testing|automation)\b', 6),
+            (r"\b(use|using|with)\s+(xml|xmllibrary|xml\s*library)\b", 10),
+            (r"\btest\s+automation\s+with\s+xml\b", 8),
+            (r"\bxmllibrary\b", 9),
+            (r"\b(xml|xpath)\s+(processing|parsing|manipulation)\b", 7),
+            (r"\b(parse|process|manipulate)\s+xml\b", 6),
+            (r"\bxml\s+(validation|testing|automation)\b", 6),
         ]
-        
+
         # Enhanced mobile testing patterns
         mobile_patterns = [
-            (r'\b(use|using|with)\s+(appium|appiumlibrary|appium\s*library)\b', 10),
-            (r'\btest\s+automation\s+with\s+appium\b', 8),
-            (r'\bappiumlibrary\b', 9),
-            (r'\b(mobile|android|ios)\s+(app|testing|automation)\b', 7),
-            (r'\b(device|mobile)\s+(automation|testing)\b', 6),
-            (r'\b(native|hybrid)\s+(app|mobile)\s+(testing|automation)\b', 6),
+            (r"\b(use|using|with)\s+(appium|appiumlibrary|appium\s*library)\b", 10),
+            (r"\btest\s+automation\s+with\s+appium\b", 8),
+            (r"\bappiumlibrary\b", 9),
+            (r"\b(mobile|android|ios)\s+(app|testing|automation)\b", 7),
+            (r"\b(device|mobile)\s+(automation|testing)\b", 6),
+            (r"\b(native|hybrid)\s+(app|mobile)\s+(testing|automation)\b", 6),
         ]
-        
+
         # Enhanced database testing patterns
         database_patterns = [
-            (r'\b(use|using|with)\s+(database|databaselibrary|database\s*library)\b', 10),
-            (r'\btest\s+automation\s+with\s+database\b', 8),
-            (r'\bdatabaselibrary\b', 9),
-            (r'\b(sql|database)\s+(testing|automation|queries)\b', 7),
-            (r'\b(mysql|postgresql|sqlite|oracle)\s+(database|testing)\b', 6),
-            (r'\bdatabase\s+(validation|testing|automation)\b', 6),
+            (
+                r"\b(use|using|with)\s+(database|databaselibrary|database\s*library)\b",
+                10,
+            ),
+            (r"\btest\s+automation\s+with\s+database\b", 8),
+            (r"\bdatabaselibrary\b", 9),
+            (r"\b(sql|database)\s+(testing|automation|queries)\b", 7),
+            (r"\b(mysql|postgresql|sqlite|oracle)\s+(database|testing)\b", 6),
+            (r"\bdatabase\s+(validation|testing|automation)\b", 6),
         ]
-        
+
         # Score all patterns
         all_patterns = [
             ("SeleniumLibrary", selenium_patterns),
@@ -525,222 +598,243 @@ class ExecutionSession:
             ("AppiumLibrary", mobile_patterns),
             ("DatabaseLibrary", database_patterns),
         ]
-        
+
         for library_name, patterns in all_patterns:
             library_scores[library_name] = 0
             for pattern, weight in patterns:
                 matches = len(re.findall(pattern, text_lower))
                 library_scores[library_name] += matches * weight
-        
+
         # Find highest scoring library
         if library_scores:
             best_library = max(library_scores, key=library_scores.get)
             max_score = library_scores[best_library]
-            
+
             # Only return if confidence is high enough
             if max_score >= 5:  # Minimum confidence threshold
-                logger.info(f"Detected explicit {best_library} preference (score: {max_score}) in scenario")
+                logger.info(
+                    f"Detected explicit {best_library} preference (score: {max_score}) in scenario"
+                )
                 return best_library
-        
+
         # Fallback: Generic patterns for common libraries (lower confidence)
         fallback_patterns = [
-            (r'\b(xml|xpath)\b', "XML"),
-            (r'\b(api|http|rest|request)\b', "RequestsLibrary"),
-            (r'\b(mobile|android|ios|device)\b', "AppiumLibrary"),
-            (r'\b(database|sql|mysql|postgresql)\b', "DatabaseLibrary"),
+            (r"\b(xml|xpath)\b", "XML"),
+            (r"\b(api|http|rest|request)\b", "RequestsLibrary"),
+            (r"\b(mobile|android|ios|device)\b", "AppiumLibrary"),
+            (r"\b(database|sql|mysql|postgresql)\b", "DatabaseLibrary"),
         ]
-        
+
         for pattern, library in fallback_patterns:
             if re.search(pattern, text_lower):
-                logger.info(f"Fallback detection: {library} preference based on generic pattern")
+                logger.info(
+                    f"Fallback detection: {library} preference based on generic pattern"
+                )
                 return library
-        
+
         return None
-    
+
     def detect_session_type_from_scenario(self, scenario_text: str) -> SessionType:
         """Detect session type from scenario text with enhanced multi-pass pattern matching."""
         if not scenario_text:
             return SessionType.UNKNOWN
-        
+
         text_lower = scenario_text.lower()
         profiles = self._get_session_profiles()
         scores = {session_type: 0 for session_type in profiles.keys()}
-        
+
         # Enhanced scoring with weighted patterns and context awareness
         pattern_weights = {
             # High confidence patterns get higher weight
             SessionType.WEB_AUTOMATION: [
-                (r'\b(web|browser|page|form|button|click|fill)\b', 2),
-                (r'\b(selenium|browser\s*library|playwright)\b', 4),  # Explicit library mentions
-                (r'\b(login|registration|navigation|ui|website)\b', 2),
-                (r'\b(url|link|element|locator|css|xpath)\b', 2),
-                (r'\b(headless|headed|screenshot|automation)\b', 1),
-                (r'\bhttps?://\S+', 3),  # URL detection
+                (r"\b(web|browser|page|form|button|click|fill)\b", 2),
+                (
+                    r"\b(selenium|browser\s*library|playwright)\b",
+                    4,
+                ),  # Explicit library mentions
+                (r"\b(login|registration|navigation|ui|website)\b", 2),
+                (r"\b(url|link|element|locator|css|xpath)\b", 2),
+                (r"\b(headless|headed|screenshot|automation)\b", 1),
+                (r"\bhttps?://\S+", 3),  # URL detection
             ],
             SessionType.API_TESTING: [
-                (r'\b(api|rest|http|endpoint|request)\b', 3),
-                (r'\b(get|post|put|delete|patch)\s+(request|method|call)\b', 4),
-                (r'\b(json|xml|response|status|header)\b', 2),
-                (r'\b(oauth|token|authentication|authorization)\b', 2),
-                (r'\bmicroservice|webhook|graphql\b', 2),
-                (r'\bapi\s+(testing|automation|validation)\b', 3),
+                (r"\b(api|rest|http|endpoint|request)\b", 3),
+                (r"\b(get|post|put|delete|patch)\s+(request|method|call)\b", 4),
+                (r"\b(json|xml|response|status|header)\b", 2),
+                (r"\b(oauth|token|authentication|authorization)\b", 2),
+                (r"\bmicroservice|webhook|graphql\b", 2),
+                (r"\bapi\s+(testing|automation|validation)\b", 3),
             ],
             SessionType.XML_PROCESSING: [
-                (r'\b(xml|xpath|parse|element|attribute)\b', 3),
-                (r'\b(document|node|tag|namespace)\b', 2),
-                (r'\b(xslt|xsd|dtd|schema)\b', 3),
-                (r'\bxml\s+(processing|parsing|validation)\b', 4),
+                (r"\b(xml|xpath|parse|element|attribute)\b", 3),
+                (r"\b(document|node|tag|namespace)\b", 2),
+                (r"\b(xslt|xsd|dtd|schema)\b", 3),
+                (r"\bxml\s+(processing|parsing|validation)\b", 4),
             ],
             SessionType.DATA_PROCESSING: [
-                (r'\b(data|process|transform|manipulate|convert)\b', 2),
-                (r'\b(list|dictionary|collection|string|csv|excel)\b', 2),
-                (r'\b(filter|sort|aggregate|merge|split)\b', 2),
-                (r'\bdata\s+(processing|transformation|manipulation)\b', 3),
+                (r"\b(data|process|transform|manipulate|convert)\b", 2),
+                (r"\b(list|dictionary|collection|string|csv|excel)\b", 2),
+                (r"\b(filter|sort|aggregate|merge|split)\b", 2),
+                (r"\bdata\s+(processing|transformation|manipulation)\b", 3),
             ],
             SessionType.SYSTEM_TESTING: [
-                (r'\b(system|process|file|directory|filesystem)\b', 2),
-                (r'\b(command|shell|environment|terminal)\b', 2),
-                (r'\b(ssh|ftp|sftp|scp)\b', 2),
-                (r'\bsystem\s+(testing|automation|administration)\b', 3),
+                (r"\b(system|process|file|directory|filesystem)\b", 2),
+                (r"\b(command|shell|environment|terminal)\b", 2),
+                (r"\b(ssh|ftp|sftp|scp)\b", 2),
+                (r"\bsystem\s+(testing|automation|administration)\b", 3),
             ],
             SessionType.MOBILE_TESTING: [
-                (r'\b(mobile|android|ios|device|app)\b', 3),
-                (r'\b(appium|espresso|xcuitest)\b', 4),
-                (r'\b(tap|swipe|scroll|pinch|gesture)\b', 3),
-                (r'\bmobile\s+(testing|automation|app)\b', 4),
+                (r"\b(mobile|android|ios|device|app)\b", 3),
+                (r"\b(appium|espresso|xcuitest)\b", 4),
+                (r"\b(tap|swipe|scroll|pinch|gesture)\b", 3),
+                (r"\bmobile\s+(testing|automation|app)\b", 4),
             ],
             SessionType.DATABASE_TESTING: [
-                (r'\b(database|sql|query|table|record)\b', 3),
-                (r'\b(mysql|postgresql|sqlite|oracle|mongodb)\b', 3),
-                (r'\b(select|insert|update|delete|create)\s+(table|from|into)\b', 3),
-                (r'\bdatabase\s+(testing|automation|validation)\b', 4),
-            ]
+                (r"\b(database|sql|query|table|record)\b", 3),
+                (r"\b(mysql|postgresql|sqlite|oracle|mongodb)\b", 3),
+                (r"\b(select|insert|update|delete|create)\s+(table|from|into)\b", 3),
+                (r"\bdatabase\s+(testing|automation|validation)\b", 4),
+            ],
         }
-        
+
         # Score using weighted patterns
         for session_type, weighted_patterns in pattern_weights.items():
             for pattern, weight in weighted_patterns:
                 matches = len(re.findall(pattern, text_lower))
                 scores[session_type] += matches * weight
-        
+
         # Also use original profile patterns as fallback
         for session_type, profile in profiles.items():
             for pattern in profile.keywords_patterns:
                 matches = len(re.findall(pattern, text_lower))
                 scores[session_type] += matches  # Default weight of 1
-        
+
         # Find the session type with highest score
         if not scores or max(scores.values()) == 0:
             return SessionType.UNKNOWN
-        
+
         best_type = max(scores, key=scores.get)
         max_score = max(scores.values())
-        
+
         # Enhanced mixed-type detection with smarter thresholds
         high_scores = [k for k, v in scores.items() if v >= max_score * 0.7 and v > 1]
         if len(high_scores) > 1 and max_score > 2:
-            logger.info(f"Multiple high-scoring session types detected: {[k.value for k in high_scores]}")
+            logger.info(
+                f"Multiple high-scoring session types detected: {[k.value for k in high_scores]}"
+            )
             return SessionType.MIXED
-        
+
         logger.info(f"Detected session type: {best_type.value} (score: {max_score})")
         return best_type
-    
+
     def configure_from_scenario(self, scenario_text: str) -> None:
         """Configure session based on scenario analysis."""
         if self.auto_configured:
-            logger.debug(f"Session {self.session_id} already auto-configured, skipping scenario analysis")
+            logger.debug(
+                f"Session {self.session_id} already auto-configured, skipping scenario analysis"
+            )
             return
-        
+
         self.scenario_text = scenario_text
-        
+
         # Detect explicit library preference (highest priority)
-        self.explicit_library_preference = self.detect_explicit_library_preference(scenario_text)
-        
+        self.explicit_library_preference = self.detect_explicit_library_preference(
+            scenario_text
+        )
+
         # Detect session type
         self.session_type = self.detect_session_type_from_scenario(scenario_text)
-        
+
         # Configure session based on detected type and preferences
         self._apply_session_configuration()
-        
+
         self.auto_configured = True
         self.update_activity()
-        
-        logger.info(f"Session {self.session_id} auto-configured: type={self.session_type.value}, explicit_lib={self.explicit_library_preference}")
-    
+
+        logger.info(
+            f"Session {self.session_id} auto-configured: type={self.session_type.value}, explicit_lib={self.explicit_library_preference}"
+        )
+
     def _apply_session_configuration(self) -> None:
         """Apply enhanced configuration with improved conflict resolution based on detected session type and preferences."""
         profiles = self._get_session_profiles()
-        
+
         # Enhanced explicit library preference handling with conflict resolution
         profile = self._get_profile_for_preferences(profiles)
-        
+
         if not profile:
             # Fallback to minimal configuration
             self.search_order = ["BuiltIn", "Collections", "String"]
             return
-        
+
         # Apply conflict resolution before setting search order
         self._resolve_library_conflicts()
-        
+
         # Set intelligent search order using RF Set Library Search Order concept
         self.search_order = self._build_intelligent_search_order(profile)
-        
+
         # Import the preferred library if explicit preference exists
         if self.explicit_library_preference:
             try:
                 self.import_library(self.explicit_library_preference, force=True)
-                logger.info(f"Auto-imported preferred library: {self.explicit_library_preference}")
+                logger.info(
+                    f"Auto-imported preferred library: {self.explicit_library_preference}"
+                )
             except ValueError as e:
-                logger.warning(f"Could not import preferred library {self.explicit_library_preference}: {e}")
-    
+                logger.warning(
+                    f"Could not import preferred library {self.explicit_library_preference}: {e}"
+                )
+
     def validate_library_for_session(self, library_name: str) -> bool:
         """Validate if a library is allowed in this session type."""
         if self.session_type.value == "unknown":
             return True  # Allow any library for unknown sessions
-        
+
         profiles = self._get_session_profiles()
         if self.session_type in profiles:
             profile = profiles[self.session_type]
             allowed_libraries = set(profile.core_libraries + profile.optional_libraries)
             is_allowed = library_name in allowed_libraries
-            
+
             if not is_allowed:
-                logger.warning(f"Library '{library_name}' not allowed in session type '{self.session_type.value}'. Allowed: {allowed_libraries}")
-            
+                logger.warning(
+                    f"Library '{library_name}' not allowed in session type '{self.session_type.value}'. Allowed: {allowed_libraries}"
+                )
+
             return is_allowed
-        
+
         return True  # Allow if no profile found
 
     def get_excluded_libraries_for_session(self) -> Set[str]:
         """Get libraries that are excluded from this session type."""
         if self.session_type.value == "unknown":
             return set()  # No exclusions for unknown sessions
-        
+
         profiles = self._get_session_profiles()
         if self.session_type in profiles:
             profile = profiles[self.session_type]
             allowed_libraries = set(profile.core_libraries + profile.optional_libraries)
-            
+
             # Get all possible libraries and exclude the non-allowed ones
             # For now, return a basic set of common web libraries that should be excluded from XML sessions
             common_web_libraries = {"Browser", "SeleniumLibrary", "AppiumLibrary"}
             excluded = common_web_libraries - allowed_libraries
-            
+
             return excluded
-        
+
         return set()
-    
+
     def _resolve_library_conflicts(self) -> None:
         """Resolve library conflicts based on explicit preferences and session type."""
         if not self.explicit_library_preference:
             return
-        
+
         # Define exclusion groups with priority handling
         exclusion_groups = [
             {
                 "libraries": {"Browser", "SeleniumLibrary"},
                 "description": "Web automation libraries",
-                "default_priority": "Browser"  # Modern default
+                "default_priority": "Browser",  # Modern default
             },
             # Future: Add more exclusion groups as needed
             # {
@@ -749,218 +843,263 @@ class ExecutionSession:
             #     "default_priority": "RequestsLibrary"
             # }
         ]
-        
+
         for group in exclusion_groups:
             if self.explicit_library_preference in group["libraries"]:
                 # Remove conflicting libraries from imported libraries
                 for conflicting_lib in group["libraries"]:
-                    if (conflicting_lib != self.explicit_library_preference and 
-                        conflicting_lib in self.imported_libraries):
+                    if (
+                        conflicting_lib != self.explicit_library_preference
+                        and conflicting_lib in self.imported_libraries
+                    ):
                         self.imported_libraries.remove(conflicting_lib)
-                        logger.info(f"Removed conflicting library {conflicting_lib} in favor of {self.explicit_library_preference}")
-                
+                        logger.info(
+                            f"Removed conflicting library {conflicting_lib} in favor of {self.explicit_library_preference}"
+                        )
+
                 # Update loaded libraries set to reflect preference
                 for conflicting_lib in group["libraries"]:
                     if conflicting_lib != self.explicit_library_preference:
                         self.loaded_libraries.discard(conflicting_lib)
-                
+
                 break
-    
-    def _get_profile_for_preferences(self, profiles: Dict[SessionType, SessionProfile]) -> Optional[SessionProfile]:
+
+    def _get_profile_for_preferences(
+        self, profiles: Dict[SessionType, SessionProfile]
+    ) -> Optional[SessionProfile]:
         """Get the appropriate profile based on explicit preferences and session type."""
         # Handle explicit library preferences with session type override
         if self.explicit_library_preference:
             # Web automation libraries
             if self.explicit_library_preference in ["SeleniumLibrary", "Browser"]:
                 self.session_type = SessionType.WEB_AUTOMATION
-                logger.info(f"Session type set to WEB_AUTOMATION based on explicit library preference: {self.explicit_library_preference}")
-                
+                logger.info(
+                    f"Session type set to WEB_AUTOMATION based on explicit library preference: {self.explicit_library_preference}"
+                )
+
                 if self.explicit_library_preference == "SeleniumLibrary":
                     # Custom profile for SeleniumLibrary
                     return SessionProfile(
                         session_type=SessionType.WEB_AUTOMATION,
-                        core_libraries=["BuiltIn", "SeleniumLibrary", "Collections", "String"],
+                        core_libraries=[
+                            "BuiltIn",
+                            "SeleniumLibrary",
+                            "Collections",
+                            "String",
+                        ],
                         optional_libraries=["XML", "DateTime", "Screenshot"],
-                        search_order=["SeleniumLibrary", "BuiltIn", "Collections", "String", "XML"],
-                        keywords_patterns=profiles[SessionType.WEB_AUTOMATION].keywords_patterns,
-                        description="Web automation testing with SeleniumLibrary"
+                        search_order=[
+                            "SeleniumLibrary",
+                            "BuiltIn",
+                            "Collections",
+                            "String",
+                            "XML",
+                        ],
+                        keywords_patterns=profiles[
+                            SessionType.WEB_AUTOMATION
+                        ].keywords_patterns,
+                        description="Web automation testing with SeleniumLibrary",
                     )
                 else:  # Browser Library
                     return profiles[SessionType.WEB_AUTOMATION]
-            
+
             # Mobile testing libraries
             elif self.explicit_library_preference == "AppiumLibrary":
                 self.session_type = SessionType.MOBILE_TESTING
                 return profiles[SessionType.MOBILE_TESTING]
-            
+
             # API testing libraries
             elif self.explicit_library_preference == "RequestsLibrary":
                 self.session_type = SessionType.API_TESTING
                 return profiles[SessionType.API_TESTING]
-            
+
             # Database testing libraries
             elif self.explicit_library_preference == "DatabaseLibrary":
                 self.session_type = SessionType.DATABASE_TESTING
                 return profiles[SessionType.DATABASE_TESTING]
-            
+
             # XML processing libraries
             elif self.explicit_library_preference == "XML":
                 self.session_type = SessionType.XML_PROCESSING
                 return profiles[SessionType.XML_PROCESSING]
-        
+
         # Use standard profile for detected session type
         return profiles.get(self.session_type)
-    
+
     def _build_intelligent_search_order(self, profile: SessionProfile) -> List[str]:
         """Build intelligent library search order using RF Set Library Search Order concept."""
         search_order = []
-        
+
         # 1. Explicit preference gets highest priority (like RF Set Library Search Order)
-        if self.explicit_library_preference and self.explicit_library_preference not in search_order:
+        if (
+            self.explicit_library_preference
+            and self.explicit_library_preference not in search_order
+        ):
             search_order.append(self.explicit_library_preference)
-        
+
         # 2. Core libraries from profile (in priority order)
         for lib in profile.core_libraries:
             if lib not in search_order:
                 search_order.append(lib)
-        
+
         # 3. Already loaded libraries (maintain existing order)
         for lib in self.loaded_libraries:
             if lib not in search_order:
                 search_order.append(lib)
-        
+
         # 4. Optional libraries from profile
         for lib in profile.optional_libraries:
             if lib not in search_order:
                 search_order.append(lib)
-        
-        logger.debug(f"Built intelligent search order for {self.session_id}: {search_order}")
+
+        logger.debug(
+            f"Built intelligent search order for {self.session_id}: {search_order}"
+        )
         return search_order
-    
+
     # ===============================
     # ActiveSession Methods (merged functionality)
     # ===============================
-    
-    def record_keyword_usage(self, keyword_name: str) -> None:
-        """Record that a keyword was used."""
+
+    def record_keyword_usage(self, keyword_name: str) -> bool:
+        """Record that a keyword was used. Returns True if session configuration changed."""
         self.keywords_used.append(keyword_name.lower())
         self.request_count += 1
-        
+
         # Re-evaluate session type every few requests if not explicitly configured
-        if not self.auto_configured and (self.request_count <= 5 or self.request_count % 10 == 0):
+        if not self.auto_configured and (
+            self.request_count <= 5 or self.request_count % 10 == 0
+        ):
+            old_libraries_loaded = self.libraries_loaded
             self._update_session_type_from_keywords()
-    
+            # Return True if configuration changed (libraries_loaded became False)
+            return old_libraries_loaded and not self.libraries_loaded
+        return False
+
     def _update_session_type_from_keywords(self) -> None:
         """Update session type based on keyword usage patterns."""
         if not self.keywords_used:
             return
-        
+
         # Create a pseudo-scenario from recent keywords
-        recent_keywords = ' '.join(self.keywords_used[-10:])  # Last 10 keywords
+        recent_keywords = " ".join(self.keywords_used[-10:])  # Last 10 keywords
         old_type = self.session_type
-        
+
         # Detect session type from keyword patterns
         new_type = self.detect_session_type_from_scenario(recent_keywords)
-        
+
         if new_type != old_type and new_type != SessionType.UNKNOWN:
-            logger.info(f"Session {self.session_id} type updated from {old_type.value} to {new_type.value} based on keyword usage")
+            logger.info(
+                f"Session {self.session_id} type updated from {old_type.value} to {new_type.value} based on keyword usage"
+            )
             self.session_type = new_type
             self._update_search_order_from_type()
-    
+
     def _update_search_order_from_type(self) -> None:
         """Update search order based on session type."""
         profiles = self._get_session_profiles()
         profile = profiles.get(self.session_type)
         if not profile:
             return
-        
+
         # Update search order
         old_search_order = self.search_order.copy()
         self.search_order = profile.search_order.copy()
-        
+
         # Add any currently loaded libraries that aren't in the new search order
         for lib in self.loaded_libraries:
             if lib not in self.search_order:
                 self.search_order.append(lib)
-        
+
         if self.search_order != old_search_order:
-            logger.info(f"Session {self.session_id} search order updated: {self.search_order}")
-    
+            logger.info(
+                f"Session {self.session_id} search order updated: {self.search_order}"
+            )
+            # Mark libraries as needing reload since search order changed
+            logger.debug(
+                f"LIBRARIES_LOADED_DEBUG: Setting libraries_loaded = False for session {self.session_id}"
+            )
+            self.libraries_loaded = False
+
     def get_libraries_to_load(self) -> List[str]:
         """Get list of libraries that should be loaded for this session with intelligent prioritization."""
         if self.session_type == SessionType.UNKNOWN:
             # For unknown sessions, load minimal core set
             return ["BuiltIn", "Collections", "String"]
-        
+
         profiles = self._get_session_profiles()
         profile = profiles.get(self.session_type)
         if not profile:
             return ["BuiltIn", "Collections", "String"]
-        
+
         # Build library list using intelligent search order approach
         libraries_to_load = []
-        
+
         # 1. Explicit preference gets highest priority
         if self.explicit_library_preference:
             libraries_to_load.append(self.explicit_library_preference)
-        
+
         # 2. Core libraries from profile (excluding conflicts)
         for lib in profile.core_libraries:
             if lib not in libraries_to_load and not self._is_conflicting_library(lib):
                 libraries_to_load.append(lib)
-        
+
         # Ensure BuiltIn is always included (but not duplicate)
         if "BuiltIn" not in libraries_to_load:
             libraries_to_load.insert(-1 if libraries_to_load else 0, "BuiltIn")
-        
+
         return libraries_to_load
-    
+
     def _is_conflicting_library(self, library_name: str) -> bool:
         """Check if a library conflicts with already selected libraries."""
         if not self.explicit_library_preference:
             return False
-        
+
         # Define exclusion groups (libraries that cannot coexist)
         exclusion_groups = [
             {"Browser", "SeleniumLibrary"},  # Web automation exclusion
             # Future: Add more exclusion groups as needed
         ]
-        
+
         for group in exclusion_groups:
-            if (library_name in group and 
-                self.explicit_library_preference in group and 
-                library_name != self.explicit_library_preference):
-                logger.debug(f"Library {library_name} conflicts with explicit preference {self.explicit_library_preference}")
+            if (
+                library_name in group
+                and self.explicit_library_preference in group
+                and library_name != self.explicit_library_preference
+            ):
+                logger.debug(
+                    f"Library {library_name} conflicts with explicit preference {self.explicit_library_preference}"
+                )
                 return True
-        
+
         return False
-    
+
     def get_optional_libraries(self) -> List[str]:
         """Get list of optional libraries for this session."""
         if self.session_type == SessionType.UNKNOWN:
             return []
-        
+
         profiles = self._get_session_profiles()
         profile = profiles.get(self.session_type)
         if not profile:
             return []
-        
+
         return profile.optional_libraries
-    
+
     def should_load_library(self, library_name: str) -> bool:
         """Determine if a library should be loaded for this session."""
         if library_name in self.loaded_libraries:
             return False  # Already loaded
-        
+
         required_libs = self.get_libraries_to_load()
         optional_libs = self.get_optional_libraries()
-        
+
         return library_name in required_libs or library_name in optional_libs
-    
+
     def mark_library_loaded(self, library_name: str) -> None:
         """Mark a library as loaded in this session."""
         self.loaded_libraries.add(library_name)
-        
+
         # Update search order if needed
         if library_name not in self.search_order:
             # Add to search order based on session type priority
@@ -977,11 +1116,11 @@ class ExecutionSession:
             else:
                 # Add to end
                 self.search_order.append(library_name)
-    
+
     def get_search_order(self) -> List[str]:
         """Get current library search order."""
         return self.search_order.copy()
-    
+
     def set_library_search_order(self, libraries: List[str]) -> None:
         """Set explicit library search order (similar to RF Set Library Search Order)."""
         # Validate that all libraries are loaded or loadable
@@ -990,33 +1129,41 @@ class ExecutionSession:
             if lib in self.loaded_libraries or self.should_load_library(lib):
                 valid_libraries.append(lib)
             else:
-                logger.warning(f"Library {lib} not loaded and not in session profile, skipping")
-        
+                logger.warning(
+                    f"Library {lib} not loaded and not in session profile, skipping"
+                )
+
         # Always ensure BuiltIn is in the search order
         if "BuiltIn" not in valid_libraries:
             valid_libraries.append("BuiltIn")
-        
+
         old_order = self.search_order.copy()
         self.search_order = valid_libraries
-        
-        logger.info(f"Library search order updated from {old_order} to {self.search_order}")
-    
+
+        logger.info(
+            f"Library search order updated from {old_order} to {self.search_order}"
+        )
+
     def resolve_keyword_library(self, keyword_name: str) -> Optional[str]:
         """Resolve which library should handle a keyword based on search order."""
         # Strip any existing library prefix
-        clean_keyword = keyword_name.split('.', 1)[-1] if '.' in keyword_name else keyword_name
-        
+        clean_keyword = (
+            keyword_name.split(".", 1)[-1] if "." in keyword_name else keyword_name
+        )
+
         # Check libraries in search order
         for library in self.search_order:
             if library in self.loaded_libraries:
                 # TODO: In a real implementation, this would check if the library has the keyword
                 # For now, we return the first loaded library in search order
-                logger.debug(f"Resolved keyword '{clean_keyword}' to library '{library}' via search order")
+                logger.debug(
+                    f"Resolved keyword '{clean_keyword}' to library '{library}' via search order"
+                )
                 return library
-        
+
         # Fallback to BuiltIn if no other library found
         return "BuiltIn"
-    
+
     def get_session_info(self) -> Dict[str, Any]:
         """Get comprehensive session information."""
         return {
@@ -1034,8 +1181,10 @@ class ExecutionSession:
             "web_automation_library": self.get_web_automation_library(),
             "active_library": self.get_active_library(),
             "is_browser_session": self.is_browser_session(),
-            "scenario_text": self.scenario_text[:100] + "..." if self.scenario_text and len(self.scenario_text) > 100 else self.scenario_text,
+            "scenario_text": self.scenario_text[:100] + "..."
+            if self.scenario_text and len(self.scenario_text) > 100
+            else self.scenario_text,
             "created_at": self.created_at.isoformat(),
             "last_activity": self.last_activity.isoformat(),
-            "duration": self.duration
+            "duration": self.duration,
         }
