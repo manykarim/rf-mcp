@@ -1,41 +1,302 @@
-# Robot Framework MCP Server
+# 🤖 RobotMCP - AI-Powered Test Automation Bridge
 
-A comprehensive Model Context Protocol (MCP) server that provides an intelligent bridge between natural language test descriptions and Robot Framework execution. This server enables AI agents to dynamically create, execute, and debug Robot Framework test steps from natural language, then generate complete test suites from successful executions.
+[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://python.org)
+[![Robot Framework](https://img.shields.io/badge/robot%20framework-6.0+-green.svg)](https://robotframework.org)
+[![FastMCP](https://img.shields.io/badge/fastmcp-2.0+-orange.svg)](https://github.com/jlowin/fastmcp)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-## ✨ Key Features
+**Transform natural language into production-ready Robot Framework tests using AI agents and MCP protocol.**
 
-- **🧠 Natural Language Processing**: Converts human language test descriptions into structured test actions
-- **🔍 Semantic Keyword Matching**: Uses AI to find the most appropriate Robot Framework keywords for each action  
-- **⚡ Interactive Test Execution**: Execute test steps individually with real-time state tracking and session management
-- **📊 State-Aware Testing**: Captures and analyzes application state (DOM, API responses, database state) after each step
-- **🎯 Intelligent Suggestions**: AI-driven recommendations for next test steps based on current state
-- **📋 Test Suite Generation**: Automatically generates optimized Robot Framework test suites from successful executions
-- **🌐 Multi-Context Support**: Handles web, mobile, API, and database testing scenarios
-- **🔧 Advanced Locator Guidance**: Comprehensive Browser Library and SeleniumLibrary locator strategy assistance
-- **🛡️ Robust Error Handling**: Context-aware error analysis with actionable suggestions
-- **📚 Native Robot Framework Integration**: Uses Robot Framework's native LibDoc and type conversion systems
+RobotMCP is a comprehensive Model Context Protocol (MCP) server that bridges the gap between human language and Robot Framework automation. It enables AI agents to understand test intentions, execute steps interactively, and generate complete test suites from successful executions.
+
+---
+
+## ✨ Quick Start
+
+### 1️⃣ Install
+```bash
+pip install rf-mcp
+```
+
+### 2️⃣ Add to VS Code (Cline/Claude Desktop)
+```json
+{
+  "servers": {
+    "robotmcp": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["-m", "robotmcp.server"]
+    }
+  }
+}
+```
+
+### 3️⃣ Start Testing with AI
+```
+Create a test that opens https://todomvc.com/examples/react/dist/,
+adds several todos, marks them as done, and verifies the count.
+Execute step by step and build the final test suite.
+```
+
+**That's it!** RobotMCP will guide the AI through the entire testing workflow.
+
+---
+
+## 🎯 Core Concept
+
+**Traditional Way:**
+1. Write Robot Framework code manually
+2. Debug syntax and locator issues
+3. Maintain test suites over time
+
+**RobotMCP Way:**
+1. **Describe** what you want to test in natural language
+2. **Execute** steps interactively with AI guidance
+3. **Generate** production-ready Robot Framework suites automatically
+
+---
+
+## 🚀 Key Features
+
+### 🧠 **Natural Language Processing**
+- Convert human test descriptions into structured actions
+- Intelligent scenario analysis and library recommendations
+- Context-aware test planning (web, mobile, API, database)
+
+### ⚡ **Interactive Step Execution**
+- Execute Robot Framework keywords step-by-step
+- Real-time state tracking and session management
+- Smart error handling with actionable suggestions
+
+### 🔍 **Intelligent Element Location**
+- Advanced locator guidance for Browser Library & SeleniumLibrary
+- Cross-library locator conversion (Browser ↔ Selenium)
+- DOM filtering and element discovery
+
+### 📋 **Production-Ready Suite Generation**
+- Generate optimized Robot Framework test suites
+- Maintain proper imports, setup/teardown, and documentation
+- Support for tags, variables, and test organization
+
+### 🌐 **Multi-Platform Support**
+- **Web**: Browser Library (Playwright) & SeleniumLibrary
+- **Mobile**: AppiumLibrary for iOS/Android testing
+- **API**: RequestsLibrary for HTTP/REST testing
+- **Database**: DatabaseLibrary for SQL operations
+
+---
+
+## 🛠️ Installation & Setup
+
+### Prerequisites
+- Python 3.10+
+- Robot Framework 6.0+
+
+### Method 1: PyPI Installation (Recommended)
+```bash
+# Install RobotMCP
+pip install rf-mcp
+
+# Install browser automation libraries
+pip install robotframework-browser
+playwright install  # Install browser binaries
+
+# Or install Selenium support
+pip install robotframework-seleniumlibrary
+
+# For API testing
+pip install robotframework-requests
+
+# For mobile testing
+pip install robotframework-appiumlibrary
+```
+
+### Method 2: Development Installation
+```bash
+# Clone repository
+git clone https://github.com/manykarim/rf-mcp.git
+cd rf-mcp
+
+# Install with uv (recommended)
+uv sync
+
+# Or with pip
+pip install -e .
+```
+
+---
+
+## 🔧 MCP Integration
+
+### VS Code (GitHub Code)
+
+```json
+
+```
+### Claude Desktop
+
+**Location:** `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
+
+```json
+{
+  "mcpServers": {
+    "robotmcp": {
+      "command": "python",
+      "args": ["-m", "robotmcp.server"]
+    }
+  }
+}
+```
+
+### Other AI Agents
+RobotMCP works with any MCP-compatible AI agent. Use the stdio configuration above.
+
+---
+
+## 🎪 Example Workflows
+
+### 🌐 Web Application Testing
+
+**Prompt:**
+```
+Create a test for https://www.saucedemo.com/ that:
+- Logs in with valid credentials
+- Adds two items to cart
+- Completes checkout process
+- Verifies success message
+
+Use Selenium Library and execute step by step.
+```
+
+**Result:** Complete Robot Framework test suite with proper locators, assertions, and structure.
+
+### 📱 Mobile App Testing
+
+**Prompt:**
+```
+Test the SauceLabs mobile app:
+- Launch app from tests/appium/SauceLabs.apk
+- Perform login flow
+- Add products to cart
+- Complete purchase
+
+Appium server at http://localhost:4723
+```
+
+**Result:** Mobile test suite with AppiumLibrary keywords and device capabilities.
+
+### 🔌 API Testing
+
+**Prompt:**
+```
+Test the Restful Booker API at https://restful-booker.herokuapp.com:
+- Create a new booking
+- Authenticate as admin
+- Update the booking
+- Delete the booking
+- Verify each response
+```
+
+**Result:** API test suite using RequestsLibrary with proper error handling.
+
+### 🧪 XML/Database Testing
+
+**Prompt:**
+```
+Create a books.xml file and test it:
+- Parse XML structure
+- Validate specific nodes and attributes
+- Assert content values
+- Check XML schema compliance
+```
+
+**Result:** XML processing test using Robot Framework's XML library.
+
+---
+
+## 🔍 MCP Tools Overview
+
+RobotMCP provides **20 comprehensive MCP tools** organized into functional categories:
+
+### Core Execution
+- `analyze_scenario` - Convert natural language to structured test intent
+- `execute_step` - Execute individual Robot Framework keywords
+- `discover_keywords` - Find appropriate keywords for actions
+
+### State & Context Management
+- `get_application_state` - Capture current application state
+- `get_page_source` - Extract DOM with intelligent filtering
+- `get_session_info` - Session configuration and status
+
+### Test Suite Generation
+- `build_test_suite` - Generate Robot Framework test files
+- `run_test_suite_dry` - Validate test syntax before execution
+- `run_test_suite` - Execute complete test suites
+
+### Library Discovery
+- `recommend_libraries` - Suggest appropriate RF libraries
+- `check_library_availability` - Verify library installation
+- `get_available_keywords` - List all available keywords
+- `search_keywords` - Find keywords by pattern
+
+### Locator Guidance
+- `get_selenium_locator_guidance` - SeleniumLibrary selector help
+- `get_browser_locator_guidance` - Browser Library (Playwright) guidance
+- `get_appium_locator_guidance` - Mobile locator strategies
+
+### Advanced Features
+- `set_library_search_order` - Control keyword resolution precedence
+- `initialize_context` - Set up test sessions with variables
+- `get_session_validation_status` - Check test readiness
+
+*For detailed tool documentation, see the [Tools Reference](#-tools-reference) section.*
+
+---
 
 ## 🏗️ Architecture
 
-### Core Components
+### Service-Oriented Design
+```
+📦 ExecutionCoordinator (Main Orchestrator)
+├── 🔤 SessionManager - Session lifecycle & library management
+├── ⚙️ KeywordExecutor - RF keyword execution engine
+├── 🌐 BrowserLibraryManager - Browser/Selenium library switching
+├── 📊 PageSourceService - DOM extraction & filtering
+├── 🔄 LocatorConverter - Cross-library locator translation
+└── 📋 SuiteExecutionService - Test suite generation & execution
+```
 
-1. **🔤 Natural Language Processor** - Analyzes test scenarios and extracts structured actions
-2. **🎯 Keyword Matcher** - Maps natural language actions to Robot Framework keywords using semantic similarity
-3. **⚙️ Execution Coordinator** - Service-oriented execution engine with proper library routing and session management
-4. **📈 State Manager** - Tracks application state (DOM, API responses, database state) with intelligent filtering
-5. **📝 Test Builder** - Converts successful execution paths into optimized Robot Framework test suites
-6. **🔍 Dynamic Keyword Discovery** - Runtime keyword detection and argument processing using Robot Framework's native systems
-7. **🌐 Browser Library Manager** - Advanced Browser Library and SeleniumLibrary integration with automatic library switching
+### Native Robot Framework Integration
+- **ArgumentResolver** - Native RF argument parsing
+- **TypeConverter** - RF type conversion (string → int/bool/etc.)
+- **LibDoc API** - Direct RF documentation access
+- **Keyword Discovery** - Runtime detection using RF internals
 
-## 🛠️ MCP Tools
+### Session Management
+- Auto-configuration based on scenario analysis
+- Browser library conflict resolution (Browser vs Selenium)
+- Cross-session state persistence
+- Mobile capability detection and setup
 
-The server provides **24 comprehensive MCP tools** for complete test automation workflow:
+---
 
-### Core Execution Tools
+## 📚 Tools Reference
 
-#### 1. `execute_step` 
-**Execute individual Robot Framework keywords with advanced session management**
-```json
+### `analyze_scenario`
+Convert natural language test descriptions into structured test intents with automatic session creation.
+
+```python
+{
+  "scenario": "Test user login with valid credentials",
+  "context": "web",
+  "session_id": "optional-session-id"
+}
+```
+
+### `execute_step`
+Execute individual Robot Framework keywords with advanced session management.
+
+```python
 {
   "keyword": "Fill Text",
   "arguments": ["css=input[name='username']", "testuser"],
@@ -43,564 +304,209 @@ The server provides **24 comprehensive MCP tools** for complete test automation 
   "detail_level": "minimal"
 }
 ```
-- ✅ Supports both Browser Library and SeleniumLibrary
-- ✅ Automatic library detection and switching
-- ✅ Native Robot Framework type conversion
-- ✅ Context-aware error messages with locator guidance
 
-#### 2. `analyze_scenario`
-**Process natural language test descriptions into structured test intents**
-```json
-{
-  "scenario": "Test that users can search for products and add them to cart",
-  "context": "web"
-}
-```
+### `build_test_suite`
+Generate production-ready Robot Framework test suites from executed steps.
 
-#### 3. `discover_keywords`
-**Find matching Robot Framework keywords for specific actions**
-```json
-{
-  "action_description": "click the login button", 
-  "context": "web",
-  "current_state": {}
-}
-```
-
-### State Management Tools
-
-#### 4. `get_application_state`
-**Retrieve current application state for decision making**
-```json
-{
-  "state_type": "dom",
-  "elements_of_interest": ["button", "input"],
-  "session_id": "default"
-}
-```
-
-#### 5. `get_page_source`
-**Get page source with intelligent DOM filtering**
-```json
-{
-  "session_id": "default",
-  "full_source": false,
-  "filtered": true,
-  "filtering_level": "standard"
-}
-```
-- ✅ Automatic DOM filtering for automation-relevant content
-- ✅ Multiple filtering levels (minimal, standard, aggressive)
-- ✅ Size optimization for AI processing
-
-#### 6. `suggest_next_step`
-**Get AI-driven suggestions for the next test step**
-```json
-{
-  "current_state": {...},
-  "test_objective": "complete user login",
-  "executed_steps": [...],
-  "session_id": "default"
-}
-```
-
-### Test Suite Generation Tools
-
-#### 7. `build_test_suite`
-**Generate Robot Framework test suite from successful execution**
-```json
+```python
 {
   "test_name": "User Login Test",
   "session_id": "default",
-  "tags": ["login", "smoke"],
-  "documentation": "Test successful user login flow",
-  "remove_library_prefixes": true
+  "tags": ["smoke", "login"],
+  "documentation": "Test successful user login flow"
 }
 ```
 
-#### 8. `validate_step_before_suite`
-**Validate individual steps before adding to test suite**
-```json
+### `get_browser_locator_guidance`
+Get comprehensive Browser Library locator strategies and error guidance.
+
+```python
 {
-  "keyword": "Click",
-  "arguments": ["css=.login-button"],
-  "session_id": "default",
-  "expected_outcome": "User should be logged in"
+  "error_message": "Strict mode violation: multiple elements found",
+  "keyword_name": "Click"
 }
 ```
 
-#### 9. `validate_test_readiness`
-**Check if session is ready for test suite generation**
-```json
-{
-  "session_id": "default"
-}
-```
+**Returns:**
+- 10 Playwright locator strategies (css=, xpath=, text=, id=, etc.)
+- Advanced features (cascaded selectors, iframe piercing, shadow DOM)
+- Error-specific guidance and suggestions
+- Best practices for element location
 
-#### 10. `get_session_validation_status`
-**Get validation status of all steps in a session**
-```json
-{
-  "session_id": "default"
-}
-```
+### `get_selenium_locator_guidance`
+Get comprehensive SeleniumLibrary locator strategies and troubleshooting.
 
-### Library and Keyword Discovery Tools
-
-#### 11. `get_available_keywords`
-**Get available Robot Framework keywords with native LibDoc documentation**
-```json
-{
-  "library_name": "Browser"  // Optional - returns all if not specified
-}
-```
-
-#### 12. `search_keywords`
-**Search for keywords matching a pattern using native RF LibDoc**
-```json
-{
-  "pattern": "click"
-}
-```
-
-#### 13. `get_keyword_documentation`
-**Get comprehensive documentation for specific keywords**
-```json
-{
-  "keyword_name": "Fill Text",
-  "library_name": "Browser"  // Optional
-}
-```
-
-#### 14. `get_loaded_libraries`
-**Get status of all loaded Robot Framework libraries**
-```json
-{}
-```
-
-#### 15. `check_library_availability`
-**Check if Robot Framework libraries are available**
-```json
-{
-  "libraries": ["Browser", "SeleniumLibrary", "RequestsLibrary"]
-}
-```
-
-#### 16. `get_library_status`
-**Get detailed installation status for specific library**
-```json
-{
-  "library_name": "Browser"
-}
-```
-
-### Advanced Locator Guidance Tools
-
-#### 17. `get_selenium_locator_guidance`
-**Get comprehensive SeleniumLibrary locator strategy guidance**
-```json
+```python
 {
   "error_message": "Element not found: name=firstname",
   "keyword_name": "Input Text"
 }
 ```
-**Provides:**
-- ✅ 14 locator strategies with examples (`id:`, `name:`, `css:`, `xpath:`, etc.)
-- ✅ Error-specific guidance (element not found, timeouts, etc.)
-- ✅ Locator format analysis and recommendations
-- ✅ Best practices for element location
 
-#### 18. `get_browser_locator_guidance`
-**Get comprehensive Browser Library (Playwright) locator strategy guidance**
-```json
-{
-  "error_message": "Strict mode violation: multiple elements match",
-  "keyword_name": "Click"
-}
-```
-**Provides:**
-- ✅ 10 Playwright locator strategies (`css=`, `xpath=`, `text=`, `id=`, etc.)
-- ✅ Advanced features (cascaded selectors, iFrame piercing, Shadow DOM)
-- ✅ Implicit detection rules (CSS default, XPath for `//`, text for quotes)
-- ✅ Strict mode and Shadow DOM guidance
-- ✅ Intelligent selector pattern analysis
+**Returns:**
+- 14 SeleniumLibrary locator strategies (id:, name:, css:, xpath:, etc.)
+- Locator format analysis and recommendations
+- Timeout and waiting strategy guidance
+- Element location best practices
 
-### Planning and Validation Tools
+*For complete tool documentation, see the source code docstrings.*
 
-#### 19. `validate_scenario`
-**Validate scenario feasibility before execution**
-```json
-{
-  "parsed_scenario": {...},
-  "available_libraries": ["Browser", "BuiltIn"]
-}
-```
-
-#### 20. `recommend_libraries`
-**Recommend Robot Framework libraries based on test scenario**
-```json
-{
-  "scenario": "Test REST API endpoints with authentication",
-  "context": "api",
-  "max_recommendations": 5
-}
-```
-
-## 🚀 Installation
-
-### Prerequisites
-- Python 3.10+
-- Robot Framework 6.0+
-
-### Quick Install from PyPI (Recommended)
-
-```bash
-# Install the latest stable version
-pip install rf-mcp
-
-```
-
-### Development Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/manykarim/rf-mcp.git
-cd rf-mcp
-
-# Install dependencies using uv (recommended)
-uv sync
-
-# Or install using pip in development mode
-pip install -e .
-
-
-```
-
-### Robot Framework Libraries
-
-Install the libraries you need for your testing:
-
-```bash
-# For web automation with Browser Library (recommended)
-uv add robotframework-browser
-playwright install  # Install browser binaries
-
-# For web automation with Selenium
-uv add robotframework-seleniumlibrary
-
-# For API testing
-uv add robotframework-requests
-
-# For database testing  
-uv add robotframework-databaselibrary
-
-# For SSH/remote operations
-uv add robotframework-sshlibrary
-```
-
-## 🖥️ VS Code Integration
-
-### Adding to VS Code via mcp.json
-
-Create or update your VS Code MCP configuration file:
-
-**Location:** `%APPDATA%\Code\User\globalStorage\rooveterinaryinc.roo-cline\mcp.json` (Windows)
-**Location:** `~/.config/Code/User/globalStorage\rooveterinaryinc.roo-cline\mcp.json` (macOS/Linux)
-
-### Option 1: Using PyPI Installation (Recommended)
-
-If you installed via `pip install rf-mcp`:
-
-**Windows:**
-```json
-{
-  "servers": {
-    "robotmcp": {
-      "type": "stdio",
-      "command": "python",
-      "args": [
-        "-m",
-        "robotmcp.server"
-      ]
-    }
-  }
-}
-```
-
-**macOS/Linux:**
-```json
-{
-  "servers": {
-    "robotmcp": {
-      "type": "stdio",
-      "command": "python3",
-      "args": [
-        "-m",
-        "robotmcp.server"
-      ]
-    }
-  }
-}
-```
-
-### Option 2: Development Installation
-
-If you cloned the repository for development:
-
-**Windows:**
-```json
-{
-  "servers": {
-    "robotmcp": {
-      "type": "stdio",
-      "command": "C:\\workspace\\rf-mcp\\.venv\\Scripts\\python.exe",
-      "args": [
-        "-m",
-        "robotmcp.server"
-      ],
-      "cwd": "C:\\workspace\\rf-mcp"
-    }
-  }
-}
-```
-
-**macOS/Linux:**
-```json
-{
-  "servers": {
-    "robotmcp": {
-      "type": "stdio", 
-      "command": "/path/to/rf-mcp/.venv/bin/python",
-      "args": [
-        "-m", 
-        "robotmcp.server"
-      ],
-      "cwd": "/path/to/rf-mcp"
-    }
-  }
-}
-```
-
-### Option 3: Using uv
-
-```json
-{
-  "servers": {
-    "robotmcp": {
-      "type": "stdio",
-      "command": "uv", 
-      "args": [
-        "run",
-        "python",
-        "-m", 
-        "robotmcp.server"
-      ],
-      "cwd": "C:\\workspace\\rf-mcp"
-    }
-  }
-}
-```
-
-## 🎯 Usage
-
-### Starting the Server
-
-**After PyPI installation:**
-```bash
-# Using the installed package
-python -m robotmcp.server
-
-# Or using the robotmcp command
-robotmcp
-```
-
-**Development installation:**
-```bash
-# Using uv (recommended for development)
-uv run python -m robotmcp.server
-
-# Or traditional method
-python -m robotmcp.server
-```
-
-### Example Workflow
-
-#### 1. **Analyze a test scenario**:
-```
-"Test login functionality with valid credentials showing dashboard"
-```
-
-#### 2. **Execute steps interactively**:
-- Open Browser to login page
-- Fill username and password fields
-- Click login button  
-- Verify dashboard appears
-- Get intelligent suggestions for next steps
-
-#### 3. **Generate test suite**:
-- Optimized Robot Framework test case
-- Complete with imports, setup, and teardown
-- Ready for execution in CI/CD pipelines
-
-### Advanced Browser Testing Example
-
-```python
-# 1. Start browser session
-await execute_step("New Browser", ["chromium", "headless=False"])
-await execute_step("New Page", ["https://example.com/login"])
-
-# 2. Get page state for element discovery
-state = await get_page_source("default", filtered=True, filtering_level="standard")
-
-# 3. Interactive element location with guidance
-try:
-    await execute_step("Fill Text", ["css=input[name='username']", "testuser"])
-except Exception as e:
-    # Get Browser Library locator guidance for error resolution
-    guidance = await get_browser_locator_guidance(str(e), "Fill Text")
-    # Use guidance to fix selector: try "id=username" or "//input[@name='username']"
-
-# 4. Build test suite from successful steps
-suite = await build_test_suite("Login Test", "default", ["smoke", "login"])
-```
-
-## 🌟 Key Advantages
-
-### For AI Agents
-- **🤖 Agent-Friendly**: Structured responses optimized for AI processing
-- **🔍 Context-Aware**: Rich error messages with actionable guidance  
-- **⚡ Efficient**: Minimal response mode reduces token usage by 80-90%
-- **🧠 Intelligent**: Semantic keyword matching and smart suggestions
-
-### For Developers  
-- **🛡️ Robust**: Native Robot Framework integration with proper type conversion
-- **🔧 Flexible**: Support for both Browser Library and SeleniumLibrary
-- **📊 Comprehensive**: 24 tools covering entire test automation workflow
-- **🎯 Precise**: Advanced locator guidance prevents common automation issues
-
-### For Test Automation
-- **📝 Stepwise Development**: Execute and validate each step before building suites
-- **🔄 Session Management**: Maintain context across multiple interactions
-- **🌐 Multi-Library**: Seamless switching between Browser/Selenium libraries
-- **📋 Production-Ready**: Generates clean, maintainable Robot Framework code
+---
 
 ## 🧪 Example Generated Test Suite
 
 ```robot
 *** Settings ***
-Documentation    Test case that opens browser, navigates to page, performs login, and verifies success.
+Documentation    Test user login functionality with form validation
 Library          Browser
 Library          BuiltIn
-Force Tags       automated    generated    web    login
+Force Tags       automated    web    login
+
+*** Variables ***
+${LOGIN_URL}     https://example.com/login
+${USERNAME}      testuser
+${PASSWORD}      testpass123
 
 *** Test Cases ***
 User Login Test
-    [Documentation]    Test successful user login flow with form validation
-    [Tags]    login    smoke    critical
+    [Documentation]    Verify successful login with valid credentials
+    [Tags]    smoke    critical
     
     # Browser Setup
-    New Browser    chromium    headless=False
-    New Page       https://example.com/login
+    New Browser         chromium    headless=False
+    New Page            ${LOGIN_URL}
     
-    # Login Actions  
-    Fill Text      css=input[name='username']    testuser
-    Fill Text      css=input[name='password']    testpass123
-    Click          css=button[type='submit']
+    # Login Actions
+    Fill Text           css=input[name='username']    ${USERNAME}
+    Fill Text           css=input[name='password']    ${PASSWORD}
+    Click               css=button[type='submit']
     
     # Verification
-    Wait For Elements State    css=.dashboard    visible    timeout=5s
-    Get Text                   css=.welcome-message    ==    Welcome, testuser!
+    Wait For Elements State    css=.dashboard    visible    timeout=10s
+    Get Text                   css=.welcome-message    ==    Welcome, ${USERNAME}!
     
     [Teardown]    Close Browser
 ```
 
-## 📚 Dependencies
+---
 
-### Required
-- `robotframework>=6.0`
-- `fastmcp>=2.0.0` 
-- `pydantic>=2.0.0`
-- `aiohttp>=3.8.0`
+## 🔄 Recommended Workflow
 
-### Optional (Enhanced Functionality)
-- `sentence-transformers>=2.2.0` - Semantic keyword matching
-- `beautifulsoup4>=4.11.0` - DOM parsing and filtering
-- `robotframework-browser` - Modern web automation (Playwright)
-- `robotframework-seleniumlibrary` - Traditional web automation
-- `robotframework-requests` - API testing
-- `robotframework-databaselibrary` - Database testing
-- `robotframework-sshlibrary` - SSH/remote operations
-
-## 🎪 Supported Test Contexts
-
-- **🌐 Web Applications**: Browser Library (Playwright) and SeleniumLibrary support
-- **📱 Mobile Applications**: AppiumLibrary integration for mobile testing
-- **🔌 API Testing**: RequestsLibrary for HTTP/REST APIs  
-- **🗄️ Database Testing**: DatabaseLibrary for SQL operations
-- **🖥️ Desktop Applications**: Support for desktop automation libraries
-- **🔧 System Testing**: SSH, Process, and OperatingSystem library integration
-
-## 🚧 Development
-
-### Running Tests
-```bash
-uv run pytest tests/
+### 1. **Analysis Phase**
+```
+Use analyze_scenario to understand test requirements and create session
 ```
 
-### Code Quality
+### 2. **Library Setup**
+```
+Get recommendations with recommend_libraries
+Check availability with check_library_availability
+```
+
+### 3. **Interactive Development**
+```
+Execute steps one by one with execute_step
+Get page state with get_page_source
+Use locator guidance tools for element issues
+```
+
+### 4. **Suite Generation**
+```
+Validate session with get_session_validation_status
+Generate suite with build_test_suite
+Validate syntax with run_test_suite_dry
+Execute with run_test_suite
+```
+
+---
+
+## 🎯 Pro Tips
+
+### 🔍 **Element Location**
+- Use `get_page_source` with `filtered=true` to see automation-relevant elements
+- Leverage locator guidance tools when elements aren't found
+- Browser Library supports modern selectors (text=, data-testid=, etc.)
+
+### ⚡ **Performance**
+- Use `detail_level="minimal"` to reduce response size by 80-90%
+- Enable DOM filtering to focus on interactive elements
+- Session management maintains state across interactions
+
+### 🛡️ **Reliability**
+- Execute steps individually before building suites
+- Use `run_test_suite_dry` to catch issues early
+- Leverage native RF integration for maximum compatibility
+
+### 🌐 **Cross-Platform**
+- Sessions auto-detect context (web/mobile/api) from scenarios
+- Library conflicts are automatically resolved
+- Mobile sessions configure Appium capabilities automatically
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! Here's how to get started:
+
+1. **Fork** the repository
+2. **Clone** your fork locally
+3. **Install** development dependencies: `uv sync`
+4. **Create** a feature branch
+5. **Add** comprehensive tests for new functionality
+6. **Run** tests: `uv run pytest tests/`
+7. **Submit** a pull request
+
+### Development Commands
 ```bash
+# Run tests
+uv run pytest tests/
+
 # Format code
 uv run black src/
 
 # Type checking
 uv run mypy src/
 
-# Linting  
-uv run flake8 src/
+# Start development server
+uv run python -m robotmcp.server
 ```
-
-### Architecture Testing
-```bash
-# Test locator guidance systems
-uv run python -c "from robotmcp.utils.rf_native_type_converter import RobotFrameworkNativeConverter; c = RobotFrameworkNativeConverter(); print('✅ Systems working')"
-```
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes with comprehensive tests
-4. Add tests for new functionality
-5. Ensure all tests pass (`uv run pytest`)
-6. Submit a pull request
-
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) file for details.
-
-## 💬 Support
-
-- 🐛 **Bug Reports**: [Create an issue](https://github.com/manykarim/rf-mcp/issues)
-- 💡 **Feature Requests**: [Create an issue](https://github.com/manykarim/rf-mcp/issues)  
-- 📖 **Documentation**: Check the comprehensive tool documentation above
-- 💬 **Community**: Join our discussions and share your automation success stories
-
-## 🔄 Recent Updates
-
-### v2.0 - Advanced Locator Guidance & Native Integration
-- ✅ **Comprehensive Locator Guidance**: Added SeleniumLibrary and Browser Library locator strategy tools
-- ✅ **Native Robot Framework Integration**: Uses RF's native LibDoc and ArgumentResolver systems  
-- ✅ **Enhanced Error Handling**: Context-aware error analysis with actionable suggestions
-- ✅ **Intelligent Selector Analysis**: Automatic detection and guidance for selector patterns
-- ✅ **Session Management**: Advanced Browser/Selenium library switching with force parameters
-- ✅ **DOM Filtering**: Intelligent page source filtering for automation-relevant content
-
-### v1.5 - Service-Oriented Architecture
-- ✅ **Migrated to Service Architecture**: From monolithic to modular ExecutionCoordinator
-- ✅ **Enhanced Performance**: 80-90% token reduction in minimal response mode
-- ✅ **Robust Type Conversion**: Native Robot Framework type conversion eliminates pattern matching
-- ✅ **24 Comprehensive Tools**: Complete test automation workflow coverage
 
 ---
 
-**🎯 Production Note**: This implementation provides enterprise-grade Robot Framework automation with comprehensive AI agent support. The system includes robust error handling, session management, and native Robot Framework integration suitable for production test automation environments.
+## 📄 License
+
+Apache 2.0 License - see [LICENSE](LICENSE) file for details.
+
+---
+
+## 🌟 Why RobotMCP?
+
+### For AI Agents
+- **🤖 Agent-Optimized**: Structured responses designed for AI processing
+- **🧠 Context-Aware**: Rich error messages with actionable guidance
+- **⚡ Token-Efficient**: Minimal response mode reduces costs significantly
+
+### For Test Engineers
+- **🛡️ Production-Ready**: Native Robot Framework integration
+- **🔧 Flexible**: Multi-library support (Browser, Selenium, Appium, etc.)
+- **📊 Comprehensive**: 20 tools covering complete automation workflow
+
+### For Teams
+- **📝 Maintainable**: Generates clean, documented Robot Framework code
+- **🔄 Iterative**: Step-by-step development and validation
+- **🌐 Scalable**: Session-based architecture supports complex scenarios
+
+---
+
+## 💬 Support & Community
+
+- 🐛 **Issues**: [GitHub Issues](https://github.com/manykarim/rf-mcp/issues)
+- 💡 **Feature Requests**: [GitHub Discussions](https://github.com/manykarim/rf-mcp/discussions)
+- 📖 **Documentation**: Tool docstrings and examples
+- 🚀 **Latest Updates**: Check releases for new features
+
+---
+
+**⭐ Star us on GitHub if RobotMCP helps your test automation journey!**
+
+Made with ❤️ for the Robot Framework and AI automation community.
