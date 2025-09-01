@@ -131,8 +131,32 @@ pip install -e .
 ### VS Code (GitHub Code)
 
 ```json
-
+{
+  "servers": {
+    "robotmcp": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "python", "-m", "robotmcp.server"]
+    }
+  }
+}
 ```
+
+```json
+{
+  "servers": {
+    "robotmcp": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["-m", "robotmcp.server"]
+    }
+  }
+}
+```
+
+**Hint:** 
+If you set up a virtual environment, make sure to also use the python executable from that venv to start the server.
+
 ### Claude Desktop
 
 **Location:** `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
