@@ -1067,6 +1067,107 @@ class ExecutionCoordinator:
         else:
             return {"success": False, "error": f"Keyword '{keyword_name}' not found"}
 
+    def get_library_documentation(self, library_name: str) -> Dict[str, Any]:
+        """Get full documentation for a Robot Framework library using native RF libdoc.
+
+        Uses Robot Framework's native LibraryDocumentation API to provide comprehensive
+        library information including library metadata and all keywords with their
+        documentation, arguments, and metadata.
+
+        Args:
+            library_name: Name of the library to get documentation for
+
+        Returns:
+            Dict containing comprehensive library information:
+            - success: Boolean indicating if library was found
+            - library: Dict with library details including:
+              - name: Library name
+              - doc: Library documentation
+              - version: Library version
+              - type: Library type
+              - scope: Library scope
+              - source: Source file path
+              - keywords: List of all library keywords with full details
+        """
+        # Try libdoc-based lookup first
+        if self.rf_doc_storage.is_available():
+            library_info = self.rf_doc_storage.get_library_documentation(library_name)
+            
+            if library_info:
+                # Convert keyword dict to list for API consistency
+                keywords_list = []
+                for keyword_info in library_info.keywords.values():
+                    keywords_list.append({
+                        "name": keyword_info.name,
+                        "library": keyword_info.library,
+                        "args": keyword_info.args,
+                        "arg_types": keyword_info.arg_types,
+                        "doc": keyword_info.doc,
+                        "short_doc": keyword_info.short_doc,
+                        "tags": keyword_info.tags,
+                        "is_deprecated": keyword_info.is_deprecated,
+                        "source": keyword_info.source,
+                        "lineno": keyword_info.lineno,
+                    })
+                
+                return {
+                    "success": True,
+                    "library": {
+                        "name": library_info.name,
+                        "doc": library_info.doc,
+                        "version": library_info.version,
+                        "type": library_info.type,
+                        "scope": library_info.scope,
+                        "source": library_info.source,
+                        "keywords": keywords_list,
+                        "keyword_count": len(keywords_list),
+                        "data_source": "libdoc"
+                    }
+                }
+        
+        # Fall back to inspection-based search via keyword_executor
+        keyword_discovery = self.keyword_executor.keyword_discovery
+        if library_name in keyword_discovery.libraries:
+            library_obj = keyword_discovery.libraries[library_name]
+            
+            # Get all keywords for this library from inspection-based discovery
+            keywords_list = []
+            for keyword_info in keyword_discovery.get_keywords_by_library(library_name):
+                keywords_list.append({
+                    "name": keyword_info.name,
+                    "library": keyword_info.library,
+                    "args": keyword_info.args,
+                    "arg_types": getattr(keyword_info, "arg_types", []),
+                    "doc": getattr(keyword_info, "doc", ""),
+                    "short_doc": keyword_info.short_doc,
+                    "tags": keyword_info.tags,
+                    "is_deprecated": False,
+                    "source": getattr(keyword_info, "source", ""),
+                    "lineno": getattr(keyword_info, "lineno", 0),
+                })
+            
+            # Extract library metadata from the library object
+            library_doc = getattr(library_obj, '__doc__', '') or ''
+            library_version = getattr(library_obj, 'ROBOT_LIBRARY_VERSION', 'Unknown')
+            library_scope = getattr(library_obj, 'ROBOT_LIBRARY_SCOPE', 'TEST')
+            
+            return {
+                "success": True,
+                "library": {
+                    "name": library_name,
+                    "doc": library_doc,
+                    "version": library_version,
+                    "type": "LIBRARY",
+                    "scope": library_scope,
+                    "source": getattr(library_obj, '__file__', ''),
+                    "keywords": keywords_list,
+                    "keyword_count": len(keywords_list),
+                    "data_source": "inspection"
+                }
+            }
+        else:
+            return {"success": False, "error": f"Library '{library_name}' not found or not loaded"}
+
     def get_installation_status(self, library_name: str) -> Dict[str, Any]:
         """Get detailed installation status for a specific library."""
         from robotmcp.utils.library_checker import COMMON_ROBOT_LIBRARIES

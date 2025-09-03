@@ -75,6 +75,27 @@ async def _ensure_all_session_libraries_loaded():
         # Don't fail the discovery operation, but log the issue for debugging
 
 
+@mcp.prompt
+def automate(scenario: str) -> str:
+    """Uses RobotMCP to create a test suite from a scenario description"""
+    return (
+        "# Task\n"
+        "Use RobotMCP to create a TestSuite and execute it step wise.\n"
+        "1. Use analyze_scenario to understand the requirements and create a session.\n"
+        "2. Use recommend_libraries to get library suggestions based on the scenario.\n"
+        "3. Use execute_step to run the test steps in the created session.\n"
+        "4. Use build_test_suite to compile the test steps into a complete suite.\n"
+        "5. Use run_test_suite_dry to execute a staged dry run of the test suite.\n"
+        "6. Use run_test_suite to execute the test suite with all libraries loaded.\n"
+        "General hints:\n"
+        "- in case of UI testing, use get_page_source to retrieve the current state of the UI.\n"
+        "- in case of UI testing, ensure the Browser is running in non-headless mode.\n"
+        "- in case of problems with keyword calls, use get_keyword_documentation and get_library_documentation to get more information.\n"
+        "# Scenario:\n"
+        f"{scenario}\n"
+    )
+
+
 @mcp.tool
 async def analyze_scenario(
     scenario: str, context: str = "web", session_id: str = None
@@ -623,6 +644,43 @@ async def get_keyword_documentation(
           - lineno: Line number in source (libdoc only)
     """
     return execution_engine.get_keyword_documentation(keyword_name, library_name)
+
+
+@mcp.tool
+async def get_library_documentation(library_name: str) -> Dict[str, Any]:
+    """Get full documentation for a Robot Framework library using native RF libdoc.
+
+    Uses Robot Framework's native LibraryDocumentation API to provide comprehensive
+    library information including library metadata and all keywords with their
+    documentation, arguments, and metadata.
+
+    Args:
+        library_name: Name of the library to get documentation for
+
+    Returns:
+        Dict containing comprehensive library information:
+        - success: Boolean indicating if library was found
+        - library: Dict with library details including:
+          - name: Library name
+          - doc: Library documentation
+          - version: Library version
+          - type: Library type
+          - scope: Library scope
+          - source: Source file path
+          - keywords: List of all library keywords with full details including:
+            - name: Keyword name
+            - args: List of argument names
+            - arg_types: List of argument types (when available from libdoc)
+            - doc: Full keyword documentation text
+            - short_doc: Native Robot Framework short_doc
+            - tags: Keyword tags
+            - is_deprecated: Deprecation status (libdoc only)
+            - source: Source file path (libdoc only)
+            - lineno: Line number in source (libdoc only)
+          - keyword_count: Total number of keywords in library
+          - data_source: 'libdoc' or 'inspection' indicating data source
+    """
+    return execution_engine.get_library_documentation(library_name)
 
 
 # TOOL DISABLED: validate_step_before_suite
