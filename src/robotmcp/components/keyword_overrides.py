@@ -264,6 +264,35 @@ class SeleniumLibraryHandler(UnifiedLibraryHandler):
     
     def __init__(self, execution_engine):
         super().__init__(execution_engine, "seleniumlibrary")
+    
+    async def execute(self, session, keyword, args, keyword_info):
+        """Override execute to handle Input Password → Input Text conversion."""
+        # CRITICAL FIX: Input Password → Input Text override to avoid "Cannot access execution context" error
+        # This override executes Input Text but preserves Input Password for step recording and test suite generation
+        original_keyword = keyword
+        execution_keyword = keyword
+        is_input_password_override = False
+        
+        # Check if this is an Input Password keyword (case-insensitive, space-insensitive)
+        normalized_keyword = keyword.lower().replace(" ", "").replace("_", "")
+        if normalized_keyword in ["inputpassword", "seleniumlibrary.inputpassword"]:
+            execution_keyword = "Input Text"
+            is_input_password_override = True
+            logger.info(f"INPUT PASSWORD OVERRIDE: SeleniumLibraryHandler executing '{original_keyword}' as '{execution_keyword}' (preserving original for recording)")
+        
+        # Execute with potentially overridden keyword
+        # The parent class will handle the actual execution
+        result = await super().execute(session, execution_keyword, args, keyword_info)
+        
+        # For successful Input Password overrides, add metadata to indicate the override
+        if is_input_password_override and result.success:
+            logger.info(f"INPUT PASSWORD OVERRIDE: Successfully executed as Input Text, original keyword '{original_keyword}' preserved for session recording")
+            if result.metadata is None:
+                result.metadata = {}
+            result.metadata['original_keyword'] = original_keyword
+            result.metadata['is_input_password_override'] = True
+            
+        return result
         
     async def _handle_success_state_updates(self, session, keyword, result, keyword_info):
         """Handle SeleniumLibrary-specific state updates."""

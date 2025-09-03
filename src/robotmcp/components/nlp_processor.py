@@ -375,9 +375,16 @@ class NaturalLanguageProcessor:
         scenario_lower = scenario.lower()
         required = set()
         
-        # Add based on context
+        # Add based on context - FIXED: Default to Browser Library for modern web automation
         if context == "web":
-            required.add("SeleniumLibrary")
+            # Check for explicit library preference first
+            if any(pattern in scenario_lower for pattern in [
+                "selenium", "seleniumlibrary", "webdriver"
+            ]):
+                required.add("SeleniumLibrary")
+            else:
+                # Default to Browser Library for modern web automation (matches recommend_libraries logic)
+                required.add("Browser")
         elif context == "api":
             required.add("RequestsLibrary")
         elif context == "mobile":

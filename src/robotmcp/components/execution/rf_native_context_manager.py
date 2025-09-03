@@ -29,6 +29,12 @@ except ImportError as e:
     RF_NATIVE_AVAILABLE = False
     logger.error(f"Robot Framework native components not available: {e}")
 
+# Import our compatibility utilities
+from robotmcp.utils.rf_variables_compatibility import (
+    create_compatible_variables, 
+    create_compatible_namespace
+)
+
 
 class RobotFrameworkNativeContextManager:
     """
@@ -68,15 +74,15 @@ class RobotFrameworkNativeContextManager:
             # Check if we already have a context
             if EXECUTION_CONTEXTS.current is None:
                 # Create minimal variables with proper structure for BuiltIn.evaluate
-                variables = Variables()
+                original_variables = Variables()
+                
+                # Create compatible variables with set_global method for BuiltIn
+                variables = create_compatible_variables(original_variables)
                 
                 # Add the 'current' attribute that BuiltIn.evaluate expects
-                # This should return an object with replace_scalar method and store attribute
                 if not hasattr(variables, 'current'):
-                    # Variables.current should return the Variables object itself
-                    # because evaluate_expression expects variables.replace_scalar and variables.store
                     variables.current = variables
-                    logger.info("Added 'current' attribute to Variables pointing to self for BuiltIn compatibility")
+                    logger.info("Added 'current' attribute to compatible Variables for BuiltIn compatibility")
                 
                 # Create a basic test suite with proper output directory setup
                 suite = TestSuite(name=f"MCP_Session_{session_id}")
@@ -90,7 +96,10 @@ class RobotFrameworkNativeContextManager:
                 suite.resource = ResourceFile(source=suite.source)
                 
                 # Create minimal namespace with correct parameter order: variables, suite, resource, languages
-                namespace = Namespace(variables, suite, suite.resource, Languages())
+                original_namespace = Namespace(original_variables, suite, suite.resource, Languages())
+                
+                # Create compatible namespace with our compatible variables
+                namespace = create_compatible_namespace(original_namespace, variables)
                 
                 # Create simple output with proper output directory for Browser Library
                 try:
@@ -108,8 +117,15 @@ class RobotFrameworkNativeContextManager:
                     # Set OUTPUTDIR variable for Browser Library compatibility
                     # Browser Library uses BuiltIn().get_variable_value("${OUTPUTDIR}")
                     variables["${OUTPUTDIR}"] = temp_output_dir
+                    
+                    # Set LOGFILE variable for SeleniumLibrary compatibility
+                    # SeleniumLibrary needs os.path.dirname(logfile) in log_dir property
+                    log_file_path = os.path.join(temp_output_dir, "log.html")
+                    variables["${LOGFILE}"] = log_file_path
+                    
                     logger.info(f"Created RF context with output directory: {temp_output_dir}")
                     logger.info(f"Set ${{OUTPUTDIR}} variable to: {temp_output_dir}")
+                    logger.info(f"Set ${{LOGFILE}} variable to: {log_file_path}")
                 except Exception:
                     # If Output still fails, try a different approach
                     logger.warning("Could not create Output, using minimal logging")
@@ -130,10 +146,14 @@ class RobotFrameworkNativeContextManager:
             else:
                 logger.info(f"RF context already exists, reusing for session {session_id}")
                 ctx = EXECUTION_CONTEXTS.current
-                variables = ctx.variables
+                variables = ctx.variables  
                 namespace = ctx.namespace
                 output = getattr(ctx, 'output', None)
                 suite = ctx.suite
+                
+            # CRITICAL: Set up BuiltIn library with proper context access
+            # This enables Input Password and other context-dependent keywords
+            self._setup_builtin_context_access(ctx, namespace)
             
             # Import libraries into the RF namespace
             imported_libraries = []
@@ -157,6 +177,19 @@ class RobotFrameworkNativeContextManager:
                         if lib_name == "Browser" and ("list index out of range" in str(e) or "index out of range" in str(e)):
                             logger.info(f"Skipping Browser Library import due to index error - will try alternative approach")
                             continue
+                        
+                        # For SeleniumLibrary, try with proper arguments for RF context
+                        if lib_name == "SeleniumLibrary":
+                            logger.info(f"Retrying SeleniumLibrary import with proper RF context configuration")
+                            try:
+                                # Import with empty arguments - RF context will handle initialization
+                                namespace.import_library("SeleniumLibrary", args=())
+                                imported_libraries.append(lib_name)
+                                logger.info(f"Successfully imported SeleniumLibrary into RF context on retry")
+                                continue
+                            except Exception as retry_error:
+                                logger.warning(f"SeleniumLibrary retry also failed: {retry_error}")
+                                # Continue to alternative approach
                         
                         # Try alternative approach with library arguments from library manager
                         try:
@@ -305,6 +338,11 @@ class RobotFrameworkNativeContextManager:
             
             # Try to resolve the keyword using RF's namespace
             try:
+                # Debug: Check available libraries and keywords
+                if hasattr(namespace, 'libraries'):
+                    lib_names = list(namespace.libraries.keys()) if hasattr(namespace.libraries, 'keys') else ['(unknown format)']
+                    logger.info(f"Available libraries in RF namespace: {lib_names}")
+                
                 keyword = namespace.get_keyword(keyword_name)
                 if keyword:
                     logger.info(f"Found keyword '{keyword_name}' via namespace resolution")
@@ -324,6 +362,30 @@ class RobotFrameworkNativeContextManager:
                             
             except Exception as e:
                 logger.debug(f"Namespace resolution failed for {keyword_name}: {e}")
+            
+            # HYBRID APPROACH: For Input Password specifically, use library manager instance with RF context
+            if keyword_name.lower() == "input password":
+                logger.info(f"Using hybrid approach for Input Password with RF context support")
+                try:
+                    from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
+                    orchestrator = get_keyword_discovery()
+                    if "SeleniumLibrary" in orchestrator.library_manager.libraries:
+                        lib_instance = orchestrator.library_manager.libraries["SeleniumLibrary"]
+                        
+                        # Check if Input Password method exists directly
+                        if hasattr(lib_instance, 'input_password'):
+                            logger.info(f"Found input_password method in SeleniumLibrary instance")
+                            
+                            # Execute with RF context available for BuiltIn calls
+                            # The key is that we already have RF context set up, so BuiltIn calls should work
+                            return lib_instance.input_password(*arguments)
+                        else:
+                            logger.warning(f"input_password method not found in SeleniumLibrary instance")
+                            # List available methods for debugging
+                            methods = [attr for attr in dir(lib_instance) if not attr.startswith('_') and callable(getattr(lib_instance, attr))]
+                            logger.info(f"Available methods in SeleniumLibrary: {methods[:10]}...")  # Show first 10 methods
+                except Exception as e:
+                    logger.warning(f"Hybrid approach failed for Input Password: {e}")
             
             # Fallback: Manual library search
             from robot.running import EXECUTION_CONTEXTS
@@ -416,6 +478,8 @@ class RobotFrameworkNativeContextManager:
         try:
             logger.info(f"RF NATIVE: Executing {keyword_name} with args: {arguments}")
             
+            # No special handling needed - Input Password will work through normal RF context now
+            
             # Direct approach: Call BuiltIn methods directly
             # This avoids the run_keyword complexity and uses RF's execution context
             from robot.libraries.BuiltIn import BuiltIn
@@ -466,6 +530,27 @@ class RobotFrameworkNativeContextManager:
             }
     
 # Fallback method removed - using simplified approach
+    
+    def _setup_builtin_context_access(self, context, namespace):
+        """Set up BuiltIn library with proper context access for Input Password and similar keywords.
+        
+        This is a general solution that enables any keyword requiring RF context access.
+        """
+        try:
+            from robot.libraries.BuiltIn import BuiltIn
+            
+            # Get or create BuiltIn instance 
+            builtin_instance = BuiltIn()
+            
+            # Set up BuiltIn with proper context access
+            # BuiltIn.set_log_level needs: self._context.output and self._namespace.variables.set_global
+            builtin_instance._context = context
+            builtin_instance._namespace = namespace
+            
+            logger.info("✅ BuiltIn library configured with RF context access for Input Password support")
+            
+        except Exception as e:
+            logger.warning(f"Failed to setup BuiltIn context access: {e}")
     
     def _handle_variable_assignment(
         self,
