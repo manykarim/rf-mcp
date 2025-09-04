@@ -70,7 +70,9 @@ class RobotFrameworkDocStorage:
         for library_name in self.common_libraries:
             self._load_library_documentation(library_name)
         
-        logger.info(f"Initialized {len(self.libraries)} libraries with {len(self.keyword_cache)} keywords using libdoc")
+        # Count total keywords across all libraries
+        total_keywords = sum(len(lib.keywords) for lib in self.libraries.values())
+        logger.info(f"Initialized {len(self.libraries)} libraries with {total_keywords} keywords using libdoc")
     
     def _load_library_documentation(self, library_name: str) -> bool:
         """Load library documentation using Robot Framework's LibraryDocumentation."""
@@ -231,24 +233,13 @@ class RobotFrameworkDocStorage:
             return None
             
         # Normalize keyword name
-        normalized = keyword_name.lower().strip()
-        
-        # Direct lookup
-        if normalized in self.keyword_cache:
-            return self.keyword_cache[normalized]
-        
-        # Try variations
-        variations = [
-            normalized.replace(' ', '_'),
-            normalized.replace('_', ' '),
-            normalized.replace(' ', ''),
-            normalized
-        ]
-        
-        for variation in variations:
-            if variation in self.keyword_cache:
-                return self.keyword_cache[variation]
-        
+        norm = self._normalize_name(keyword_name)
+        by_lib = self.keyword_index_by_name.get(norm)
+        if not by_lib:
+            return None
+        # Return deterministically the first library’s entry
+        for lib in sorted(by_lib.keys()):
+            return by_lib[lib]
         return None
     
     def get_keywords_by_library(self, library_name: str) -> List[RFKeywordInfo]:
@@ -295,7 +286,7 @@ class RobotFrameworkDocStorage:
         pattern = pattern.lower()
         matches = []
         
-        for keyword_info in self.keyword_cache.values():
+        for keyword_info in self.get_all_keywords():
             if (pattern in keyword_info.name.lower() or 
                 pattern in keyword_info.doc.lower() or
                 pattern in keyword_info.short_doc.lower() or
@@ -507,10 +498,14 @@ class RobotFrameworkDocStorage:
         # Remove old data
         if library_name in self.libraries:
             old_keywords = self.libraries[library_name].keywords
+            # Remove entries from index for this library
             for kw_name in old_keywords:
-                cache_key = kw_name.lower().strip()
-                if cache_key in self.keyword_cache:
-                    del self.keyword_cache[cache_key]
+                norm = self._normalize_name(kw_name)
+                by_lib = self.keyword_index_by_name.get(norm)
+                if by_lib and library_name in by_lib:
+                    del by_lib[library_name]
+                    if not by_lib:
+                        del self.keyword_index_by_name[norm]
             del self.libraries[library_name]
         
         # Reload
@@ -539,7 +534,7 @@ class RobotFrameworkDocStorage:
                 for name, lib in self.libraries.items()
             },
             "failed_imports": self.failed_imports,
-            "total_keywords": len(self.keyword_cache)
+            "total_keywords": sum(len(lib.keywords) for lib in self.libraries.values())
         }
     
     def is_available(self) -> bool:
