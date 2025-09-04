@@ -37,8 +37,8 @@ class ExecutionConfig:
     REMOVE_STYLES_IN_STANDARD: bool = True
     KEEP_HIDDEN_ELEMENTS_IN_STANDARD: bool = True
     
-    # Locator conversion settings
-    ENABLE_LOCATOR_CONVERSION: bool = True
+    # Locator conversion settings (disabled during execution; handle in suite generation)
+    ENABLE_LOCATOR_CONVERSION: bool = False
     CONVERT_JQUERY_SELECTORS: bool = True
     CONVERT_CASCADED_SELECTORS: bool = True
     ADD_EXPLICIT_SELECTOR_STRATEGIES: bool = True  # Add css=, xpath=, text= prefixes

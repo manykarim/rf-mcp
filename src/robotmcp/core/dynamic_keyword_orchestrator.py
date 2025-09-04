@@ -280,6 +280,7 @@ class DynamicKeywordDiscovery:
 
     def _execute_with_rf_type_conversion(self, method, keyword_info, corrected_args):
         """Execute method using Robot Framework's native type conversion system."""
+        logger.debug(f"TYPE_CONVERSION_DEBUG: Starting RF type conversion for {keyword_info.name} with args: {corrected_args}")
         try:
             import inspect
 
@@ -380,7 +381,7 @@ class DynamicKeywordDiscovery:
             else:
                 # No '=' signs detected, use original positional-only logic
                 logger.debug(
-                    f"No potential named arguments detected for {keyword_info.name}, using positional processing"
+                    f"TYPE_CONVERSION_DEBUG: No potential named arguments detected for {keyword_info.name}, using positional processing"
                 )
                 raise Exception("fallback_to_positional")  # Trigger fallback
 
@@ -388,7 +389,10 @@ class DynamicKeywordDiscovery:
             if str(e) == "fallback_to_positional":
                 # Use the original positional-only logic
                 logger.debug(
-                    f"Falling back to positional-only processing for {keyword_info.name}"
+                    f"TYPE_CONVERSION_DEBUG: Falling back to positional-only processing for {keyword_info.name}"
+                )
+                logger.debug(
+                    f"TYPE_CONVERSION_DEBUG: Will convert {len(corrected_args)} arguments using method signature"
                 )
 
                 converted_args = []
@@ -423,11 +427,30 @@ class DynamicKeywordDiscovery:
                             )
                             converted_args.append(converted_value)
                             logger.debug(
-                                f"RF converted arg {i} '{param_name}': {arg_value} -> {converted_value} (type: {type(converted_value).__name__})"
+                                f"TYPE_CONVERSION_DEBUG: RF converted arg {i} '{param_name}': '{arg_value}' -> {converted_value} (type: {type(converted_value).__name__})"
                             )
                         except Exception as conversion_error:
                             # Enhanced error handling for type conversion failures
                             error_msg = str(conversion_error)
+                            
+                            # Try special enum string pattern handling for Browser Library
+                            if param_name == 'browser' and string_arg_value.startswith('SupportedBrowsers.'):
+                                logger.debug(f"TYPE_CONVERSION_DEBUG: Attempting enum string conversion for '{string_arg_value}'")
+                                try:
+                                    # Extract the enum member name (e.g., 'chromium' from 'SupportedBrowsers.chromium')
+                                    enum_member_name = string_arg_value.split('.', 1)[1]
+                                    logger.debug(f"TYPE_CONVERSION_DEBUG: Extracted enum member: '{enum_member_name}'")
+                                    
+                                    # Try to convert the enum member name instead
+                                    converted_value = converter.convert(enum_member_name, param_name)
+                                    converted_args.append(converted_value)
+                                    logger.debug(
+                                        f"TYPE_CONVERSION_DEBUG: Enum string conversion succeeded: '{string_arg_value}' -> {converted_value} (type: {type(converted_value).__name__})"
+                                    )
+                                    continue  # Successfully handled, skip to next argument
+                                except Exception as enum_error:
+                                    logger.debug(f"TYPE_CONVERSION_DEBUG: Enum string conversion failed: {enum_error}")
+                                    # Fall through to original error handling
 
                             # Check if this looks like a misplaced named argument
                             if (
@@ -445,7 +468,7 @@ class DynamicKeywordDiscovery:
                             elif "'str' object has no attribute 'name'" in error_msg:
                                 # This is the specific error we're trying to fix
                                 logger.debug(
-                                    f"Caught 'str' object error for parameter '{param_name}' with value '{string_arg_value}'"
+                                    f"TYPE_CONVERSION_DEBUG: Caught 'str' object error for parameter '{param_name}' with value '{string_arg_value}'"
                                 )
                                 raise ValueError(
                                     f"Parameter '{param_name}' received invalid value '{string_arg_value}'. "
@@ -463,10 +486,13 @@ class DynamicKeywordDiscovery:
                         converted_args.append(arg_value)
 
                 # Execute with converted arguments
+                logger.debug(
+                    f"TYPE_CONVERSION_DEBUG: Executing {keyword_info.name} with converted args: {converted_args}"
+                )
                 result = method(*converted_args)
 
                 logger.debug(
-                    f"RF native type conversion succeeded for {keyword_info.name}"
+                    f"TYPE_CONVERSION_DEBUG: RF native type conversion succeeded for {keyword_info.name}"
                 )
                 return (
                     "executed",
@@ -1706,6 +1732,29 @@ class DynamicKeywordDiscovery:
 
                 result = method(*string_args)
             else:
+                # Unified primary path: try direct call with parsed positional and named arguments
+                try:
+                    pos_args = parsed_args.positional
+                    kwargs = parsed_args.named or {}
+                    logger.debug(
+                        f"UNIFIED_EXECUTION: Calling {keyword_info.library}.{keyword_info.name} with pos={pos_args}, kwargs={list(kwargs.keys())}"
+                    )
+                    result = method(*pos_args, **kwargs)
+                    return {
+                        "success": True,
+                        "output": str(result) if result is not None else f"Executed {keyword_info.name}",
+                        "result": result,
+                        "keyword_info": {
+                            "name": keyword_info.name,
+                            "library": keyword_info.library,
+                            "doc": keyword_info.doc,
+                        },
+                    }
+                except Exception as primary_error:
+                    logger.debug(
+                        f"UNIFIED_EXECUTION: Primary call failed for {keyword_info.library}.{keyword_info.name}: {primary_error}. Falling back to legacy conversion paths."
+                    )
+
                 # Regular library methods - use centralized type conversion configuration
                 from robotmcp.config.library_registry import (
                     get_libraries_requiring_type_conversion,
@@ -1717,7 +1766,10 @@ class DynamicKeywordDiscovery:
                     # Enhanced logging for named arguments debugging
                     has_potential_named_args = any("=" in arg for arg in corrected_args)
                     logger.debug(
-                        f"NAMED_ARGS_DEBUG: {keyword_info.name} from {keyword_info.library} - args={corrected_args}, has_potential_named={has_potential_named_args}"
+                        f"TYPE_CONVERSION_DEBUG: {keyword_info.name} from {keyword_info.library} - args={corrected_args}, has_potential_named={has_potential_named_args}"
+                    )
+                    logger.debug(
+                        f"TYPE_CONVERSION_DEBUG: Library '{keyword_info.library}' is in type_conversion_libraries: {type_conversion_libraries}"
                     )
 
                     try:
@@ -1726,7 +1778,7 @@ class DynamicKeywordDiscovery:
                             method, keyword_info, corrected_args
                         )
                         logger.debug(
-                            f"NAMED_ARGS_DEBUG: Type conversion result for {keyword_info.name}: {conversion_result[0] if conversion_result else 'None'}"
+                            f"TYPE_CONVERSION_DEBUG: Type conversion result for {keyword_info.name}: {conversion_result[0] if conversion_result else 'None'}"
                         )
                         if (
                             conversion_result[0] == "executed"
@@ -1767,7 +1819,56 @@ class DynamicKeywordDiscovery:
                                 f"Successfully executed {keyword_info.name} with fallback named arguments"
                             )
                         else:
-                            result = method(*pos_args)
+                            # Apply type conversion and argument parsing for Browser Library in fallback path
+                            if keyword_info.library == "Browser" and keyword_info.name == "New Browser" and pos_args:
+                                # Parse arguments more carefully for Browser Library
+                                parsed_pos_args = []
+                                parsed_kwargs = {}
+                                
+                                for i, arg in enumerate(pos_args):
+                                    if isinstance(arg, str) and '=' in arg:
+                                        # This is a named argument disguised as positional
+                                        key, value = arg.split('=', 1)
+                                        logger.debug(f"TYPE_CONVERSION_DEBUG: Fallback parsing named arg: '{key}'='{value}'")
+                                        
+                                        # Convert value types
+                                        if key == 'headless' and value.lower() in ['true', 'false']:
+                                            parsed_kwargs[key] = value.lower() == 'true'
+                                            logger.debug(f"TYPE_CONVERSION_DEBUG: Converted {key}: '{value}' -> {parsed_kwargs[key]}")
+                                        else:
+                                            parsed_kwargs[key] = value
+                                    
+                                    elif i == 0 and isinstance(arg, str):
+                                        # Handle browser argument (first positional arg)
+                                        logger.debug(f"TYPE_CONVERSION_DEBUG: Fallback browser conversion for '{arg}'")
+                                        try:
+                                            from Browser.utils.data_types import SupportedBrowsers
+                                            
+                                            if arg.startswith('SupportedBrowsers.'):
+                                                # Handle SupportedBrowsers.chromium pattern
+                                                enum_member_name = arg.split('.', 1)[1]  # Extract 'chromium' from 'SupportedBrowsers.chromium'
+                                                enum_value = getattr(SupportedBrowsers, enum_member_name)
+                                            else:
+                                                # Handle direct browser name (e.g., 'chromium' -> SupportedBrowsers.chromium)
+                                                enum_value = getattr(SupportedBrowsers, arg)
+                                            
+                                            parsed_pos_args.append(enum_value)
+                                            logger.debug(f"TYPE_CONVERSION_DEBUG: Fallback browser conversion succeeded: '{arg}' -> {enum_value}")
+                                        except Exception as enum_error:
+                                            logger.debug(f"TYPE_CONVERSION_DEBUG: Fallback browser conversion failed: {enum_error}")
+                                            parsed_pos_args.append(arg)  # Use original value
+                                    else:
+                                        parsed_pos_args.append(arg)
+                                
+                                # Call method with properly parsed arguments
+                                if parsed_kwargs:
+                                    logger.debug(f"TYPE_CONVERSION_DEBUG: Calling Browser method with pos_args={parsed_pos_args}, kwargs={parsed_kwargs}")
+                                    result = method(*parsed_pos_args, **parsed_kwargs)
+                                else:
+                                    logger.debug(f"TYPE_CONVERSION_DEBUG: Calling Browser method with pos_args={parsed_pos_args}")
+                                    result = method(*parsed_pos_args)
+                            else:
+                                result = method(*pos_args)
                             logger.debug(
                                 f"Successfully executed {keyword_info.name} with fallback positional arguments"
                             )
@@ -2005,41 +2106,14 @@ class DynamicKeywordDiscovery:
                     f"Executing keyword '{keyword_info.name}' from {keyword_info.library}"
                 )
 
-            # Parse arguments using LibDoc information for accuracy
-            # BUGFIX: Convert all arguments to strings before parsing since Robot Framework expects string inputs
+            # Parse arguments using LibDoc/RF information for accuracy.
+            # Pass through original arguments to preserve tuples for named kwargs and object values.
             logger.debug(
-                f"ORCHESTRATOR: Before string conversion, args={args}, types={[type(arg).__name__ for arg in args]}"
+                f"ORCHESTRATOR: Using original args for parsing: {args}, types={[type(arg).__name__ for arg in args]}"
             )
-            string_args = []
-            for arg in args:
-                if not isinstance(arg, str):
-                    # Special handling for tuples from variable resolution (like ('json', {'test': 'value'}))
-                    if isinstance(arg, tuple) and len(arg) == 2:
-                        # This is a named parameter tuple - convert back to name=value format
-                        param_name, param_value = arg
-                        if isinstance(param_name, str) and param_name.isidentifier():
-                            # For named parameters, we need to create a special format that preserves the object
-                            # Use ObjectPreservingArgument format that RF converter can understand
-                            string_args.append(
-                                arg
-                            )  # Keep the tuple as-is for RF converter
-                            logger.debug(
-                                f"Preserving named parameter tuple {arg} for RF converter"
-                            )
-                            continue
-
-                    # Default conversion for other non-string types
-                    string_arg = str(arg)
-                    logger.debug(
-                        f"Converting non-string argument {arg} (type: {type(arg).__name__}) to string '{string_arg}' for RF argument parsing"
-                    )
-                    string_args.append(string_arg)
-                else:
-                    string_args.append(arg)
-
             parsed_args = self._parse_arguments_for_keyword(
                 effective_keyword_name,
-                string_args,
+                args,
                 keyword_info.library,
                 session_variables,
             )

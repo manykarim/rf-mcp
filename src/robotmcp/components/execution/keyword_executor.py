@@ -200,14 +200,23 @@ class KeywordExecutor:
                         f"Variable resolution: {arguments} → {resolved_arguments}"
                     )
 
-                    # FINAL SOLUTION: Store and immediately inject objects for all execution paths
-                    resolved_arguments = self._store_and_reference_objects(
-                        resolved_arguments, session
-                    )
-                    resolved_arguments = self._inject_objects_for_execution(
-                        resolved_arguments, session
-                    )
-                    # Object injection completed successfully
+                    # General solution: preserve object values for named params by converting
+                    # ObjectPreservingArgument to (name, value) tuples. Orchestrator preserves tuples.
+                    try:
+                        from robotmcp.components.variables.variable_resolver import (
+                            ObjectPreservingArgument,
+                        )
+
+                        converted_args = []
+                        for arg in resolved_arguments:
+                            if isinstance(arg, ObjectPreservingArgument):
+                                converted_args.append((arg.param_name, arg.value))
+                            else:
+                                converted_args.append(arg)
+                        resolved_arguments = converted_args
+                    except Exception as _:
+                        # If conversion helpers are unavailable, keep resolved arguments as-is
+                        pass
 
                 except Exception as var_error:
                     logger.error(
@@ -1114,35 +1123,14 @@ class KeywordExecutor:
     ) -> Dict[str, Any]:
         """Execute a SeleniumLibrary keyword using the dynamic execution handler."""
         try:
-            # CRITICAL FIX: Input Password → Input Text override to avoid "Cannot access execution context" error
-            # This override executes Input Text but preserves Input Password for step recording and test suite generation
-            execution_keyword = keyword
-            is_input_password_override = False
-            
-            # Check if this is an Input Password keyword (case-insensitive, space-insensitive)
-            normalized_keyword = keyword.lower().replace(" ", "").replace("_", "")
-            logger.debug(f"INPUT PASSWORD DEBUG: Checking keyword '{keyword}' (normalized: '{normalized_keyword}') for override")
-            if normalized_keyword in ["inputpassword", "seleniumlibrary.inputpassword"]:
-                execution_keyword = "Input Text"
-                is_input_password_override = True
-                logger.info(f"INPUT PASSWORD OVERRIDE: Executing '{keyword}' as 'Input Text' (preserving original keyword for recording)")
-            else:
-                logger.debug(f"INPUT PASSWORD DEBUG: No override needed for '{keyword}'")
-
             # Use the keyword discovery's execute_keyword method with SeleniumLibrary filter
             result = await self.keyword_discovery.execute_keyword(
-                keyword_name=execution_keyword,  # Use overridden keyword for execution
+                keyword_name=keyword,
                 args=args,
                 session_variables=session.variables,
                 active_library="SeleniumLibrary", 
                 session_id=session.session_id,
             )
-            
-            # CRITICAL: Restore original keyword name in result for proper step recording
-            if is_input_password_override and result.get("success"):
-                logger.info(f"INPUT PASSWORD OVERRIDE: Execution successful, preserving original keyword '{keyword}' for step recording")
-                # The keyword that gets recorded in the session step should be the original one
-                # This ensures test suite generation shows "Input Password" not "Input Text"
 
             # Update session browser state based on keyword if successful
             if result.get("success"):

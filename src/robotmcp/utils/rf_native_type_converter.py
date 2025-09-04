@@ -329,24 +329,18 @@ class RobotFrameworkNativeConverter:
         from robotmcp.components.variables.variable_resolver import ObjectPreservingArgument
         
         processed_args = []
-        
+
         for arg in args:
             if isinstance(arg, ObjectPreservingArgument):
-                # CORRECT FIX: Return a special format that preserves the object
-                # This will be handled by the argument resolution system properly
+                # Preserve object-valued named parameter as a (name, value) tuple
                 processed_args.append((arg.param_name, arg.value))
             elif isinstance(arg, tuple) and len(arg) == 2:
-                # Handle named parameter tuples (like ('json', {'test': 'value'}))
-                param_name, param_value = arg
-                if isinstance(param_name, str) and param_name.isidentifier():
-                    # Preserve the tuple as-is for named parameter handling
-                    processed_args.append(arg)
-                else:
-                    # Not a valid named parameter tuple, convert to string
-                    processed_args.append(str(arg))
+                # Preserve named parameter tuple as-is for downstream resolver
+                processed_args.append(arg)
             else:
-                processed_args.append(str(arg) if not isinstance(arg, str) else arg)
-        
+                # Do NOT stringify non-strings here; keep original objects for positional parameters
+                processed_args.append(arg)
+
         return processed_args
     
     def parse_and_convert_arguments(
