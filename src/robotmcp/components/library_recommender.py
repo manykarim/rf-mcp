@@ -129,9 +129,15 @@ class LibraryRecommender:
             # Remove duplicates and rank
             unique_matches = self._deduplicate_recommendations(matches)
             ranked_matches = self._rank_recommendations(unique_matches, scenario_keywords, context)
-            
+
+            # Apply context-based filtering (e.g., exclude mobile/database for web)
+            filtered = self._filter_by_context(ranked_matches, context, scenario_keywords)
+
+            # Apply preferences (e.g., prefer Browser over SeleniumLibrary for web)
+            preferred = self._apply_preferences(filtered, context)
+
             # Limit results
-            top_recommendations = ranked_matches[:max_recommendations]
+            top_recommendations = preferred[:max_recommendations]
             
             return {
                 "success": True,
@@ -166,6 +172,53 @@ class LibraryRecommender:
                 "error": str(e),
                 "recommendations": []
             }
+
+    def _filter_by_context(self, recs: List['LibraryRecommendation'], context: str, scenario_keywords: List[str]) -> List['LibraryRecommendation']:
+        """Filter recommendations based on the given context and scenario.
+
+        For context='web': exclude mobile and database libraries unless scenario explicitly mentions them.
+        """
+        if not recs:
+            return recs
+
+        ctx = (context or '').lower().strip()
+        kws = set((kw or '').lower() for kw in scenario_keywords)
+
+        if ctx == 'web':
+            # Exclude mobile unless scenario mentions mobile terms
+            allow_mobile = any(k in kws for k in {'mobile', 'android', 'ios', 'app'})
+            # Exclude database unless scenario mentions db terms
+            allow_database = any(k in kws for k in {'database', 'sql', 'db'})
+
+            filtered: List['LibraryRecommendation'] = []
+            for r in recs:
+                cats = set((c or '').lower() for c in r.library.categories)
+                if ('mobile' in cats and not allow_mobile):
+                    continue
+                if ('database' in cats and not allow_database):
+                    continue
+                filtered.append(r)
+            return filtered
+
+        return recs
+
+    def _apply_preferences(self, recs: List['LibraryRecommendation'], context: str) -> List['LibraryRecommendation']:
+        """Apply library preferences and resolve conflicts.
+
+        - For web context, prefer Browser over SeleniumLibrary when both present.
+        """
+        if not recs:
+            return recs
+
+        ctx = (context or '').lower().strip()
+        if ctx == 'web':
+            names = [r.library.name for r in recs]
+            if 'Browser' in names and 'SeleniumLibrary' in names:
+                # Keep Browser, drop SeleniumLibrary
+                recs = [r for r in recs if r.library.name != 'SeleniumLibrary']
+                # Ensure Browser is at the front
+                recs.sort(key=lambda r: 0 if r.library.name == 'Browser' else 1)
+        return recs
 
     def _normalize_text(self, text: str) -> str:
         """Normalize text for keyword extraction."""

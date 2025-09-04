@@ -23,6 +23,84 @@ logger = logging.getLogger(__name__)
 # Initialize FastMCP server
 mcp = FastMCP("Robot Framework MCP Server")
 
+
+# Internal helpers to build prompt texts (used by both @mcp.prompt and wrapper tools)
+def _build_recommend_libraries_sampling_prompt(
+    scenario: str,
+    k: int = 4,
+    available_libraries: List[Dict[str, Any]] = None,
+) -> str:
+    try:
+        import json
+
+        libs_section = (
+            json.dumps(available_libraries, ensure_ascii=False, indent=2)
+            if available_libraries
+            else "[]"
+        )
+    except Exception:
+        libs_section = "[]"
+
+    return (
+        "# Task\n"
+        "You are 1 of {k} samplers. Recommend the best Robot Framework libraries for this scenario.\n"
+        "- Consider ONLY the libraries listed below as available in this environment.\n"
+        "- Resolve conflicts (e.g., prefer one of Browser/SeleniumLibrary).\n"
+        "- Output strictly the JSON schema in the Output Format section.\n\n"
+        "# Scenario\n"
+        f"{scenario}\n\n"
+        "# Available Libraries (from environment)\n"
+        f"{libs_section}\n\n"
+        "# Guidance\n"
+        "- Choose 2–5 libraries maximum.\n"
+        "- Justify each choice concisely, referencing capabilities from 'available_libraries'.\n"
+        "- If multiple web libs exist, pick one with a short rationale.\n"
+        "- For API use, mention RequestsLibrary and how sessions are created.\n"
+        "- For XML/data flows, consider XML/Collections/String.\n"
+        "- If specialized libs are not needed, do not recommend them.\n\n"
+        "# Output Format (JSON)\n"
+        "{\n"
+        '  "recommendations": [\n'
+        '    { "name": "<LibraryName>", "reason": "<1-2 lines>", "score": 0.0 },\n'
+        "    ... up to 5 total ...\n"
+        "  ],\n"
+        '  "conflicts": [\n'
+        '    { "conflict_set": ["Browser", "SeleniumLibrary"], "chosen": "Browser", "reason": "<1 line>" }\n'
+        "  ]\n"
+        "}\n"
+    )
+
+
+def _build_choose_recommendations_prompt(
+    candidates: List[Dict[str, Any]] = None,
+) -> str:
+    import json
+
+    cand_section = (
+        json.dumps(candidates, ensure_ascii=False, indent=2) if candidates else "[]"
+    )
+
+    return (
+        "# Task\n"
+        "Select or merge the following sampled recommendations into a final JSON.\n"
+        "- Deduplicate libraries by name.\n"
+        "- Resolve conflicts (e.g., Browser vs SeleniumLibrary) by choosing the higher total score; state a 1-line reason.\n"
+        "- Normalize scores to 0..1, and keep at most 5 libraries.\n"
+        "- Output strictly the JSON under 'Output Format'.\n\n"
+        "# Candidates (JSON)\n"
+        f"{cand_section}\n\n"
+        "# Output Format (JSON)\n"
+        "{\n"
+        '  "recommendations": [\n'
+        '    { "name": "<LibraryName>", "reason": "<1-2 lines>", "score": 0.0 }\n'
+        "  ],\n"
+        '  "conflicts": [\n'
+        '    { "conflict_set": ["Browser", "SeleniumLibrary"], "chosen": "<name>", "reason": "<1 line>" }\n'
+        "  ]\n"
+        "}\n"
+    )
+
+
 # Initialize components
 nlp_processor = NaturalLanguageProcessor()
 keyword_matcher = KeywordMatcher()
@@ -94,6 +172,186 @@ def automate(scenario: str) -> str:
         "# Scenario:\n"
         f"{scenario}\n"
     )
+
+
+# Note: Prompt endpoints removed per Option B. Use tools below that return plain prompt text.
+
+
+@mcp.tool(
+    name="recommend_libraries",
+    description="STEP 2 (planning): Recommend the best libraries for a scenario using sampling; returns prompt text and suggested sampling config.",
+)
+async def recommend_libraries_sampling_tool(
+    scenario: str,
+    k: int = 4,
+    available_libraries: List[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Recommend the best Robot Framework libraries for a scenario (sampling-enabled).
+
+    Purpose:
+    - Produce a prioritized list of libraries with reasons and scores, chosen strictly
+      from the provided environment and tailored to the scenario. Use sampling to
+      generate diverse candidates, then select/merge with the chooser tool.
+
+    How to use:
+    - Call this tool to get the plain prompt text and a suggested sampling config.
+    - Use your model to generate k sampled recommendations from that prompt.
+    - Then call `choose_recommendations_tool` to merge/score into a final set.
+    - Follow with `check_library_availability`, `set_library_search_order`, then `execute_step`.
+
+    Arguments:
+    - scenario: Plain-language scenario to analyze.
+    - k: Number of samples to generate (e.g., 3–5).
+    - available_libraries: Array of objects with: name, description, categories,
+      requires_setup, setup_commands, use_cases, conflicts (optional).
+
+    Returns:
+    - success: True
+    - prompt: Prompt text for your model to sample against
+    - recommended_sampling: Suggested sampling config, e.g., {count: k, temperature: 0.4}
+    """
+    prompt_text = _build_recommend_libraries_sampling_prompt(
+        scenario, k, available_libraries
+    )
+    return {
+        "success": True,
+        "prompt": prompt_text,
+        "recommended_sampling": {"count": k, "temperature": 0.4},
+    }
+
+
+@mcp.tool(
+    name="choose_from_library_recommendations",
+    description="STEP 2b (selection): Merge/score sampled recommendation payloads into a final prioritized set before availability checks.",
+)
+async def choose_recommendations_tool(
+    candidates: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Choose/merge sampled recommender outputs into a final recommendation set.
+
+    Purpose:
+    - Turn multiple sampled recommendation payloads into a single, deduplicated,
+      conflict‑resolved, prioritized list with normalized scores.
+
+    How to use:
+    - Call this tool to get the chooser prompt text, then use your model to produce
+      the final set from the provided candidates. Proceed to `check_library_availability`
+      and `set_library_search_order`.
+
+    Arguments:
+    - candidates: List of sampled recommendation payloads (objects with a `recommendations`
+      array of {name, reason, score} and optional `conflicts`).
+
+    Returns:
+    - success: True
+    - prompt: Chooser prompt text for your model
+    """
+    prompt_text = _build_choose_recommendations_prompt(candidates)
+    return {
+        "success": True,
+        "prompt": prompt_text,
+    }
+
+
+@mcp.tool(
+    name="list_available_libraries_for_prompt",
+    description="Emit the available_libraries payload shaped for the sampling recommender (names, descriptions, categories, setup flags).",
+)
+async def list_available_libraries_for_prompt() -> Dict[str, Any]:
+    """List available libraries formatted for recommend_libraries_sampling.
+
+    Produces an array of library objects containing fields referenced by the
+    sampling prompt: name, description, categories, requires_setup, setup_commands,
+    use_cases, conflicts (optional), platform_requirements, dependencies, is_builtin.
+
+    Returns:
+    - success: True
+    - available_libraries: Array of library objects suitable for the sampling prompt
+    """
+    from robotmcp.config.library_registry import get_recommendation_info
+
+    libs = get_recommendation_info()
+    # Add an explicit empty conflicts field for consistency in prompts
+    for lib in libs:
+        lib.setdefault("conflicts", [])
+    return {"success": True, "available_libraries": libs}
+
+
+@mcp.tool
+async def recommend_libraries(
+    scenario: str,
+    context: str = "web",
+    max_recommendations: int = 5,
+    session_id: str = None,
+    check_availability: bool = True,
+    apply_search_order: bool = True,
+) -> Dict[str, Any]:
+    """Recommend Robot Framework libraries for a scenario and optionally apply them.
+
+    Returns a prioritized list of recommended Robot Framework libraries based on
+    the scenario description and context. Can also check availability and, when a
+    session_id is provided, apply the recommended search order to that session.
+
+    Args:
+        scenario: Scenario description.
+        context: Testing context (web, mobile, api, data, etc.).
+        max_recommendations: Max number of libraries to return.
+        session_id: If provided, apply the search order to this session.
+        check_availability: When True, includes availability and install suggestions.
+        apply_search_order: When True and session_id provided, sets session search order.
+
+    Returns:
+        - success: True on success
+        - recommended_libraries: Ordered list of library names (primary output)
+        - recommendations: Detailed entries (name, rationale, confidence, etc.)
+        - availability: When requested, available/missing lists and installation suggestions
+        - session_setup: When applied, session_id and resulting search order
+    """
+    # 1) Compute recommendations deterministically
+    rec = library_recommender.recommend_libraries(
+        scenario, context=context, max_recommendations=max_recommendations
+    )
+    if not rec.get("success"):
+        return {"success": False, "error": rec.get("error", "Recommendation failed")}
+
+    recommendations = rec.get("recommendations", [])
+    recommended_names = [r.get("library_name") for r in recommendations if r.get("library_name")]
+
+    result: Dict[str, Any] = {
+        "success": True,
+        "scenario": scenario,
+        "context": context,
+        "recommended_libraries": recommended_names,
+        "recommendations": recommendations,
+    }
+
+    # 2) Optionally check availability
+    availability_info = None
+    if check_availability and recommended_names:
+        availability_info = execution_engine.check_library_requirements(recommended_names)
+        result["availability"] = availability_info
+
+    # 3) Optionally apply search order to session
+    if session_id and apply_search_order and recommended_names:
+        session = execution_engine.session_manager.get_or_create_session(session_id)
+        old_order = session.get_search_order()
+
+        # Prefer available libraries first if we have that info, else use all recommendations
+        preferred = (
+            availability_info.get("available_libraries", []) if availability_info else recommended_names
+        )
+        # Merge with existing order while preserving priority
+        new_order = list(dict.fromkeys(preferred + [lib for lib in old_order if lib not in preferred]))
+        session.set_library_search_order(new_order)
+
+        result["session_setup"] = {
+            "session_id": session_id,
+            "old_search_order": old_order,
+            "new_search_order": new_order,
+            "applied": True,
+        }
+
+    return result
 
 
 @mcp.tool
@@ -408,79 +666,7 @@ async def validate_scenario(
     return await nlp_processor.validate_scenario(parsed_scenario, available_libraries)
 
 
-@mcp.tool
-async def recommend_libraries(
-    scenario: str,
-    context: str = "web",
-    max_recommendations: int = 5,
-    session_id: str = None,
-) -> Dict[str, Any]:
-    """Recommend Robot Framework libraries based on test scenario.
-
-    RECOMMENDED WORKFLOW - STEP 2 OF 3:
-    This tool should be used as the SECOND step in the Robot Framework automation workflow:
-    1. ✅ analyze_scenario - Understand what the user wants to accomplish
-    2. ✅ recommend_libraries (THIS TOOL) - Get targeted library suggestions for the scenario
-    3. ➡️ check_library_availability - Verify only the recommended libraries
-
-    IMPORTANT: Use the scenario output from analyze_scenario as input to this tool for
-    the most accurate library recommendations. This prevents checking irrelevant libraries
-    in the next step.
-
-    NEW: Session Management Integration
-    If session_id is provided, this tool will setup the session with recommended libraries
-    and configure library search order for optimal keyword resolution.
-
-    Args:
-        scenario: Natural language description of the test scenario (ideally from analyze_scenario output)
-        context: Testing context (web, mobile, api, database, desktop, system, visual)
-        max_recommendations: Maximum number of library recommendations to return
-        session_id: Optional session ID to setup with recommended libraries
-
-    Returns:
-        Targeted library recommendations that should be passed to check_library_availability.
-        If session_id provided, also includes session setup details.
-    """
-    # Get library recommendations
-    result = library_recommender.recommend_libraries(
-        scenario, context, max_recommendations
-    )
-
-    # If session_id provided, setup session with recommended libraries
-    if session_id:
-        logger.info(f"Setting up session '{session_id}' with recommended libraries")
-
-        # Get or create session
-        session = execution_engine.session_manager.get_or_create_session(session_id)
-
-        # If not already auto-configured, configure from scenario
-        if not session.auto_configured:
-            session.configure_from_scenario(scenario)
-
-        # Get recommended libraries from result
-        recommended_libs = result.get("recommended_libraries", [])
-
-        # Setup library search order based on recommendations
-        if recommended_libs:
-            # Update session search order to prioritize recommended libraries
-            session.search_order = recommended_libs + [
-                lib for lib in session.search_order if lib not in recommended_libs
-            ]
-            logger.info(
-                f"Updated session '{session_id}' search order: {session.search_order[:3]}..."
-            )
-
-        # Add session setup info to result
-        result["session_setup"] = {
-            "session_id": session_id,
-            "configured": True,
-            "search_order": session.search_order,
-            "session_type": session.session_type.value,
-            "explicit_preference": session.explicit_library_preference,
-            "recommended_libraries_applied": recommended_libs,
-        }
-
-    return result
+# Note: Removed legacy disabled recommend_libraries_ tool to avoid confusion.
 
 
 @mcp.tool
