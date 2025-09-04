@@ -46,7 +46,8 @@ class RobotFrameworkDocStorage:
     
     def __init__(self):
         self.libraries: Dict[str, RFLibraryInfo] = {}
-        self.keyword_cache: Dict[str, RFKeywordInfo] = {}
+        # Map normalized keyword name -> { library_name -> RFKeywordInfo }
+        self.keyword_index_by_name: Dict[str, Dict[str, RFKeywordInfo]] = {}
         self.failed_imports: Dict[str, str] = {}
         
         # Load library list from centralized registry
@@ -96,9 +97,11 @@ class RobotFrameworkDocStorage:
                 keyword_info = self._extract_keyword_from_libdoc(library_name, kw_doc)
                 lib_info.keywords[keyword_info.name] = keyword_info
                 
-                # Add to cache with normalized name
-                cache_key = keyword_info.name.lower().strip()
-                self.keyword_cache[cache_key] = keyword_info
+                # Index by normalized name and library to avoid collisions
+                norm = self._normalize_name(keyword_info.name)
+                if norm not in self.keyword_index_by_name:
+                    self.keyword_index_by_name[norm] = {}
+                self.keyword_index_by_name[norm][library_name] = keyword_info
             
             self.libraries[library_name] = lib_info
             
@@ -259,8 +262,11 @@ class RobotFrameworkDocStorage:
         """Get all available keywords."""
         if not HAS_LIBDOC:
             return []
-            
-        return list(self.keyword_cache.values())
+        # Flatten index across libraries
+        result: List[RFKeywordInfo] = []
+        for by_lib in self.keyword_index_by_name.values():
+            result.extend(by_lib.values())
+        return result
     
     def get_keywords_from_libraries(self, library_names: List[str]) -> List[RFKeywordInfo]:
         """Get keywords from specific libraries in the order provided.
@@ -306,20 +312,39 @@ class RobotFrameworkDocStorage:
         return self.libraries.get(library_name)
     
     def get_keyword_documentation(self, keyword_name: str, library_name: str = None) -> Optional[RFKeywordInfo]:
-        """Get full documentation for a specific keyword."""
+        """Get full documentation for a specific keyword.
+
+        If library_name is provided, performs a strict lookup within that library only.
+        If not provided, returns the first match (for backward compatibility). Use
+        get_keywords_documentation_all() to fetch all matches across libraries.
+        """
         if not HAS_LIBDOC:
             return None
-            
-        keyword_info = self.find_keyword(keyword_name)
-        
-        if keyword_info and library_name:
-            # If library specified, ensure it matches
-            if keyword_info.library.lower() == library_name.lower():
-                return keyword_info
-            else:
-                return None
-        
-        return keyword_info
+
+        norm = self._normalize_name(keyword_name)
+        if library_name:
+            by_lib = self.keyword_index_by_name.get(norm, {})
+            # Strict per-library search
+            return by_lib.get(library_name)
+        # Backward-compat: return first available match across libraries
+        by_lib = self.keyword_index_by_name.get(norm)
+        if not by_lib:
+            return None
+        # Return the entry from the first library deterministically (sorted keys)
+        for lib in sorted(by_lib.keys()):
+            return by_lib[lib]
+        return None
+
+    def get_keywords_documentation_all(self, keyword_name: str) -> List[RFKeywordInfo]:
+        """Return all matches for a keyword across libraries (exact/normalized)."""
+        if not HAS_LIBDOC:
+            return []
+        norm = self._normalize_name(keyword_name)
+        by_lib = self.keyword_index_by_name.get(norm, {})
+        return [by_lib[k] for k in sorted(by_lib.keys())]
+
+    def _normalize_name(self, name: str) -> str:
+        return name.lower().replace('_', ' ').strip()
     
     def _extract_hybrid_signature(self, keyword_name: str, library_name: str) -> Optional[List[str]]:
         """

@@ -1020,51 +1020,115 @@ class ExecutionCoordinator:
     def get_keyword_documentation(
         self, keyword_name: str, library_name: str = None
     ) -> Dict[str, Any]:
-        """Get full documentation for a specific keyword using native RF libdoc when available."""
-        # Try libdoc-based lookup first
-        if self.rf_doc_storage.is_available():
-            keyword_info = self.rf_doc_storage.get_keyword_documentation(
-                keyword_name, library_name
-            )
+        """Get keyword documentation using RF libdoc with strict library filtering.
 
-            if keyword_info:
+        - If library_name is provided: restrict search to that library only. No cross-library fallback.
+        - If library_name is None: return all matches across libraries in a 'matches' array.
+        """
+        # LibDoc preferred path
+        if self.rf_doc_storage.is_available():
+            if library_name:
+                kw = self.rf_doc_storage.get_keyword_documentation(keyword_name, library_name)
+                if kw:
+                    return {
+                        "success": True,
+                        "keyword": {
+                            "name": kw.name,
+                            "library": kw.library,
+                            "args": kw.args,
+                            "arg_types": kw.arg_types,
+                            "doc": kw.doc,
+                            "short_doc": kw.short_doc,
+                            "tags": kw.tags,
+                            "is_deprecated": kw.is_deprecated,
+                            "source": kw.source,
+                            "lineno": kw.lineno,
+                        },
+                    }
+                # Not found in the requested library: no cross-library fallback
+                # Provide suggestions from that library via fuzzy match
+                suggestions = []
+                try:
+                    lib_keywords = self.rf_doc_storage.get_keywords_by_library(library_name)
+                    # simple fuzzy: match words ignoring case/underscores/spaces
+                    target = keyword_name.lower().replace('_', ' ').strip()
+                    for k in lib_keywords:
+                        name_norm = k.name.lower().replace('_', ' ').strip()
+                        if target in name_norm or name_norm in target or k.name.lower().startswith(keyword_name.lower()[0:3]):
+                            suggestions.append(k.name)
+                except Exception:
+                    pass
+                return {
+                    "success": False,
+                    "error": f"Keyword '{keyword_name}' not found in library '{library_name}'",
+                    "suggestions": sorted(list(set(suggestions)))[:5],
+                }
+            else:
+                # Return all matches across libraries
+                matches = self.rf_doc_storage.get_keywords_documentation_all(keyword_name)
+                if matches:
+                    return {
+                        "success": True,
+                        "matches": [
+                            {
+                                "name": m.name,
+                                "library": m.library,
+                                "args": m.args,
+                                "arg_types": m.arg_types,
+                                "doc": m.doc,
+                                "short_doc": m.short_doc,
+                                "tags": m.tags,
+                                "is_deprecated": m.is_deprecated,
+                                "source": m.source,
+                                "lineno": m.lineno,
+                            }
+                            for m in matches
+                        ],
+                    }
+                # No matches anywhere
+                return {"success": False, "error": f"Keyword '{keyword_name}' not found in any loaded library"}
+
+        # Inspection-based fallback (no LibDoc available)
+        keyword_discovery = self.keyword_executor.keyword_discovery
+        if library_name:
+            # Strict filter: use library_prefix to restrict search
+            ki = keyword_discovery.find_keyword(keyword_name, active_library=library_name)
+            if ki and ki.library == library_name:
                 return {
                     "success": True,
                     "keyword": {
-                        "name": keyword_info.name,
-                        "library": keyword_info.library,
-                        "args": keyword_info.args,
-                        "arg_types": keyword_info.arg_types,
-                        "doc": keyword_info.doc,
-                        "short_doc": keyword_info.short_doc,
-                        "tags": keyword_info.tags,
-                        "is_deprecated": keyword_info.is_deprecated,
-                        "source": keyword_info.source,
-                        "lineno": keyword_info.lineno,
+                        "name": ki.name,
+                        "library": ki.library,
+                        "args": ki.args,
+                        "arg_types": getattr(ki, "arg_types", []),
+                        "doc": getattr(ki, "doc", ""),
+                        "short_doc": ki.short_doc,
+                        "tags": ki.tags,
+                        "is_deprecated": False,
+                        "source": getattr(ki, "source", ""),
+                        "lineno": getattr(ki, "lineno", 0),
                     },
                 }
-
-        # Fall back to inspection-based search via keyword_executor
-        keyword_discovery = self.keyword_executor.keyword_discovery
-        keyword_info = keyword_discovery.find_keyword(keyword_name, library_name)
-
-        if keyword_info:
-            return {
-                "success": True,
-                "keyword": {
-                    "name": keyword_info.name,
-                    "library": keyword_info.library,
-                    "args": keyword_info.args,
-                    "arg_types": getattr(keyword_info, "arg_types", []),
-                    "doc": getattr(keyword_info, "doc", ""),
-                    "short_doc": keyword_info.short_doc,
-                    "tags": keyword_info.tags,
-                    "is_deprecated": False,
-                    "source": getattr(keyword_info, "source", ""),
-                    "lineno": getattr(keyword_info, "lineno", 0),
-                },
-            }
+            return {"success": False, "error": f"Keyword '{keyword_name}' not found in library '{library_name}'"}
         else:
+            # No library specified: return first match for backward compatibility
+            ki = keyword_discovery.find_keyword(keyword_name)
+            if ki:
+                return {
+                    "success": True,
+                    "keyword": {
+                        "name": ki.name,
+                        "library": ki.library,
+                        "args": ki.args,
+                        "arg_types": getattr(ki, "arg_types", []),
+                        "doc": getattr(ki, "doc", ""),
+                        "short_doc": ki.short_doc,
+                        "tags": ki.tags,
+                        "is_deprecated": False,
+                        "source": getattr(ki, "source", ""),
+                        "lineno": getattr(ki, "lineno", 0),
+                    },
+                }
             return {"success": False, "error": f"Keyword '{keyword_name}' not found"}
 
     def get_library_documentation(self, library_name: str) -> Dict[str, Any]:

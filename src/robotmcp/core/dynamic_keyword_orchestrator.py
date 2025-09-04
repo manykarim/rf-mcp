@@ -187,39 +187,40 @@ class DynamicKeywordDiscovery:
             )
             return None
 
-        # Priority 2: Global search only allowed when no session libraries are specified
-        # This maintains compatibility for non-session-aware operations
-        logger.debug("LibDoc: No session libraries specified - allowing global search")
-
+        # Priority 2: If an active_library is specified (without session libraries), restrict search to that library only
         if active_library:
             logger.debug(
-                f"LibDoc: Active library filter '{active_library}' specified, including in global search"
+                f"LibDoc: Active library filter '{active_library}' specified - restricting search to this library"
             )
+            try:
+                lib_keywords = rf_doc_storage.get_keywords_by_library(active_library)
+                # Exact match first
+                for kw in lib_keywords:
+                    if kw.name.lower() == keyword_name.lower():
+                        return self._convert_libdoc_to_keyword_info(kw)
+                # Fuzzy match within the active library
+                fuzzy_result = self._fuzzy_match_in_library(
+                    keyword_name, lib_keywords, active_library
+                )
+                if fuzzy_result:
+                    return fuzzy_result
+            except Exception as e:
+                logger.debug(f"LibDoc: Active library search failed: {e}")
+            # Respect active_library constraint: no global fallback
+            return None
 
-        # Get all keywords for global fallback (only when no session libraries)
+        # Priority 3: Global search only when no filters/libraries specified
+        logger.debug("LibDoc: No session or active library filters - allowing global search across all keywords")
         try:
             keywords = rf_doc_storage.get_all_keywords()
-            logger.debug(
-                f"LibDoc: Global fallback search - found {len(keywords)} total keywords"
-            )
         except Exception as e:
             logger.debug(f"LibDoc: Failed to get keywords for global fallback: {e}")
             return None
-
-        # Global search for exact match (fallback)
         for kw in keywords:
             if kw.name.lower() == keyword_name.lower():
-                logger.debug(
-                    f"LibDoc: Global fallback found '{keyword_name}' in '{kw.library}'"
-                )
                 return self._convert_libdoc_to_keyword_info(kw)
-
-        # Global fuzzy matching (fallback)
         fuzzy_result = self._fuzzy_match_global(keyword_name, keywords)
         if fuzzy_result:
-            logger.debug(
-                f"LibDoc: Global fuzzy match '{keyword_name}' -> '{fuzzy_result.name}' in '{fuzzy_result.library}'"
-            )
             return fuzzy_result
 
         logger.debug(f"LibDoc: No match found for '{keyword_name}' in any library")
