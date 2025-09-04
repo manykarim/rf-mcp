@@ -189,6 +189,12 @@ class LibraryRecommender:
             allow_mobile = any(k in kws for k in {'mobile', 'android', 'ios', 'app'})
             # Exclude database unless scenario mentions db terms
             allow_database = any(k in kws for k in {'database', 'sql', 'db'})
+            # Exclude API/network unless scenario mentions relevant terms
+            allow_api = any(k in kws for k in {'api', 'http', 'request', 'rest', 'endpoint'})
+            # Exclude system tooling unless explicitly requested
+            allow_system = any(k in kws for k in {
+                'ssh', 'telnet', 'process', 'execute', 'command', 'file', 'directory', 'env', 'os', 'shell', 'sftp'
+            })
 
             filtered: List['LibraryRecommendation'] = []
             for r in recs:
@@ -196,6 +202,12 @@ class LibraryRecommender:
                 if ('mobile' in cats and not allow_mobile):
                     continue
                 if ('database' in cats and not allow_database):
+                    continue
+                if (("api" in cats or "network" in cats) and not allow_api):
+                    # Keep core web libs even if they have 'network' (none do currently)
+                    continue
+                if ("system" in cats and not allow_system):
+                    # Exclude OperatingSystem/Process by default for web
                     continue
                 filtered.append(r)
             return filtered

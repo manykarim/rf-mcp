@@ -365,6 +365,15 @@ async def recommend_libraries(
         preferred = (
             availability_info.get("available_libraries", []) if availability_info else recommended_names
         )
+        # If explicit preference exists, ensure it leads and resolve web conflicts in preferred list as well
+        if explicit:
+            # Put explicit first
+            preferred = [explicit] + [n for n in preferred if n != explicit]
+            # Resolve Browser/Selenium conflict
+            if explicit == "SeleniumLibrary":
+                preferred = [n for n in preferred if n != "Browser"]
+            if explicit == "Browser":
+                preferred = [n for n in preferred if n != "SeleniumLibrary"]
         # Merge with existing order while preserving priority
         new_order = list(dict.fromkeys(preferred + [lib for lib in old_order if lib not in preferred]))
         session.set_library_search_order(new_order)
