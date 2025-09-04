@@ -40,9 +40,12 @@ async def test_recommend_libraries_web_scenario(mcp_client):
     assert any(lib in recs for lib in ("Browser", "SeleniumLibrary"))
     # Availability included
     assert isinstance(res.data.get("availability"), dict)
-    # Should not include mobile or database libs by default for web context
+    # Should not include mobile, system, or database libs by default for web context
     assert "AppiumLibrary" not in recs
     assert "DatabaseLibrary" not in recs
+    assert "SSHLibrary" not in recs
+    assert "OperatingSystem" not in recs
+    assert "Process" not in recs
 
 
 @pytest.mark.asyncio
