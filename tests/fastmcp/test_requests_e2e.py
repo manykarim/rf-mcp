@@ -21,7 +21,22 @@ async def mcp_client():
 
 @pytest.mark.asyncio
 async def test_requests_get_booking_list(mcp_client):
-    session = "req_e2e"
+    # Create API-focused session via analyze_scenario to avoid web auto-detect
+    analyze = await mcp_client.call_tool(
+        "analyze_scenario",
+        {"scenario": "Use RequestsLibrary for API testing", "context": "api"},
+    )
+    session = analyze.data["session_info"]["session_id"]
+
+    # Optionally enforce search order to RequestsLibrary first
+    try:
+        await mcp_client.call_tool(
+            "set_library_search_order",
+            {"libraries": ["RequestsLibrary", "BuiltIn", "Collections", "String"], "session_id": session},
+        )
+    except Exception:
+        pass
+
     # Create a Requests session
     create = await mcp_client.call_tool(
         "execute_step",
@@ -80,7 +95,20 @@ async def test_requests_get_booking_list(mcp_client):
 
 @pytest.mark.asyncio
 async def test_requests_get_booking_item(mcp_client):
-    session = "req_e2e_item"
+    analyze = await mcp_client.call_tool(
+        "analyze_scenario",
+        {"scenario": "Use RequestsLibrary for API testing", "context": "api"},
+    )
+    session = analyze.data["session_info"]["session_id"]
+
+    try:
+        await mcp_client.call_tool(
+            "set_library_search_order",
+            {"libraries": ["RequestsLibrary", "BuiltIn", "Collections", "String"], "session_id": session},
+        )
+    except Exception:
+        pass
+
     # Create a Requests session
     await mcp_client.call_tool(
         "execute_step",
