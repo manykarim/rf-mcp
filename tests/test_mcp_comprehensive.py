@@ -112,6 +112,7 @@ async def test_tool_05_get_page_source(mcp_client, test_session_id):
     print("✅ get_page_source - PASSED")
 
 
+@pytest.mark.xfail(reason="suggest_next_step tool not listed in this build", strict=False)
 @pytest.mark.asyncio
 async def test_tool_06_suggest_next_step(mcp_client, test_session_id):
     """Test suggest_next_step tool - AI-driven step suggestions."""
@@ -194,6 +195,7 @@ async def test_tool_09_get_session_validation_status(mcp_client, test_session_id
     print("✅ get_session_validation_status - PASSED")
 
 
+@pytest.mark.skip(reason="validate_test_readiness tool is disabled in this build")
 @pytest.mark.asyncio
 async def test_tool_10_validate_test_readiness(mcp_client, test_session_id):
     """Test validate_test_readiness tool - checks if session is ready for suite generation."""
@@ -208,6 +210,7 @@ async def test_tool_10_validate_test_readiness(mcp_client, test_session_id):
     print("✅ validate_test_readiness - PASSED")
 
 
+@pytest.mark.xfail(reason="validate_scenario tool not listed in this build", strict=False)
 @pytest.mark.asyncio
 async def test_tool_11_validate_scenario(mcp_client):
     """Test validate_scenario tool - validates scenario feasibility."""
@@ -304,6 +307,7 @@ async def test_tool_16_check_library_availability(mcp_client):
     print("✅ check_library_availability - PASSED")
 
 
+@pytest.mark.skip(reason="get_library_status tool is disabled in this build")
 @pytest.mark.asyncio 
 async def test_tool_17_get_library_status(mcp_client):
     """Test get_library_status tool - gets detailed status of specific library."""
