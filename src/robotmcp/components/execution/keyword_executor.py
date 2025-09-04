@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional, Union
 from robotmcp.components.execution.rf_native_context_manager import (
     get_rf_native_context_manager,
 )
-from robotmcp.components.execution.robot_context_manager import get_context_manager
 from robotmcp.components.variables.variable_resolver import VariableResolver
 from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
 from robotmcp.models.config_models import ExecutionConfig
@@ -44,7 +43,7 @@ class KeywordExecutor:
         self.override_registry = override_registry
         self.variable_resolver = VariableResolver()
         self.response_serializer = MCPResponseSerializer()
-        self.context_manager = get_context_manager()
+        # Legacy RobotContextManager is deprecated; use RF native context only
         self.rf_native_context = get_rf_native_context_manager()
 
     async def execute_keyword(

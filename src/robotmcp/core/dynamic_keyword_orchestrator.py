@@ -1760,169 +1760,28 @@ class DynamicKeywordDiscovery:
                     get_libraries_requiring_type_conversion,
                 )
 
+                # Minimal fallback: try RF native type conversion path for libraries that require it
                 type_conversion_libraries = get_libraries_requiring_type_conversion()
 
                 if keyword_info.library in type_conversion_libraries:
-                    # Enhanced logging for named arguments debugging
-                    has_potential_named_args = any("=" in arg for arg in corrected_args)
-                    logger.debug(
-                        f"TYPE_CONVERSION_DEBUG: {keyword_info.name} from {keyword_info.library} - args={corrected_args}, has_potential_named={has_potential_named_args}"
-                    )
-                    logger.debug(
-                        f"TYPE_CONVERSION_DEBUG: Library '{keyword_info.library}' is in type_conversion_libraries: {type_conversion_libraries}"
-                    )
-
                     try:
-                        # Use Robot Framework's native type conversion system for libraries that need it
                         conversion_result = self._execute_with_rf_type_conversion(
                             method, keyword_info, corrected_args
                         )
-                        logger.debug(
-                            f"TYPE_CONVERSION_DEBUG: Type conversion result for {keyword_info.name}: {conversion_result[0] if conversion_result else 'None'}"
-                        )
-                        if (
-                            conversion_result[0] == "executed"
-                        ):  # Successfully converted and executed
-                            result = conversion_result[1]  # Use the result as-is
-                        elif conversion_result[0] == "not_available":
-                            # Type conversion not available, use pre-parsed corrected arguments
-                            parsed = parsed_args  # Use the corrected arguments from the caller
-                            pos_args = parsed.positional
-                            kwargs = parsed.named
-
-                            if kwargs:
-                                result = method(*pos_args, **kwargs)
-                            else:
-                                result = method(*pos_args)
+                        if conversion_result and conversion_result[0] == "executed":
+                            result = conversion_result[1]
+                        else:
+                            # Fall back to parsed positional only
+                            result = method(*parsed_args.positional)
                     except Exception as lib_error:
                         logger.debug(
-                            f"{keyword_info.library} execution failed: {lib_error}"
+                            f"FALLBACK: RF type conversion failed for {keyword_info.name}: {lib_error}. Using parsed positional."
                         )
-                        # NAMED ARGUMENTS FIX: Use the already parsed and corrected arguments
-                        # This ensures named arguments are preserved and argument ordering is fixed
-                        logger.info(
-                            f"Type conversion failed for {keyword_info.name}, using pre-parsed corrected arguments"
-                        )
-                        parsed = (
-                            parsed_args  # Use the corrected arguments from the caller
-                        )
-                        pos_args = parsed.positional
-                        kwargs = parsed.named
-
-                        logger.debug(
-                            f"Fallback execution: positional={pos_args}, named={list(kwargs.keys()) if kwargs else 'none'}"
-                        )
-
-                        if kwargs:
-                            result = method(*pos_args, **kwargs)
-                            logger.debug(
-                                f"Successfully executed {keyword_info.name} with fallback named arguments"
-                            )
-                        else:
-                            # Apply type conversion and argument parsing for Browser Library in fallback path
-                            if keyword_info.library == "Browser" and keyword_info.name == "New Browser" and pos_args:
-                                # Parse arguments more carefully for Browser Library
-                                parsed_pos_args = []
-                                parsed_kwargs = {}
-                                
-                                for i, arg in enumerate(pos_args):
-                                    if isinstance(arg, str) and '=' in arg:
-                                        # This is a named argument disguised as positional
-                                        key, value = arg.split('=', 1)
-                                        logger.debug(f"TYPE_CONVERSION_DEBUG: Fallback parsing named arg: '{key}'='{value}'")
-                                        
-                                        # Convert value types
-                                        if key == 'headless' and value.lower() in ['true', 'false']:
-                                            parsed_kwargs[key] = value.lower() == 'true'
-                                            logger.debug(f"TYPE_CONVERSION_DEBUG: Converted {key}: '{value}' -> {parsed_kwargs[key]}")
-                                        else:
-                                            parsed_kwargs[key] = value
-                                    
-                                    elif i == 0 and isinstance(arg, str):
-                                        # Handle browser argument (first positional arg)
-                                        logger.debug(f"TYPE_CONVERSION_DEBUG: Fallback browser conversion for '{arg}'")
-                                        try:
-                                            from Browser.utils.data_types import SupportedBrowsers
-                                            
-                                            if arg.startswith('SupportedBrowsers.'):
-                                                # Handle SupportedBrowsers.chromium pattern
-                                                enum_member_name = arg.split('.', 1)[1]  # Extract 'chromium' from 'SupportedBrowsers.chromium'
-                                                enum_value = getattr(SupportedBrowsers, enum_member_name)
-                                            else:
-                                                # Handle direct browser name (e.g., 'chromium' -> SupportedBrowsers.chromium)
-                                                enum_value = getattr(SupportedBrowsers, arg)
-                                            
-                                            parsed_pos_args.append(enum_value)
-                                            logger.debug(f"TYPE_CONVERSION_DEBUG: Fallback browser conversion succeeded: '{arg}' -> {enum_value}")
-                                        except Exception as enum_error:
-                                            logger.debug(f"TYPE_CONVERSION_DEBUG: Fallback browser conversion failed: {enum_error}")
-                                            parsed_pos_args.append(arg)  # Use original value
-                                    else:
-                                        parsed_pos_args.append(arg)
-                                
-                                # Call method with properly parsed arguments
-                                if parsed_kwargs:
-                                    logger.debug(f"TYPE_CONVERSION_DEBUG: Calling Browser method with pos_args={parsed_pos_args}, kwargs={parsed_kwargs}")
-                                    result = method(*parsed_pos_args, **parsed_kwargs)
-                                else:
-                                    logger.debug(f"TYPE_CONVERSION_DEBUG: Calling Browser method with pos_args={parsed_pos_args}")
-                                    result = method(*parsed_pos_args)
-                            else:
-                                result = method(*pos_args)
-                            logger.debug(
-                                f"Successfully executed {keyword_info.name} with fallback positional arguments"
-                            )
-                elif keyword_info.name == "Create List":
-                    # Collections.Create List takes variable arguments
-                    result = method(*parsed_args.positional)
-                elif keyword_info.name == "Set Variable":
-                    # Set Variable takes one argument
-                    value = (
-                        parsed_args.positional[0] if parsed_args.positional else None
-                    )
-                    result = method(value)
+                        result = method(*parsed_args.positional)
                 else:
-                    # OBJECT ARGUMENTS FIX: Libraries like XML, RequestsLibrary, Collections need original object arguments, not string conversions
-                    libraries_needing_objects = [
-                        "XML",
-                        "RequestsLibrary",
-                        "Collections",
-                    ]
-
-                    if keyword_info.library in libraries_needing_objects:
-                        # Use original arguments to preserve object types (e.g., XML Elements)
-                        logger.debug(
-                            f"Object-preserving execution for {keyword_info.name} in {keyword_info.library}: using original args"
-                        )
-                        if parsed_args.named:
-                            result = method(*corrected_args, **parsed_args.named)
-                            logger.debug(
-                                f"Successfully executed {keyword_info.name} with original args + named arguments"
-                            )
-                        else:
-                            result = method(*corrected_args)
-                            logger.debug(
-                                f"Successfully executed {keyword_info.name} with original args only"
-                            )
-                    else:
-                        # NAMED ARGUMENTS FIX: For other libraries, check for named arguments
-                        # This was the critical bug - line was ignoring named arguments completely
-                        logger.debug(
-                            f"Standard execution path for {keyword_info.name}: positional={parsed_args.positional}, named={list(parsed_args.named.keys()) if parsed_args.named else 'none'}"
-                        )
-
-                        if parsed_args.named:
-                            result = method(
-                                *parsed_args.positional, **parsed_args.named
-                            )
-                            logger.debug(
-                                f"Successfully executed {keyword_info.name} with named arguments: {list(parsed_args.named.keys())}"
-                            )
-                        else:
-                            result = method(*parsed_args.positional)
-                            logger.debug(
-                                f"Successfully executed {keyword_info.name} with positional arguments only"
-                            )
+                    # Final fallback for non-conversion libraries: parsed positional only
+                    result = method(*parsed_args.positional)
+                # At this point, 'result' should be set by one of the fallbacks above
 
             return {
                 "success": True,

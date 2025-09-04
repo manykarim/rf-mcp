@@ -43,6 +43,26 @@ class CompatibleVariables:
             
         logger.debug(f"Variables.set_global({name}, {value}) -> __setitem__")
         self._original[name] = value
+
+    # Added for RF 6/7 compatibility: BuiltIn uses variables.set_test/set_suite
+    def _normalize_var_name(self, name: str) -> str:
+        if not name.startswith('${'):
+            name = f"${{{name}}}"
+        if not name.endswith('}'):
+            name = f"{name}" + "}"
+        return name
+
+    def set_test(self, name: str, value: Any) -> None:
+        """Set test-scoped variable (compatibility shim)."""
+        name = self._normalize_var_name(name)
+        logger.debug(f"Variables.set_test({name}, {value}) -> __setitem__")
+        self._original[name] = value
+
+    def set_suite(self, name: str, value: Any) -> None:
+        """Set suite-scoped variable (compatibility shim)."""
+        name = self._normalize_var_name(name)
+        logger.debug(f"Variables.set_suite({name}, {value}) -> __setitem__")
+        self._original[name] = value
         
     def get_variable(self, name: str, default: Any = None) -> Any:
         """Get variable value with RF-compatible name handling."""
