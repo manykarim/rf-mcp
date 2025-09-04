@@ -4,9 +4,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rf-mcp"
-version = "0.15.0"
+version = "0.16.0"
 description = "Robot Framework MCP Server - Natural Language Test Automation Bridge"
-authors = [{name = "Robot MCP Team"}]
+authors = [{name = "Many Kasiriha"}]
 license = {text = "Apache-2.0"}
 readme = "README.md"
 requires-python = ">=3.10"
@@ -19,8 +19,8 @@ dependencies = [
     "robotframework-seleniumlibrary",
     "robotframework-requests",
     "robotframework-databaselibrary",
-    "robotframework-browser>=19.7.0",
-    "robotframework-appiumlibrary>=3.1",
+    "robotframework-browser",
+    "robotframework-appiumlibrary",
 ]
 
 [project.optional-dependencies]
