@@ -35,9 +35,15 @@ pip install rf-mcp
 
 ### 3️⃣ Start Testing with AI
 ```
-Create a test that opens https://todomvc.com/examples/react/dist/,
-adds several todos, marks them as done, and verifies the count.
-Execute step by step and build the final test suite.
+Use RobotMCP to create a TestSuite and execute it step wise.
+Create a test for https://www.saucedemo.com/ that:
+- Logs in to https://www.saucedemo.com/ with valid credentials
+- Adds two items to cart
+- Completes checkout process
+- Verifies success message
+
+Use Selenium Library.
+Execute the test suite stepwise and build the final version afterwards.
 ```
 
 **That's it!** RobotMCP will guide the AI through the entire testing workflow.
@@ -190,13 +196,16 @@ RobotMCP works with any MCP-compatible AI agent. Use the stdio configuration abo
 
 **Prompt:**
 ```
+Use RobotMCP to create a TestSuite and execute it step wise.
 Create a test for https://www.saucedemo.com/ that:
-- Logs in with valid credentials
+- Logs in to https://www.saucedemo.com/ with valid credentials
 - Adds two items to cart
 - Completes checkout process
 - Verifies success message
 
-Use Selenium Library and execute step by step.
+Use Selenium Library.
+Execute the test suite stepwise and build the final version afterwards.
+
 ```
 
 **Result:** Complete Robot Framework test suite with proper locators, assertions, and structure.
@@ -205,13 +214,15 @@ Use Selenium Library and execute step by step.
 
 **Prompt:**
 ```
-Test the SauceLabs mobile app:
+Use RobotMCP to create a TestSuite and execute it step wise.
+It shall:
 - Launch app from tests/appium/SauceLabs.apk
 - Perform login flow
 - Add products to cart
 - Complete purchase
 
-Appium server at http://localhost:4723
+Appium server is running at http://localhost:4723
+Execute the test suite stepwise and build the final version afterwards.
 ```
 
 **Result:** Mobile test suite with AppiumLibrary keywords and device capabilities.
@@ -220,12 +231,17 @@ Appium server at http://localhost:4723
 
 **Prompt:**
 ```
-Test the Restful Booker API at https://restful-booker.herokuapp.com:
+Read the Restful Booker API documentation at https://restful-booker.herokuapp.com.
+Use RobotMCP to create a TestSuite and execute it step wise.
+It shall:
+
 - Create a new booking
 - Authenticate as admin
 - Update the booking
 - Delete the booking
 - Verify each response
+
+Execute the test suite stepwise and build the final version afterwards.
 ```
 
 **Result:** API test suite using RequestsLibrary with proper error handling.
@@ -234,11 +250,15 @@ Test the Restful Booker API at https://restful-booker.herokuapp.com:
 
 **Prompt:**
 ```
-Create a books.xml file and test it:
+Create a xml file with books and authors.
+Use RobotMCP to create a TestSuite and execute it step wise.
+It shall:
 - Parse XML structure
 - Validate specific nodes and attributes
 - Assert content values
 - Check XML schema compliance
+
+Execute the test suite stepwise and build the final version afterwards.
 ```
 
 **Result:** XML processing test using Robot Framework's XML library.
