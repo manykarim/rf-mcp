@@ -212,6 +212,16 @@ class LibraryRecommender:
                 filtered.append(r)
             return filtered
 
+        if ctx == 'mobile':
+            # For mobile context, exclude web automation libraries by default
+            filtered: List['LibraryRecommendation'] = []
+            for r in recs:
+                name = r.library.name
+                if name in {"Browser", "SeleniumLibrary"}:
+                    continue
+                filtered.append(r)
+            return filtered
+
         return recs
 
     def _apply_preferences(self, recs: List['LibraryRecommendation'], context: str) -> List['LibraryRecommendation']:
@@ -230,6 +240,12 @@ class LibraryRecommender:
                 recs = [r for r in recs if r.library.name != 'SeleniumLibrary']
                 # Ensure Browser is at the front
                 recs.sort(key=lambda r: 0 if r.library.name == 'Browser' else 1)
+        elif ctx == 'mobile':
+            # Prefer AppiumLibrary and exclude web libs
+            recs = [r for r in recs if r.library.name != 'SeleniumLibrary']
+            recs = [r for r in recs if r.library.name != 'Browser']
+            # Ensure AppiumLibrary is first if present
+            recs.sort(key=lambda r: 0 if r.library.name == 'AppiumLibrary' else 1)
         return recs
 
     def _normalize_text(self, text: str) -> str:

@@ -903,6 +903,53 @@ async def get_library_documentation(library_name: str) -> Dict[str, Any]:
     return execution_engine.get_library_documentation(library_name)
 
 
+@mcp.tool(enabled=True)
+async def debug_parse_keyword_arguments(
+    keyword_name: str,
+    arguments: List[str],
+    library_name: str = None,
+    session_id: str = None,
+) -> Dict[str, Any]:
+    """Debug helper: Parse arguments into positional and named using RF-native logic.
+
+    Uses the same parsing path as execution to verify how name=value pairs are handled
+    for a given keyword and (optionally) library.
+
+    Args:
+        keyword_name: Keyword to parse for (e.g., 'Open Application').
+        arguments: List of argument strings as they would be passed to execute_step.
+        library_name: Optional library name to disambiguate (e.g., 'AppiumLibrary').
+        session_id: Optional session to pull variables from for resolution.
+
+    Returns:
+        - success: True
+        - parsed: { positional: [...], named: {k: v} }
+        - notes: brief info on library and session impact
+    """
+    try:
+        session_vars = {}
+        if session_id:
+            sess = execution_engine.get_session(session_id)
+            if sess:
+                session_vars = sess.variables
+
+        parsed = execution_engine.keyword_executor.argument_processor.parse_arguments_for_keyword(
+            keyword_name, arguments, library_name, session_vars
+        )
+        return {
+            "success": True,
+            "parsed": {"positional": parsed.positional, "named": parsed.named},
+            "notes": {
+                "library_name": library_name,
+                "session_id": session_id,
+                "positional_count": len(parsed.positional),
+                "named_count": len(parsed.named or {}),
+            },
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 # TOOL DISABLED: validate_step_before_suite
 #
 # Reason for removal: This tool is functionally redundant with execute_step().

@@ -884,22 +884,12 @@ class KeywordExecutor:
             if keyword_name.lower() in ["set variable", "log", "should be equal"]:
                 return await self._execute_builtin_keyword(session, keyword_name, args)
 
-            # Handle mobile-specific keywords for mobile sessions
+            # Route ALL keywords through AppiumLibrary for mobile sessions
             if session.is_mobile_session():
-                mobile_keywords = [
-                    "get source",
-                    "get page source",
-                    "capture page screenshot",
-                    "get contexts",
-                    "switch to context",
-                ]
-                if keyword_name.lower() in mobile_keywords:
-                    logger.debug(
-                        f"Routing mobile keyword '{keyword_name}' to mobile execution path"
-                    )
-                    return await self._execute_mobile_keyword(
-                        session, keyword_name, args
-                    )
+                logger.debug(
+                    f"Mobile session detected; routing '{keyword_name}' to AppiumLibrary execution path"
+                )
+                return await self._execute_mobile_keyword(session, keyword_name, args)
 
             # If library prefix is specified, use direct execution
             if library_prefix:
@@ -1167,6 +1157,31 @@ class KeywordExecutor:
     ) -> Dict[str, Any]:
         """Execute a built-in Robot Framework keyword."""
         try:
+            # First, attempt dynamic execution via orchestrator for non-built-in libraries.
+            # This path supports full argument parsing (incl. **kwargs) and works for AppiumLibrary, RequestsLibrary, etc.
+            try:
+                from robotmcp.core.dynamic_keyword_orchestrator import (
+                    get_keyword_discovery,
+                )
+
+                orchestrator = get_keyword_discovery()
+                dyn_result = await orchestrator.execute_keyword(
+                    keyword_name=keyword,
+                    args=args,
+                    session_variables=session.variables,
+                    active_library=None,
+                    session_id=session.session_id,
+                    library_prefix=None,
+                )
+
+                # If orchestrator could resolve and execute the keyword, return immediately
+                if dyn_result and dyn_result.get("success"):
+                    return dyn_result
+            except Exception as dyn_error:
+                logger.debug(
+                    f"Dynamic orchestrator path failed for '{keyword}': {dyn_error}. Falling back to BuiltIn."
+                )
+
             if not ROBOT_AVAILABLE:
                 return {
                     "success": False,
@@ -2072,7 +2087,11 @@ class KeywordExecutor:
 
             keyword_discovery = get_keyword_discovery()
             result = await keyword_discovery.execute_keyword(
-                keyword_name, args, session.variables
+                keyword_name=keyword_name,
+                args=args,
+                session_variables=session.variables,
+                active_library="AppiumLibrary",
+                session_id=session.session_id,
             )
 
             if result and result.get("success"):

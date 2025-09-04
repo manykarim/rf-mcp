@@ -532,23 +532,29 @@ class DynamicKeywordDiscovery:
         positional = []
         named = {}
 
-        # Build list of valid parameter names from signature
+        # Build list of valid parameter names from signature and detect **kwargs
         valid_param_names = set()
+        kwargs_allowed = False
         if signature_args:
             for arg_str in signature_args:
                 if ":" in arg_str:
                     param_name = arg_str.split(":", 1)[0].strip()
-                    if param_name.startswith("*"):
+                    if param_name.startswith("**"):
+                        kwargs_allowed = True
+                        param_name = param_name[2:]
+                    elif param_name.startswith("*"):
                         param_name = param_name[1:]  # Remove * for varargs
-                    if param_name.startswith("*"):
-                        param_name = param_name[1:]  # Remove ** for kwargs
                     if param_name and not param_name.startswith("*"):
                         valid_param_names.add(param_name)
 
         for arg in args:
-            if "=" in arg and self._looks_like_named_arg(arg, valid_param_names):
+            if "=" in arg:
                 key, value = arg.split("=", 1)
-                named[key.strip()] = value
+                key = key.strip()
+                if (key in valid_param_names) or (kwargs_allowed and key.isidentifier()):
+                    named[key] = value
+                else:
+                    positional.append(arg)
             else:
                 positional.append(arg)
 
@@ -618,6 +624,14 @@ class DynamicKeywordDiscovery:
 
         # Get parameter names from the actual method signature
         param_names = list(method_signature.parameters.keys())
+        # Detect if method accepts **kwargs; if so, allow arbitrary name=value pairs
+        try:
+            from inspect import Parameter
+            kwargs_allowed = any(
+                p.kind == Parameter.VAR_KEYWORD for p in method_signature.parameters.values()
+            )
+        except Exception:
+            kwargs_allowed = False
 
         for arg in corrected_args:
             if "=" in arg:
@@ -629,11 +643,18 @@ class DynamicKeywordDiscovery:
                     named_args[param_name] = param_value
                     logger.debug(f"Valid named argument: {param_name}={param_value}")
                 else:
-                    # Not a valid parameter name - treat as positional (e.g., locator string)
-                    positional_args.append(arg)
-                    logger.debug(
-                        f"Invalid parameter name '{param_name}' - treating '{arg}' as positional"
-                    )
+                    # If **kwargs is supported, accept arbitrary name=value here
+                    if kwargs_allowed and param_name.isidentifier():
+                        named_args[param_name] = param_value
+                        logger.debug(
+                            f"Accepted dynamic named argument via **kwargs: {param_name}={param_value}"
+                        )
+                    else:
+                        # Not a valid parameter name - treat as positional (e.g., locator string)
+                        positional_args.append(arg)
+                        logger.debug(
+                            f"Invalid parameter name '{param_name}' - treating '{arg}' as positional"
+                        )
             else:
                 # Regular positional argument
                 positional_args.append(arg)
@@ -1772,16 +1793,23 @@ class DynamicKeywordDiscovery:
                         if conversion_result and conversion_result[0] == "executed":
                             result = conversion_result[1]
                         else:
-                            # Fall back to parsed positional only
-                            result = method(*parsed_args.positional)
+                            # Fall back to parsed positional + named kwargs
+                            result = method(
+                                *parsed_args.positional,
+                                **(parsed_args.named or {})
+                            )
                     except Exception as lib_error:
                         logger.debug(
-                            f"FALLBACK: RF type conversion failed for {keyword_info.name}: {lib_error}. Using parsed positional."
+                            f"FALLBACK: RF type conversion failed for {keyword_info.name}: {lib_error}. Using parsed positional + named kwargs."
                         )
-                        result = method(*parsed_args.positional)
+                        result = method(
+                            *parsed_args.positional, **(parsed_args.named or {})
+                        )
                 else:
-                    # Final fallback for non-conversion libraries: parsed positional only
-                    result = method(*parsed_args.positional)
+                    # Final fallback for non-conversion libraries: parsed positional + named kwargs
+                    result = method(
+                        *parsed_args.positional, **(parsed_args.named or {})
+                    )
                 # At this point, 'result' should be set by one of the fallbacks above
 
             return {
