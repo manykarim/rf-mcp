@@ -178,7 +178,7 @@ def automate(scenario: str) -> str:
 
 
 @mcp.tool(
-    name="recommend_libraries",
+    name="recommend_libraries_sampling_tool",
     description="STEP 2 (planning): Recommend the best libraries for a scenario using sampling; returns prompt text and suggested sampling config.",
 )
 async def recommend_libraries_sampling_tool(
@@ -221,7 +221,7 @@ async def recommend_libraries_sampling_tool(
 
 
 @mcp.tool(
-    name="choose_from_library_recommendations",
+    name="choose_recommendations_tool",
     description="STEP 2b (selection): Merge/score sampled recommendation payloads into a final prioritized set before availability checks.",
 )
 async def choose_recommendations_tool(
@@ -335,6 +335,31 @@ async def recommend_libraries(
     if session_id and apply_search_order and recommended_names:
         session = execution_engine.session_manager.get_or_create_session(session_id)
         old_order = session.get_search_order()
+
+        # Respect explicit library preference detected during analyze_scenario
+        explicit = getattr(session, "explicit_library_preference", None)
+        if explicit:
+            # Put explicit preference first
+            recommended_names = [explicit] + [n for n in recommended_names if n != explicit]
+            # Resolve web lib conflicts by removing the opposite when explicit is set
+            if explicit == "SeleniumLibrary" and "Browser" in recommended_names:
+                recommended_names = [n for n in recommended_names if n != "Browser"]
+            if explicit == "Browser" and "SeleniumLibrary" in recommended_names:
+                recommended_names = [n for n in recommended_names if n != "SeleniumLibrary"]
+
+            # Also align the detailed recommendations list with the adjusted names/order
+            name_to_rec = {r.get("library_name"): r for r in recommendations}
+            recommendations = [name_to_rec[n] for n in recommended_names if n in name_to_rec]
+            result["recommendations"] = recommendations
+            result["recommended_libraries"] = recommended_names
+
+        # Ensure recommended libraries are imported/loaded into the session so they can be applied to search order
+        for lib in recommended_names:
+            try:
+                # Force switch if conflicting web libraries
+                session.import_library(lib, force=True)
+            except Exception as e:
+                logger.debug(f"Could not import {lib} into session {session_id}: {e}")
 
         # Prefer available libraries first if we have that info, else use all recommendations
         preferred = (
