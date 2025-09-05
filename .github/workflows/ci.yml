@@ -1,0 +1,62 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  build-and-test:
+    name: Build and Test (uv)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+        python-version: [ '3.10', '3.11', '3.12' ]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: 'latest'
+
+      - name: Setup Python ${{ matrix.python-version }} (via uv)
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Show uv and Python versions
+        run: |
+          uv --version
+          uv run python --version
+
+      - name: Install dependencies (dev)
+        run: uv sync
+
+      - name: Setup Google Chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Setup Mozilla Firefox
+        uses: browser-actions/setup-firefox@v1
+
+      - name: Initialize Browser Library (rfbrowser)
+        # This installs Playwright and browser engines for the Robot Framework Browser library.
+        # It is safe to run even if Browser is not used; failures are ignored to avoid breaking non-UI PRs.
+        run: uv run rfbrowser init
+        continue-on-error: true
+
+      - name: Run tests
+        env:
+          # Keep runner path enabled for RequestsLibrary in CI
+          ROBOTMCP_RF_RUNNER_REQUESTS: '1'
+        run: |
+          uv run pytest tests/ -q
+
+      - name: Build package (wheel + sdist)
+        run: uv build
+
+      - name: Upload dist artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: dist/*

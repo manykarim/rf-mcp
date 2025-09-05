@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<library>
+    <book id="001" year="2023" available="true">
+        <title>Robot Framework Essentials</title>
+        <author id="auth001">
+            <name>John Smith</name>
+            <email>john.smith@example.com</email>
+        </author>
+        <genre>Technical</genre>
+        <pages>250</pages>
+        <price currency="USD">29.99</price>
+    </book>
+    <book id="002" year="2022" available="false">
+        <title>Test Automation Mastery</title>
+        <author id="auth002">
+            <name>Jane Doe</name>
+            <email>jane.doe@example.com</email>
+        </author>
+        <genre>Technical</genre>
+        <pages>300</pages>
+        <price currency="EUR">35.50</price>
+    </book>
+    <book id="003" year="2024" available="true">
+        <title>Python for Beginners</title>
+        <author id="auth003">
+            <name>Alice Johnson</name>
+            <email>alice.johnson@example.com</email>
+        </author>
+        <genre>Programming</genre>
+        <pages>180</pages>
+        <price currency="USD">24.99</price>
+    </book>
+</library>
