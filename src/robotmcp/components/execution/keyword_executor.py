@@ -199,8 +199,38 @@ class KeywordExecutor:
             else:
                 # Resolve variables in arguments before execution for non-context mode
                 try:
+                    # Merge session variables with RF context variables (if available)
+                    merged_vars = dict(session.variables)
+                    try:
+                        from robotmcp.components.execution.rf_native_context_manager import (
+                            get_rf_native_context_manager,
+                        )
+
+                        rf_mgr = get_rf_native_context_manager()
+                        ctx_info = rf_mgr.get_session_context_info(session.session_id)
+                        if ctx_info.get("context_exists"):
+                            ctx = rf_mgr._session_contexts.get(session.session_id)
+                            rf_vars_obj = ctx.get("variables") if ctx else None
+                            if rf_vars_obj is not None:
+                                rf_data = None
+                                if hasattr(rf_vars_obj, "store"):
+                                    rf_data = rf_vars_obj.store.data
+                                elif hasattr(rf_vars_obj, "current") and hasattr(
+                                    rf_vars_obj.current, "store"
+                                ):
+                                    rf_data = rf_vars_obj.current.store.data
+                                if rf_data:
+                                    for k, v in rf_data.items():
+                                        key = k if isinstance(k, str) else str(k)
+                                        if not key.startswith("${"):
+                                            key = f"${{{key}}}"
+                                        merged_vars[key] = v
+                    except Exception:
+                        # If RF context not available, continue with session vars only
+                        pass
+
                     resolved_arguments = self.variable_resolver.resolve_arguments(
-                        arguments, session.variables
+                        arguments, merged_vars
                     )
                     logger.debug(
                         f"Variable resolution: {arguments} → {resolved_arguments}"
