@@ -9,6 +9,9 @@ from robotmcp.components.execution import ExecutionCoordinator
 from robotmcp.components.execution.mobile_capability_service import (
     MobileCapabilityService,
 )
+from robotmcp.components.execution.rf_native_context_manager import (
+    get_rf_native_context_manager,
+)
 from robotmcp.components.keyword_matcher import KeywordMatcher
 from robotmcp.components.library_recommender import LibraryRecommender
 from robotmcp.components.nlp_processor import NaturalLanguageProcessor
@@ -16,9 +19,6 @@ from robotmcp.components.state_manager import StateManager
 from robotmcp.components.test_builder import TestBuilder
 from robotmcp.models.session_models import PlatformType
 from robotmcp.utils.server_integration import initialize_enhanced_serialization
-from robotmcp.components.execution.rf_native_context_manager import (
-    get_rf_native_context_manager,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -318,7 +318,9 @@ async def recommend_libraries(
         return {"success": False, "error": rec.get("error", "Recommendation failed")}
 
     recommendations = rec.get("recommendations", [])
-    recommended_names = [r.get("library_name") for r in recommendations if r.get("library_name")]
+    recommended_names = [
+        r.get("library_name") for r in recommendations if r.get("library_name")
+    ]
 
     result: Dict[str, Any] = {
         "success": True,
@@ -331,7 +333,9 @@ async def recommend_libraries(
     # 2) Optionally check availability
     availability_info = None
     if check_availability and recommended_names:
-        availability_info = execution_engine.check_library_requirements(recommended_names)
+        availability_info = execution_engine.check_library_requirements(
+            recommended_names
+        )
         result["availability"] = availability_info
 
     # 3) Optionally apply search order to session
@@ -343,16 +347,22 @@ async def recommend_libraries(
         explicit = getattr(session, "explicit_library_preference", None)
         if explicit:
             # Put explicit preference first
-            recommended_names = [explicit] + [n for n in recommended_names if n != explicit]
+            recommended_names = [explicit] + [
+                n for n in recommended_names if n != explicit
+            ]
             # Resolve web lib conflicts by removing the opposite when explicit is set
             if explicit == "SeleniumLibrary" and "Browser" in recommended_names:
                 recommended_names = [n for n in recommended_names if n != "Browser"]
             if explicit == "Browser" and "SeleniumLibrary" in recommended_names:
-                recommended_names = [n for n in recommended_names if n != "SeleniumLibrary"]
+                recommended_names = [
+                    n for n in recommended_names if n != "SeleniumLibrary"
+                ]
 
             # Also align the detailed recommendations list with the adjusted names/order
             name_to_rec = {r.get("library_name"): r for r in recommendations}
-            recommendations = [name_to_rec[n] for n in recommended_names if n in name_to_rec]
+            recommendations = [
+                name_to_rec[n] for n in recommended_names if n in name_to_rec
+            ]
             result["recommendations"] = recommendations
             result["recommended_libraries"] = recommended_names
 
@@ -366,7 +376,9 @@ async def recommend_libraries(
 
         # Prefer available libraries first if we have that info, else use all recommendations
         preferred = (
-            availability_info.get("available_libraries", []) if availability_info else recommended_names
+            availability_info.get("available_libraries", [])
+            if availability_info
+            else recommended_names
         )
         # If explicit preference exists, ensure it leads and resolve web conflicts in preferred list as well
         if explicit:
@@ -378,7 +390,11 @@ async def recommend_libraries(
             if explicit == "Browser":
                 preferred = [n for n in preferred if n != "SeleniumLibrary"]
         # Merge with existing order while preserving priority
-        new_order = list(dict.fromkeys(preferred + [lib for lib in old_order if lib not in preferred]))
+        new_order = list(
+            dict.fromkeys(
+                preferred + [lib for lib in old_order if lib not in preferred]
+            )
+        )
         session.set_library_search_order(new_order)
 
         result["session_setup"] = {
@@ -1259,7 +1275,20 @@ async def get_context_variables(session_id: str) -> Dict[str, Any]:
                     except Exception:
                         rf_vars = {}
 
-                sanitized = {str(k): _sanitize(v) for k, v in rf_vars.items()}
+                # Attempt to resolve variable resolvers to concrete values via Variables API
+                resolved: Dict[str, Any] = {}
+                for k, v in rf_vars.items():
+                    key = k if isinstance(k, str) else str(k)
+                    try:
+                        norm = key if key.startswith("${") else f"${{{key}}}"
+                        concrete = rf_vars_obj[norm]
+                    except Exception:
+                        concrete = v
+                    resolved[key if not key.startswith("${") else key.strip("${}")] = (
+                        concrete
+                    )
+
+                sanitized = {str(k): _sanitize(v) for k, v in resolved.items()}
                 return {
                     "success": True,
                     "session_id": session_id,
@@ -1653,9 +1682,6 @@ async def run_test_suite(
         return result
 
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    mcp.run()
 @mcp.tool(
     name="diagnose_rf_context",
     description="Inspect RF context state for a session: libraries, search order, and variables count.",
@@ -1689,3 +1715,53 @@ async def diagnose_rf_context(session_id: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"diagnose_rf_context failed: {e}")
         return {"context_exists": False, "error": str(e), "session_id": session_id}
+
+
+@mcp.tool(
+    name="import_resource",
+    description="Import a Robot Framework resource file into the session RF Namespace.",
+)
+async def import_resource(session_id: str, path: str) -> Dict[str, Any]:
+    mgr = get_rf_native_context_manager()
+    return mgr.import_resource_for_session(session_id, path)
+
+
+@mcp.tool(
+    name="import_custom_library",
+    description="Import a custom Robot Framework library (module name or file path) into the session RF Namespace.",
+)
+async def import_custom_library(
+    session_id: str,
+    name_or_path: str,
+    args: List[str] | None = None,
+    alias: str | None = None,
+) -> Dict[str, Any]:
+    mgr = get_rf_native_context_manager()
+    return mgr.import_library_for_session(
+        session_id, name_or_path, tuple(args or ()), alias
+    )
+
+
+@mcp.tool(
+    name="list_available_keywords",
+    description="List available keywords from imported libraries and resources in the session RF Namespace.",
+)
+async def list_available_keywords(session_id: str) -> Dict[str, Any]:
+    mgr = get_rf_native_context_manager()
+    return mgr.list_available_keywords(session_id)
+
+
+@mcp.tool(
+    name="get_session_keyword_documentation",
+    description="Get documentation for a keyword (library or resource) available in the session RF Namespace.",
+)
+async def get_session_keyword_documentation(
+    session_id: str, keyword_name: str
+) -> Dict[str, Any]:
+    mgr = get_rf_native_context_manager()
+    return mgr.get_keyword_documentation(session_id, keyword_name)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    mcp.run()

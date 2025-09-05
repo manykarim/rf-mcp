@@ -63,6 +63,23 @@ class CompatibleVariables:
         name = self._normalize_var_name(name)
         logger.debug(f"Variables.set_suite({name}, {value}) -> __setitem__")
         self._original[name] = value
+
+    # RF user keyword lifecycle hooks expected by Namespace
+    def start_keyword(self) -> None:
+        """Start of keyword scope (compatibility shim)."""
+        try:
+            if hasattr(self._original, "start_keyword"):
+                self._original.start_keyword()
+        except Exception:
+            pass
+
+    def end_keyword(self) -> None:
+        """End of keyword scope (compatibility shim)."""
+        try:
+            if hasattr(self._original, "end_keyword"):
+                self._original.end_keyword()
+        except Exception:
+            pass
         
     def get_variable(self, name: str, default: Any = None) -> Any:
         """Get variable value with RF-compatible name handling."""

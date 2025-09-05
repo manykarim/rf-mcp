@@ -74,6 +74,7 @@ Execute the test suite stepwise and build the final version afterwards.
 ### ⚡ **Interactive Step Execution**
 - Execute Robot Framework keywords step-by-step
 - Real-time state tracking and session management
+- Native RF context runner for correct argument parsing and types
 - Smart error handling with actionable suggestions
 
 ### 🔍 **Intelligent Element Location**
@@ -85,12 +86,27 @@ Execute the test suite stepwise and build the final version afterwards.
 - Generate optimized Robot Framework test suites
 - Maintain proper imports, setup/teardown, and documentation
 - Support for tags, variables, and test organization
+- Includes session Resources/Libraries in *** Settings ***
+- Portable path formatting using ${/} (Windows-safe)
 
 ### 🌐 **Multi-Platform Support**
 - **Web**: Browser Library (Playwright) & SeleniumLibrary
 - **Mobile**: AppiumLibrary for iOS/Android testing
 - **API**: RequestsLibrary for HTTP/REST testing
 - **Database**: DatabaseLibrary for SQL operations
+
+---
+
+## 🧭 Latest Updates
+
+- RF native context execution: persistent per-session Namespace + ExecutionContext.
+- Runner-first keyword execution with BuiltIn fallback for maximum compatibility.
+- New tools to import Resources and custom Python libraries into the session context.
+- Session-aware keyword discovery and documentation.
+- Test suite generation now reflects session imports and uses OS-independent paths.
+- CI pipeline via uv across Windows/macOS/Linux; Browser/Playwright initialization included.
+
+Details below.
 
 ---
 
@@ -131,6 +147,9 @@ uv sync
 # Or with pip
 pip install -e .
 ```
+
+### Playwright/Browsers for UI Tests
+- Browser Library: run `rfbrowser init` (downloads Playwright and browsers)
 
 ### Hint: When using a venv 
 
@@ -267,7 +286,7 @@ Execute the test suite stepwise and build the final version afterwards.
 
 ## 🔍 MCP Tools Overview
 
-RobotMCP provides **20 comprehensive MCP tools** organized into functional categories:
+RobotMCP provides a comprehensive toolset organized by function. Highlights:
 
 ### Core Execution
 - `analyze_scenario` - Convert natural language to structured test intent
@@ -289,6 +308,13 @@ RobotMCP provides **20 comprehensive MCP tools** organized into functional categ
 - `check_library_availability` - Verify library installation
 - `get_available_keywords` - List all available keywords
 - `search_keywords` - Find keywords by pattern
+
+### RF Context & Imports
+- `import_resource` - Import a `.resource` file into the session RF Namespace
+- `import_custom_library` - Import a custom Python library (module name or file path)
+- `list_available_keywords` - List keywords from session libraries/resources (context-aware)
+- `get_session_keyword_documentation` - Get docs/signature for a session keyword
+- `diagnose_rf_context` - Inspect session RF context (libraries, variables count)
 
 ### Locator Guidance
 - `get_selenium_locator_guidance` - SeleniumLibrary selector help
@@ -322,6 +348,7 @@ RobotMCP provides **20 comprehensive MCP tools** organized into functional categ
 - **TypeConverter** - RF type conversion (string → int/bool/etc.)
 - **LibDoc API** - Direct RF documentation access
 - **Keyword Discovery** - Runtime detection using RF internals
+- **Runner First** - Execute via Namespace.get_runner(...).run(...), fallback to BuiltIn.run_keyword
 
 ### Session Management
 - Auto-configuration based on scenario analysis
@@ -564,11 +591,14 @@ Execute with run_test_suite
 - Execute steps individually before building suites
 - Use `run_test_suite_dry` to catch issues early
 - Leverage native RF integration for maximum compatibility
+- Prefer context mode for BuiltIn keywords (Evaluate, Set Variables, control flow)
+- `execute_step` auto-retries via RF context when a keyword isn’t found
 
 ### 🌐 **Cross-Platform**
 - Sessions auto-detect context (web/mobile/api) from scenarios
 - Library conflicts are automatically resolved
 - Mobile sessions configure Appium capabilities automatically
+- Test suite paths use `${/}` for OS-independent imports; module names stay as-is
 
 ---
 
@@ -597,7 +627,35 @@ uv run mypy src/
 
 # Start development server
 uv run python -m robotmcp.server
+
+# Build package
+uv build
 ```
+
+---
+
+## 🧩 RF Context Execution
+
+- Persistent per-session Namespace + ExecutionContext are created on demand.
+- Runner-first dispatch: `Namespace.get_runner(...).run(...)`, with fallback to `BuiltIn.run_keyword`.
+- Variables and imports persist within the session; `get_context_variables` surfaces a sanitized snapshot.
+- RequestsLibrary session keywords default to runner path; disable via `ROBOTMCP_RF_RUNNER_REQUESTS=0`.
+- Non-context executions automatically retry in RF context when a keyword cannot be resolved (helps user keywords/resources).
+
+Common cases that require `use_context=true` in `execute_step`:
+- BuiltIn control flow and variables: Evaluate, Set Test/Suite/Global Variable, Run Keywords
+- Keywords relying on session imports/resources
+- Complex named/positional/mixed arguments where RF’s resolver is desired
+
+---
+
+## 📦 CI with uv (GitHub Actions)
+
+- Matrix for Python 3.10–3.12 on Ubuntu, macOS, Windows
+- Uses `astral-sh/setup-uv` and `uv sync` for installs
+- Initializes Browser Library with `rfbrowser init` (continues on error)
+- Runs tests via `uv run pytest`
+- Builds artifacts with `uv build` and uploads `dist/*`
 
 ---
 

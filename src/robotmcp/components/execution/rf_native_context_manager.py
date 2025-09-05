@@ -76,7 +76,7 @@ class RobotFrameworkNativeContextManager:
                 # Create minimal variables with proper structure for BuiltIn.evaluate
                 original_variables = Variables()
                 
-                # Create compatible variables with set_global method for BuiltIn
+                # Create compatible variables with set_global/start_keyword methods for BuiltIn/RF
                 variables = create_compatible_variables(original_variables)
                 
                 # Add the 'current' attribute that BuiltIn.evaluate expects
@@ -95,11 +95,11 @@ class RobotFrameworkNativeContextManager:
                 from robot.running.resourcemodel import ResourceFile
                 suite.resource = ResourceFile(source=suite.source)
                 
-                # Create minimal namespace with correct parameter order: variables, suite, resource, languages
+                # Create minimal namespace; assign compatible variables so RF internals use it
                 original_namespace = Namespace(original_variables, suite, suite.resource, Languages())
-                
-                # Create compatible namespace with our compatible variables
-                namespace = create_compatible_namespace(original_namespace, variables)
+                # Replace Variables with our compatible wrapper
+                original_namespace.variables = variables
+                namespace = original_namespace
                 
                 # Create simple output with proper output directory for Browser Library
                 try:
@@ -131,6 +131,12 @@ class RobotFrameworkNativeContextManager:
                     logger.warning("Could not create Output, using minimal logging")
                     output = None
                 
+                # Ensure BuiltIn is available for user keywords and variable ops
+                try:
+                    original_namespace.import_library("BuiltIn")
+                except Exception:
+                    pass
+
                 # Start execution context (must not be dry_run to actually execute keywords)
                 if output:
                     ctx = EXECUTION_CONTEXTS.start_suite(suite, namespace, output, dry_run=False)
@@ -771,6 +777,173 @@ class RobotFrameworkNativeContextManager:
             "active_context": self._active_context,
             "contexts": contexts
         }
+
+    # --- New: Resource and custom library management + discovery ---
+
+    def import_resource_for_session(self, session_id: str, resource_path: str) -> Dict[str, Any]:
+        """Import a Robot Framework resource file into the session Namespace."""
+        try:
+            if session_id not in self._session_contexts:
+                create = self.create_context_for_session(session_id)
+                if not create.get("success"):
+                    return create
+            namespace = self._session_contexts[session_id]["namespace"]
+            from pathlib import Path
+            # Resolve relative and platform-specific paths robustly and pass POSIX-style to RF
+            p = Path(resource_path)
+            if not p.is_absolute():
+                p = (Path.cwd() / p).resolve()
+            path_str = p.as_posix()
+            namespace.import_resource(path_str)
+            ctx_info = self._session_contexts[session_id]
+            resources = ctx_info.setdefault("resources", [])
+            if resource_path not in resources:
+                resources.append(resource_path)
+            return {"success": True, "session_id": session_id, "resource": resource_path}
+        except Exception as e:
+            logger.error(f"Failed to import resource '{resource_path}': {e}")
+            return {"success": False, "error": str(e), "session_id": session_id}
+
+    def import_library_for_session(
+        self,
+        session_id: str,
+        library_name_or_path: str,
+        args: tuple = (),
+        alias: str | None = None,
+    ) -> Dict[str, Any]:
+        """Import a custom Robot Framework library (by module name or file path) into the session Namespace."""
+        try:
+            if session_id not in self._session_contexts:
+                create = self.create_context_for_session(session_id)
+                if not create.get("success"):
+                    return create
+            namespace = self._session_contexts[session_id]["namespace"]
+            from pathlib import Path
+            name = library_name_or_path
+            try:
+                p = Path(library_name_or_path)
+                if not p.is_absolute():
+                    p = (Path.cwd() / p).resolve()
+                if p.exists():
+                    name = p.as_posix()
+            except Exception:
+                pass
+            namespace.import_library(name, args=tuple(args or ()), alias=alias)
+            ctx_info = self._session_contexts[session_id]
+            libs = ctx_info.setdefault("imported_libraries", [])
+            if library_name_or_path not in libs:
+                libs.append(library_name_or_path)
+            return {
+                "success": True,
+                "session_id": session_id,
+                "library": library_name_or_path,
+                "alias": alias,
+            }
+        except Exception as e:
+            logger.error(f"Failed to import library '{library_name_or_path}': {e}")
+            return {"success": False, "error": str(e), "session_id": session_id}
+
+    def list_available_keywords(self, session_id: str) -> Dict[str, Any]:
+        """List available keyword names from imported libraries and resources in this session."""
+        try:
+            if session_id not in self._session_contexts:
+                return {"success": False, "error": "No RF context for session", "session_id": session_id}
+            namespace = self._session_contexts[session_id]["namespace"]
+
+            library_keywords = []
+            for lib in list(namespace.libraries):
+                try:
+                    for kw in getattr(lib, "keywords", []) or []:
+                        library_keywords.append({
+                            "name": kw.name,
+                            "full_name": getattr(kw, "full_name", kw.name),
+                            "library": getattr(lib, "name", None) or getattr(lib, "__class__", type(lib)).__name__,
+                        })
+                except Exception:
+                    continue
+
+            # Resource keywords: use LibDoc for resources tracked in context
+            resource_keywords = []
+            try:
+                from robot.libdoc import LibraryDocumentation
+                for res in self._session_contexts[session_id].get("resources", []) or []:
+                    try:
+                        doc = LibraryDocumentation(res)
+                        for kw in doc.keywords:
+                            resource_keywords.append({
+                                "name": kw.name,
+                                "full_name": kw.name,
+                                "resource": res,
+                            })
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+            return {
+                "success": True,
+                "session_id": session_id,
+                "libraries_count": len(list(namespace.libraries)),
+                "library_keywords": library_keywords,
+                "resource_keywords": resource_keywords,
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e), "session_id": session_id}
+
+    def get_keyword_documentation(self, session_id: str, keyword_name: str) -> Dict[str, Any]:
+        """Get documentation and signature for a keyword available in this session.
+
+        Attempts library handlers first, then resource keywords via LibDoc.
+        """
+        try:
+            if session_id not in self._session_contexts:
+                return {"success": False, "error": "No RF context for session", "session_id": session_id}
+            namespace = self._session_contexts[session_id]["namespace"]
+
+            # Search library handlers
+            for lib in list(namespace.libraries):
+                for kw in getattr(lib, "keywords", []) or []:
+                    if kw.name.lower() == keyword_name.lower():
+                        info = {
+                            "success": True,
+                            "session_id": session_id,
+                            "name": kw.name,
+                            "source": getattr(lib, "name", None) or getattr(lib, "__class__", type(lib)).__name__,
+                            "doc": getattr(kw, "doc", ""),
+                            "args": [str(a) for a in (getattr(kw, "args", []) or [])],
+                            "type": "library",
+                        }
+                        return info
+
+            # Search resources via LibDoc
+            try:
+                from robot.libdoc import LibraryDocumentation
+                for res in self._session_contexts[session_id].get("resources", []) or []:
+                    try:
+                        doc = LibraryDocumentation(res)
+                        for kw in doc.keywords:
+                            if kw.name.lower() == keyword_name.lower():
+                                return {
+                                    "success": True,
+                                    "session_id": session_id,
+                                    "name": kw.name,
+                                    "source": res,
+                                    "doc": kw.doc,
+                                    "args": [str(a) for a in kw.args],
+                                    "type": "resource",
+                                }
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+            return {
+                "success": False,
+                "error": f"Keyword '{keyword_name}' not found in session",
+                "session_id": session_id,
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e), "session_id": session_id}
 
 
 # Global instance for use throughout the application
