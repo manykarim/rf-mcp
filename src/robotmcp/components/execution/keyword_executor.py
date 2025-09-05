@@ -1,6 +1,7 @@
 """Keyword execution service."""
 
 import logging
+import os
 import sys
 import uuid
 from datetime import datetime
@@ -45,6 +46,13 @@ class KeywordExecutor:
         self.response_serializer = MCPResponseSerializer()
         # Legacy RobotContextManager is deprecated; use RF native context only
         self.rf_native_context = get_rf_native_context_manager()
+        # Feature flag: route RequestsLibrary session operations via RF runner
+        # Default ON; set ROBOTMCP_RF_RUNNER_REQUESTS=0 to disable
+        self.rf_runner_requests = os.getenv("ROBOTMCP_RF_RUNNER_REQUESTS", "1") in (
+            "1",
+            "true",
+            "True",
+        )
 
     async def execute_keyword(
         self,
@@ -110,18 +118,17 @@ class KeywordExecutor:
                 # NOTE: Input Password removed - works fine in normal execution with name normalization
             ]
 
-            # RequestsLibrary keywords should NOT use RF native context since they work
-            # perfectly in regular execution mode and RF native context has library import issues
-            requests_library_keywords = [
-                "get",
-                "post",
-                "put",
-                "delete",
-                "patch",
-                "head",
-                "options",
+            # RequestsLibrary: route session-scoped operations through RF native context
+            requests_library_context_keywords = [
                 "create session",
                 "delete session",
+                "get on session",
+                "post on session",
+                "put on session",
+                "delete on session",
+                "patch on session",
+                "head on session",
+                "options on session",
             ]
 
             # Browser Library keywords should NOT use RF native context due to import issues
@@ -162,21 +169,21 @@ class KeywordExecutor:
                 keyword = keyword_name_mappings[keyword]
 
             keyword_requires_context = keyword.lower() in context_required_keywords
-            is_requests_keyword = keyword.lower() in requests_library_keywords
+            is_requests_keyword = keyword.lower() in requests_library_context_keywords
             is_browser_keyword = keyword.lower() in browser_library_keywords
 
-            # Force RequestsLibrary and Browser Library keywords to use regular execution when RF context import fails
+            # Feature-flagged path for RequestsLibrary session ops
             if is_requests_keyword:
-                use_context = False
-                logger.info(
-                    f"Forcing RequestsLibrary keyword {keyword} to use regular execution for compatibility"
-                )
-
-            if is_browser_keyword:
-                use_context = False
-                logger.info(
-                    f"Forcing Browser Library keyword {keyword} to use regular execution due to RF context import issues"
-                )
+                if self.rf_runner_requests:
+                    use_context = True
+                    logger.info(
+                        f"Feature flag enabled: routing RequestsLibrary keyword '{keyword}' to RF native runner"
+                    )
+                else:
+                    use_context = False
+                    logger.info(
+                        f"Routing RequestsLibrary keyword '{keyword}' via non-context handler (temporary exception)"
+                    )
 
             if use_context or session.is_context_mode() or keyword_requires_context:
                 # Use RF native context mode for keywords that require it
@@ -192,8 +199,38 @@ class KeywordExecutor:
             else:
                 # Resolve variables in arguments before execution for non-context mode
                 try:
+                    # Merge session variables with RF context variables (if available)
+                    merged_vars = dict(session.variables)
+                    try:
+                        from robotmcp.components.execution.rf_native_context_manager import (
+                            get_rf_native_context_manager,
+                        )
+
+                        rf_mgr = get_rf_native_context_manager()
+                        ctx_info = rf_mgr.get_session_context_info(session.session_id)
+                        if ctx_info.get("context_exists"):
+                            ctx = rf_mgr._session_contexts.get(session.session_id)
+                            rf_vars_obj = ctx.get("variables") if ctx else None
+                            if rf_vars_obj is not None:
+                                rf_data = None
+                                if hasattr(rf_vars_obj, "store"):
+                                    rf_data = rf_vars_obj.store.data
+                                elif hasattr(rf_vars_obj, "current") and hasattr(
+                                    rf_vars_obj.current, "store"
+                                ):
+                                    rf_data = rf_vars_obj.current.store.data
+                                if rf_data:
+                                    for k, v in rf_data.items():
+                                        key = k if isinstance(k, str) else str(k)
+                                        if not key.startswith("${"):
+                                            key = f"${{{key}}}"
+                                        merged_vars[key] = v
+                    except Exception:
+                        # If RF context not available, continue with session vars only
+                        pass
+
                     resolved_arguments = self.variable_resolver.resolve_arguments(
-                        arguments, session.variables
+                        arguments, merged_vars
                     )
                     logger.debug(
                         f"Variable resolution: {arguments} → {resolved_arguments}"
@@ -241,6 +278,27 @@ class KeywordExecutor:
                 logger.info(
                     f"Executing keyword: {keyword} with resolved args: {resolved_arguments}"
                 )
+
+                # Temporary fix: pre-process RequestsLibrary Create Session named args like headers={...}
+                try:
+                    if keyword.lower() == "create session":
+                        import ast
+                        fixed_args: List[Any] = []
+                        for arg in resolved_arguments:
+                            if isinstance(arg, str) and "=" in arg and arg.count("=") == 1:
+                                name, val = arg.split("=", 1)
+                                name = name.strip().lower()
+                                if name in {"headers", "cookies", "proxies", "retry_status_list", "retry_method_list"}:
+                                    try:
+                                        parsed = ast.literal_eval(val.strip())
+                                        fixed_args.append((name, parsed))
+                                        continue
+                                    except Exception:
+                                        pass
+                            fixed_args.append(arg)
+                        resolved_arguments = fixed_args
+                except Exception:
+                    pass
 
                 # Execute the keyword with library prefix support using resolved arguments
                 result = await self._execute_keyword_internal(

@@ -16,6 +16,9 @@ from robotmcp.components.state_manager import StateManager
 from robotmcp.components.test_builder import TestBuilder
 from robotmcp.models.session_models import PlatformType
 from robotmcp.utils.server_integration import initialize_enhanced_serialization
+from robotmcp.components.execution.rf_native_context_manager import (
+    get_rf_native_context_manager,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1225,25 +1228,65 @@ async def get_context_variables(session_id: str) -> Dict[str, Any]:
         Dictionary containing all session variables
     """
     try:
-        # Get session
-        session = execution_engine.session_manager.get_session(session_id)
+        # Helper to sanitize values: return scalars as-is; for complex objects, return their type name.
+        def _sanitize(val: Any) -> Any:
+            if isinstance(val, (str, int, float, bool)) or val is None:
+                return val
+            # Avoid serializing complex/large objects
+            return f"<{type(val).__name__}>"
 
+        # Prefer RF Namespace/Variables if an RF context exists for the session
+        try:
+            from robotmcp.components.execution.rf_native_context_manager import (
+                get_rf_native_context_manager,
+            )
+
+            mgr = get_rf_native_context_manager()
+            ctx_info = mgr.get_session_context_info(session_id)
+            if ctx_info.get("context_exists"):
+                # Extract variables from RF Variables object
+                ctx = mgr._session_contexts.get(session_id)  # internal read-only access
+                rf_vars_obj = ctx.get("variables") if ctx else None
+                rf_vars: Dict[str, Any] = {}
+                if rf_vars_obj is not None:
+                    try:
+                        if hasattr(rf_vars_obj, "store"):
+                            rf_vars = dict(rf_vars_obj.store.data)
+                        elif hasattr(rf_vars_obj, "current") and hasattr(
+                            rf_vars_obj.current, "store"
+                        ):
+                            rf_vars = dict(rf_vars_obj.current.store.data)
+                    except Exception:
+                        rf_vars = {}
+
+                sanitized = {str(k): _sanitize(v) for k, v in rf_vars.items()}
+                return {
+                    "success": True,
+                    "session_id": session_id,
+                    "variables": sanitized,
+                    "variable_count": len(sanitized),
+                    "source": "rf_context",
+                }
+        except Exception:
+            # Fall back to session store below
+            pass
+
+        # Fallback: session-based variable store
+        session = execution_engine.session_manager.get_session(session_id)
         if not session:
             return {
                 "success": False,
                 "error": f"Session '{session_id}' not found",
                 "session_id": session_id,
             }
-
-        # Get session variables
-        variables = dict(session.variables)
-
+        sess_vars_raw = dict(session.variables)
+        sess_vars = {str(k): _sanitize(v) for k, v in sess_vars_raw.items()}
         return {
             "success": True,
             "session_id": session_id,
-            "variables": variables,
-            "variable_count": len(variables),
-            "note": "Using session-based variable system",
+            "variables": sess_vars,
+            "variable_count": len(sess_vars),
+            "source": "session_store",
         }
 
     except Exception as e:
@@ -1613,3 +1656,36 @@ async def run_test_suite(
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     mcp.run()
+@mcp.tool(
+    name="diagnose_rf_context",
+    description="Inspect RF context state for a session: libraries, search order, and variables count.",
+)
+async def diagnose_rf_context(session_id: str) -> Dict[str, Any]:
+    """Return diagnostic information about the current RF execution context for a session.
+
+    Includes: whether context exists, created_at, imported libraries, variables count,
+    and where possible, the current RF library search order.
+    """
+    try:
+        mgr = get_rf_native_context_manager()
+        info = mgr.get_session_context_info(session_id)
+        # Try to enrich with Namespace search order and imported libraries
+        if info.get("context_exists"):
+            ctx = mgr._session_contexts.get(session_id)  # internal, read-only
+            extra = {}
+            try:
+                namespace = ctx.get("namespace")
+                # Namespace has no direct getter for search order; infer from libraries list
+                lib_names = []
+                if hasattr(namespace, "libraries"):
+                    libs = namespace.libraries
+                    if hasattr(libs, "keys"):
+                        lib_names = list(libs.keys())
+                extra["namespace_libraries"] = lib_names
+            except Exception:
+                pass
+            info["extra"] = extra
+        return info
+    except Exception as e:
+        logger.error(f"diagnose_rf_context failed: {e}")
+        return {"context_exists": False, "error": str(e), "session_id": session_id}
