@@ -449,15 +449,22 @@ class RobotFrameworkNativeContextManager:
         """Final fallback execution using BuiltIn library."""
         from robot.libraries.BuiltIn import BuiltIn
         builtin = BuiltIn()
-        
-        # Check if it's a BuiltIn method
+
+        # Try generic RF-level resolution with run_keyword (handles decorated names)
+        try:
+            logger.info(f"FALLBACK: BuiltIn.run_keyword('{keyword_name}', args={len(arguments)})")
+            return builtin.run_keyword(keyword_name, *arguments)
+        except Exception as e:
+            logger.debug(f"BuiltIn.run_keyword failed for {keyword_name}: {e}")
+
+        # Check if it's a BuiltIn method (direct call)
         method_name = keyword_name.replace(' ', '_').lower()
         if hasattr(builtin, method_name):
             method = getattr(builtin, method_name)
             if callable(method):
                 logger.info(f"Executing {keyword_name} as BuiltIn method")
                 return method(*arguments)
-        
+
         # If nothing worked, raise an error
         raise RuntimeError(f"Keyword '{keyword_name}' could not be resolved or executed")
     

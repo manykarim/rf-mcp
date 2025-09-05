@@ -329,49 +329,19 @@ class DynamicKeywordDiscovery:
                         f"Found valid named arguments for {keyword_info.name}: {named_args}"
                     )
 
-                    # Create ArgumentSpec from LibDoc signature
-                    spec = self._create_argument_spec_from_libdoc(keyword_info.args)
-
-                    # Use Robot Framework's ArgumentResolver to properly handle arguments
-                    resolver = ArgumentResolver(spec)
-                    resolved_positional, resolved_named = resolver.resolve(
-                        positional_args, named_args
-                    )
-
-                    # ArgumentResolver might return different types, handle them properly
-                    if not isinstance(resolved_named, dict):
-                        logger.debug(
-                            f"ArgumentResolver returned non-dict for named args: {type(resolved_named)} = {resolved_named}"
-                        )
-                        if hasattr(resolved_named, "__iter__") and not isinstance(
-                            resolved_named, str
-                        ):
-                            # Convert list/tuple to dict if possible
-                            resolved_named = (
-                                dict(resolved_named) if resolved_named else {}
-                            )
-                        else:
-                            resolved_named = {}
-
-                    # Apply type conversion to resolved arguments
+                    # Apply type conversion using the actual method signature
                     converted_positional = self._convert_positional_with_rf(
-                        resolved_positional, sig
+                        positional_args, sig
                     )
-                    converted_named = self._convert_named_with_rf(resolved_named, sig)
+                    converted_named = self._convert_named_with_rf(named_args, sig)
 
                     # Execute with both positional and named arguments
-                    if converted_named:
-                        result = method(*converted_positional, **converted_named)
-                    else:
-                        result = method(*converted_positional)
+                    result = method(*converted_positional, **converted_named)
 
                     logger.debug(
-                        f"RF native type conversion succeeded for {keyword_info.name} with named args: {list(converted_named.keys()) if converted_named else 'none'}"
+                        f"RF native type conversion (direct) succeeded for {keyword_info.name} with named args: {list(converted_named.keys())}"
                     )
-                    return (
-                        "executed",
-                        result,
-                    )  # Return tuple to indicate execution happened
+                    return ("executed", result)
                 else:
                     # Arguments contain '=' but none are valid named arguments (e.g., locator strings)
                     logger.debug(
@@ -395,6 +365,27 @@ class DynamicKeywordDiscovery:
                 logger.debug(
                     f"TYPE_CONVERSION_DEBUG: Will convert {len(corrected_args)} arguments using method signature"
                 )
+                # ATTEMPT: Even in fallback, try splitting into positional/named by method signature
+                try:
+                    fallback_positional, fallback_named = self._split_args_using_method_signature(
+                        corrected_args, sig
+                    )
+                    if fallback_named:
+                        logger.debug(
+                            f"TYPE_CONVERSION_DEBUG: Fallback found named args: {list(fallback_named.keys())}"
+                        )
+                        conv_pos = self._convert_positional_with_rf(
+                            fallback_positional, sig
+                        )
+                        conv_named = self._convert_named_with_rf(
+                            fallback_named, sig
+                        )
+                        res = method(*conv_pos, **conv_named)
+                        return ("executed", res)
+                except Exception as split_error:
+                    logger.debug(
+                        f"TYPE_CONVERSION_DEBUG: Fallback split failed, continuing with positional-only: {split_error}"
+                    )
 
                 converted_args = []
                 param_list = list(sig.parameters.values())
@@ -751,6 +742,24 @@ class DynamicKeywordDiscovery:
                     # Convert the argument - handle both parameter objects and strings
                     param_name = param.name if hasattr(param, "name") else str(param)
                     converted_value = converter.convert(arg_value, param_name)
+                    # Enum fallback mapping by member name (case-insensitive) when converter leaves string
+                    try:
+                        ann = param.annotation
+                        if (
+                            isinstance(converted_value, str)
+                            and ann is not None
+                            and hasattr(ann, "__members__")
+                        ):
+                            members = getattr(ann, "__members__", {})
+                            cv = converted_value
+                            enum_val = members.get(cv) or next(
+                                (m for n, m in members.items() if n.lower() == cv.lower()),
+                                None,
+                            )
+                            if enum_val is not None:
+                                converted_value = enum_val
+                    except Exception:
+                        pass
                     converted_args.append(converted_value)
 
                     logger.debug(
@@ -787,6 +796,24 @@ class DynamicKeywordDiscovery:
 
                     # Convert the argument
                     converted_value = converter.convert(value, name)
+                    # Enum fallback mapping by member name (case-insensitive)
+                    try:
+                        ann = param.annotation
+                        if (
+                            isinstance(converted_value, str)
+                            and ann is not None
+                            and hasattr(ann, "__members__")
+                        ):
+                            members = getattr(ann, "__members__", {})
+                            cv = converted_value
+                            enum_val = members.get(cv) or next(
+                                (m for n, m in members.items() if n.lower() == cv.lower()),
+                                None,
+                            )
+                            if enum_val is not None:
+                                converted_value = enum_val
+                    except Exception:
+                        pass
                     converted_named[name] = converted_value
 
                     logger.debug(
@@ -1754,28 +1781,36 @@ class DynamicKeywordDiscovery:
 
                 result = method(*string_args)
             else:
-                # Unified primary path: try direct call with parsed positional and named arguments
-                try:
-                    pos_args = parsed_args.positional
-                    kwargs = parsed_args.named or {}
-                    logger.debug(
-                        f"UNIFIED_EXECUTION: Calling {keyword_info.library}.{keyword_info.name} with pos={pos_args}, kwargs={list(kwargs.keys())}"
-                    )
-                    result = method(*pos_args, **kwargs)
-                    return {
-                        "success": True,
-                        "output": str(result) if result is not None else f"Executed {keyword_info.name}",
-                        "result": result,
-                        "keyword_info": {
-                            "name": keyword_info.name,
-                            "library": keyword_info.library,
-                            "doc": keyword_info.doc,
-                        },
-                    }
-                except Exception as primary_error:
-                    logger.debug(
-                        f"UNIFIED_EXECUTION: Primary call failed for {keyword_info.library}.{keyword_info.name}: {primary_error}. Falling back to legacy conversion paths."
-                    )
+                # For libraries requiring type conversion (enums, typed dicts, etc.), prefer RF-native conversion path first
+                from robotmcp.config.library_registry import (
+                    get_libraries_requiring_type_conversion,
+                )
+
+                type_conversion_libraries = get_libraries_requiring_type_conversion()
+
+                if keyword_info.library not in type_conversion_libraries:
+                    # Primary path for simple libraries: direct call with parsed args/kwargs
+                    try:
+                        pos_args = parsed_args.positional
+                        kwargs = parsed_args.named or {}
+                        logger.debug(
+                            f"UNIFIED_EXECUTION: Calling {keyword_info.library}.{keyword_info.name} with pos={pos_args}, kwargs={list(kwargs.keys())}"
+                        )
+                        result = method(*pos_args, **kwargs)
+                        return {
+                            "success": True,
+                            "output": str(result) if result is not None else f"Executed {keyword_info.name}",
+                            "result": result,
+                            "keyword_info": {
+                                "name": keyword_info.name,
+                                "library": keyword_info.library,
+                                "doc": keyword_info.doc,
+                            },
+                        }
+                    except Exception as primary_error:
+                        logger.debug(
+                            f"UNIFIED_EXECUTION: Primary call failed for {keyword_info.library}.{keyword_info.name}: {primary_error}. Falling back to conversion paths."
+                        )
 
                 # Regular library methods - use centralized type conversion configuration
                 from robotmcp.config.library_registry import (
@@ -1793,11 +1828,26 @@ class DynamicKeywordDiscovery:
                         if conversion_result and conversion_result[0] == "executed":
                             result = conversion_result[1]
                         else:
-                            # Fall back to parsed positional + named kwargs
-                            result = method(
-                                *parsed_args.positional,
-                                **(parsed_args.named or {})
-                            )
+                            # Secondary conversion attempt: use method annotations with RF converters
+                            try:
+                                import inspect
+                                signature = inspect.signature(method)
+                                conv_pos = self._convert_positional_with_rf(
+                                    parsed_args.positional, signature
+                                )
+                                conv_named = self._convert_named_with_rf(
+                                    parsed_args.named or {}, signature
+                                )
+                                result = method(*conv_pos, **conv_named)
+                            except Exception as conv2_error:
+                                logger.debug(
+                                    f"SECONDARY CONVERSION FAILED for {keyword_info.name}: {conv2_error}; using parsed positional+named"
+                                )
+                                # Fall back to parsed positional + named kwargs
+                                result = method(
+                                    *parsed_args.positional,
+                                    **(parsed_args.named or {})
+                                )
                     except Exception as lib_error:
                         logger.debug(
                             f"FALLBACK: RF type conversion failed for {keyword_info.name}: {lib_error}. Using parsed positional + named kwargs."

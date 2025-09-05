@@ -412,6 +412,18 @@ class RobotFrameworkNativeConverter:
             keyword_spec = self._get_keyword_argument_spec(keyword_name, library_name)
             valid_param_names = set()
             has_kwargs = False
+            # Enrich with actual Python method signature when available (more reliable for decorated/dynamic keywords)
+            py_sig = self._get_python_method_signature(keyword_name, library_name)
+            if py_sig is not None:
+                try:
+                    from inspect import Parameter
+                    for p in py_sig.parameters.values():
+                        if p.kind in (Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY):
+                            valid_param_names.add(p.name)
+                        if p.kind == Parameter.VAR_KEYWORD:
+                            has_kwargs = True
+                except Exception:
+                    pass
             
             if keyword_spec:
                 # Get all valid parameter names from the keyword specification
@@ -423,10 +435,19 @@ class RobotFrameworkNativeConverter:
                     valid_param_names.update(keyword_spec.positional_or_named)
                 
                 # CRITICAL: Check if keyword accepts **kwargs
-                has_kwargs = hasattr(keyword_spec, 'var_named') and keyword_spec.var_named is not None
+                has_kwargs = (has_kwargs or (hasattr(keyword_spec, 'var_named') and keyword_spec.var_named is not None))
                 
                 logger.debug(f"ArgumentSpec analysis for {keyword_name}: valid_params={valid_param_names}, has_kwargs={has_kwargs} (var_named='{getattr(keyword_spec, 'var_named', None)}')")
+                # If spec yields no explicit parameter names, allow identifier=value pairs as kwargs
+                if not valid_param_names:
+                    has_kwargs = True
             
+            # If no spec is available, allow identifier=value pairs as **kwargs so that
+            # named arguments like browser=chromium or headless=False are not misclassified
+            # as positional (especially for dynamic/decorated keywords like Browser/New Browser).
+            if not keyword_spec:
+                has_kwargs = True
+
             for arg in args:
                 if isinstance(arg, tuple) and len(arg) == 2:
                     # Handle ObjectPreservingArgument tuples (already resolved)
@@ -1539,4 +1560,45 @@ Handle WebView
         except Exception as e:
             logger.debug(f"Failed to get ArgumentSpec for {keyword_name} from {library_name}: {e}")
         
+        return None
+
+    def _get_python_method_signature(self, keyword_name: str, library_name: Optional[str]):
+        """Try to fetch the underlying Python method signature for a keyword.
+
+        Uses the dynamic orchestrator's library manager to locate the library instance
+        and then finds the implementing method by robot_name or derived convention.
+        """
+        if not library_name:
+            return None
+        try:
+            from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
+            import inspect
+            orch = get_keyword_discovery()
+            # Load on demand if needed
+            if library_name not in orch.library_manager.libraries:
+                orch.library_manager.load_library_on_demand(library_name, orch.keyword_discovery)
+            lib = orch.library_manager.libraries.get(library_name)
+            if not lib or not lib.instance:
+                return None
+            inst = lib.instance
+            # Match by robot_name first
+            for attr in dir(inst):
+                try:
+                    method = getattr(inst, attr)
+                except Exception:
+                    continue
+                if callable(method) and hasattr(method, 'robot_name'):
+                    try:
+                        if method.robot_name == keyword_name:
+                            return inspect.signature(method)
+                    except Exception:
+                        continue
+            # Fallback: derive method name
+            cand = keyword_name.lower().replace(' ', '_')
+            if hasattr(inst, cand):
+                method = getattr(inst, cand)
+                if callable(method):
+                    return inspect.signature(method)
+        except Exception:
+            return None
         return None
