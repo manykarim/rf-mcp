@@ -27,7 +27,7 @@ jobs:
       - name: Show uv and Python versions
         run: |
           uv --version
-          uv python --version
+          uv run python --version
 
       - name: Install dependencies (dev)
         run: uv sync
