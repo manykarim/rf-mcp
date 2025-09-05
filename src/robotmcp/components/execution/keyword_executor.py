@@ -47,7 +47,12 @@ class KeywordExecutor:
         # Legacy RobotContextManager is deprecated; use RF native context only
         self.rf_native_context = get_rf_native_context_manager()
         # Feature flag: route RequestsLibrary session operations via RF runner
-        self.rf_runner_requests = os.getenv("ROBOTMCP_RF_RUNNER_REQUESTS", "0") in ("1", "true", "True")
+        # Default ON; set ROBOTMCP_RF_RUNNER_REQUESTS=0 to disable
+        self.rf_runner_requests = os.getenv("ROBOTMCP_RF_RUNNER_REQUESTS", "1") in (
+            "1",
+            "true",
+            "True",
+        )
 
     async def execute_keyword(
         self,

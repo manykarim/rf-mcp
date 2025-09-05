@@ -16,6 +16,9 @@ from robotmcp.components.state_manager import StateManager
 from robotmcp.components.test_builder import TestBuilder
 from robotmcp.models.session_models import PlatformType
 from robotmcp.utils.server_integration import initialize_enhanced_serialization
+from robotmcp.components.execution.rf_native_context_manager import (
+    get_rf_native_context_manager,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1613,3 +1616,36 @@ async def run_test_suite(
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     mcp.run()
+@mcp.tool(
+    name="diagnose_rf_context",
+    description="Inspect RF context state for a session: libraries, search order, and variables count.",
+)
+async def diagnose_rf_context(session_id: str) -> Dict[str, Any]:
+    """Return diagnostic information about the current RF execution context for a session.
+
+    Includes: whether context exists, created_at, imported libraries, variables count,
+    and where possible, the current RF library search order.
+    """
+    try:
+        mgr = get_rf_native_context_manager()
+        info = mgr.get_session_context_info(session_id)
+        # Try to enrich with Namespace search order and imported libraries
+        if info.get("context_exists"):
+            ctx = mgr._session_contexts.get(session_id)  # internal, read-only
+            extra = {}
+            try:
+                namespace = ctx.get("namespace")
+                # Namespace has no direct getter for search order; infer from libraries list
+                lib_names = []
+                if hasattr(namespace, "libraries"):
+                    libs = namespace.libraries
+                    if hasattr(libs, "keys"):
+                        lib_names = list(libs.keys())
+                extra["namespace_libraries"] = lib_names
+            except Exception:
+                pass
+            info["extra"] = extra
+        return info
+    except Exception as e:
+        logger.error(f"diagnose_rf_context failed: {e}")
+        return {"context_exists": False, "error": str(e), "session_id": session_id}

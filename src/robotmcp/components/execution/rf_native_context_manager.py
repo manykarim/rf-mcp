@@ -210,7 +210,7 @@ class RobotFrameworkNativeContextManager:
                             logger.warning(f"Fallback import also failed for {lib_name}: {fallback_error}")
                             logger.warning(f"Fallback error type: {type(fallback_error).__name__}")
 
-            # Apply RF search order and initialize suite/test scopes in Namespace
+            # Apply RF search order and initialize suite/test scopes in Namespace and Context
             try:
                 if imported_libraries:
                     namespace.set_search_order(imported_libraries)
@@ -218,7 +218,17 @@ class RobotFrameworkNativeContextManager:
                 # Initialize variable and library scopes for suite and test
                 namespace.start_suite()
                 namespace.start_test()
-                logger.info("Initialized Namespace suite and test scopes for session context")
+                # Also start a real running+result test in ExecutionContext for StatusReporter/BuiltIn
+                try:
+                    from robot.running.model import TestCase as RunTest
+                    from robot.result.model import TestCase as ResTest
+                    run_test = RunTest(name=f"MCP_Test_{session_id}")
+                    res_test = ResTest(name=f"MCP_Test_{session_id}")
+                    ctx.start_test(run_test, res_test)
+                    logger.info("Started ExecutionContext test for session")
+                except Exception as e:
+                    logger.debug(f"Could not start ExecutionContext test: {e}")
+                logger.info("Initialized Namespace + Context suite/test scopes for session context")
             except Exception as e:
                 logger.debug(f"Namespace initialization failed: {e}")
 
@@ -228,7 +238,6 @@ class RobotFrameworkNativeContextManager:
                 from robot.result.model import TestSuite as ResultSuite, TestCase as ResultTest
                 result_suite = ResultSuite(name=suite.name)
                 result_test = ResultTest(name=f"MCP_Test_{session_id}")
-                result_suite.suites  # access to avoid linter
             except Exception:
                 result_suite = None
                 result_test = None
@@ -327,7 +336,7 @@ class RobotFrameworkNativeContextManager:
             
             # Use RF's native argument resolution
             result = self._execute_with_native_resolution(
-                keyword_name, arguments, namespace, variables, assign_to
+                session_id, keyword_name, arguments, namespace, variables, assign_to
             )
             
             # Update session variables from RF variables
@@ -493,6 +502,7 @@ class RobotFrameworkNativeContextManager:
     
     def _execute_with_native_resolution(
         self,
+        session_id: str,
         keyword_name: str,
         arguments: List[str], 
         namespace: Namespace,
@@ -565,17 +575,53 @@ class RobotFrameworkNativeContextManager:
                     named_args=named_args,  # pass empty dict when no named args
                     assign=tuple(assign_to) if isinstance(assign_to, list) else (() if not assign_to else (assign_to,)),
                 )
+                # Build result keyword and bind to a parent test result to satisfy StatusReporter
                 res_kw = ResultKeyword(
                     name=keyword_name,
                     args=tuple(pos_args),
                     assign=tuple(assign_to) if isinstance(assign_to, list) else (() if not assign_to else (assign_to,)),
                 )
+                try:
+                    ctx_info = self._session_contexts.get(session_id)
+                    parent_test = ctx_info.get("result_test") if ctx_info else None
+                    if parent_test is not None:
+                        res_kw.parent = parent_test
+                except Exception:
+                    pass
                 result = runner.run(data_kw, res_kw, ctx)
             except Exception as runner_error:
                 logger.error(
                     f"RF runner failed for '{keyword_name}' with args {arguments}: {runner_error}"
                 )
-                raise
+                # Fallback: BuiltIn.run_keyword under active context
+                try:
+                    from robot.libraries.BuiltIn import BuiltIn
+                    # Ensure BuiltIn uses test-level result, not previous step
+                    saved_steps = []
+                    try:
+                        saved_steps = list(ctx.steps)
+                        ctx.steps.clear()
+                    except Exception:
+                        pass
+                    try:
+                        # Force context.test to a valid result test
+                        try:
+                            ctx_info = self._session_contexts.get(session_id)
+                            if ctx_info and ctx_info.get("result_test") is not None:
+                                ctx.test = ctx_info["result_test"]
+                        except Exception:
+                            pass
+                        result = BuiltIn().run_keyword(keyword_name, *arguments)
+                    finally:
+                        try:
+                            ctx.steps[:] = saved_steps
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.error(
+                        f"BuiltIn.run_keyword fallback failed for '{keyword_name}': {e}"
+                    )
+                    raise
             
             # Handle variable assignment using RF's native variable system
             assigned_vars = {}
