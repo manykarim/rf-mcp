@@ -309,6 +309,23 @@ class KeywordExecutor:
                     resolved_arguments,
                 )
 
+                # Fallback: If keyword not found or cannot be resolved in non-context path,
+                # retry via RF native context (supports user keywords and custom libraries/resources).
+                if not result.get("success") and any(
+                    s in str(result.get("error", "")).lower()
+                    for s in [
+                        "not found",
+                        "could not be resolved",
+                        "no keyword with name",
+                    ]
+                ):
+                    logger.info(
+                        f"Non-context execution could not resolve '{keyword}'. Retrying in RF native context."
+                    )
+                    result = await self._execute_keyword_with_context(
+                        session, keyword, arguments, assign_to
+                    )
+
             # Update step status
             step.end_time = datetime.now()
             step.result = result.get("output")

@@ -51,6 +51,7 @@ class GeneratedTestSuite:
     setup: Optional[TestCaseStep] = None
     teardown: Optional[TestCaseStep] = None
     imports: List[str] = None
+    resources: List[str] = None
 
 class TestBuilder:
     """Builds Robot Framework test suites from successful execution steps."""
@@ -328,12 +329,26 @@ class TestBuilder:
         # Generate common tags
         common_tags = await self._extract_common_tags(test_cases)
         
+        # Pull resources imported into the RF context for this session
+        resources: List[str] = []
+        try:
+            from robotmcp.components.execution.rf_native_context_manager import (
+                get_rf_native_context_manager,
+            )
+            mgr = get_rf_native_context_manager()
+            ctx = getattr(mgr, "_session_contexts", {}).get(session_id)
+            if ctx and ctx.get("resources"):
+                resources = list(ctx.get("resources"))
+        except Exception:
+            resources = []
+
         return GeneratedTestSuite(
             name=f"Generated_Suite_{session_id}",
             test_cases=test_cases,
             documentation=suite_docs,
             tags=common_tags,
-            imports=list(all_imports)
+            imports=list(all_imports),
+            resources=resources,
         )
 
     async def _optimize_step(
@@ -734,6 +749,11 @@ class TestBuilder:
         # Add imports
         for library in suite.imports or []:
             rf_suite.resource.imports.library(library)
+        for res in suite.resources or []:
+            try:
+                rf_suite.resource.imports.resource(res)
+            except Exception:
+                pass
         
         # Add test cases
         for test_case in suite.test_cases:
@@ -771,7 +791,7 @@ class TestBuilder:
 
     async def _generate_rf_text(self, suite: GeneratedTestSuite) -> str:
         """Generate Robot Framework text representation."""
-        
+
         lines = []
         
         # Suite header
@@ -783,9 +803,19 @@ class TestBuilder:
             lines.extend(doc_lines)
         
         # Imports
+        # Resources first, then libraries
+        if suite.resources:
+            for res in suite.resources:
+                lines.append(f"Resource        {self._format_path_for_rf(res)}")
         if suite.imports:
             for library in suite.imports:
-                lines.append(f"Library          {library}")
+                # If library looks like a path, format it for RF portability
+                if any(ch in library for ch in ['\\\
+','/']) or (':' in library and len(library) >= 2):
+                    lib_line = self._format_path_for_rf(library)
+                else:
+                    lib_line = library
+                lines.append(f"Library         {lib_line}")
         
         if suite.tags:
             lines.append(f"Force Tags       {' '.join(suite.tags)}")
@@ -859,6 +889,33 @@ class TestBuilder:
             lines.append("")
         
         return "\n".join(lines)
+
+    def _format_path_for_rf(self, path: str) -> str:
+        """Format a filesystem path into OS-independent Robot Framework syntax.
+
+        Converts separators to the RF variable ${/} and preserves drive letters
+        (e.g., 'C:${/}path${/}to${/}file'). Works for both Windows and Posix inputs.
+        """
+        if not path:
+            return path
+        # Normalize all separators to '/'
+        import re
+        s = path.replace('\\\\', '\\')  # collapse escaped backslashes
+        parts = re.split(r"[\\/]+", s.strip())
+        if not parts:
+            return path
+        sep = "${/}"
+        # Detect Windows drive letter like 'C:'
+        drive = None
+        if re.match(r"^[A-Za-z]:$", parts[0]):
+            drive = parts[0]
+            parts = parts[1:]
+        # If original path started with a separator (absolute posix), add leading ${/}
+        leading = ""
+        if s.startswith('/') or s.startswith('\\'):
+            leading = sep
+        formatted = (drive + sep if drive else leading) + sep.join(p for p in parts if p)
+        return formatted or path
 
     async def _generate_statistics(
         self,
