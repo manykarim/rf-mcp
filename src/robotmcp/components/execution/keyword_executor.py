@@ -191,7 +191,7 @@ class KeywordExecutor:
                     f"Executing keyword in RF native context mode: {keyword} with args: {arguments}"
                 )
                 result = await self._execute_keyword_with_context(
-                    session, keyword, arguments, assign_to
+                    session, keyword, arguments, assign_to, browser_library_manager
                 )
                 resolved_arguments = (
                     arguments  # For logging - RF handles variable resolution
@@ -323,7 +323,7 @@ class KeywordExecutor:
                         f"Non-context execution could not resolve '{keyword}'. Retrying in RF native context."
                     )
                     result = await self._execute_keyword_with_context(
-                        session, keyword, arguments, assign_to
+                        session, keyword, arguments, assign_to, browser_library_manager
                     )
 
             # Update step status
@@ -1006,6 +1006,7 @@ class KeywordExecutor:
         keyword: str,
         arguments: List[Any],
         assign_to: Optional[Union[str, List[str]]] = None,
+        browser_library_manager: Any = None,
     ) -> Dict[str, Any]:
         """Execute keyword within full Robot Framework native context.
 
@@ -1075,6 +1076,49 @@ class KeywordExecutor:
                 logger.debug(
                     f"Updated session variables from RF native context: {len(result['variables'])} variables"
                 )
+
+            # Bridge RF-context browser state back to session for downstream services
+            try:
+                if result.get("success") and browser_library_manager is not None:
+                    from robotmcp.utils.library_detector import (
+                        detect_library_type_from_keyword,
+                    )
+
+                    detected = detect_library_type_from_keyword(keyword)
+                    lib_type = None
+                    if detected in ("browser", "selenium"):
+                        lib_type = detected
+                    if not lib_type and "." in keyword:
+                        prefix = keyword.split(".", 1)[0].strip().lower()
+                        if prefix == "browser":
+                            lib_type = "browser"
+                        elif prefix in ("seleniumlibrary", "selenium"):
+                            lib_type = "selenium"
+
+                    if lib_type:
+                        browser_library_manager.set_active_library(session, lib_type)
+                        if lib_type == "browser":
+                            state_updates = self._extract_browser_state_updates(
+                                keyword, arguments, result.get("output")
+                            )
+                            self._apply_state_updates(session, state_updates)
+                            # Capture page source if applicable
+                            if keyword.lower().endswith("get page source") or keyword.lower() == "get page source":
+                                out = result.get("output") or result.get("result")
+                                if isinstance(out, str) and out:
+                                    session.browser_state.page_source = out
+                        elif lib_type == "selenium":
+                            state_updates = self._extract_selenium_state_updates(
+                                keyword, arguments, result.get("output")
+                            )
+                            self._apply_state_updates(session, state_updates)
+                            if keyword.lower().endswith("get source") or keyword.lower() == "get source":
+                                out = result.get("output") or result.get("result")
+                                if isinstance(out, str) and out:
+                                    session.browser_state.page_source = out
+            except Exception as _bridge_err:
+                # Non-fatal; page source tool has additional fallbacks
+                pass
 
             logger.info(
                 f"RF NATIVE CONTEXT: {keyword} executed with result: {result.get('success')}"

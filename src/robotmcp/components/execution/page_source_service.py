@@ -177,9 +177,29 @@ class PageSourceService:
             filtering_level: Filtering intensity when filtered=True ('minimal', 'standard', 'aggressive').
         """
         try:
-            # Check if this is a mobile session
-            if session.is_mobile_session():
-                return await self._get_mobile_source(session, full_source, filtered, filtering_level)
+            # Prefer web path if a web automation library is active/selected
+            active_lib = None
+            try:
+                active_lib = session.get_active_library()
+            except Exception:
+                active_lib = None
+            web_pref = None
+            try:
+                web_pref = session.get_web_automation_library()
+            except Exception:
+                web_pref = None
+
+            if (
+                (active_lib in ("browser", "selenium"))
+                or (web_pref in ("Browser", "SeleniumLibrary"))
+            ):
+                # Continue with web page source retrieval below
+                pass
+            elif session.is_mobile_session():
+                # Only use mobile source path when not in a web automation session
+                return await self._get_mobile_source(
+                    session, full_source, filtered, filtering_level
+                )
             
             # Try to get fresh page source using browser library (web)
             page_source = ""
@@ -300,8 +320,8 @@ class PageSourceService:
                     
             else:
                 logger.debug("No active browser library available for page source")
-                return None
-                
+                # Fall through to RF-context fallback below
+
         except Exception as e:
             logger.error(f"Error getting page source via keyword discovery: {e}")
             
@@ -320,7 +340,42 @@ class PageSourceService:
             except Exception as fallback_error:
                 logger.error(f"Fallback page source retrieval also failed: {fallback_error}")
                 
-            return None
+        # Final fallback: use RF native context (same session Namespace/ExecutionContext)
+        try:
+            from robotmcp.components.execution.rf_native_context_manager import (
+                get_rf_native_context_manager,
+            )
+
+            mgr = get_rf_native_context_manager()
+            ctx_info = mgr.get_session_context_info(session.session_id)
+            if ctx_info.get("context_exists"):
+                # Prefer keyword based on known library_type; otherwise try Browser then Selenium variants
+                candidate_keywords: List[str] = []
+                if 'library_type' in locals() and library_type in ("browser", "selenium"):
+                    candidate_keywords = [
+                        "Get Page Source" if library_type == "browser" else "Get Source"
+                    ]
+                else:
+                    candidate_keywords = ["Get Page Source", "Get Source"]
+
+                for kw in candidate_keywords:
+                    res = mgr.execute_keyword_with_context(
+                        session_id=session.session_id,
+                        keyword_name=kw,
+                        arguments=[],
+                        assign_to=None,
+                        session_variables=dict(session.variables),
+                    )
+                    if res and res.get("success"):
+                        out = res.get("output") or res.get("result")
+                        if isinstance(out, str) and out:
+                            # Cache for later
+                            session.browser_state.page_source = out
+                            return out
+        except Exception as rf_fallback_err:
+            logger.debug(f"RF-context page source fallback not available: {rf_fallback_err}")
+
+        return None
     
     async def _get_current_url(self, session: ExecutionSession, browser_library_manager: Any) -> Optional[str]:
         """Get current URL using keyword discovery."""
