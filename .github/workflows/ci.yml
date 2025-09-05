@@ -44,11 +44,6 @@ jobs:
         run: uv run rfbrowser init
         continue-on-error: true
 
-      - name: (Optional) Install Playwright browsers
-        # Extra safety for CI environments where rfbrowser may not be present yet.
-        run: uv run playwright install
-        continue-on-error: true
-
       - name: Run tests
         env:
           # Keep runner path enabled for RequestsLibrary in CI
