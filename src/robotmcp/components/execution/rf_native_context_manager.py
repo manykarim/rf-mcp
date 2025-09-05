@@ -21,7 +21,7 @@ try:
     from robot.running.arguments.typeinfo import TypeInfo
     from robot.libdoc import LibraryDocumentation
     from robot.running.importer import Importer
-    from robot.running import Keyword
+    # Avoid importing robot.running.Keyword to prevent shadowing model classes in some RF versions
     from robot.conf import Languages
     RF_NATIVE_AVAILABLE = True
     logger.info("Robot Framework native components imported successfully")
@@ -131,13 +131,13 @@ class RobotFrameworkNativeContextManager:
                     logger.warning("Could not create Output, using minimal logging")
                     output = None
                 
-                # Start execution context
+                # Start execution context (must not be dry_run to actually execute keywords)
                 if output:
-                    ctx = EXECUTION_CONTEXTS.start_suite(suite, namespace, output, dry_run=True)  # dry_run to avoid file I/O
+                    ctx = EXECUTION_CONTEXTS.start_suite(suite, namespace, output, dry_run=False)
                 else:
-                    # Even simpler - just set a current context manually
+                    # Fallback: create a minimal context without output
                     from robot.running.context import _ExecutionContext
-                    ctx = _ExecutionContext(suite, namespace, output, dry_run=True)
+                    ctx = _ExecutionContext(suite, namespace, output, dry_run=False)
                     EXECUTION_CONTEXTS._contexts.append(ctx)
                     EXECUTION_CONTEXTS._context = ctx
                 
@@ -151,9 +151,8 @@ class RobotFrameworkNativeContextManager:
                 output = getattr(ctx, 'output', None)
                 suite = ctx.suite
                 
-            # CRITICAL: Set up BuiltIn library with proper context access
-            # This enables Input Password and other context-dependent keywords
-            self._setup_builtin_context_access(ctx, namespace)
+            # BuiltIn context access: avoid setting internal attributes in RF7+.
+            # BuiltIn will operate correctly when an execution context is active.
             
             # Import libraries into the RF namespace
             imported_libraries = []
@@ -199,7 +198,7 @@ class RobotFrameworkNativeContextManager:
                                 lib_info = orchestrator.library_manager.libraries[lib_name]
                                 # Try with any library-specific arguments if available
                                 lib_args = getattr(lib_info, 'args', ()) or ()
-                                namespace.import_library(lib_name, args=lib_args, alias=None)
+                                namespace.import_library(lib_name, args=tuple(lib_args), alias=None)
                                 imported_libraries.append(lib_name)
                                 logger.info(f"Imported {lib_name} from library manager with args {lib_args}")
                             else:
@@ -211,13 +210,37 @@ class RobotFrameworkNativeContextManager:
                             logger.warning(f"Fallback import also failed for {lib_name}: {fallback_error}")
                             logger.warning(f"Fallback error type: {type(fallback_error).__name__}")
 
+            # Apply RF search order and initialize suite/test scopes in Namespace
+            try:
+                if imported_libraries:
+                    namespace.set_search_order(imported_libraries)
+                    logger.info(f"Set RF Namespace search order: {imported_libraries}")
+                # Initialize variable and library scopes for suite and test
+                namespace.start_suite()
+                namespace.start_test()
+                logger.info("Initialized Namespace suite and test scopes for session context")
+            except Exception as e:
+                logger.debug(f"Namespace initialization failed: {e}")
+
             # Store context info
+            # Prepare result model holders (for future RF runner/BuiltIn status reporting integration)
+            try:
+                from robot.result.model import TestSuite as ResultSuite, TestCase as ResultTest
+                result_suite = ResultSuite(name=suite.name)
+                result_test = ResultTest(name=f"MCP_Test_{session_id}")
+                result_suite.suites  # access to avoid linter
+            except Exception:
+                result_suite = None
+                result_test = None
+
             self._session_contexts[session_id] = {
                 "context": ctx,
                 "variables": variables,
                 "namespace": namespace,
                 "output": output,
                 "suite": suite,
+                "result_suite": result_suite,
+                "result_test": result_test,
                 "created_at": datetime.now(),
                 "libraries": libraries or [],
                 "imported_libraries": imported_libraries
@@ -477,25 +500,82 @@ class RobotFrameworkNativeContextManager:
         assign_to: Optional[Union[str, List[str]]] = None
     ) -> Dict[str, Any]:
         """
-        Execute keyword using RF's native argument resolution and execution.
-        
-        This uses a simplified approach - just use BuiltIn.run_keyword
-        which should now work because we have proper RF execution context.
+        Execute keyword using RF's native runner for discovery + argument resolution.
         """
         try:
             logger.info(f"RF NATIVE: Executing {keyword_name} with args: {arguments}")
-            
-            # No special handling needed - Input Password will work through normal RF context now
-            
-            # Direct approach: Call BuiltIn methods directly
-            # This avoids the run_keyword complexity and uses RF's execution context
-            from robot.libraries.BuiltIn import BuiltIn
-            
-            builtin = BuiltIn()
-            
-            # Use generic keyword execution approach that works with RF 7.x
-            # Instead of run_keyword, use direct keyword resolution and execution
-            result = self._execute_any_keyword_generic(keyword_name, arguments, namespace)
+            # Generic path: try direct resolution/dispatch (often works for BuiltIn)
+            try:
+                generic_result = self._execute_any_keyword_generic(
+                    keyword_name, arguments, namespace
+                )
+                # If generic path succeeded, proceed with assignment/variables and return
+                assigned_vars = {}
+                if assign_to and generic_result is not None:
+                    assigned_vars = self._handle_variable_assignment(
+                        assign_to, generic_result, variables
+                    )
+                current_vars = {}
+                try:
+                    if hasattr(variables, 'store'):
+                        current_vars = dict(variables.store.data)
+                    elif hasattr(variables, 'current') and hasattr(variables.current, 'store'):
+                        current_vars = dict(variables.current.store.data)
+                except Exception as e:
+                    logger.debug(f"Could not extract variables: {e}")
+                    current_vars = {}
+                return {
+                    "success": True,
+                    "result": generic_result,
+                    "output": str(generic_result) if generic_result is not None else "OK",
+                    "variables": current_vars,
+                    "assigned_variables": assigned_vars,
+                }
+            except Exception:
+                pass
+            # Resolve via Namespace → get_runner → run with proper models
+            try:
+                from robot.running.model import Keyword as RunKeyword
+                from robot.result.model import Keyword as ResultKeyword
+                from robot.running.context import EXECUTION_CONTEXTS
+
+                runner = namespace.get_runner(keyword_name)
+                ctx = EXECUTION_CONTEXTS.current
+                # Split positional vs named args from name=value patterns
+                pos_args: list[str] = []
+                named_args: dict[str, object] = {}
+                import ast
+                for arg in arguments:
+                    if isinstance(arg, str) and '=' in arg and not arg.strip().startswith('${'):
+                        name, val = arg.split('=', 1)
+                        name = name.strip()
+                        val_str = val.strip()
+                        # Try safe literal eval for dict/list/number/bool/None
+                        try:
+                            parsed = ast.literal_eval(val_str)
+                        except Exception:
+                            parsed = val_str
+                        named_args[name] = parsed
+                    else:
+                        pos_args.append(arg)
+                # Build running/data and result keyword models
+                data_kw = RunKeyword(
+                    name=keyword_name,
+                    args=tuple(pos_args),
+                    named_args=named_args,  # pass empty dict when no named args
+                    assign=tuple(assign_to) if isinstance(assign_to, list) else (() if not assign_to else (assign_to,)),
+                )
+                res_kw = ResultKeyword(
+                    name=keyword_name,
+                    args=tuple(pos_args),
+                    assign=tuple(assign_to) if isinstance(assign_to, list) else (() if not assign_to else (assign_to,)),
+                )
+                result = runner.run(data_kw, res_kw, ctx)
+            except Exception as runner_error:
+                logger.error(
+                    f"RF runner failed for '{keyword_name}' with args {arguments}: {runner_error}"
+                )
+                raise
             
             # Handle variable assignment using RF's native variable system
             assigned_vars = {}
@@ -539,25 +619,8 @@ class RobotFrameworkNativeContextManager:
 # Fallback method removed - using simplified approach
     
     def _setup_builtin_context_access(self, context, namespace):
-        """Set up BuiltIn library with proper context access for Input Password and similar keywords.
-        
-        This is a general solution that enables any keyword requiring RF context access.
-        """
-        try:
-            from robot.libraries.BuiltIn import BuiltIn
-            
-            # Get or create BuiltIn instance 
-            builtin_instance = BuiltIn()
-            
-            # Set up BuiltIn with proper context access
-            # BuiltIn.set_log_level needs: self._context.output and self._namespace.variables.set_global
-            builtin_instance._context = context
-            builtin_instance._namespace = namespace
-            
-            logger.info("✅ BuiltIn library configured with RF context access for Input Password support")
-            
-        except Exception as e:
-            logger.warning(f"Failed to setup BuiltIn context access: {e}")
+        """No-op: BuiltIn picks up active context automatically; avoid touching internals in RF7+."""
+        return
     
     def _handle_variable_assignment(
         self,
