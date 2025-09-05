@@ -1228,25 +1228,65 @@ async def get_context_variables(session_id: str) -> Dict[str, Any]:
         Dictionary containing all session variables
     """
     try:
-        # Get session
-        session = execution_engine.session_manager.get_session(session_id)
+        # Helper to sanitize values: return scalars as-is; for complex objects, return their type name.
+        def _sanitize(val: Any) -> Any:
+            if isinstance(val, (str, int, float, bool)) or val is None:
+                return val
+            # Avoid serializing complex/large objects
+            return f"<{type(val).__name__}>"
 
+        # Prefer RF Namespace/Variables if an RF context exists for the session
+        try:
+            from robotmcp.components.execution.rf_native_context_manager import (
+                get_rf_native_context_manager,
+            )
+
+            mgr = get_rf_native_context_manager()
+            ctx_info = mgr.get_session_context_info(session_id)
+            if ctx_info.get("context_exists"):
+                # Extract variables from RF Variables object
+                ctx = mgr._session_contexts.get(session_id)  # internal read-only access
+                rf_vars_obj = ctx.get("variables") if ctx else None
+                rf_vars: Dict[str, Any] = {}
+                if rf_vars_obj is not None:
+                    try:
+                        if hasattr(rf_vars_obj, "store"):
+                            rf_vars = dict(rf_vars_obj.store.data)
+                        elif hasattr(rf_vars_obj, "current") and hasattr(
+                            rf_vars_obj.current, "store"
+                        ):
+                            rf_vars = dict(rf_vars_obj.current.store.data)
+                    except Exception:
+                        rf_vars = {}
+
+                sanitized = {str(k): _sanitize(v) for k, v in rf_vars.items()}
+                return {
+                    "success": True,
+                    "session_id": session_id,
+                    "variables": sanitized,
+                    "variable_count": len(sanitized),
+                    "source": "rf_context",
+                }
+        except Exception:
+            # Fall back to session store below
+            pass
+
+        # Fallback: session-based variable store
+        session = execution_engine.session_manager.get_session(session_id)
         if not session:
             return {
                 "success": False,
                 "error": f"Session '{session_id}' not found",
                 "session_id": session_id,
             }
-
-        # Get session variables
-        variables = dict(session.variables)
-
+        sess_vars_raw = dict(session.variables)
+        sess_vars = {str(k): _sanitize(v) for k, v in sess_vars_raw.items()}
         return {
             "success": True,
             "session_id": session_id,
-            "variables": variables,
-            "variable_count": len(variables),
-            "note": "Using session-based variable system",
+            "variables": sess_vars,
+            "variable_count": len(sess_vars),
+            "source": "session_store",
         }
 
     except Exception as e:
