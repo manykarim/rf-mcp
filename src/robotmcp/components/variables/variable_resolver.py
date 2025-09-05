@@ -383,7 +383,33 @@ class VariableResolver:
             if '${' in var_name:
                 resolved_var_name = self._substitute_variables_in_text(var_name, variables)
                 return self._resolve_simple_or_indexed_variable(resolved_var_name, variables)
-            
+
+            # Dynamic literals: booleans/None (case-insensitive)
+            lower_name = var_name.lower()
+            if lower_name in ("true", "false", "none", "null"):
+                return {
+                    "true": True,
+                    "false": False,
+                    "none": None,
+                    "null": None,
+                }[lower_name]
+
+            # Dynamic literals: numbers (ints, floats, scientific, 0b/0o/0x)
+            try:
+                if lower_name.startswith("0b"):
+                    return int(var_name, 2)
+                if lower_name.startswith("0o"):
+                    return int(var_name, 8)
+                if lower_name.startswith("0x"):
+                    return int(var_name, 16)
+                import re as _re
+                if _re.fullmatch(r"[+-]?\d+", var_name):
+                    return int(var_name)
+                if _re.fullmatch(r"[+-]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?", var_name):
+                    return float(var_name)
+            except Exception:
+                pass
+
             # Handle simple variables - but check if value contains more variables
             normalized_name = self._normalize_variable_name(var_name)
             
@@ -620,9 +646,14 @@ class VariableResolver:
             "${SPACE}": " ",
             "${EMPTY}": "",
             "${TRUE}": True,
+            "${True}": True,
+            "${true}": True,
             "${FALSE}": False,
+            "${False}": False,
+            "${false}": False,
             "${NULL}": None,
-            "${NONE}": None,  # Alternative to NULL
+            "${None}": None,
+            "${none}": None,
             
             # Path separators
             "${/}": os.sep,

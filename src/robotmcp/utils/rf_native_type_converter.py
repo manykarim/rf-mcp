@@ -558,6 +558,14 @@ class RobotFrameworkNativeConverter:
                         # Convert our tuple format to RF-compatible format
                         rf_args = []
                         object_params = {}
+                        # Prepare variable resolver for ${} built-ins in non-context
+                        try:
+                            from robotmcp.components.variables.variable_resolver import (
+                                VariableResolver,
+                            )
+                            _vr = VariableResolver()
+                        except Exception:
+                            _vr = None
                         
                         for arg in args:
                             if isinstance(arg, tuple) and len(arg) == 2:
@@ -567,7 +575,7 @@ class RobotFrameworkNativeConverter:
                                 # Add to RF args in named parameter format
                                 rf_args.append(f"{param_name}=__OBJECT_PLACEHOLDER__")
                             else:
-                                # Handle named parameters that might need type conversion
+                                # Handle named parameters and simple ${} scalars before resolver
                                 arg_str = str(arg)
                                 if '=' in arg_str and self._is_dictionary_literal(arg_str):
                                     # Convert dictionary literals like "headers={}" to actual dicts
@@ -580,6 +588,26 @@ class RobotFrameworkNativeConverter:
                                         rf_args.append(f"{param_name}=__OBJECT_PLACEHOLDER__")
                                     except (ValueError, SyntaxError):
                                         # If it's not a valid literal, keep as string
+                                        rf_args.append(arg_str)
+                                elif '=' in arg_str:
+                                    # Try resolving ${...} to a Python value via VariableResolver
+                                    param_name, param_value_str = arg_str.split('=', 1)
+                                    if (
+                                        _vr is not None
+                                        and param_value_str.startswith('${')
+                                        and param_value_str.endswith('}')
+                                    ):
+                                        try:
+                                            resolved_val = _vr.resolve_single_argument(
+                                                param_value_str, {}
+                                            )
+                                            object_params[param_name] = resolved_val
+                                            rf_args.append(
+                                                f"{param_name}=__OBJECT_PLACEHOLDER__"
+                                            )
+                                        except Exception:
+                                            rf_args.append(arg_str)
+                                    else:
                                         rf_args.append(arg_str)
                                 else:
                                     rf_args.append(arg_str)
@@ -596,7 +624,18 @@ class RobotFrameworkNativeConverter:
                         
                         result = ParsedArguments()
                         result.positional = positional
-                        result.named = dict(named) if named else {}
+                        named_dict = dict(named) if named else {}
+                        # Coerce boolean/None string literals in named values
+                        for k, v in list(named_dict.items()):
+                            if isinstance(v, str):
+                                low = v.lower()
+                                if low == 'true':
+                                    named_dict[k] = True
+                                elif low == 'false':
+                                    named_dict[k] = False
+                                elif low in ('none', 'null'):
+                                    named_dict[k] = None
+                        result.named = named_dict
                         
                         return result
                     else:

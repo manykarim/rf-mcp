@@ -1782,35 +1782,29 @@ class DynamicKeywordDiscovery:
                 result = method(*string_args)
             else:
                 # For libraries requiring type conversion (enums, typed dicts, etc.), prefer RF-native conversion path first
-                from robotmcp.config.library_registry import (
-                    get_libraries_requiring_type_conversion,
-                )
-
-                type_conversion_libraries = get_libraries_requiring_type_conversion()
-
-                if keyword_info.library not in type_conversion_libraries:
-                    # Primary path for simple libraries: direct call with parsed args/kwargs
-                    try:
-                        pos_args = parsed_args.positional
-                        kwargs = parsed_args.named or {}
-                        logger.debug(
-                            f"UNIFIED_EXECUTION: Calling {keyword_info.library}.{keyword_info.name} with pos={pos_args}, kwargs={list(kwargs.keys())}"
-                        )
-                        result = method(*pos_args, **kwargs)
-                        return {
-                            "success": True,
-                            "output": str(result) if result is not None else f"Executed {keyword_info.name}",
-                            "result": result,
-                            "keyword_info": {
-                                "name": keyword_info.name,
-                                "library": keyword_info.library,
-                                "doc": keyword_info.doc,
-                            },
-                        }
-                    except Exception as primary_error:
-                        logger.debug(
-                            f"UNIFIED_EXECUTION: Primary call failed for {keyword_info.library}.{keyword_info.name}: {primary_error}. Falling back to conversion paths."
-                        )
+                # Primary attempt for all libraries: direct call with parsed args/kwargs
+                # This preserves types (e.g., booleans) already resolved by our parser.
+                try:
+                    pos_args = parsed_args.positional
+                    kwargs = parsed_args.named or {}
+                    logger.debug(
+                        f"UNIFIED_EXECUTION: Direct call {keyword_info.library}.{keyword_info.name} pos={pos_args}, kwargs={list(kwargs.keys())}"
+                    )
+                    result = method(*pos_args, **kwargs)
+                    return {
+                        "success": True,
+                        "output": str(result) if result is not None else f"Executed {keyword_info.name}",
+                        "result": result,
+                        "keyword_info": {
+                            "name": keyword_info.name,
+                            "library": keyword_info.library,
+                            "doc": keyword_info.doc,
+                        },
+                    }
+                except Exception as primary_error:
+                    logger.debug(
+                        f"UNIFIED_EXECUTION: Direct call failed for {keyword_info.library}.{keyword_info.name}: {primary_error}. Falling back to conversion paths."
+                    )
 
                 # Regular library methods - use centralized type conversion configuration
                 from robotmcp.config.library_registry import (
