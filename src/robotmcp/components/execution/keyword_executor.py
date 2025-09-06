@@ -53,6 +53,12 @@ class KeywordExecutor:
             "true",
             "True",
         )
+        # Default to context-only execution unless explicitly disabled
+        self.context_only = os.getenv("ROBOTMCP_RF_CONTEXT_ONLY", "1") in (
+            "1",
+            "true",
+            "True",
+        )
 
     async def execute_keyword(
         self,
@@ -172,20 +178,8 @@ class KeywordExecutor:
             is_requests_keyword = keyword.lower() in requests_library_context_keywords
             is_browser_keyword = keyword.lower() in browser_library_keywords
 
-            # Feature-flagged path for RequestsLibrary session ops
-            if is_requests_keyword:
-                if self.rf_runner_requests:
-                    use_context = True
-                    logger.info(
-                        f"Feature flag enabled: routing RequestsLibrary keyword '{keyword}' to RF native runner"
-                    )
-                else:
-                    use_context = False
-                    logger.info(
-                        f"Routing RequestsLibrary keyword '{keyword}' via non-context handler (temporary exception)"
-                    )
-
-            if use_context or session.is_context_mode() or keyword_requires_context:
+            # Context-only execution: route all keywords through RF native context
+            if True:
                 # Use RF native context mode for keywords that require it
                 logger.info(
                     f"Executing keyword in RF native context mode: {keyword} with args: {arguments}"
@@ -197,134 +191,8 @@ class KeywordExecutor:
                     arguments  # For logging - RF handles variable resolution
                 )
             else:
-                # Resolve variables in arguments before execution for non-context mode
-                try:
-                    # Merge session variables with RF context variables (if available)
-                    merged_vars = dict(session.variables)
-                    try:
-                        from robotmcp.components.execution.rf_native_context_manager import (
-                            get_rf_native_context_manager,
-                        )
-
-                        rf_mgr = get_rf_native_context_manager()
-                        ctx_info = rf_mgr.get_session_context_info(session.session_id)
-                        if ctx_info.get("context_exists"):
-                            ctx = rf_mgr._session_contexts.get(session.session_id)
-                            rf_vars_obj = ctx.get("variables") if ctx else None
-                            if rf_vars_obj is not None:
-                                rf_data = None
-                                if hasattr(rf_vars_obj, "store"):
-                                    rf_data = rf_vars_obj.store.data
-                                elif hasattr(rf_vars_obj, "current") and hasattr(
-                                    rf_vars_obj.current, "store"
-                                ):
-                                    rf_data = rf_vars_obj.current.store.data
-                                if rf_data:
-                                    for k, v in rf_data.items():
-                                        key = k if isinstance(k, str) else str(k)
-                                        if not key.startswith("${"):
-                                            key = f"${{{key}}}"
-                                        merged_vars[key] = v
-                    except Exception:
-                        # If RF context not available, continue with session vars only
-                        pass
-
-                    resolved_arguments = self.variable_resolver.resolve_arguments(
-                        arguments, merged_vars
-                    )
-                    logger.debug(
-                        f"Variable resolution: {arguments} → {resolved_arguments}"
-                    )
-
-                    # General solution: preserve object values for named params by converting
-                    # ObjectPreservingArgument to (name, value) tuples. Orchestrator preserves tuples.
-                    try:
-                        from robotmcp.components.variables.variable_resolver import (
-                            ObjectPreservingArgument,
-                        )
-
-                        converted_args = []
-                        for arg in resolved_arguments:
-                            if isinstance(arg, ObjectPreservingArgument):
-                                converted_args.append((arg.param_name, arg.value))
-                            else:
-                                converted_args.append(arg)
-                        resolved_arguments = converted_args
-                    except Exception as _:
-                        # If conversion helpers are unavailable, keep resolved arguments as-is
-                        pass
-
-                except Exception as var_error:
-                    logger.error(
-                        f"Variable resolution failed for {arguments}: {var_error}"
-                    )
-                    import traceback
-
-                    logger.error(
-                        f"Variable resolution traceback: {traceback.format_exc()}"
-                    )
-                    # Return error result for variable resolution failure
-                    step.mark_failure(f"Variable resolution failed: {str(var_error)}")
-                    return {
-                        "success": False,
-                        "error": f"Variable resolution failed: {str(var_error)}",
-                        "keyword": keyword,
-                        "arguments": arguments,
-                        "step_id": step.step_id,
-                    }
-
-                # Log keyword execution with resolved arguments
-                # Note: Input Password secure logging is now handled in _execute_selenium_keyword
-                logger.info(
-                    f"Executing keyword: {keyword} with resolved args: {resolved_arguments}"
-                )
-
-                # Temporary fix: pre-process RequestsLibrary Create Session named args like headers={...}
-                try:
-                    if keyword.lower() == "create session":
-                        import ast
-                        fixed_args: List[Any] = []
-                        for arg in resolved_arguments:
-                            if isinstance(arg, str) and "=" in arg and arg.count("=") == 1:
-                                name, val = arg.split("=", 1)
-                                name = name.strip().lower()
-                                if name in {"headers", "cookies", "proxies", "retry_status_list", "retry_method_list"}:
-                                    try:
-                                        parsed = ast.literal_eval(val.strip())
-                                        fixed_args.append((name, parsed))
-                                        continue
-                                    except Exception:
-                                        pass
-                            fixed_args.append(arg)
-                        resolved_arguments = fixed_args
-                except Exception:
-                    pass
-
-                # Execute the keyword with library prefix support using resolved arguments
-                result = await self._execute_keyword_internal(
-                    session,
-                    step,
-                    browser_library_manager,
-                    library_prefix,
-                    resolved_arguments,
-                )
-
-                # Fallback: If keyword not found or cannot be resolved in non-context path,
-                # retry via RF native context (supports user keywords and custom libraries/resources).
-                if not result.get("success") and any(
-                    s in str(result.get("error", "")).lower()
-                    for s in [
-                        "not found",
-                        "could not be resolved",
-                        "no keyword with name",
-                    ]
-                ):
-                    logger.info(
-                        f"Non-context execution could not resolve '{keyword}'. Retrying in RF native context."
-                    )
-                    result = await self._execute_keyword_with_context(
-                        session, keyword, arguments, assign_to, browser_library_manager
-                    )
+                # Unreachable in context-only mode
+                result = {"success": False, "error": "Non-context path disabled"}
 
             # Update step status
             step.end_time = datetime.now()
@@ -1040,6 +908,15 @@ class KeywordExecutor:
                     libraries = list(session.loaded_libraries)
                 else:
                     libraries = []
+
+                # If keyword has explicit library prefix (e.g., 'XML.Parse XML'), ensure it's imported
+                try:
+                    if "." in keyword:
+                        prefix = keyword.split(".", 1)[0]
+                        if prefix and prefix not in libraries:
+                            libraries.append(prefix)
+                except Exception:
+                    pass
 
                 logger.info(f"Creating RF native context with libraries: {libraries}")
                 context_result = self.rf_native_context.create_context_for_session(

@@ -32,12 +32,8 @@ class ExecutionCoordinator:
         self.config = config or ExecutionConfig()
 
         # Initialize keyword override system first
-        from robotmcp.components.keyword_overrides import (
-            KeywordOverrideRegistry,
-            setup_default_overrides,
-        )
-
-        self.override_registry = KeywordOverrideRegistry()
+        # Keyword overrides removed in context-only mode
+        self.override_registry = None
 
         # Initialize all service components
         self.session_manager = SessionManager(self.config)
@@ -51,8 +47,7 @@ class ExecutionCoordinator:
         self.library_checker = LibraryAvailabilityChecker()
         self.rf_doc_storage = get_rf_doc_storage()
 
-        # Set up default keyword overrides
-        setup_default_overrides(self.override_registry, self)
+        # Keyword overrides not used in context-only execution
 
         # Set session manager for keyword discovery
         from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery

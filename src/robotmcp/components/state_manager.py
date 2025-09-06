@@ -137,8 +137,11 @@ class StateManager:
                 db_state = await self._get_database_state(session_id)
                 result["database"] = db_state
             
-            # Always include variables
-            result["variables"] = dict(current_state.variables)
+            # Always include variables (sanitized for serialization)
+            def _sanitize(val: Any) -> Any:
+                return val if isinstance(val, (str, int, float, bool)) or val is None else f"<{type(val).__name__}>"
+
+            result["variables"] = {k: _sanitize(v) for k, v in current_state.variables.items()}
             
             # Update state history
             await self._update_state_history(session_id, current_state)

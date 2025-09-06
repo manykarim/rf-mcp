@@ -201,23 +201,52 @@ class PageSourceService:
                     session, full_source, filtered, filtering_level
                 )
             
-            # Try to get fresh page source using browser library (web)
+            # RF-context only: get page source directly through the session RF context
             page_source = ""
             try:
-                page_source = await self._get_page_source_unified_async(session, browser_library_manager)
-                if page_source:
-                    session.browser_state.page_source = page_source
-                    # Also update URL and title if we can extract them
-                    url = await self._get_current_url(session, browser_library_manager)
-                    if url and url != "about:blank":
-                        session.browser_state.current_url = url
-                    title = await self._get_page_title(session, browser_library_manager)
-                    if title and title != "Generic Page":
-                        session.browser_state.page_title = title
-                else:
-                    page_source = session.browser_state.page_source or ""
+                from robotmcp.components.execution.rf_native_context_manager import (
+                    get_rf_native_context_manager,
+                )
+
+                rf_mgr = get_rf_native_context_manager()
+                # Try Browser first, then Selenium keyword name
+                for kw in ("Get Page Source", "Get Source"):
+                    res = rf_mgr.execute_keyword_with_context(
+                        session_id=session.session_id,
+                        keyword_name=kw,
+                        arguments=[],
+                        assign_to=None,
+                        session_variables=dict(session.variables),
+                    )
+                    if res and res.get("success"):
+                        out = res.get("output") or res.get("result")
+                        if isinstance(out, str) and out:
+                            page_source = out
+                            session.browser_state.page_source = out
+                            break
+                # Update URL and title, best-effort
+                try:
+                    res = rf_mgr.execute_keyword_with_context(
+                        session_id=session.session_id,
+                        keyword_name="Get Url",
+                        arguments=[],
+                    )
+                    if res and res.get("success") and res.get("output"):
+                        session.browser_state.current_url = res.get("output")
+                except Exception:
+                    pass
+                try:
+                    res = rf_mgr.execute_keyword_with_context(
+                        session_id=session.session_id,
+                        keyword_name="Get Title",
+                        arguments=[],
+                    )
+                    if res and res.get("success") and res.get("output"):
+                        session.browser_state.page_title = res.get("output")
+                except Exception:
+                    pass
             except Exception as e:
-                logger.debug(f"Could not get fresh page source: {e}")
+                logger.debug(f"RF-context page source retrieval failed: {e}")
                 page_source = session.browser_state.page_source or ""
             
             if not page_source:
@@ -276,6 +305,8 @@ class PageSourceService:
                         )
                     else:
                         result["page_source_preview"] = page_source
+                    # Add generic 'source' field for compatibility with older tests
+                    result["source"] = result["page_source_preview"]
             
             return result
             

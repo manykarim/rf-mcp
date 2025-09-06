@@ -78,6 +78,26 @@ class RobotFrameworkNativeContextManager:
                 
                 # Create compatible variables with set_global/start_keyword methods for BuiltIn/RF
                 variables = create_compatible_variables(original_variables)
+                # Inject Robot built-in variables for runtime scalar replacement (e.g., ${True})
+                try:
+                    from robotmcp.components.variables.variable_resolver import (
+                        VariableResolver,
+                    )
+                    _vr = VariableResolver()
+                    for k, v in _vr.builtin_variables.items():
+                        variables[k] = v
+                    # Common-case synonyms
+                    for k, v in {
+                        "${True}": True,
+                        "${true}": True,
+                        "${False}": False,
+                        "${false}": False,
+                        "${None}": None,
+                        "${none}": None,
+                    }.items():
+                        variables[k] = v
+                except Exception:
+                    pass
                 
                 # Add the 'current' attribute that BuiltIn.evaluate expects
                 if not hasattr(variables, 'current'):
@@ -557,23 +577,11 @@ class RobotFrameworkNativeContextManager:
 
                 runner = namespace.get_runner(keyword_name)
                 ctx = EXECUTION_CONTEXTS.current
-                # Split positional vs named args from name=value patterns
-                pos_args: list[str] = []
+                # IMPORTANT: Do not pre-split name=value here. Let RF resolve named args
+                # based on the keyword's real signature to avoid passing unexpected kwargs
+                # (e.g., BuiltIn.Set Variable should treat 'token=${auth}' as positional text).
+                pos_args: list[str] = list(arguments)
                 named_args: dict[str, object] = {}
-                import ast
-                for arg in arguments:
-                    if isinstance(arg, str) and '=' in arg and not arg.strip().startswith('${'):
-                        name, val = arg.split('=', 1)
-                        name = name.strip()
-                        val_str = val.strip()
-                        # Try safe literal eval for dict/list/number/bool/None
-                        try:
-                            parsed = ast.literal_eval(val_str)
-                        except Exception:
-                            parsed = val_str
-                        named_args[name] = parsed
-                    else:
-                        pos_args.append(arg)
                 # Build running/data and result keyword models
                 data_kw = RunKeyword(
                     name=keyword_name,
