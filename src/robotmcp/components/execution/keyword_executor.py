@@ -795,68 +795,7 @@ class KeywordExecutor:
                         "Using session's web automation library: SeleniumLibrary"
                     )
 
-            elif session_type.value in ["web_automation", "unknown"]:
-                # Only auto-detect for web/unknown sessions (REMOVED mobile_testing)
-                if not current_active or current_active == "auto":
-                    detected_library = (
-                        browser_library_manager.detect_library_from_keyword(
-                            keyword_name, args
-                        )
-                    )
-                    if detected_library in ["browser", "selenium"]:
-                        browser_library_manager.set_active_library(
-                            session, detected_library
-                        )
-                        logger.debug(
-                            f"Auto-detected library for '{keyword_name}': {detected_library}"
-                        )
-
-            elif session_type.value == "mobile_testing":
-                # CRITICAL FIX: Mobile sessions should NEVER auto-detect web libraries
-                # They should only use their configured session libraries
-                logger.debug(
-                    "Mobile session - using only session libraries, no web auto-detection"
-                )
-                # Let execution flow through session-aware keyword resolution only
-            else:
-                logger.debug(
-                    f"Session type '{session_type.value}' - no web automation library handling needed"
-                )
-
-            # Handle special built-in keywords first
-            if keyword_name.lower() in ["set variable", "log", "should be equal"]:
-                return await self._execute_builtin_keyword(session, keyword_name, args)
-
-            # Route ALL keywords through AppiumLibrary for mobile sessions
-            if session.is_mobile_session():
-                logger.debug(
-                    f"Mobile session detected; routing '{keyword_name}' to AppiumLibrary execution path"
-                )
-                return await self._execute_mobile_keyword(session, keyword_name, args)
-
-            # If library prefix is specified, use direct execution
-            if library_prefix:
-                return await self._execute_with_library_prefix(
-                    session, keyword_name, args, library_prefix
-                )
-
-            # Get active browser library and execute
-            library, library_type = browser_library_manager.get_active_browser_library(
-                session
-            )
-
-            if library_type == "browser":
-                return await self._execute_browser_keyword(
-                    session, keyword_name, args, library
-                )
-            elif library_type == "selenium":
-                logger.debug(f"INPUT PASSWORD DEBUG: Routing '{keyword_name}' to SeleniumLibrary execution path")
-                return await self._execute_selenium_keyword(
-                    session, keyword_name, args, library
-                )
-            else:
-                # Try built-in execution as fallback
-                return await self._execute_builtin_keyword(session, keyword_name, args)
+            # Non-context branches removed in context-only mode
 
         except Exception as e:
             logger.error(f"Error in keyword execution: {e}")
