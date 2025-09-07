@@ -580,7 +580,24 @@ class RobotFrameworkNativeContextManager:
                 # IMPORTANT: Do not pre-split name=value here. Let RF resolve named args
                 # based on the keyword's real signature to avoid passing unexpected kwargs
                 # (e.g., BuiltIn.Set Variable should treat 'token=${auth}' as positional text).
-                pos_args: list[str] = list(arguments)
+                # Normalize Windows absolute paths to use forward slashes to avoid RF de-escaping
+                # of sequences like \t, \r, \b in file paths.
+                def _normalize_arg(a: Any) -> Any:
+                    try:
+                        import os, re
+                        if isinstance(a, str) and os.name == 'nt':
+                            # Match Windows absolute paths like C:\folder\file
+                            if re.match(r'^[A-Za-z]:\\', a):
+                                from pathlib import Path
+                                try:
+                                    return Path(a).as_posix()
+                                except Exception:
+                                    return a.replace('\\\\', '/')
+                    except Exception:
+                        pass
+                    return a
+
+                pos_args: list[Any] = [_normalize_arg(arg) for arg in list(arguments)]
                 named_args: dict[str, object] = {}
                 # Build running/data and result keyword models
                 data_kw = RunKeyword(
@@ -625,7 +642,9 @@ class RobotFrameworkNativeContextManager:
                                 ctx.test = ctx_info["result_test"]
                         except Exception:
                             pass
-                        result = BuiltIn().run_keyword(keyword_name, *arguments)
+                        # Apply the same Windows path normalization for BuiltIn fallback
+                        norm_args = [_normalize_arg(a) for a in list(arguments)]
+                        result = BuiltIn().run_keyword(keyword_name, *norm_args)
                     finally:
                         try:
                             ctx.steps[:] = saved_steps
