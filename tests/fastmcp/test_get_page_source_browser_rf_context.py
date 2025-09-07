@@ -7,6 +7,7 @@ import pytest
 import pytest_asyncio
 
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
 from robotmcp.server import mcp
 
 
@@ -18,13 +19,44 @@ async def mcp_client():
 
 @pytest.mark.asyncio
 async def test_get_page_source_browser_rf_context_filtered(mcp_client):
-    # Check Browser availability
-    avail = await mcp_client.call_tool(
-        "check_library_availability", {"libraries": ["Browser"]}
-    )
-    available = set(avail.data.get("available_libraries", []))
-    if "Browser" not in available:
-        pytest.skip("Browser library not available in this environment")
+    # Practical probe: try initializing and opening a headless browser quickly
+    probe_session = "rfctx_browser_probe"
+    try:
+        await mcp_client.call_tool(
+            "initialize_context",
+            {"session_id": probe_session, "libraries": ["Browser"]},
+        )
+        await mcp_client.call_tool(
+            "set_library_search_order",
+            {
+                "libraries": ["Browser", "BuiltIn", "Collections", "String"],
+                "session_id": probe_session,
+            },
+        )
+        res_probe = await mcp_client.call_tool(
+            "execute_step",
+            {
+                "keyword": "Browser.New Browser",
+                "arguments": ["browser=chromium", "headless=True"],
+                "session_id": probe_session,
+                "use_context": True,
+                "raise_on_failure": True,
+            },
+        )
+        assert res_probe.data.get("success") is True
+        # Close immediately
+        await mcp_client.call_tool(
+            "execute_step",
+            {
+                "keyword": "Browser.Close Browser",
+                "arguments": [],
+                "session_id": probe_session,
+                "use_context": True,
+                "raise_on_failure": True,
+            },
+        )
+    except ToolError as e:
+        pytest.skip(f"Browser not ready: {e}")
 
     session_id = "rfctx_browser_pagesource"
 
@@ -103,4 +135,3 @@ async def test_get_page_source_browser_rf_context_filtered(mcp_client):
     assert len(ps_full.data.get("page_source")) == ps_full.data.get(
         "filtered_page_source_length"
     )
-

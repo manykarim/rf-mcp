@@ -7,6 +7,7 @@ import pytest
 import pytest_asyncio
 
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
 from robotmcp.server import mcp
 
 
@@ -18,13 +19,41 @@ async def mcp_client():
 
 @pytest.mark.asyncio
 async def test_browser_click_with_options_boolean_args(mcp_client):
-    # Check Browser availability
-    avail = await mcp_client.call_tool(
-        "check_library_availability", {"libraries": ["Browser"]}
-    )
-    available = set(avail.data.get("available_libraries", []))
-    if "Browser" not in available:
-        pytest.skip("Browser library not available in this environment")
+    # Practical probe for Browser readiness
+    probe_session = "browser_click_probe"
+    try:
+        await mcp_client.call_tool(
+            "initialize_context",
+            {"session_id": probe_session, "libraries": ["Browser"]},
+        )
+        await mcp_client.call_tool(
+            "set_library_search_order",
+            {
+                "libraries": ["Browser", "BuiltIn", "Collections", "String"],
+                "session_id": probe_session,
+            },
+        )
+        res_probe = await mcp_client.call_tool(
+            "execute_step",
+            {
+                "keyword": "Browser.New Browser",
+                "arguments": ["browser=chromium", "headless=True"],
+                "session_id": probe_session,
+                "raise_on_failure": True,
+            },
+        )
+        assert res_probe.data.get("success") is True
+        await mcp_client.call_tool(
+            "execute_step",
+            {
+                "keyword": "Browser.Close Browser",
+                "arguments": [],
+                "session_id": probe_session,
+                "raise_on_failure": True,
+            },
+        )
+    except ToolError as e:
+        pytest.skip(f"Browser not ready: {e}")
 
     session_id = "browser_click_with_options_bool"
 
@@ -91,4 +120,3 @@ async def test_browser_click_with_options_boolean_args(mcp_client):
         },
     )
     assert r2.data.get("success") is True
-
