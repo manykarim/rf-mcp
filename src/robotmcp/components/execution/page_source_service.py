@@ -329,127 +329,68 @@ class PageSourceService:
             str: Page source HTML or None if not available
         """
         try:
-            from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
-            
-            # Use the same keyword discovery system that handles Browser Library execution
-            keyword_discovery = get_keyword_discovery()
-            
-            # Determine which library to use
-            library, library_type = browser_library_manager.get_active_browser_library(session)
-            
-            if library_type == "browser":
-                # Use Browser Library via keyword discovery
-                result = await keyword_discovery.execute_keyword("Get Page Source", [], session.variables, session_id=session.session_id)
-                if result and result.get("success") and result.get("output"):
-                    return result["output"]
-                    
-            elif library_type == "selenium":
-                # Use SeleniumLibrary via keyword discovery  
-                result = await keyword_discovery.execute_keyword("Get Source", [], session.variables, session_id=session.session_id)
-                if result and result.get("success") and result.get("output"):
-                    return result["output"]
-                    
-            else:
-                logger.debug("No active browser library available for page source")
-                # Fall through to RF-context fallback below
+            from robotmcp.components.execution.rf_native_context_manager import (
+                get_rf_native_context_manager,
+            )
 
-        except Exception as e:
-            logger.error(f"Error getting page source via keyword discovery: {e}")
-            
-            # Fallback to direct library calls if keyword discovery fails
-            try:
-                library, library_type = browser_library_manager.get_active_browser_library(session)
-                
-                if library_type == "browser" and library:
-                    # Browser Library - direct call as fallback
-                    return library.get_page_source()
-                    
-                elif library_type == "selenium" and library:
-                    # SeleniumLibrary - direct call as fallback
-                    return library.get_source()
-                    
-            except Exception as fallback_error:
-                logger.error(f"Fallback page source retrieval also failed: {fallback_error}")
-                
-        # Final fallback: use RF native context (same session Namespace/ExecutionContext)
+            mgr = get_rf_native_context_manager()
+            # Try Browser first, then Selenium variants using the RF session
+            for kw in ("Get Page Source", "Get Source"):
+                res = mgr.execute_keyword_with_context(
+                    session_id=session.session_id,
+                    keyword_name=kw,
+                    arguments=[],
+                    assign_to=None,
+                    session_variables=dict(session.variables),
+                )
+                if res and res.get("success"):
+                    out = res.get("output") or res.get("result")
+                    if isinstance(out, str) and out:
+                        # Cache for later
+                        session.browser_state.page_source = out
+                        return out
+        except Exception as rf_fallback_err:
+            logger.debug(f"RF-context page source retrieval not available: {rf_fallback_err}")
+
+        return None
+    
+    async def _get_current_url(self, session: ExecutionSession, browser_library_manager: Any) -> Optional[str]:
+        """Get current URL using RF context in the session."""
         try:
             from robotmcp.components.execution.rf_native_context_manager import (
                 get_rf_native_context_manager,
             )
 
             mgr = get_rf_native_context_manager()
-            ctx_info = mgr.get_session_context_info(session.session_id)
-            if ctx_info.get("context_exists"):
-                # Prefer keyword based on known library_type; otherwise try Browser then Selenium variants
-                candidate_keywords: List[str] = []
-                if 'library_type' in locals() and library_type in ("browser", "selenium"):
-                    candidate_keywords = [
-                        "Get Page Source" if library_type == "browser" else "Get Source"
-                    ]
-                else:
-                    candidate_keywords = ["Get Page Source", "Get Source"]
-
-                for kw in candidate_keywords:
-                    res = mgr.execute_keyword_with_context(
-                        session_id=session.session_id,
-                        keyword_name=kw,
-                        arguments=[],
-                        assign_to=None,
-                        session_variables=dict(session.variables),
-                    )
-                    if res and res.get("success"):
-                        out = res.get("output") or res.get("result")
-                        if isinstance(out, str) and out:
-                            # Cache for later
-                            session.browser_state.page_source = out
-                            return out
-        except Exception as rf_fallback_err:
-            logger.debug(f"RF-context page source fallback not available: {rf_fallback_err}")
-
-        return None
-    
-    async def _get_current_url(self, session: ExecutionSession, browser_library_manager: Any) -> Optional[str]:
-        """Get current URL using keyword discovery."""
-        try:
-            from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
-            
-            keyword_discovery = get_keyword_discovery()
-            library, library_type = browser_library_manager.get_active_browser_library(session)
-            
-            if library_type == "browser":
-                result = await keyword_discovery.execute_keyword("Get Url", [], session.variables, session_id=session.session_id)
-                if result and result.get("success") and result.get("output"):
-                    return result["output"]
-            elif library_type == "selenium":
-                result = await keyword_discovery.execute_keyword("Get Location", [], session.variables, session_id=session.session_id)
-                if result and result.get("success") and result.get("output"):
-                    return result["output"]
-                    
+            for kw in ("Get Url", "Get Location"):
+                res = mgr.execute_keyword_with_context(
+                    session_id=session.session_id,
+                    keyword_name=kw,
+                    arguments=[],
+                )
+                if res and res.get("success") and res.get("output"):
+                    return res["output"]
         except Exception as e:
             logger.debug(f"Could not get current URL: {e}")
-            
         return None
     
     async def _get_page_title(self, session: ExecutionSession, browser_library_manager: Any) -> Optional[str]:
-        """Get page title using keyword discovery."""
+        """Get page title using RF context in the session."""
         try:
-            from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
-            
-            keyword_discovery = get_keyword_discovery()
-            library, library_type = browser_library_manager.get_active_browser_library(session)
-            
-            if library_type == "browser":
-                result = await keyword_discovery.execute_keyword("Get Title", [], session.variables, session_id=session.session_id)
-                if result and result.get("success") and result.get("output"):
-                    return result["output"]
-            elif library_type == "selenium":
-                result = await keyword_discovery.execute_keyword("Get Title", [], session.variables, session_id=session.session_id)  
-                if result and result.get("success") and result.get("output"):
-                    return result["output"]
-                    
+            from robotmcp.components.execution.rf_native_context_manager import (
+                get_rf_native_context_manager,
+            )
+
+            mgr = get_rf_native_context_manager()
+            res = mgr.execute_keyword_with_context(
+                session_id=session.session_id,
+                keyword_name="Get Title",
+                arguments=[],
+            )
+            if res and res.get("success") and res.get("output"):
+                return res["output"]
         except Exception as e:
             logger.debug(f"Could not get page title: {e}")
-            
         return None
 
     async def extract_page_context(self, html: str) -> Dict[str, Any]:
@@ -648,37 +589,40 @@ class PageSourceService:
                     "error": "AppiumLibrary not loaded in session"
                 }
             
-            # FIXED: Use keyword discovery system instead of BuiltIn.run_keyword
-            # This avoids the "Cannot access execution context" error
+            # Use RF context manager to execute AppiumLibrary keyword in-session
             try:
-                from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
-                
-                keyword_discovery = get_keyword_discovery()
-                result = await keyword_discovery.execute_keyword("Get Source", [], session.variables, session_id=session.session_id)
-                
-                if result and result.get("success") and result.get("output"):
-                    source = result["output"]
-                elif result and result.get("success") and result.get("result"):
-                    source = result["result"]
+                from robotmcp.components.execution.rf_native_context_manager import (
+                    get_rf_native_context_manager,
+                )
+                rf_mgr = get_rf_native_context_manager()
+                res = rf_mgr.execute_keyword_with_context(
+                    session_id=session.session_id,
+                    keyword_name="Get Source",
+                    arguments=[],
+                    assign_to=None,
+                    session_variables=dict(session.variables),
+                )
+                if res and res.get("success"):
+                    if res.get("output"):
+                        source = res["output"]
+                    else:
+                        source = res.get("result")
                 else:
-                    error_msg = result.get('error', 'Unknown error') if result else 'No result from keyword discovery'
-                    logger.debug(f"Keyword discovery failed for Get Source: {error_msg}")
-                    # Fall back to direct library method call
+                    error_msg = res.get("error", "Unknown error") if res else "No result"
+                    logger.debug(f"RF context call failed for Get Source: {error_msg}")
                     source = await self._get_mobile_source_direct(session)
                     if not source:
                         return {
                             "success": False,
                             "error": f"Failed to get mobile source: {error_msg}"
                         }
-                        
-            except Exception as kd_error:
-                logger.debug(f"Keyword discovery failed for Get Source: {kd_error}")
-                # Fall back to direct library method call
+            except Exception as rf_err:
+                logger.debug(f"RF context execution failed for Get Source: {rf_err}")
                 source = await self._get_mobile_source_direct(session)
                 if not source:
                     return {
                         "success": False,
-                        "error": f"No active mobile app session: {str(kd_error)}"
+                        "error": f"No active mobile app session: {str(rf_err)}"
                     }
             
             if not source:

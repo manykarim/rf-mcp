@@ -1896,6 +1896,20 @@ class DynamicKeywordDiscovery:
         library_prefix: str = None,
     ) -> Dict[str, Any]:
         """Execute a keyword dynamically with session-based library management and optional library prefix support."""
+        # PHASE 5 PRUNE: Execution path deprecated in favor of RF native context.
+        # Keep discovery/docs in this module; actual execution must go through
+        # KeywordExecutor with RF context manager to ensure correct variable scoping
+        # and argument resolution.
+        logger.warning(
+            "DynamicKeywordOrchestrator.execute_keyword is deprecated; use execute_step (RF context)."
+        )
+        return {
+            "success": False,
+            "error": "Orchestrator execution pruned. Use execute_step with RF context.",
+            "keyword": keyword_name,
+            "session_id": session_id,
+            "source": "orchestrator",
+        }
         # Parse library prefix from keyword name if present (e.g., "XML.Get Element Count")
         parsed_library, parsed_keyword = self._parse_library_prefix(keyword_name)
 

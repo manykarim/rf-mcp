@@ -418,7 +418,7 @@ class KeywordExecutor:
             # Determine library from keyword
             library_name = self._get_library_for_keyword(keyword)
 
-            if library_name and library_name == "RequestsLibrary":
+            if library_name:
                 # Get the library manager from keyword discovery
                 library_manager = self.keyword_discovery.library_manager
 
@@ -441,21 +441,21 @@ class KeywordExecutor:
                         f"Successfully ensured {library_name} registration for keyword: {keyword}"
                     )
 
-                    # PHASE 2: Session State Synchronization
-                    # After successful registration, synchronize session state
-                    session_manager = getattr(session, "_session_manager", None)
-                    if session_manager:
-                        sync_success = (
-                            session_manager.synchronize_requests_library_state(session)
-                        )
-                        if sync_success:
-                            logger.debug(
-                                f"RequestsLibrary session state synchronized for keyword: {keyword}"
+                    # PHASE 2: Session State Synchronization (RequestsLibrary only)
+                    if library_name == "RequestsLibrary":
+                        session_manager = getattr(session, "_session_manager", None)
+                        if session_manager:
+                            sync_success = (
+                                session_manager.synchronize_requests_library_state(session)
                             )
-                        else:
-                            logger.debug(
-                                f"RequestsLibrary session synchronization skipped for keyword: {keyword}"
-                            )
+                            if sync_success:
+                                logger.debug(
+                                    f"RequestsLibrary session state synchronized for keyword: {keyword}"
+                                )
+                            else:
+                                logger.debug(
+                                    f"RequestsLibrary session synchronization skipped for keyword: {keyword}"
+                                )
 
                 else:
                     logger.warning(
@@ -496,8 +496,21 @@ class KeywordExecutor:
         if keyword in requests_keywords:
             return "RequestsLibrary"
 
-        # For other keywords, we could extend this mapping
-        # For now, return None for non-RequestsLibrary keywords
+        # Minimal Browser Library mapping for context import
+        browser_keywords = {
+            "New Browser",
+            "New Page",
+            "Get Page Source",
+            "Get Url",
+            "Get Title",
+        }
+        if keyword in browser_keywords:
+            return "Browser"
+
+        # Selenium-specific mapping
+        if keyword.strip().lower() == "get source":
+            return "SeleniumLibrary"
+
         return None
 
     def _normalize_variable_name(self, name: str) -> str:
@@ -953,139 +966,6 @@ class KeywordExecutor:
                 "arguments": arguments,
             }
 
-    async def _execute_with_library_prefix(
-        self,
-        session: ExecutionSession,
-        keyword: str,
-        args: List[str],
-        library_prefix: str,
-    ) -> Dict[str, Any]:
-        """Execute keyword with explicit library prefix."""
-        try:
-            # Use keyword discovery with library prefix
-            result = await self.keyword_discovery.execute_keyword(
-                keyword_name=keyword,
-                args=args,
-                session_variables=session.variables,
-                active_library=None,  # Don't use active library when prefix is explicit
-                session_id=session.session_id,
-                library_prefix=library_prefix,
-            )
-
-            # Update session state if successful
-            if result.get("success"):
-                # Extract any state updates based on the library and keyword
-                if library_prefix.lower() == "browser":
-                    state_updates = self._extract_browser_state_updates(
-                        keyword, args, result.get("output")
-                    )
-                    self._apply_state_updates(session, state_updates)
-
-                # Add library prefix information to result
-                result["library_prefix_used"] = library_prefix
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Error executing {library_prefix}.{keyword}: {e}")
-            return {
-                "success": False,
-                "error": f"Library prefix execution failed: {str(e)}",
-                "output": "",
-                "variables": {},
-                "state_updates": {},
-                "library_prefix_used": library_prefix,
-            }
-
-    async def _execute_browser_keyword(
-        self, session: ExecutionSession, keyword: str, args: List[str], library: Any
-    ) -> Dict[str, Any]:
-        """Execute a Browser Library keyword using the dynamic execution handler."""
-        try:
-            # Use the keyword discovery's execute_keyword method with Browser Library filter
-            result = await self.keyword_discovery.execute_keyword(
-                keyword_name=keyword,
-                args=args,
-                session_variables=session.variables,
-                active_library="Browser",
-                session_id=session.session_id,
-            )
-
-            # Update session browser state based on keyword if successful
-            if result.get("success"):
-                state_updates = self._extract_browser_state_updates(
-                    keyword, args, result.get("output")
-                )
-                self._apply_state_updates(session, state_updates)
-                result["state_updates"] = state_updates
-            else:
-                # Add Browser Library-specific error guidance for failed keywords
-                result["browser_guidance"] = self._get_browser_error_guidance(
-                    keyword, args, result.get("error", "")
-                )
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Error executing Browser Library keyword {keyword}: {e}")
-            error_msg = f"Browser keyword execution failed: {str(e)}"
-
-            # Include locator guidance for Browser Library errors
-            guidance = self._get_browser_error_guidance(keyword, args, str(e))
-
-            return {
-                "success": False,
-                "error": error_msg,
-                "output": "",
-                "variables": {},
-                "state_updates": {},
-                "browser_guidance": guidance,
-            }
-
-    async def _execute_selenium_keyword(
-        self, session: ExecutionSession, keyword: str, args: List[str], library: Any
-    ) -> Dict[str, Any]:
-        """Execute a SeleniumLibrary keyword using the dynamic execution handler."""
-        try:
-            # Use the keyword discovery's execute_keyword method with SeleniumLibrary filter
-            result = await self.keyword_discovery.execute_keyword(
-                keyword_name=keyword,
-                args=args,
-                session_variables=session.variables,
-                active_library="SeleniumLibrary", 
-                session_id=session.session_id,
-            )
-
-            # Update session browser state based on keyword if successful
-            if result.get("success"):
-                state_updates = self._extract_selenium_state_updates(
-                    keyword, args, result.get("output")
-                )
-                self._apply_state_updates(session, state_updates)
-                result["state_updates"] = state_updates
-            else:
-                # Add SeleniumLibrary-specific error guidance for failed keywords
-                result["selenium_guidance"] = self._get_selenium_error_guidance(
-                    keyword, args, result.get("error", "")
-                )
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Error executing SeleniumLibrary keyword {keyword}: {e}")
-            error_msg = f"Selenium keyword execution failed: {str(e)}"
-
-            # Include locator guidance for SeleniumLibrary errors
-            guidance = self._get_selenium_error_guidance(keyword, args, str(e))
-
-            return {
-                "success": False,
-                "error": error_msg,
-                "output": "",
-                "variables": {},
-                "state_updates": {},
-                "selenium_guidance": guidance,
-            }
 
     async def _execute_builtin_keyword(
         self, session: ExecutionSession, keyword: str, args: List[str]
@@ -1997,160 +1877,6 @@ class KeywordExecutor:
 
         return analysis
 
-    async def _execute_mobile_keyword(
-        self, session: ExecutionSession, keyword_name: str, args: List[Any]
-    ) -> Dict[str, Any]:
-        """
-        Execute mobile-specific keywords through AppiumLibrary.
-
-        This method handles mobile keywords that would otherwise fail with
-        "Cannot access execution context" when executed through BuiltIn.run_keyword.
-
-        Args:
-            session: ExecutionSession containing mobile configuration
-            keyword_name: Mobile keyword name (e.g., "Get Source")
-            args: Keyword arguments
-
-        Returns:
-            Execution result with status, output, and state
-        """
-        try:
-            logger.info(f"Executing mobile keyword: '{keyword_name}' with args: {args}")
-
-            # Use keyword discovery system for mobile keywords
-            from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
-
-            keyword_discovery = get_keyword_discovery()
-            result = await keyword_discovery.execute_keyword(
-                keyword_name=keyword_name,
-                args=args,
-                session_variables=session.variables,
-                active_library="AppiumLibrary",
-                session_id=session.session_id,
-            )
-
-            if result and result.get("success"):
-                # Process successful result
-                output = result.get("output", "")
-                result_value = result.get("result")
-
-                # For Get Source, the result might be in either output or result field
-                if (
-                    keyword_name.lower() in ["get source", "get page source"]
-                    and not output
-                    and result_value
-                ):
-                    output = str(result_value)
-
-                response = {
-                    "success": True,
-                    "output": output,
-                    "result": result_value,
-                    "variables": result.get("variables", {}),
-                    "state_updates": result.get("state_updates", {}),
-                }
-
-                logger.info(f"Mobile keyword '{keyword_name}' executed successfully")
-                return response
-            else:
-                # Keyword discovery failed, try fallback
-                error_msg = (
-                    result.get("error", "Unknown error")
-                    if result
-                    else "No result from keyword discovery"
-                )
-                logger.debug(
-                    f"Keyword discovery failed for mobile keyword '{keyword_name}': {error_msg}"
-                )
-
-                # For Get Source, try direct library method call as fallback
-                if keyword_name.lower() == "get source":
-                    return await self._execute_get_source_fallback(session)
-
-                return {
-                    "success": False,
-                    "error": f"Mobile keyword execution failed: {error_msg}",
-                    "output": "",
-                    "variables": {},
-                    "state_updates": {},
-                }
-
-        except Exception as e:
-            logger.error(f"Error executing mobile keyword '{keyword_name}': {e}")
-
-            # Try fallback for Get Source
-            if keyword_name.lower() == "get source":
-                try:
-                    return await self._execute_get_source_fallback(session)
-                except Exception as fallback_error:
-                    logger.error(
-                        f"Fallback also failed for Get Source: {fallback_error}"
-                    )
-
-            return {
-                "success": False,
-                "error": f"Mobile keyword execution error: {str(e)}",
-                "output": "",
-                "variables": {},
-                "state_updates": {},
-            }
-
-    async def _execute_get_source_fallback(
-        self, session: ExecutionSession
-    ) -> Dict[str, Any]:
-        """
-        Fallback method for Get Source using direct AppiumLibrary method call.
-
-        Args:
-            session: ExecutionSession containing mobile configuration
-
-        Returns:
-            Execution result
-        """
-        try:
-            from robotmcp.core.library_manager import LibraryManager
-
-            library_manager = LibraryManager()
-
-            # Try to get AppiumLibrary instance
-            appium_lib = None
-            if hasattr(library_manager, "_libraries"):
-                for lib_name, lib_instance in library_manager._libraries.items():
-                    if lib_name == "AppiumLibrary" or "appium" in lib_name.lower():
-                        appium_lib = lib_instance
-                        break
-
-            if appium_lib and hasattr(appium_lib, "get_source"):
-                source = appium_lib.get_source()
-                logger.info(
-                    f"Got mobile source via fallback: {len(source) if source else 0} chars"
-                )
-
-                return {
-                    "success": True,
-                    "output": source,
-                    "result": source,
-                    "variables": {},
-                    "state_updates": {},
-                }
-            else:
-                return {
-                    "success": False,
-                    "error": "No active mobile app session: AppiumLibrary not properly loaded",
-                    "output": "",
-                    "variables": {},
-                    "state_updates": {},
-                }
-
-        except Exception as e:
-            logger.error(f"Get Source fallback failed: {e}")
-            return {
-                "success": False,
-                "error": f"No active mobile app session: {str(e)}",
-                "output": "",
-                "variables": {},
-                "state_updates": {},
-            }
 
     def _get_session_libraries(self, session: ExecutionSession) -> List[str]:
         """Get list of libraries loaded in the session for session-aware keyword resolution.
