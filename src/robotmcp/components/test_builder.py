@@ -1118,10 +1118,20 @@ class TestBuilder:
         else:
             return "other"
 
-    def _escape_robot_argument(self, arg: str) -> str:
-        """Escape Robot Framework arguments that start with special characters."""
+    def _escape_robot_argument(self, arg: Any) -> str:
+        """Escape Robot Framework arguments that start with special characters.
+
+        Accepts non-string args (e.g., int/bool) and converts to string safely.
+        """
+        if arg is None:
+            return ""
+        if not isinstance(arg, str):
+            try:
+                arg = str(arg)
+            except Exception:
+                arg = f"<{type(arg).__name__}>"
         if not arg:
-            return arg
+            return ""
 
         # Escape arguments starting with # (treated as comments in RF)
         if arg.startswith("#"):

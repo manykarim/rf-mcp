@@ -839,6 +839,220 @@ async def search_keywords(pattern: str) -> List[Dict[str, Any]]:
     return execution_engine.search_keywords(pattern)
 
 
+# =====================
+# Flow/Control Tools v1
+# =====================
+
+def _normalize_step(step: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize a step dict to expected keys."""
+    return {
+        "keyword": step.get("keyword", ""),
+        "arguments": step.get("arguments", []) or [],
+        "assign_to": step.get("assign_to"),
+    }
+
+
+async def _run_steps_in_context(
+    session_id: str,
+    steps: List[Dict[str, Any]],
+    stop_on_failure: bool = True,
+) -> List[Dict[str, Any]]:
+    """Execute a list of steps via execute_step with use_context=True and return per-step results.
+
+    Does not raise on failure; captures each step's success/error.
+    """
+    results: List[Dict[str, Any]] = []
+    for raw in steps or []:
+        s = _normalize_step(raw)
+        res = await execution_engine.execute_step(
+            s["keyword"],
+            s["arguments"],
+            session_id,
+            detail_level="minimal",
+            assign_to=s.get("assign_to"),
+            use_context=True,
+        )
+        results.append(res)
+        if not res.get("success", False) and (stop_on_failure is True or str(stop_on_failure).lower() in ("1","true","yes","on")):
+            break
+    return results
+
+
+@mcp.tool
+async def evaluate_expression(
+    session_id: str,
+    expression: str,
+    assign_to: str | None = None,
+) -> Dict[str, Any]:
+    """Evaluate a Python expression in RF context (BuiltIn.Evaluate).
+
+    - Uses the current RF session variables; supports ${var} inside the expression.
+    - Optionally assigns the result to a variable name (test scope).
+    """
+    res = await execution_engine.execute_step(
+        "Evaluate",
+        [expression],
+        session_id,
+        detail_level="minimal",
+        assign_to=assign_to,
+        use_context=True,
+    )
+    return res
+
+
+@mcp.tool
+async def set_variables(
+    session_id: str,
+    variables: Dict[str, Any] | List[str],
+    scope: str = "test",
+) -> Dict[str, Any]:
+    """Set multiple variables in the RF session Variables store.
+
+    - variables: either a dict {name: value} or a list of "name=value" strings.
+    - scope: one of 'test', 'suite', 'global' (default 'test').
+    """
+    # Normalize input
+    pairs: Dict[str, Any] = {}
+    if isinstance(variables, dict):
+        pairs = variables
+    else:
+        for item in variables:
+            if isinstance(item, str) and "=" in item:
+                n, v = item.split("=", 1)
+                pairs[n.strip()] = v
+
+    set_kw = {
+        "test": "Set Test Variable",
+        "suite": "Set Suite Variable",
+        "global": "Set Global Variable",
+    }.get(scope.lower(), "Set Test Variable")
+
+    results: Dict[str, bool] = {}
+    for name, value in pairs.items():
+        # Use RF keyword so scoping is honored
+        res = await execution_engine.execute_step(
+            set_kw,
+            [f"${{{name}}}", value],
+            session_id,
+            detail_level="minimal",
+            use_context=True,
+        )
+        results[name] = bool(res.get("success"))
+
+    return {"success": all(results.values()), "session_id": session_id, "set": list(results.keys()), "scope": scope}
+
+
+@mcp.tool
+async def execute_if(
+    session_id: str,
+    condition: str,
+    then_steps: List[Dict[str, Any]],
+    else_steps: List[Dict[str, Any]] | None = None,
+    stop_on_failure: bool = True,
+) -> Dict[str, Any]:
+    """Evaluate a condition in RF context and run then/else blocks of steps."""
+    cond = await execution_engine.execute_step(
+        "Evaluate",
+        [condition],
+        session_id,
+        detail_level="minimal",
+        use_context=True,
+    )
+    truthy = False
+    if cond.get("success"):
+        out = str(cond.get("output", "")).strip().lower()
+        truthy = out in ("true", "1", "yes", "on")
+    branch = then_steps if truthy else (else_steps or [])
+    step_results = await _run_steps_in_context(session_id, branch, stop_on_failure)
+    ok = all(sr.get("success", False) for sr in step_results)
+    return {
+        "success": ok,
+        "branch_taken": "then" if truthy else "else",
+        "condition_result": cond.get("output") if cond.get("success") else None,
+        "steps": step_results,
+    }
+
+
+@mcp.tool
+async def execute_for_each(
+    session_id: str,
+    items: List[Any] | None,
+    steps: List[Dict[str, Any]],
+    item_var: str = "item",
+    stop_on_failure: bool = True,
+    max_iterations: int = 1000,
+) -> Dict[str, Any]:
+    """Run a sequence of steps for each item, setting ${item_var} in RF context per iteration."""
+    if not items:
+        return {"success": True, "iterations": [], "count": 0}
+
+    iterations: List[Dict[str, Any]] = []
+    count = 0
+    for idx, it in enumerate(items):
+        if idx >= int(max_iterations):
+            break
+        # Set ${item_var} in test scope using BuiltIn keyword
+        _ = await execution_engine.execute_step(
+            "Set Test Variable",
+            [f"${{{item_var}}}", it],
+            session_id,
+            detail_level="minimal",
+            use_context=True,
+        )
+        step_results = await _run_steps_in_context(session_id, steps, stop_on_failure)
+        iterations.append({"index": idx, "item": it, "steps": step_results})
+        count += 1
+        if any(not sr.get("success", False) for sr in step_results) and stop_on_failure:
+            break
+
+    overall_success = all(
+        all(sr.get("success", False) for sr in it["steps"]) for it in iterations
+    )
+    return {"success": overall_success, "iterations": iterations, "count": count}
+
+
+@mcp.tool
+async def execute_try_except(
+    session_id: str,
+    try_steps: List[Dict[str, Any]],
+    except_patterns: List[str] | None = None,
+    except_steps: List[Dict[str, Any]] | None = None,
+    finally_steps: List[Dict[str, Any]] | None = None,
+    rethrow: bool = False,
+) -> Dict[str, Any]:
+    """Execute steps in a TRY/EXCEPT/FINALLY structure."""
+    try_res = await _run_steps_in_context(session_id, try_steps, stop_on_failure=False)
+    first_fail = next((r for r in try_res if not r.get("success", False)), None)
+    handled = False
+    exc_res: List[Dict[str, Any]] | None = None
+    fin_res: List[Dict[str, Any]] | None = None
+    err_text = None
+
+    if first_fail is not None:
+        err_text = first_fail.get("error") or str(first_fail)
+        pats = except_patterns or []
+        if any((isinstance(p, str) and p.lower() in err_text.lower()) for p in pats) and (except_steps or []):
+            exc_res = await _run_steps_in_context(session_id, except_steps or [], stop_on_failure=False)
+            handled = True
+
+    if finally_steps:
+        fin_res = await _run_steps_in_context(session_id, finally_steps, stop_on_failure=False)
+
+    success = first_fail is None or handled
+    result: Dict[str, Any] = {
+        "success": success if not bool(rethrow) else (handled and success),
+        "handled": handled,
+        "try_results": try_res,
+    }
+    if exc_res is not None:
+        result["except_results"] = exc_res
+    if fin_res is not None:
+        result["finally_results"] = fin_res
+    if err_text is not None and not handled:
+        result["error"] = err_text
+    return result
+
+
 @mcp.tool
 async def get_keyword_documentation(
     keyword_name: str, library_name: str = None
