@@ -112,6 +112,9 @@ class ExecutionSession:
     session_id: str
     suite: Optional[Any] = None
     steps: List[ExecutionStep] = field(default_factory=list)
+    # High-level flow AST recorded by flow tools (execute_if/for_each/try_except)
+    # Structure: list of dict nodes with keys depending on 'type' (e.g., 'if', 'for_each', 'try')
+    flow_blocks: List[Dict[str, Any]] = field(default_factory=list)
     variables: Dict[str, Any] = field(default_factory=dict)
     imported_libraries: List[str] = field(default_factory=list)
     current_browser: Optional[str] = None

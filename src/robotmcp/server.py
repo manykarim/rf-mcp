@@ -951,6 +951,19 @@ async def execute_if(
     stop_on_failure: bool = True,
 ) -> Dict[str, Any]:
     """Evaluate a condition in RF context and run then/else blocks of steps."""
+    # Record flow block
+    try:
+        sess = execution_engine.session_manager.get_or_create_session(session_id)
+        block = {
+            "type": "if",
+            "condition": condition,
+            "then": [ _normalize_step(s) for s in (then_steps or []) ],
+            "else": [ _normalize_step(s) for s in (else_steps or []) ],
+        }
+        sess.flow_blocks.append(block)
+    except Exception:
+        pass
+
     cond = await execution_engine.execute_step(
         "Evaluate",
         [condition],
@@ -983,6 +996,19 @@ async def execute_for_each(
     max_iterations: int = 1000,
 ) -> Dict[str, Any]:
     """Run a sequence of steps for each item, setting ${item_var} in RF context per iteration."""
+    # Record flow block (do not unroll items)
+    try:
+        sess = execution_engine.session_manager.get_or_create_session(session_id)
+        block = {
+            "type": "for_each",
+            "item_var": item_var,
+            "items": list(items or []),
+            "body": [ _normalize_step(s) for s in (steps or []) ],
+        }
+        sess.flow_blocks.append(block)
+    except Exception:
+        pass
+
     if not items:
         return {"success": True, "iterations": [], "count": 0}
 
@@ -1021,6 +1047,20 @@ async def execute_try_except(
     rethrow: bool = False,
 ) -> Dict[str, Any]:
     """Execute steps in a TRY/EXCEPT/FINALLY structure."""
+    # Record flow block
+    try:
+        sess = execution_engine.session_manager.get_or_create_session(session_id)
+        block = {
+            "type": "try",
+            "try": [ _normalize_step(s) for s in (try_steps or []) ],
+            "except_patterns": list(except_patterns or []),
+            "except": [ _normalize_step(s) for s in (except_steps or []) ] if except_steps else [],
+            "finally": [ _normalize_step(s) for s in (finally_steps or []) ] if finally_steps else [],
+        }
+        sess.flow_blocks.append(block)
+    except Exception:
+        pass
+
     try_res = await _run_steps_in_context(session_id, try_steps, stop_on_failure=False)
     first_fail = next((r for r in try_res if not r.get("success", False)), None)
     handled = False

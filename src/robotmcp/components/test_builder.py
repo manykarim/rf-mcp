@@ -57,6 +57,8 @@ class GeneratedTestSuite:
     teardown: Optional[TestCaseStep] = None
     imports: List[str] = None
     resources: List[str] = None
+    # Optional: preserved high-level flow blocks recorded during execution
+    flow_blocks: List[Dict[str, Any]] | None = None
 
 
 class TestBuilder:
@@ -964,67 +966,71 @@ class TestBuilder:
                     f"    [Setup]    {test_case.setup.keyword}    {'    '.join(escaped_setup_args)}"
                 )
 
-            # Test steps
-            for step in test_case.steps:
-                # Generate variable assignment syntax if applicable
-                if step.assigned_variables and step.assignment_type:
-                    if (
-                        step.assignment_type == "single"
-                        and len(step.assigned_variables) == 1
-                    ):
-                        # Single assignment: ${var}    Keyword    args
-                        var_assignment = step.assigned_variables[0]
-                        step_line = f"    {var_assignment}    {step.keyword}"
-                    elif (
-                        step.assignment_type == "multiple"
-                        and len(step.assigned_variables) > 1
-                    ):
-                        # Multiple assignment: ${var1}    ${var2}    Keyword    args
-                        var_assignments = "    ".join(step.assigned_variables)
-                        step_line = f"    {var_assignments}    {step.keyword}"
-                    else:
-                        # Fallback to standard format
-                        step_line = f"    {step.keyword}"
-                else:
-                    # Standard keyword without assignment
-                    step_line = f"    {step.keyword}"
-
-                if step.arguments:
-                    # Convert locators for consistency if using execution engine
-                    processed_args = step.arguments.copy()
-                    if (
-                        self.execution_engine
-                        and hasattr(
-                            self.execution_engine, "_convert_locator_for_library"
-                        )
-                        and step.arguments
-                    ):
-                        # Detect library from keyword
-                        library = await self._detect_library_from_keyword(step.keyword)
-                        if library and any(
-                            kw in step.keyword.lower()
-                            for kw in ["click", "fill", "get text", "wait", "select"]
+            # Flow-aware rendering: prefer structured blocks if available on suite
+            if hasattr(suite, 'flow_blocks') and suite.flow_blocks:
+                lines.extend(self._render_flow_blocks(suite.flow_blocks, indent="    "))
+            else:
+                # Test steps (legacy linear rendering)
+                for step in test_case.steps:
+                    # Generate variable assignment syntax if applicable
+                    if step.assigned_variables and step.assignment_type:
+                        if (
+                            step.assignment_type == "single"
+                            and len(step.assigned_variables) == 1
                         ):
-                            converted_locator = (
-                                self.execution_engine._convert_locator_for_library(
-                                    step.arguments[0], library
-                                )
+                            # Single assignment: ${var}    Keyword    args
+                            var_assignment = step.assigned_variables[0]
+                            step_line = f"    {var_assignment}    {step.keyword}"
+                        elif (
+                            step.assignment_type == "multiple"
+                            and len(step.assigned_variables) > 1
+                        ):
+                            # Multiple assignment: ${var1}    ${var2}    Keyword    args
+                            var_assignments = "    ".join(step.assigned_variables)
+                            step_line = f"    {var_assignments}    {step.keyword}"
+                        else:
+                            # Fallback to standard format
+                            step_line = f"    {step.keyword}"
+                    else:
+                        # Standard keyword without assignment
+                        step_line = f"    {step.keyword}"
+
+                    if step.arguments:
+                        # Convert locators for consistency if using execution engine
+                        processed_args = step.arguments.copy()
+                        if (
+                            self.execution_engine
+                            and hasattr(
+                                self.execution_engine, "_convert_locator_for_library"
                             )
-                            if converted_locator != step.arguments[0]:
-                                processed_args[0] = converted_locator
+                            and step.arguments
+                        ):
+                            # Detect library from keyword
+                            library = await self._detect_library_from_keyword(step.keyword)
+                            if library and any(
+                                kw in step.keyword.lower()
+                                for kw in ["click", "fill", "get text", "wait", "select"]
+                            ):
+                                converted_locator = (
+                                    self.execution_engine._convert_locator_for_library(
+                                        step.arguments[0], library
+                                    )
+                                )
+                                if converted_locator != step.arguments[0]:
+                                    processed_args[0] = converted_locator
 
-                    # Escape arguments that start with special characters
-                    escaped_args = [
-                        self._escape_robot_argument(arg) for arg in processed_args
-                    ]
-                    # Use proper 4-space separation between keyword and arguments
-                    args_str = "    ".join(escaped_args)
-                    step_line += f"    {args_str}"
+                        # Escape arguments that start with special characters
+                        escaped_args = [
+                            self._escape_robot_argument(arg) for arg in processed_args
+                        ]
+                        # Use proper 4-space separation between keyword and arguments
+                        args_str = "    ".join(escaped_args)
+                        step_line += f"    {args_str}"
 
-                if step.comment:
-                    step_line += f"    {step.comment}"
+                    if step.comment:
+                        step_line += f"    {step.comment}"
 
-                lines.append(step_line)
+                    lines.append(step_line)
 
             if test_case.teardown:
                 escaped_teardown_args = [
@@ -1038,6 +1044,64 @@ class TestBuilder:
             lines.append("")
 
         return "\n".join(lines)
+
+    def _render_flow_blocks(self, nodes: List[Dict[str, Any]], indent: str = "") -> List[str]:
+        lines: List[str] = []
+        for n in nodes:
+            ntype = n.get("type")
+            if ntype == "for_each":
+                item_var = n.get("item_var", "item")
+                items = [self._escape_robot_argument(v) for v in (n.get("items") or [])]
+                header = f"{indent}FOR    ${{{item_var}}}    IN"
+                if items:
+                    header += "    " + "    ".join(items)
+                lines.append(header)
+                body = n.get("body") or []
+                lines.extend(self._render_flow_body(body, indent + "    "))
+                lines.append(f"{indent}END")
+            elif ntype == "if":
+                cond = n.get("condition", "")
+                lines.append(f"{indent}IF    {cond}")
+                then_body = n.get("then") or []
+                lines.extend(self._render_flow_body(then_body, indent + "    "))
+                else_body = n.get("else") or []
+                if else_body:
+                    lines.append(f"{indent}ELSE")
+                    lines.extend(self._render_flow_body(else_body, indent + "    "))
+                lines.append(f"{indent}END")
+            elif ntype == "try":
+                lines.append(f"{indent}TRY")
+                try_body = n.get("try") or []
+                lines.extend(self._render_flow_body(try_body, indent + "    "))
+                patterns = n.get("except_patterns") or []
+                if n.get("except"):
+                    if patterns:
+                        lines.append(f"{indent}EXCEPT    {patterns[0]}")
+                    else:
+                        lines.append(f"{indent}EXCEPT")
+                    lines.extend(self._render_flow_body(n.get("except"), indent + "    "))
+                    for extra in patterns[1:]:
+                        lines.append(f"{indent}EXCEPT    {extra}")
+                if n.get("finally"):
+                    lines.append(f"{indent}FINALLY")
+                    lines.extend(self._render_flow_body(n.get("finally"), indent + "    "))
+                lines.append(f"{indent}END")
+            else:
+                # Fallback: plain step
+                lines.extend(self._render_flow_body([n], indent))
+        return lines
+
+    def _render_flow_body(self, steps: List[Dict[str, Any]], indent: str) -> List[str]:
+        out: List[str] = []
+        for s in steps or []:
+            kw = s.get("keyword", "")
+            args = s.get("arguments", []) or []
+            line = f"{indent}{self._remove_library_prefix(kw)}"
+            if args:
+                esc = [self._escape_robot_argument(a) for a in args]
+                line += "    " + "    ".join(esc)
+            out.append(line)
+        return out
 
     def _format_path_for_rf(self, path: str) -> str:
         """Format a filesystem path into OS-independent Robot Framework syntax.
