@@ -262,7 +262,7 @@ ROBOT_FRAMEWORK_LIBRARIES: Dict[str, LibraryConfig] = {
         use_cases=['database testing', 'sql queries', 'data validation', 'database connections'],
         categories=[LibraryCategory.DATABASE, LibraryCategory.TESTING, LibraryCategory.DATA],
         installation_command='pip install robotframework-databaselibrary',
-        load_priority=20
+        load_priority=22
     ),
     
     'AppiumLibrary': LibraryConfig(
@@ -275,7 +275,7 @@ ROBOT_FRAMEWORK_LIBRARIES: Dict[str, LibraryConfig] = {
         categories=[LibraryCategory.MOBILE, LibraryCategory.TESTING],
         installation_command='pip install robotframework-appiumlibrary',
         dependencies=['appium'],
-        load_priority=25,
+        load_priority=27,
         default_enabled=False  # PHASE 3: Disable by default to prevent conflicts with web testing
     ),
     
@@ -288,7 +288,7 @@ ROBOT_FRAMEWORK_LIBRARIES: Dict[str, LibraryConfig] = {
         use_cases=['remote connections', 'ssh commands', 'file transfer', 'server management'],
         categories=[LibraryCategory.NETWORK, LibraryCategory.SYSTEM],
         installation_command='pip install robotframework-sshlibrary',
-        load_priority=30
+        load_priority=31
     ),
     
     'FTPLibrary': LibraryConfig(

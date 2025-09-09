@@ -1,6 +1,6 @@
-"""E2E test for Browser.New Browser execution with headless=True.
+"""Verify boolean handling for Browser.Click With Options in non-context path.
 
-Skips if Browser library is not available in the environment.
+Skips if Browser library is unavailable. Uses headless to avoid UI requirements.
 """
 
 import pytest
@@ -18,9 +18,9 @@ async def mcp_client():
 
 
 @pytest.mark.asyncio
-async def test_browser_new_browser_e2e_headless(mcp_client):
+async def test_browser_click_with_options_boolean_args(mcp_client):
     # Practical probe for Browser readiness
-    probe_session = "browser_new_probe"
+    probe_session = "browser_click_probe"
     try:
         await mcp_client.call_tool(
             "initialize_context",
@@ -55,20 +55,23 @@ async def test_browser_new_browser_e2e_headless(mcp_client):
     except ToolError as e:
         pytest.skip(f"Browser not ready: {e}")
 
-    session_id = "browser_headless_e2e"
+    session_id = "browser_click_with_options_bool"
 
-    # Initialize session and ensure Browser is loaded and prioritized
+    # Init Browser session and search order
     await mcp_client.call_tool(
         "initialize_context",
         {"session_id": session_id, "libraries": ["Browser"]},
     )
     await mcp_client.call_tool(
         "set_library_search_order",
-        {"libraries": ["Browser", "BuiltIn", "Collections", "String"], "session_id": session_id},
+        {
+            "libraries": ["Browser", "BuiltIn", "Collections", "String"],
+            "session_id": session_id,
+        },
     )
 
-    # Start a headless browser
-    new_browser = await mcp_client.call_tool(
+    # New headless browser and new page with simple content
+    nb = await mcp_client.call_tool(
         "execute_step",
         {
             "keyword": "Browser.New Browser",
@@ -77,28 +80,43 @@ async def test_browser_new_browser_e2e_headless(mcp_client):
             "raise_on_failure": True,
         },
     )
-    assert new_browser.data.get("success") is True
+    assert nb.data.get("success") is True
 
-    # Open a blank page to verify basic operation
-    new_page = await mcp_client.call_tool(
+    # Data URL with a button
+    html = "<html><head><title>T</title></head><body><button id='selectgold'>Click</button></body></html>"
+    url = f"data:text/html,{html}"
+
+    npg = await mcp_client.call_tool(
         "execute_step",
         {
             "keyword": "Browser.New Page",
-            "arguments": ["about:blank"],
+            "arguments": [url],
             "session_id": session_id,
             "raise_on_failure": True,
         },
     )
-    assert new_page.data.get("success") is True
+    assert npg.data.get("success") is True
 
-    # Close Browser
-    close = await mcp_client.call_tool(
+    # 1) force=True (string literal) should be converted to boolean True
+    r1 = await mcp_client.call_tool(
         "execute_step",
         {
-            "keyword": "Browser.Close Browser",
-            "arguments": [],
+            "keyword": "Browser.Click With Options",
+            "arguments": ["#selectgold", "force=True"],
             "session_id": session_id,
             "raise_on_failure": True,
         },
     )
-    assert close.data.get("success") is True
+    assert r1.data.get("success") is True
+
+    # 2) force=${True} should resolve to Python True via built-ins
+    r2 = await mcp_client.call_tool(
+        "execute_step",
+        {
+            "keyword": "Browser.Click With Options",
+            "arguments": ["#selectgold", "force=${True}"],
+            "session_id": session_id,
+            "raise_on_failure": True,
+        },
+    )
+    assert r2.data.get("success") is True

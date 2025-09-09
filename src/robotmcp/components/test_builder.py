@@ -345,20 +345,45 @@ class TestBuilder:
     ) -> GeneratedTestSuite:
         """Build a test suite from test cases."""
 
-        # Get libraries from session execution history (more reliable than keyword pattern matching)
-        all_imports = self._get_session_libraries(session_id)
+        # Determine libraries strictly from keywords used in the generated steps
+        # Prefer RF context namespace mapping; fall back to pattern detection
+        all_imports: set = set()
+        keyword_to_lib: Dict[str, str] = {}
+        try:
+            from robotmcp.components.execution.rf_native_context_manager import (
+                get_rf_native_context_manager,
+            )
 
-        # If no session libraries found, fall back to keyword detection
-        if not all_imports:
-            for test_case in test_cases:
-                for step in test_case.steps:
-                    library = await self._detect_library_from_keyword(
-                        step.keyword, session_id
-                    )
-                    if (
-                        library and library != "BuiltIn"
-                    ):  # Exclude BuiltIn as it's automatically available
-                        all_imports.add(library)
+            mgr = get_rf_native_context_manager()
+            lst = mgr.list_available_keywords(session_id)
+            if lst.get("success"):
+                for item in lst.get("library_keywords", []) or []:
+                    # Map lowercased keyword name to library
+                    name = str(item.get("name", "")).lower()
+                    lib = item.get("library")
+                    if name and lib:
+                        keyword_to_lib[name] = lib
+        except Exception:
+            pass
+
+        for test_case in test_cases:
+            for step in test_case.steps:
+                kw = step.keyword or ""
+                # Explicit prefix (Library.Keyword)
+                if "." in kw:
+                    prefix = kw.split(".", 1)[0].strip()
+                    if prefix and prefix != "BuiltIn":
+                        all_imports.add(prefix)
+                        continue
+                # RF namespace mapping
+                lib = keyword_to_lib.get(kw.lower())
+                if lib and lib != "BuiltIn":
+                    all_imports.add(lib)
+                    continue
+                # Pattern-based fallback
+                library = await self._detect_library_from_keyword(kw, session_id)
+                if library and library != "BuiltIn":
+                    all_imports.add(library)
 
         # Validate library exclusion rules for test suite generation
         # Only validate if we don't have a session with execution history
