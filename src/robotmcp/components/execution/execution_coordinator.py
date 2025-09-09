@@ -841,10 +841,14 @@ class ExecutionCoordinator:
     # ============================================
 
     def get_available_keywords(self, library_name: str = None) -> List[Dict[str, Any]]:
-        """Get list of available keywords, optionally filtered by library.
+        """List available keywords with minimal metadata.
 
-        CRITICAL FIX: Now uses LibraryManager as source of truth, with LibDoc for enrichment.
-        This fixes the synchronization issue between static LibDoc and dynamic LibraryManager loading.
+        Returns one entry per keyword with fields:
+        - name: keyword name
+        - library: library name
+        - args: list of argument names
+        - arg_types: list of argument types if available from LibDoc (empty if unknown)
+        - short_doc: short documentation summary (no full docstrings)
         """
         # CRITICAL FIX: Use LibraryManager as primary source since it reflects current loaded state
         keyword_discovery = self.keyword_executor.keyword_discovery
@@ -865,59 +869,34 @@ class ExecutionCoordinator:
 
             # Get keywords from specific library using LibraryManager
             keywords_from_lib = keyword_discovery.get_keywords_by_library(library_name)
-            result = []
+            result: List[Dict[str, Any]] = []
+
+            # Build LibDoc map once for O(1) arg_types enrichment
+            libdoc_map: Dict[str, Any] = {}
+            if self.rf_doc_storage.is_available():
+                try:
+                    for libdoc_kw in self.rf_doc_storage.get_keywords_by_library(library_name) or []:
+                        libdoc_map[libdoc_kw.name] = libdoc_kw
+                except Exception:
+                    pass
 
             for keyword_info in keywords_from_lib:
-                # CRITICAL FIX: Enhanced MCP serialization with null-safety and validation
-                keyword_dict = {
-                    "name": str(keyword_info.name if keyword_info.name else ""),
-                    "library": str(
-                        keyword_info.library if keyword_info.library else ""
-                    ),
-                    "args": [
-                        str(arg)
-                        for arg in (keyword_info.args if keyword_info.args else [])
-                    ],
-                    "short_doc": str(
-                        keyword_info.short_doc if keyword_info.short_doc else ""
-                    ),
-                    "tags": [
-                        str(tag)
-                        for tag in (keyword_info.tags if keyword_info.tags else [])
-                    ],
-                    "is_builtin": bool(getattr(keyword_info, "is_builtin", False)),
-                }
+                arg_types = []
+                try:
+                    if keyword_info.name in libdoc_map:
+                        arg_types = libdoc_map[keyword_info.name].arg_types or []
+                except Exception:
+                    arg_types = []
 
-                # CRITICAL FIX: Validate no complex objects remain
-                for key, value in keyword_dict.items():
-                    if not isinstance(value, (str, int, bool, list)):
-                        logger.warning(
-                            f"Non-serializable value in keyword_dict[{key}]: {type(value)}"
-                        )
-                        keyword_dict[key] = str(value)  # Force string conversion
-                    elif isinstance(value, list):
-                        # Ensure list elements are also serializable
-                        keyword_dict[key] = [str(item) for item in value]
-
-                # Enrich with LibDoc data if available
-                if self.rf_doc_storage.is_available():
-                    try:
-                        libdoc_keywords = self.rf_doc_storage.get_keywords_by_library(
-                            library_name
-                        )
-                        for libdoc_kw in libdoc_keywords:
-                            if libdoc_kw.name == keyword_info.name:
-                                keyword_dict.update(
-                                    {
-                                        "is_deprecated": libdoc_kw.is_deprecated,
-                                        "arg_types": libdoc_kw.arg_types,
-                                    }
-                                )
-                                break
-                    except Exception:
-                        pass  # LibDoc enrichment is optional
-
-                result.append(keyword_dict)
+                result.append(
+                    {
+                        "name": str(keyword_info.name or ""),
+                        "library": str(keyword_info.library or ""),
+                        "args": [str(a) for a in (keyword_info.args or [])],
+                        "arg_types": [str(t) for t in (arg_types or [])],
+                        "short_doc": str(keyword_info.short_doc or ""),
+                    }
+                )
 
             logger.info(
                 f"Retrieved {len(result)} keywords for library '{library_name}'"
@@ -925,63 +904,48 @@ class ExecutionCoordinator:
             return result
         else:
             # Get all keywords from all loaded libraries using LibraryManager
-            keywords = []
-            for keyword_info in keyword_discovery.get_all_keywords():
-                # CRITICAL FIX: Enhanced MCP serialization with null-safety and validation
-                keyword_dict = {
-                    "name": str(keyword_info.name if keyword_info.name else ""),
-                    "library": str(
-                        keyword_info.library if keyword_info.library else ""
-                    ),
-                    "args": [
-                        str(arg)
-                        for arg in (keyword_info.args if keyword_info.args else [])
-                    ],
-                    "short_doc": str(
-                        keyword_info.short_doc if keyword_info.short_doc else ""
-                    ),
-                    "tags": [
-                        str(tag)
-                        for tag in (keyword_info.tags if keyword_info.tags else [])
-                    ],
-                    "is_builtin": bool(getattr(keyword_info, "is_builtin", False)),
-                }
+            items = keyword_discovery.get_all_keywords()
 
-                # CRITICAL FIX: Validate no complex objects remain
-                for key, value in keyword_dict.items():
-                    if not isinstance(value, (str, int, bool, list)):
-                        logger.warning(
-                            f"Non-serializable value in keyword_dict[{key}]: {type(value)}"
-                        )
-                        keyword_dict[key] = str(value)  # Force string conversion
-                    elif isinstance(value, list):
-                        # Ensure list elements are also serializable
-                        keyword_dict[key] = [str(item) for item in value]
+            # Build LibDoc maps per library for arg_types enrichment
+            libdoc_maps: Dict[str, Dict[str, Any]] = {}
+            if self.rf_doc_storage.is_available():
+                try:
+                    libs = {kw.library for kw in items if kw.library}
+                    for lib in libs:
+                        libdoc_maps[lib] = {}
+                        for libdoc_kw in self.rf_doc_storage.get_keywords_by_library(lib) or []:
+                            libdoc_maps[lib][libdoc_kw.name] = libdoc_kw
+                except Exception:
+                    libdoc_maps = {}
 
-                # ENHANCEMENT: Try to enrich with LibDoc data if available
-                if self.rf_doc_storage.is_available():
-                    try:
-                        libdoc_keywords = self.rf_doc_storage.get_keywords_by_library(
-                            keyword_info.library
-                        )
-                        for libdoc_kw in libdoc_keywords:
-                            if libdoc_kw.name == keyword_info.name:
-                                keyword_dict.update(
-                                    {
-                                        "is_deprecated": libdoc_kw.is_deprecated,
-                                        "arg_types": libdoc_kw.arg_types,
-                                    }
-                                )
-                                break
-                    except Exception:
-                        pass  # LibDoc enrichment is optional
+            keywords: List[Dict[str, Any]] = []
+            for keyword_info in items:
+                arg_types = []
+                try:
+                    lib_map = libdoc_maps.get(keyword_info.library or "")
+                    if lib_map and keyword_info.name in lib_map:
+                        arg_types = lib_map[keyword_info.name].arg_types or []
+                except Exception:
+                    arg_types = []
 
-                keywords.append(keyword_dict)
+                keywords.append(
+                    {
+                        "name": str(keyword_info.name or ""),
+                        "library": str(keyword_info.library or ""),
+                        "args": [str(a) for a in (keyword_info.args or [])],
+                        "arg_types": [str(t) for t in (arg_types or [])],
+                        "short_doc": str(keyword_info.short_doc or ""),
+                    }
+                )
 
             return keywords
 
     def search_keywords(self, pattern: str) -> List[Dict[str, Any]]:
-        """Search for keywords matching a pattern using native RF libdoc when available."""
+        """Search keywords by pattern and return minimal metadata.
+
+        Returns the same minimal fields as get_available_keywords: name, library, args,
+        arg_types (when available via LibDoc), and short_doc.
+        """
         # Use libdoc-based search if available, otherwise fall back to inspection-based
         if self.rf_doc_storage.is_available():
             matches = self.rf_doc_storage.search_keywords(pattern)
@@ -989,11 +953,9 @@ class ExecutionCoordinator:
                 {
                     "name": kw.name,
                     "library": kw.library,
-                    "args": kw.args,
-                    "short_doc": kw.short_doc,
-                    "tags": kw.tags,
-                    "is_deprecated": kw.is_deprecated,
-                    "arg_types": kw.arg_types,
+                    "args": list(kw.args or []),
+                    "arg_types": list(kw.arg_types or []),
+                    "short_doc": kw.short_doc or "",
                 }
                 for kw in matches
             ]
@@ -1004,10 +966,9 @@ class ExecutionCoordinator:
                 {
                     "name": kw.name,
                     "library": kw.library,
-                    "args": kw.args,
-                    "short_doc": kw.short_doc,
-                    "tags": kw.tags,
-                    "is_builtin": getattr(kw, "is_builtin", False),
+                    "args": list(kw.args or []),
+                    "arg_types": [],
+                    "short_doc": kw.short_doc or "",
                 }
                 for kw in matches
             ]
