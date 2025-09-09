@@ -800,32 +800,16 @@ async def get_library_status(library_name: str) -> Dict[str, Any]:
 
 @mcp.tool
 async def get_available_keywords(library_name: str = None) -> List[Dict[str, Any]]:
-    """Get available Robot Framework keywords with native RF libdoc short documentation, optionally filtered by library.
+    """List available RF keywords with minimal metadata.
 
-    Uses Robot Framework's native libdoc API to provide accurate short_doc, argument types, and metadata.
-    Falls back to inspection-based discovery if libdoc is not available.
+    Returns one entry per keyword with fields:
+    - name: keyword name
+    - library: library name
+    - args: list of argument names
+    - arg_types: list of argument types if available (empty when unknown)
+    - short_doc: short documentation summary (no full docstrings)
 
-    CRITICAL FIX: Now ensures all session libraries are loaded before discovery to fix
-    keyword resolution synchronization issue.
-
-    NOTE: This tool initializes library discovery and can be used as a fallback if you need to call
-    check_library_availability without following the recommended 3-step workflow.
-
-    Args:
-        library_name: Optional library name to filter keywords (e.g., 'Browser', 'BuiltIn', 'Collections').
-                     If not provided, returns all keywords from all loaded libraries.
-
-    Returns:
-        List of keyword information including:
-        - name: Keyword name
-        - library: Library name
-        - args: List of argument names
-        - arg_types: List of argument types (when available from libdoc)
-        - short_doc: Short documentation from Robot Framework's native short_doc
-        - tags: Keyword tags
-        - is_deprecated: Whether keyword is deprecated (libdoc only)
-
-    Related tools: Use analyze_scenario → recommend_libraries → check_library_availability for optimal workflow.
+    If `library_name` is provided, results are filtered to that library, loading it on demand if needed.
     """
     # CRITICAL FIX: Ensure all session libraries are loaded before discovery
     await _ensure_all_session_libraries_loaded()
