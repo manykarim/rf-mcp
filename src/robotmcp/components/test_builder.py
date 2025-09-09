@@ -414,6 +414,15 @@ class TestBuilder:
         except Exception:
             resources = []
 
+        # Include flow blocks recorded during execution (if any)
+        flow_blocks = None
+        try:
+            sess = self.execution_engine.sessions.get(session_id)
+            if sess and hasattr(sess, "flow_blocks") and sess.flow_blocks:
+                flow_blocks = list(sess.flow_blocks)
+        except Exception:
+            flow_blocks = None
+
         return GeneratedTestSuite(
             name=f"Generated_Suite_{session_id}",
             test_cases=test_cases,
@@ -421,6 +430,7 @@ class TestBuilder:
             tags=common_tags,
             imports=list(all_imports),
             resources=resources,
+            flow_blocks=flow_blocks,
         )
 
     async def _optimize_step(
