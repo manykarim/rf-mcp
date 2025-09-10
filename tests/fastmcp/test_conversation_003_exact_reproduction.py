@@ -60,11 +60,36 @@ async def test_conversation_003_exact_reproduction(mcp_client):
     )
     assert create_session.data.get("success") is True
     
-    # 4. GET On Session (read booking)
-    get_booking = await mcp_client.call_tool(
-        "execute_step", 
+    # 4. GET On Session (read booking) - get available booking list first
+    get_bookings = await mcp_client.call_tool(
+        "execute_step",
         {
-            "arguments": ["restful_booker", "/booking/1"],
+            "arguments": ["restful_booker", "/booking"],
+            "keyword": "GET On Session",
+            "session_id": session_id,
+            "use_context": True,
+            "assign_to": "bookings_response"
+        }
+    )
+    assert get_bookings.data.get("success") is True
+    
+    # Extract first booking ID  
+    set_booking_id = await mcp_client.call_tool(
+        "set_variables",
+        {
+            "variables": {
+                "first_booking_id": "${bookings_response.json()[0]['bookingid']}"
+            },
+            "session_id": session_id
+        }
+    )
+    assert set_booking_id.data.get("success") is True
+    
+    # GET On Session (read specific booking)
+    get_booking = await mcp_client.call_tool(
+        "execute_step",
+        {
+            "arguments": ["restful_booker", "/booking/${first_booking_id}"],
             "keyword": "GET On Session",
             "session_id": session_id,
             "use_context": True,
@@ -391,7 +416,7 @@ async def test_conversation_003_exact_reproduction(mcp_client):
     # Check for key operations that MUST be present
     critical_operations = {
         "Create Session": "Create Session    restful_booker" in rf_text,
-        "GET booking": "GET On Session" in rf_text and "/booking/1" in rf_text,
+        "GET booking": "GET On Session" in rf_text and "/booking/${first_booking_id}" in rf_text,
         "POST create booking": "POST On Session" in rf_text and "/booking" in rf_text,
         "POST authentication": "/auth" in rf_text,
         "DELETE operation": "DELETE On Session" in rf_text,

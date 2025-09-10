@@ -63,11 +63,36 @@ async def test_restful_booker_build_suite_missing_steps_bug(mcp_client):
     )
     assert create_session.data.get("success") is True
     
-    # READ: Get a booking
+    # READ: Get list of bookings first to find a valid ID
+    get_bookings = await mcp_client.call_tool(
+        "execute_step",
+        {
+            "arguments": ["restful_booker", "/booking"],
+            "keyword": "GET On Session",
+            "session_id": session_id,
+            "use_context": True,
+            "assign_to": "bookings_response"
+        }
+    )
+    assert get_bookings.data.get("success") is True
+    
+    # Extract first booking ID
+    set_booking_id = await mcp_client.call_tool(
+        "set_variables",
+        {
+            "variables": {
+                "first_booking_id": "${bookings_response.json()[0]['bookingid']}"
+            },
+            "session_id": session_id
+        }
+    )
+    assert set_booking_id.data.get("success") is True
+    
+    # READ: Get the first available booking
     get_booking = await mcp_client.call_tool(
         "execute_step",
         {
-            "arguments": ["restful_booker", "/booking/1"],
+            "arguments": ["restful_booker", "/booking/${first_booking_id}"],
             "keyword": "GET On Session",
             "session_id": session_id,
             "use_context": True,
