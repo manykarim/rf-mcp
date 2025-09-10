@@ -1061,7 +1061,8 @@ async def execute_try_except(
     except Exception:
         pass
 
-    try_res = await _run_steps_in_context(session_id, try_steps, stop_on_failure=False)
+    # Stop try body at first failure (subsequent steps should not execute)
+    try_res = await _run_steps_in_context(session_id, try_steps, stop_on_failure=True)
     first_fail = next((r for r in try_res if not r.get("success", False)), None)
     handled = False
     exc_res: List[Dict[str, Any]] | None = None
@@ -1071,7 +1072,22 @@ async def execute_try_except(
     if first_fail is not None:
         err_text = first_fail.get("error") or str(first_fail)
         pats = except_patterns or []
-        if any((isinstance(p, str) and p.lower() in err_text.lower()) for p in pats) and (except_steps or []):
+        # Glob-style match; '*' catches all
+        match = False
+        if not pats:
+            match = True
+        else:
+            try:
+                from fnmatch import fnmatch
+                for p in pats:
+                    if isinstance(p, str):
+                        pat = p.strip()
+                        if pat == "*" or fnmatch(err_text.lower(), pat.lower()) or (pat.lower() in err_text.lower()):
+                            match = True
+                            break
+            except Exception:
+                match = any((isinstance(p, str) and p.lower() in err_text.lower()) for p in pats)
+        if match and (except_steps or []):
             exc_res = await _run_steps_in_context(session_id, except_steps or [], stop_on_failure=False)
             handled = True
 
@@ -1080,7 +1096,7 @@ async def execute_try_except(
 
     success = first_fail is None or handled
     result: Dict[str, Any] = {
-        "success": success if not bool(rethrow) else (handled and success),
+        "success": success if not bool(rethrow) else False if (first_fail and not handled) else success,
         "handled": handled,
         "try_results": try_res,
     }

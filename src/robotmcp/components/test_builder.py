@@ -160,32 +160,29 @@ class TestBuilder:
             # Generate execution statistics
             stats = await self._generate_statistics(successful_steps, suite)
 
+            # Build structured steps (keywords + control blocks) for consumers
+            structured_cases = []
+            for tc in suite.test_cases:
+                structured_cases.append({
+                    "name": tc.name,
+                    "structured_steps": self._build_structured_steps(tc, suite.flow_blocks),
+                })
+
             return {
                 "success": True,
                 "session_id": session_id,
                 "suite": {
-                    "name": suite.name,
-                    "documentation": suite.documentation,
-                    "tags": suite.tags or [],
-                    "test_cases": [
-                        {
-                            "name": tc.name,
-                            "documentation": tc.documentation,
-                            "tags": tc.tags or [],
-                            "steps": [
-                                {
-                                    "keyword": step.keyword,
-                                    "arguments": [
-                                        self._escape_robot_argument(arg)
-                                        for arg in (step.arguments or [])
-                                    ],
-                                    "comment": step.comment,
-                                    "assigned_variables": step.assigned_variables,
-                                    "assignment_type": step.assignment_type,
-                                    "has_assignment": bool(step.assigned_variables),
-                                }
-                                for step in tc.steps
-                            ],
+                        "name": suite.name,
+                        "documentation": suite.documentation,
+                        "tags": suite.tags or [],
+                        # Expose flow blocks so callers can reconstruct control structures
+                        "flow_blocks": suite.flow_blocks or [],
+                        "test_cases": [
+                            {
+                                "name": tc.name,
+                                "documentation": tc.documentation,
+                                "tags": tc.tags or [],
+                            # steps omitted in favor of structured_steps
                             "setup": {
                                 "keyword": tc.setup.keyword,
                                 "arguments": [
@@ -204,6 +201,8 @@ class TestBuilder:
                             }
                             if tc.teardown
                             else None,
+                            # Provide structured rendering alongside linear steps
+                            "structured_steps": next((c["structured_steps"] for c in structured_cases if c["name"] == tc.name), []),
                         }
                         for tc in suite.test_cases
                     ],
@@ -976,71 +975,34 @@ class TestBuilder:
                     f"    [Setup]    {test_case.setup.keyword}    {'    '.join(escaped_setup_args)}"
                 )
 
-            # Flow-aware rendering: prefer structured blocks if available on suite
+            # Flow-aware rendering: if structured flow blocks exist, merge them with
+            # surrounding linear steps so that keywords before/after the block are kept.
             if hasattr(suite, 'flow_blocks') and suite.flow_blocks:
-                lines.extend(self._render_flow_blocks(suite.flow_blocks, indent="    "))
+                # Map each flow block to its covered index range in linear steps
+                block_ranges, used_indices = self._map_blocks_to_ranges(test_case.steps, suite.flow_blocks)
+                cur = 0
+                for block, start_idx, end_idx in block_ranges:
+                    # Emit linear steps before this block
+                    while cur < start_idx:
+                        if cur not in used_indices:
+                            line = await self._render_linear_step(test_case.steps[cur])
+                            lines.append(line)
+                        cur += 1
+                    # Emit this flow block in RF syntax
+                    lines.extend(self._render_flow_blocks([block], indent="    "))
+                    # Advance cur past the block
+                    cur = max(cur, end_idx + 1)
+                # Emit remaining linear steps after last block
+                while cur < len(test_case.steps):
+                    if cur not in used_indices:
+                        line = await self._render_linear_step(test_case.steps[cur])
+                        lines.append(line)
+                    cur += 1
             else:
                 # Test steps (legacy linear rendering)
                 for step in test_case.steps:
-                    # Generate variable assignment syntax if applicable
-                    if step.assigned_variables and step.assignment_type:
-                        if (
-                            step.assignment_type == "single"
-                            and len(step.assigned_variables) == 1
-                        ):
-                            # Single assignment: ${var}    Keyword    args
-                            var_assignment = step.assigned_variables[0]
-                            step_line = f"    {var_assignment}    {step.keyword}"
-                        elif (
-                            step.assignment_type == "multiple"
-                            and len(step.assigned_variables) > 1
-                        ):
-                            # Multiple assignment: ${var1}    ${var2}    Keyword    args
-                            var_assignments = "    ".join(step.assigned_variables)
-                            step_line = f"    {var_assignments}    {step.keyword}"
-                        else:
-                            # Fallback to standard format
-                            step_line = f"    {step.keyword}"
-                    else:
-                        # Standard keyword without assignment
-                        step_line = f"    {step.keyword}"
-
-                    if step.arguments:
-                        # Convert locators for consistency if using execution engine
-                        processed_args = step.arguments.copy()
-                        if (
-                            self.execution_engine
-                            and hasattr(
-                                self.execution_engine, "_convert_locator_for_library"
-                            )
-                            and step.arguments
-                        ):
-                            # Detect library from keyword
-                            library = await self._detect_library_from_keyword(step.keyword)
-                            if library and any(
-                                kw in step.keyword.lower()
-                                for kw in ["click", "fill", "get text", "wait", "select"]
-                            ):
-                                converted_locator = (
-                                    self.execution_engine._convert_locator_for_library(
-                                        step.arguments[0], library
-                                    )
-                                )
-                                if converted_locator != step.arguments[0]:
-                                    processed_args[0] = converted_locator
-
-                        # Escape arguments that start with special characters
-                        escaped_args = [
-                            self._escape_robot_argument(arg) for arg in processed_args
-                        ]
-                        # Use proper 4-space separation between keyword and arguments
-                        args_str = "    ".join(escaped_args)
-                        step_line += f"    {args_str}"
-
-                    if step.comment:
-                        step_line += f"    {step.comment}"
-
-                    lines.append(step_line)
+                    line = await self._render_linear_step(step)
+                    lines.append(line)
 
             if test_case.teardown:
                 escaped_teardown_args = [
@@ -1054,6 +1016,226 @@ class TestBuilder:
             lines.append("")
 
         return "\n".join(lines)
+
+    async def _render_linear_step(self, step: TestCaseStep) -> str:
+        """Render a single linear keyword step with proper escaping and assignments."""
+        # Generate variable assignment syntax if applicable
+        if step.assigned_variables and step.assignment_type:
+            if step.assignment_type == "single" and len(step.assigned_variables) == 1:
+                var_assignment = step.assigned_variables[0]
+                step_line = f"    {var_assignment}    {step.keyword}"
+            elif step.assignment_type == "multiple" and len(step.assigned_variables) > 1:
+                var_assignments = "    ".join(step.assigned_variables)
+                step_line = f"    {var_assignments}    {step.keyword}"
+            else:
+                step_line = f"    {step.keyword}"
+        else:
+            step_line = f"    {step.keyword}"
+
+        if step.arguments:
+            processed_args = list(step.arguments)
+            if (
+                self.execution_engine
+                and hasattr(self.execution_engine, "_convert_locator_for_library")
+                and step.arguments
+            ):
+                # Detect library from keyword
+                library = await self._detect_library_from_keyword(step.keyword)
+                if library and any(
+                    kw in step.keyword.lower()
+                    for kw in ["click", "fill", "get text", "wait", "select"]
+                ):
+                    try:
+                        converted = self.execution_engine._convert_locator_for_library(
+                            step.arguments[0], library
+                        )
+                        if converted != step.arguments[0]:
+                            processed_args[0] = converted
+                    except Exception:
+                        pass
+            escaped_args = [self._escape_robot_argument(arg) for arg in processed_args]
+            args_str = "    ".join(escaped_args)
+            step_line += f"    {args_str}"
+
+        if step.comment:
+            step_line += f"    {step.comment}"
+        return step_line
+
+    def _collect_flow_steps(self, nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Flatten flow nodes into a list of {keyword, arguments} dictionaries."""
+        steps: List[Dict[str, Any]] = []
+        for n in nodes or []:
+            ntype = n.get("type")
+            if ntype == "for_each":
+                steps.extend(n.get("body") or [])
+            elif ntype == "if":
+                steps.extend(n.get("then") or [])
+                steps.extend(n.get("else") or [])
+            elif ntype == "try":
+                steps.extend(n.get("try") or [])
+                steps.extend(n.get("except") or [])
+                steps.extend(n.get("finally") or [])
+            else:
+                # Unknown node; best-effort treat as single step
+                if n.get("keyword"):
+                    steps.append({"keyword": n.get("keyword"), "arguments": n.get("arguments") or []})
+        return steps
+
+    def _matches_any_flow_step(self, step: TestCaseStep, flow_steps: List[Dict[str, Any]]) -> bool:
+        """Return True if a linear step matches any step in flow_steps by keyword and arguments."""
+        skw = (step.keyword or "").strip().lower()
+        sargs = [str(a) for a in (step.arguments or [])]
+        for fs in flow_steps:
+            fkw = (fs.get("keyword", "") or "").strip().lower()
+            fargs = [str(a) for a in (fs.get("arguments") or [])]
+            if skw == fkw and sargs == fargs:
+                return True
+        return False
+
+    def _map_blocks_to_ranges(
+        self,
+        steps: List[TestCaseStep],
+        flow_blocks: List[Dict[str, Any]],
+    ) -> tuple[list[tuple[Dict[str, Any], int, int]], set[int]]:
+        """Map each flow block to the [start,end] index range it covers in linear steps.
+
+        Returns a sorted list of (block, start_idx, end_idx) and a set of used indices.
+        """
+        ranges: list[tuple[Dict[str, Any], int, int]] = []
+        used: set[int] = set()
+        # Build per-block flattened steps
+        def flatten_block(b: Dict[str, Any]) -> List[Dict[str, Any]]:
+            if b.get("type") == "for_each":
+                return list(b.get("body") or [])
+            if b.get("type") == "if":
+                return list(b.get("then") or []) + list(b.get("else") or [])
+            if b.get("type") == "try":
+                return list(b.get("try") or []) + list(b.get("except") or []) + list(b.get("finally") or [])
+            if b.get("keyword"):
+                return [{"keyword": b.get("keyword"), "arguments": b.get("arguments") or []}]
+            return []
+        # Helper to match
+        def matches(step: TestCaseStep, flat: Dict[str, Any]) -> bool:
+            skw = (step.keyword or "").strip().lower()
+            sargs = [str(a) for a in (step.arguments or [])]
+            fkw = (flat.get("keyword", "") or "").strip().lower()
+            fargs = [str(a) for a in (flat.get("arguments") or [])]
+            return skw == fkw and sargs == fargs
+
+        for block in flow_blocks:
+            flats = flatten_block(block)
+            idxs: list[int] = []
+            if flats:
+                for i, s in enumerate(steps):
+                    if any(matches(s, f) for f in flats):
+                        idxs.append(i)
+            if idxs:
+                start, end = min(idxs), max(idxs)
+                for i in range(start, end + 1):
+                    used.add(i)
+                ranges.append((block, start, end))
+            else:
+                # No match found; place block at current end
+                ranges.append((block, len(steps), len(steps) - 1))
+        # Sort by start index
+        ranges.sort(key=lambda t: t[1])
+        return ranges, used
+
+    def _build_structured_steps(
+        self,
+        test_case: GeneratedTestCase,
+        flow_blocks: List[Dict[str, Any]] | None,
+    ) -> List[Dict[str, Any]]:
+        """Produce a structured steps list combining pre/post linear keywords with control blocks.
+
+        Shape examples:
+        - {"type": "keyword", "keyword": "Log", "arguments": ["hello"], ...}
+        - {"type": "control", "control": "TRY"}
+        - {"type": "control", "control": "EXCEPT", "args": ["*Error*"]}
+        - {"type": "control", "control": "FOR", "args": ["${item}", "IN", "a", "b"]}
+        - {"type": "control", "control": "END"}
+        """
+        struct: List[Dict[str, Any]] = []
+
+        # If no flow, return linear keywords only
+        if not flow_blocks:
+            for s in test_case.steps:
+                struct.append(self._structured_from_step(s))
+            return struct
+
+        # Interleave linear steps around and between flow blocks
+        block_ranges, used_indices = self._map_blocks_to_ranges(test_case.steps, flow_blocks)
+        cur = 0
+        for block, start_idx, end_idx in block_ranges:
+            # Linear steps before block
+            while cur < start_idx:
+                if cur not in used_indices:
+                    struct.append(self._structured_from_step(test_case.steps[cur]))
+                cur += 1
+            # The block itself
+            struct.extend(self._structure_from_flow_blocks([block]))
+            cur = max(cur, end_idx + 1)
+        # Remainder
+        while cur < len(test_case.steps):
+            if cur not in used_indices:
+                struct.append(self._structured_from_step(test_case.steps[cur]))
+            cur += 1
+
+        return struct
+
+    def _structured_from_step(self, step: TestCaseStep) -> Dict[str, Any]:
+        return {
+            "type": "keyword",
+            "keyword": step.keyword,
+            "arguments": list(step.arguments or []),
+            "assigned_variables": list(step.assigned_variables or []),
+            "assignment_type": step.assignment_type,
+        }
+
+    def _structure_from_flow_blocks(self, nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for n in nodes or []:
+            ntype = n.get("type")
+            if ntype == "for_each":
+                item_var = n.get("item_var", "item")
+                items = list(n.get("items") or [])
+                out.append({"type": "control", "control": "FOR", "args": [f"${{{item_var}}}", "IN", *items]})
+                for s in n.get("body") or []:
+                    out.append({"type": "keyword", "keyword": s.get("keyword", ""), "arguments": list(s.get("arguments") or [])})
+                out.append({"type": "control", "control": "END"})
+            elif ntype == "if":
+                out.append({"type": "control", "control": "IF", "args": [n.get("condition", "")]})
+                for s in n.get("then") or []:
+                    out.append({"type": "keyword", "keyword": s.get("keyword", ""), "arguments": list(s.get("arguments") or [])})
+                else_body = n.get("else") or []
+                if else_body:
+                    out.append({"type": "control", "control": "ELSE"})
+                    for s in else_body:
+                        out.append({"type": "keyword", "keyword": s.get("keyword", ""), "arguments": list(s.get("arguments") or [])})
+                out.append({"type": "control", "control": "END"})
+            elif ntype == "try":
+                out.append({"type": "control", "control": "TRY"})
+                for s in n.get("try") or []:
+                    out.append({"type": "keyword", "keyword": s.get("keyword", ""), "arguments": list(s.get("arguments") or [])})
+                patterns = list(n.get("except_patterns") or [])
+                if n.get("except"):
+                    # Use a single EXCEPT node with all patterns when sharing one handler
+                    if patterns:
+                        out.append({"type": "control", "control": "EXCEPT", "args": patterns})
+                    else:
+                        out.append({"type": "control", "control": "EXCEPT"})
+                    for s in n.get("except") or []:
+                        out.append({"type": "keyword", "keyword": s.get("keyword", ""), "arguments": list(s.get("arguments") or [])})
+                if n.get("finally"):
+                    out.append({"type": "control", "control": "FINALLY"})
+                    for s in n.get("finally") or []:
+                        out.append({"type": "keyword", "keyword": s.get("keyword", ""), "arguments": list(s.get("arguments") or [])})
+                out.append({"type": "control", "control": "END"})
+            else:
+                # Unknown node: best-effort as a keyword
+                if n.get("keyword"):
+                    out.append({"type": "keyword", "keyword": n.get("keyword", ""), "arguments": list(n.get("arguments") or [])})
+        return out
 
     def _render_flow_blocks(self, nodes: List[Dict[str, Any]], indent: str = "") -> List[str]:
         lines: List[str] = []
@@ -1085,13 +1267,13 @@ class TestBuilder:
                 lines.extend(self._render_flow_body(try_body, indent + "    "))
                 patterns = n.get("except_patterns") or []
                 if n.get("except"):
+                    # If a single handler is provided with multiple patterns, put all on one EXCEPT line.
                     if patterns:
-                        lines.append(f"{indent}EXCEPT    {patterns[0]}")
+                        joined = "    ".join([str(p) for p in patterns])
+                        lines.append(f"{indent}EXCEPT    {joined}")
                     else:
                         lines.append(f"{indent}EXCEPT")
                     lines.extend(self._render_flow_body(n.get("except"), indent + "    "))
-                    for extra in patterns[1:]:
-                        lines.append(f"{indent}EXCEPT    {extra}")
                 if n.get("finally"):
                     lines.append(f"{indent}FINALLY")
                     lines.extend(self._render_flow_body(n.get("finally"), indent + "    "))
