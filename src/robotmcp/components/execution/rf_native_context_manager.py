@@ -348,6 +348,7 @@ class RobotFrameworkNativeContextManager:
             try:
                 from robot.conf import RobotSettings
                 from robot.output import Output
+                from robot.output import logger as rf_logger
                 import tempfile, os
 
                 # Validate current execution context
@@ -363,6 +364,22 @@ class RobotFrameworkNativeContextManager:
                     # Update ${OUTPUTDIR} and ${LOGFILE} for library compatibility
                     variables["${OUTPUTDIR}"] = temp_output_dir
                     variables["${LOGFILE}"] = os.path.join(temp_output_dir, "log.html")
+
+                # Ensure global LOGGER has an output file registered
+                try:
+                    if getattr(rf_logger.LOGGER, "_output_file", None) is None:
+                        temp_output_dir = variables.get("${OUTPUTDIR}")
+                        if not temp_output_dir:
+                            temp_output_dir = tempfile.mkdtemp(prefix="rf_mcp_")
+                            variables["${OUTPUTDIR}"] = temp_output_dir
+                            variables["${LOGFILE}"] = os.path.join(temp_output_dir, "log.html")
+                        settings = RobotSettings(outputdir=temp_output_dir, output=None)
+                        # Creating Output registers output file with LOGGER
+                        new_output = Output(settings)
+                        # Prefer to use the most recent output on the context too
+                        active_ctx.output = new_output
+                except Exception:
+                    pass
 
                 # Ensure a parent result test exists for StatusReporter
                 try:

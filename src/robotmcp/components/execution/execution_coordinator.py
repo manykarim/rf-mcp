@@ -638,6 +638,20 @@ class ExecutionCoordinator:
                 suite_content, session_id, options
             )
 
+            # Refresh RF native context after dry run as RF CLI may alter globals
+            try:
+                from robotmcp.components.execution.rf_native_context_manager import (
+                    get_rf_native_context_manager,
+                )
+                mgr = get_rf_native_context_manager()
+                try:
+                    libs = list(session.search_order) if getattr(session, "search_order", None) else None
+                except Exception:
+                    libs = None
+                _ = mgr.create_context_for_session(session_id, libraries=libs)
+            except Exception:
+                pass
+
             return result
 
         except Exception as e:
