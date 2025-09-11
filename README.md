@@ -9,7 +9,15 @@
 
 RobotMCP is a comprehensive Model Context Protocol (MCP) server that bridges the gap between human language and Robot Framework automation. It enables AI agents to understand test intentions, execute steps interactively, and generate complete test suites from successful executions.
 
+**Intro**
+
 https://github.com/user-attachments/assets/ad89064f-cab3-4ae6-a4c4-5e8c241301a1
+
+**Setup**
+
+https://github.com/user-attachments/assets/8448cb70-6fb3-4f04-9742-a8a8453a9c7f
+
+
 
 ---
 
