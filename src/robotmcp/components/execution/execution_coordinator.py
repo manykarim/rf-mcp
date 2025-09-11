@@ -767,6 +767,22 @@ class ExecutionCoordinator:
                 suite_content, session_id, options
             )
 
+            # Refresh RF native context after full suite run to avoid stale globals
+            try:
+                from robotmcp.components.execution.rf_native_context_manager import (
+                    get_rf_native_context_manager,
+                )
+                mgr = get_rf_native_context_manager()
+                # Prefer the session's search order if available
+                try:
+                    libs = list(session.search_order) if getattr(session, "search_order", None) else None
+                except Exception:
+                    libs = None
+                _ = mgr.create_context_for_session(session_id, libraries=libs)
+            except Exception:
+                # Best-effort; do not fail suite result if refresh has issues
+                pass
+
             return result
 
         except Exception as e:

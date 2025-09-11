@@ -340,9 +340,43 @@ class RobotFrameworkNativeContextManager:
             ctx = context_info["context"]
             namespace = context_info["namespace"]
             variables = context_info["variables"]
-            
+
             logger.info(f"Executing {keyword_name} in RF native context for session {session_id}")
-            
+
+            # Ensure the RF context is healthy after any prior suite execution.
+            # Rebuild missing output/result parent as needed to avoid NoneType.is_logged errors.
+            try:
+                from robot.conf import RobotSettings
+                from robot.output import Output
+                import tempfile, os
+
+                # Validate current execution context
+                from robot.running.context import EXECUTION_CONTEXTS as _CTX
+                active_ctx = _CTX.current or ctx
+
+                # Ensure output is available and has is_logged
+                needs_output = not getattr(active_ctx, 'output', None) or not hasattr(getattr(active_ctx, 'output', None), 'message')
+                if needs_output:
+                    temp_output_dir = tempfile.mkdtemp(prefix="rf_mcp_")
+                    settings = RobotSettings(outputdir=temp_output_dir, output=None)
+                    active_ctx.output = Output(settings)
+                    # Update ${OUTPUTDIR} and ${LOGFILE} for library compatibility
+                    variables["${OUTPUTDIR}"] = temp_output_dir
+                    variables["${LOGFILE}"] = os.path.join(temp_output_dir, "log.html")
+
+                # Ensure a parent result test exists for StatusReporter
+                try:
+                    from robot.result.model import TestCase as ResultTest
+                    parent_test = context_info.get("result_test")
+                    if parent_test is None:
+                        parent_test = ResultTest(name=f"MCP_Test_{session_id}")
+                        context_info["result_test"] = parent_test
+                except Exception:
+                    pass
+            except Exception:
+                # Best-effort self-heal; continue
+                pass
+
             # SYNC SESSION VARIABLES TO RF VARIABLES (critical for ${response.json()})
             if session_variables:
                 logger.info(f"Syncing {len(session_variables)} session variables to RF Variables before execution")
@@ -615,8 +649,12 @@ class RobotFrameworkNativeContextManager:
                 try:
                     ctx_info = self._session_contexts.get(session_id)
                     parent_test = ctx_info.get("result_test") if ctx_info else None
-                    if parent_test is not None:
-                        res_kw.parent = parent_test
+                    if parent_test is None:
+                        # Self-heal: create a minimal ResultTest to satisfy StatusReporter
+                        from robot.result.model import TestCase as ResultTest
+                        parent_test = ResultTest(name=f"MCP_Test_{session_id}")
+                        ctx_info["result_test"] = parent_test
+                    res_kw.parent = parent_test
                 except Exception:
                     pass
                 result = runner.run(data_kw, res_kw, ctx)
@@ -638,8 +676,13 @@ class RobotFrameworkNativeContextManager:
                         # Force context.test to a valid result test
                         try:
                             ctx_info = self._session_contexts.get(session_id)
-                            if ctx_info and ctx_info.get("result_test") is not None:
-                                ctx.test = ctx_info["result_test"]
+                            from robot.result.model import TestCase as ResultTest
+                            if ctx_info:
+                                parent_test = ctx_info.get("result_test")
+                                if parent_test is None:
+                                    parent_test = ResultTest(name=f"MCP_Test_{session_id}")
+                                    ctx_info["result_test"] = parent_test
+                                ctx.test = parent_test
                         except Exception:
                             pass
                         # Apply the same Windows path normalization for BuiltIn fallback
