@@ -293,6 +293,20 @@ class KeywordExecutor:
             )
             step.mark_failure(str(e))
 
+            # Generate hints for the failure
+            try:
+                from robotmcp.utils.hints import HintContext, generate_hints
+                hctx = HintContext(
+                    session_id=session.session_id,
+                    keyword=keyword,
+                    arguments=list(arguments or []),
+                    error_text=str(e),
+                    session_search_order=getattr(session, "search_order", None),
+                )
+                hints = generate_hints(hctx)
+            except Exception:
+                hints = []
+
             return {
                 "success": False,
                 "error": str(e),
@@ -302,6 +316,7 @@ class KeywordExecutor:
                 "status": "fail",
                 "execution_time": step.execution_time,
                 "session_variables": dict(session.variables),
+                "hints": hints,
             }
 
     def _process_variable_assignment(
@@ -1603,6 +1618,22 @@ class KeywordExecutor:
 
         if not result["success"]:
             base_response["error"] = result.get("error", "Unknown error")
+            # Propagate hints from lower layers or generate as fallback
+            hints = result.get("hints")
+            if not hints:
+                try:
+                    from robotmcp.utils.hints import HintContext, generate_hints
+                    hctx = HintContext(
+                        session_id=session.session_id,
+                        keyword=keyword,
+                        arguments=list(arguments or []),
+                        error_text=str(base_response["error"]),
+                        session_search_order=getattr(session, "search_order", None),
+                    )
+                    hints = generate_hints(hctx)
+                except Exception:
+                    hints = []
+            base_response["hints"] = hints
 
         if detail_level == "minimal":
             # Serialize output to prevent MCP serialization errors with complex objects

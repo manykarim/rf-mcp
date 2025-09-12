@@ -620,6 +620,69 @@ class RobotFrameworkNativeContextManager:
                 }
             except Exception:
                 pass
+            # Evaluate expression normalization: support ${var} and bare variable names
+            try:
+                if keyword_name.strip().lower() == "evaluate" and arguments:
+                    import re
+                    expr = arguments[0]
+                    if isinstance(expr, str):
+                        # Convert ${var.suffix} -> $var.suffix for RF Evaluate semantics
+                        expr2 = re.sub(r"\$\{([A-Za-z_]\w*)([^}]*)\}", r"$\1\2", expr)
+                        # If expression starts with a bare variable name that exists in session vars, prefix with $.
+                        try:
+                            bare = re.match(r"^\s*([A-Za-z_]\w+)\b(.*)$", expr2)
+                            if bare:
+                                name, rest = bare.group(1), bare.group(2)
+                                # Build a set of known names without ${}
+                                known = set()
+                                try:
+                                    for k in (session_variables or {}).keys():
+                                        kstr = str(k)
+                                        if kstr.startswith("${") and kstr.endswith("}"):
+                                            known.add(kstr[2:-1])
+                                        else:
+                                            known.add(kstr)
+                                except Exception:
+                                    pass
+                                # Fallback: probe RF Variables by normalized name
+                                in_variables = False
+                                if name not in known:
+                                    try:
+                                        _ = variables[f"${{{name}}}"]
+                                        in_variables = True
+                                    except Exception:
+                                        in_variables = False
+                                if (name in known or in_variables) and not expr2.lstrip().startswith("$"):
+                                    expr2 = f"${name}{rest}"
+                        except Exception:
+                            pass
+
+                        # Also normalize bracketed indexing like [item] or [item[0]] to use $item
+                        try:
+                            # Rebuild known set if needed
+                            kn = set()
+                            for k in (session_variables or {}).keys():
+                                ks = str(k)
+                                if ks.startswith("${") and ks.endswith("}"):
+                                    kn.add(ks[2:-1])
+                                else:
+                                    kn.add(ks)
+                            # Probe variables store for additional names
+                            for candidate in list(kn):
+                                pass
+                            # Apply substitutions for each known name
+                            import re as _re
+                            for nm in kn or []:
+                                pat_simple = _re.compile(r"\[" + _re.escape(nm) + r"\]")
+                                expr2 = pat_simple.sub("[${}".format(nm) + "]", expr2)
+                                pat_index = _re.compile(r"\[" + _re.escape(nm) + r"\[(.*?)\]\]")
+                                expr2 = pat_index.sub(r"[$" + nm + r"[\1]]", expr2)
+                        except Exception:
+                            pass
+                        arguments = [expr2] + list(arguments[1:])
+            except Exception:
+                pass
+
             # Resolve via Namespace → get_runner → run with proper models
             try:
                 from robot.running.model import Keyword as RunKeyword
@@ -748,11 +811,25 @@ class RobotFrameworkNativeContextManager:
             import traceback
             logger.error(f"RF native execution traceback: {traceback.format_exc()}")
             
+            # Attach contextual hints
+            try:
+                from robotmcp.utils.hints import HintContext, generate_hints
+                ctx = HintContext(
+                    session_id=session_id,
+                    keyword=keyword_name,
+                    arguments=list(arguments or []),
+                    error_text=str(e),
+                )
+                hints = generate_hints(ctx)
+            except Exception:
+                hints = []
+
             return {
                 "success": False,
                 "error": f"Keyword execution failed: {str(e)}",
                 "keyword": keyword_name,
-                "arguments": arguments
+                "arguments": arguments,
+                "hints": hints,
             }
     
 # Fallback method removed - using simplified approach
