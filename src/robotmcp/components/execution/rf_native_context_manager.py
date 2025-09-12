@@ -340,9 +340,60 @@ class RobotFrameworkNativeContextManager:
             ctx = context_info["context"]
             namespace = context_info["namespace"]
             variables = context_info["variables"]
-            
+
             logger.info(f"Executing {keyword_name} in RF native context for session {session_id}")
-            
+
+            # Ensure the RF context is healthy after any prior suite execution.
+            # Rebuild missing output/result parent as needed to avoid NoneType.is_logged errors.
+            try:
+                from robot.conf import RobotSettings
+                from robot.output import Output
+                from robot.output import logger as rf_logger
+                import tempfile, os
+
+                # Validate current execution context
+                from robot.running.context import EXECUTION_CONTEXTS as _CTX
+                active_ctx = _CTX.current or ctx
+
+                # Ensure output is available and has is_logged
+                needs_output = not getattr(active_ctx, 'output', None) or not hasattr(getattr(active_ctx, 'output', None), 'message')
+                if needs_output:
+                    temp_output_dir = tempfile.mkdtemp(prefix="rf_mcp_")
+                    settings = RobotSettings(outputdir=temp_output_dir, output=None)
+                    active_ctx.output = Output(settings)
+                    # Update ${OUTPUTDIR} and ${LOGFILE} for library compatibility
+                    variables["${OUTPUTDIR}"] = temp_output_dir
+                    variables["${LOGFILE}"] = os.path.join(temp_output_dir, "log.html")
+
+                # Ensure global LOGGER has an output file registered
+                try:
+                    if getattr(rf_logger.LOGGER, "_output_file", None) is None:
+                        temp_output_dir = variables.get("${OUTPUTDIR}")
+                        if not temp_output_dir:
+                            temp_output_dir = tempfile.mkdtemp(prefix="rf_mcp_")
+                            variables["${OUTPUTDIR}"] = temp_output_dir
+                            variables["${LOGFILE}"] = os.path.join(temp_output_dir, "log.html")
+                        settings = RobotSettings(outputdir=temp_output_dir, output=None)
+                        # Creating Output registers output file with LOGGER
+                        new_output = Output(settings)
+                        # Prefer to use the most recent output on the context too
+                        active_ctx.output = new_output
+                except Exception:
+                    pass
+
+                # Ensure a parent result test exists for StatusReporter
+                try:
+                    from robot.result.model import TestCase as ResultTest
+                    parent_test = context_info.get("result_test")
+                    if parent_test is None:
+                        parent_test = ResultTest(name=f"MCP_Test_{session_id}")
+                        context_info["result_test"] = parent_test
+                except Exception:
+                    pass
+            except Exception:
+                # Best-effort self-heal; continue
+                pass
+
             # SYNC SESSION VARIABLES TO RF VARIABLES (critical for ${response.json()})
             if session_variables:
                 logger.info(f"Syncing {len(session_variables)} session variables to RF Variables before execution")
@@ -569,6 +620,69 @@ class RobotFrameworkNativeContextManager:
                 }
             except Exception:
                 pass
+            # Evaluate expression normalization: support ${var} and bare variable names
+            try:
+                if keyword_name.strip().lower() == "evaluate" and arguments:
+                    import re
+                    expr = arguments[0]
+                    if isinstance(expr, str):
+                        # Convert ${var.suffix} -> $var.suffix for RF Evaluate semantics
+                        expr2 = re.sub(r"\$\{([A-Za-z_]\w*)([^}]*)\}", r"$\1\2", expr)
+                        # If expression starts with a bare variable name that exists in session vars, prefix with $.
+                        try:
+                            bare = re.match(r"^\s*([A-Za-z_]\w+)\b(.*)$", expr2)
+                            if bare:
+                                name, rest = bare.group(1), bare.group(2)
+                                # Build a set of known names without ${}
+                                known = set()
+                                try:
+                                    for k in (session_variables or {}).keys():
+                                        kstr = str(k)
+                                        if kstr.startswith("${") and kstr.endswith("}"):
+                                            known.add(kstr[2:-1])
+                                        else:
+                                            known.add(kstr)
+                                except Exception:
+                                    pass
+                                # Fallback: probe RF Variables by normalized name
+                                in_variables = False
+                                if name not in known:
+                                    try:
+                                        _ = variables[f"${{{name}}}"]
+                                        in_variables = True
+                                    except Exception:
+                                        in_variables = False
+                                if (name in known or in_variables) and not expr2.lstrip().startswith("$"):
+                                    expr2 = f"${name}{rest}"
+                        except Exception:
+                            pass
+
+                        # Also normalize bracketed indexing like [item] or [item[0]] to use $item
+                        try:
+                            # Rebuild known set if needed
+                            kn = set()
+                            for k in (session_variables or {}).keys():
+                                ks = str(k)
+                                if ks.startswith("${") and ks.endswith("}"):
+                                    kn.add(ks[2:-1])
+                                else:
+                                    kn.add(ks)
+                            # Probe variables store for additional names
+                            for candidate in list(kn):
+                                pass
+                            # Apply substitutions for each known name
+                            import re as _re
+                            for nm in kn or []:
+                                pat_simple = _re.compile(r"\[" + _re.escape(nm) + r"\]")
+                                expr2 = pat_simple.sub("[${}".format(nm) + "]", expr2)
+                                pat_index = _re.compile(r"\[" + _re.escape(nm) + r"\[(.*?)\]\]")
+                                expr2 = pat_index.sub(r"[$" + nm + r"[\1]]", expr2)
+                        except Exception:
+                            pass
+                        arguments = [expr2] + list(arguments[1:])
+            except Exception:
+                pass
+
             # Resolve via Namespace → get_runner → run with proper models
             try:
                 from robot.running.model import Keyword as RunKeyword
@@ -615,8 +729,12 @@ class RobotFrameworkNativeContextManager:
                 try:
                     ctx_info = self._session_contexts.get(session_id)
                     parent_test = ctx_info.get("result_test") if ctx_info else None
-                    if parent_test is not None:
-                        res_kw.parent = parent_test
+                    if parent_test is None:
+                        # Self-heal: create a minimal ResultTest to satisfy StatusReporter
+                        from robot.result.model import TestCase as ResultTest
+                        parent_test = ResultTest(name=f"MCP_Test_{session_id}")
+                        ctx_info["result_test"] = parent_test
+                    res_kw.parent = parent_test
                 except Exception:
                     pass
                 result = runner.run(data_kw, res_kw, ctx)
@@ -638,8 +756,13 @@ class RobotFrameworkNativeContextManager:
                         # Force context.test to a valid result test
                         try:
                             ctx_info = self._session_contexts.get(session_id)
-                            if ctx_info and ctx_info.get("result_test") is not None:
-                                ctx.test = ctx_info["result_test"]
+                            from robot.result.model import TestCase as ResultTest
+                            if ctx_info:
+                                parent_test = ctx_info.get("result_test")
+                                if parent_test is None:
+                                    parent_test = ResultTest(name=f"MCP_Test_{session_id}")
+                                    ctx_info["result_test"] = parent_test
+                                ctx.test = parent_test
                         except Exception:
                             pass
                         # Apply the same Windows path normalization for BuiltIn fallback
@@ -688,11 +811,25 @@ class RobotFrameworkNativeContextManager:
             import traceback
             logger.error(f"RF native execution traceback: {traceback.format_exc()}")
             
+            # Attach contextual hints
+            try:
+                from robotmcp.utils.hints import HintContext, generate_hints
+                ctx = HintContext(
+                    session_id=session_id,
+                    keyword=keyword_name,
+                    arguments=list(arguments or []),
+                    error_text=str(e),
+                )
+                hints = generate_hints(ctx)
+            except Exception:
+                hints = []
+
             return {
                 "success": False,
                 "error": f"Keyword execution failed: {str(e)}",
                 "keyword": keyword_name,
-                "arguments": arguments
+                "arguments": arguments,
+                "hints": hints,
             }
     
 # Fallback method removed - using simplified approach

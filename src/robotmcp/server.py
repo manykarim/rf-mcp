@@ -572,6 +572,19 @@ async def execute_step(
         detailed_error = f"Step execution failed: {error_msg}"
         if "suggestions" in result:
             detailed_error += f"\nSuggestions: {', '.join(result['suggestions'])}"
+        # Include structured hints for better guidance
+        hints = result.get("hints") or []
+        if hints:
+            try:
+                hint_lines = []
+                for h in hints:
+                    title = h.get("title") or "Hint"
+                    message = h.get("message") or ""
+                    hint_lines.append(f"- {title}: {message}")
+                if hint_lines:
+                    detailed_error += "\nHints:\n" + "\n".join(hint_lines)
+            except Exception:
+                pass
         if "step_id" in result:
             detailed_error += f"\nStep ID: {result['step_id']}"
 

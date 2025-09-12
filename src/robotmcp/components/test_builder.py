@@ -1034,6 +1034,16 @@ class TestBuilder:
 
         if step.arguments:
             processed_args = list(step.arguments)
+            # Normalize Evaluate expressions to use $var syntax (Robot Framework requirement)
+            try:
+                if (step.keyword or "").strip().lower() == "evaluate" and processed_args:
+                    import re
+                    expr = str(processed_args[0])
+                    # Convert ${var.suffix} -> $var.suffix inside the expression
+                    expr = re.sub(r"\$\{([A-Za-z_]\w*)([^}]*)\}", r"$\1\2", expr)
+                    processed_args[0] = expr
+            except Exception:
+                pass
             if (
                 self.execution_engine
                 and hasattr(self.execution_engine, "_convert_locator_for_library")
