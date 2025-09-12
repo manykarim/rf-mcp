@@ -26,7 +26,6 @@ TIMEOUT = 90
 network_enabled = os.environ.get("RUN_NETWORK_TESTS") == "1"
 
 
-@pytest.mark.skipif(not network_enabled, reason="Network tests disabled; set RUN_NETWORK_TESTS=1 to enable")
 @pytest_asyncio.fixture
 async def mcp_client():
     async with Client(mcp) as client:
@@ -116,4 +115,3 @@ async def test_execute_step_after_full_suite_run_requests(mcp_client):
     assert post.data.get("success") is True, (
         "Expected post-suite execute_step to succeed; got error: %s" % post.data
     )
-
