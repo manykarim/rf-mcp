@@ -1,11 +1,13 @@
 """Main MCP Server implementation for Robot Framework integration."""
 
 import logging
-from typing import Any, Dict, List, Union
+import os
+from typing import Any, Callable, Dict, List, Union
 
 from fastmcp import FastMCP
 
 from robotmcp.components.execution import ExecutionCoordinator
+from robotmcp.components.execution.external_rf_client import ExternalRFClient
 from robotmcp.components.execution.mobile_capability_service import (
     MobileCapabilityService,
 )
@@ -25,6 +27,134 @@ logger = logging.getLogger(__name__)
 
 # Initialize FastMCP server
 mcp = FastMCP("Robot Framework MCP Server")
+
+
+def _get_external_client_if_configured() -> ExternalRFClient | None:
+    """Return an ExternalRFClient when attach mode is configured via env.
+
+    Env vars:
+    - ROBOTMCP_ATTACH_HOST (required to enable attach mode)
+    - ROBOTMCP_ATTACH_PORT (optional, defaults 7317)
+    - ROBOTMCP_ATTACH_TOKEN (optional, defaults 'change-me')
+    """
+    try:
+        host = os.environ.get("ROBOTMCP_ATTACH_HOST")
+        if not host:
+            return None
+        port = int(os.environ.get("ROBOTMCP_ATTACH_PORT", "7317"))
+        token = os.environ.get("ROBOTMCP_ATTACH_TOKEN", "change-me")
+        return ExternalRFClient(host=host, port=port, token=token)
+    except Exception:
+        return None
+
+
+def _call_attach_tool_with_fallback(
+    tool_name: str,
+    external_call: Callable[[ExternalRFClient], Dict[str, Any]],
+    local_call: Callable[[], Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Execute an attach-aware tool with automatic fallback when bridge is unreachable."""
+
+    client = _get_external_client_if_configured()
+    mode = os.environ.get("ROBOTMCP_ATTACH_DEFAULT", "auto").strip().lower()
+    strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {"1", "true", "yes"}
+
+    if client is None or mode == "off":
+        return local_call()
+
+    try:
+        response = external_call(client)
+    except Exception as exc:  # pragma: no cover - defensive conversion to attach-style error
+        err = str(exc)
+        logger.error(
+            "ATTACH tool '%s' raised exception: %s", tool_name, err, exc_info=False
+        )
+        response = {"success": False, "error": err}
+
+    if response.get("success"):
+        return response
+
+    error_msg = response.get("error", "attach call failed")
+    logger.error("ATTACH tool '%s' error: %s", tool_name, error_msg)
+
+    if strict or mode == "force":
+        return {
+            "success": False,
+            "error": f"Attach bridge call failed ({tool_name}): {error_msg}",
+        }
+
+    logger.warning(
+        "ATTACH unreachable for '%s'; falling back to local execution", tool_name
+    )
+    return local_call()
+
+
+def _log_attach_banner() -> None:
+    """Log attach-mode configuration and basic bridge health at server start."""
+
+    # Log several environment variables for debugging
+    logger.info(
+        (
+            "--- RobotMCP Environment Variables ---\n"
+            f"ROBOTMCP_ATTACH_HOST: {os.environ.get('ROBOTMCP_ATTACH_HOST')}\n"
+            f"ROBOTMCP_ATTACH_PORT: {os.environ.get('ROBOTMCP_ATTACH_PORT')}\n"
+            f"ROBOTMCP_ATTACH_TOKEN: {os.environ.get('ROBOTMCP_ATTACH_TOKEN')}\n"
+        )
+    )
+    try:
+        client = _get_external_client_if_configured()
+        if client is None:
+            logger.info("Attach mode: disabled (ROBOTMCP_ATTACH_HOST not set)")
+            return
+        logger.info(f"Attach mode: enabled → {client.host}:{client.port}")
+        diag = client.diagnostics()
+        if diag.get("success"):
+            details = diag.get("result") or {}
+            libs = details.get("libraries")
+            extra = f" libraries={libs}" if libs else ""
+            logger.info(f"Attach bridge: reachable.{extra}")
+        else:
+            err = diag.get("error", "not reachable yet")
+            logger.info(f"Attach bridge: not reachable ({err})")
+        mode = os.environ.get("ROBOTMCP_ATTACH_DEFAULT", "auto").strip().lower()
+        strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {"1", "true", "yes"}
+        logger.info(f"Attach default: {mode}{' (strict)' if strict else ''}")
+    except Exception as e:  # defensive
+        logger.info(f"Attach bridge: check failed ({e})")
+
+
+def _compute_effective_use_context(
+    use_context: bool | None, client: ExternalRFClient | None, keyword: str
+) -> tuple[bool, str, bool]:
+    """Decide whether to route to the external bridge.
+
+    Returns a tuple: (effective_use_context, mode, strict)
+    - mode: value of ROBOTMCP_ATTACH_DEFAULT (auto|force|off)
+    - strict: True if ROBOTMCP_ATTACH_STRICT is enabled
+    """
+    mode = os.environ.get("ROBOTMCP_ATTACH_DEFAULT", "auto").strip().lower()
+    strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {"1", "true", "yes"}
+    effective = bool(use_context) if use_context is not None else False
+    if client is not None:
+        if use_context is None:
+            if mode in ("auto", "force"):
+                reachable = bool(client.diagnostics().get("success"))
+                if mode == "force" or reachable:
+                    effective = True
+                    logger.info(
+                        f"ATTACH mode ({mode}): defaulting use_context=True for '{keyword}'"
+                    )
+                else:
+                    effective = False
+                    logger.info(
+                        f"ATTACH mode (auto): bridge unreachable, defaulting to local for '{keyword}'"
+                    )
+        elif use_context is False and mode == "force":
+            effective = True
+            logger.info(
+                f"ATTACH mode (force): overriding use_context=False → True for '{keyword}'"
+            )
+    return effective, mode, strict
 
 
 # Internal helpers to build prompt texts (used by both @mcp.prompt and wrapper tools)
@@ -521,7 +651,7 @@ async def execute_step(
     detail_level: str = "minimal",
     scenario_hint: str = None,
     assign_to: Union[str, List[str]] = None,
-    use_context: bool = False,
+    use_context: bool | None = None,
 ) -> Dict[str, Any]:
     """Execute a single test step using Robot Framework API.
 
@@ -553,6 +683,38 @@ async def execute_step(
     if arguments is None:
         arguments = []
 
+    # Determine routing based on attach mode and default settings
+    client = _get_external_client_if_configured()
+    effective_use_context, mode, strict = _compute_effective_use_context(
+        use_context, client, keyword
+    )
+
+    # External routing path
+    if client is not None and effective_use_context:
+        logger.info(
+            f"ATTACH mode: routing execute_step '{keyword}' to bridge at {client.host}:{client.port}"
+        )
+        attach_resp = client.run_keyword(keyword, arguments, assign_to)
+        if not attach_resp.get("success"):
+            err = attach_resp.get("error", "attach call failed")
+            logger.error(f"ATTACH mode error: {err}")
+            if strict or mode == "force":
+                raise Exception(
+                    f"Attach bridge call failed: {err}. Is MCP Serve running and token/port correct?"
+                )
+            # Fallback to local execution
+            logger.warning("ATTACH unreachable; falling back to local execution")
+        else:
+            return {
+                "success": True,
+                "keyword": keyword,
+                "arguments": arguments,
+                "assign_to": assign_to,
+                "result": attach_resp.get("result"),
+                "assigned": attach_resp.get("assigned"),
+            }
+
+    # Local execution path
     result = await execution_engine.execute_step(
         keyword,
         arguments,
@@ -560,7 +722,7 @@ async def execute_step(
         detail_level,
         scenario_hint=scenario_hint,
         assign_to=assign_to,
-        use_context=use_context,
+        use_context=bool(use_context),
     )
 
     # For proper MCP protocol compliance, failed steps should raise exceptions
@@ -758,6 +920,29 @@ async def get_page_source(
         Dict with page source, metadata, and filtering information. When filtered=True,
         includes both original and filtered page source lengths for comparison.
     """
+    # Bridge path: try Browser.Get Page Source or SeleniumLibrary.Get Source in live debug session
+    client = _get_external_client_if_configured()
+    if client is not None:
+        # Prefer Browser's keyword
+        for kw in ("Get Page Source", "Get Source"):
+            resp = client.run_keyword(kw, [])
+            if resp.get("success") and resp.get("result") is not None:
+                src = resp.get("result")
+                # Minimal normalized payload with external flag
+                return {
+                    "success": True,
+                    "external": True,
+                    "keyword_used": kw,
+                    "page_source": src,
+                    "metadata": {"full": True, "filtered": False},
+                }
+        return {
+            "success": False,
+            "external": True,
+            "error": "Could not retrieve page source via bridge (no keyword succeeded)",
+        }
+
+    # Local path
     return await execution_engine.get_page_source(
         session_id, full_source, filtered, filtering_level
     )
@@ -856,6 +1041,7 @@ async def search_keywords(pattern: str) -> List[Dict[str, Any]]:
 # Flow/Control Tools v1
 # =====================
 
+
 def _normalize_step(step: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize a step dict to expected keys."""
     return {
@@ -886,7 +1072,10 @@ async def _run_steps_in_context(
             use_context=True,
         )
         results.append(res)
-        if not res.get("success", False) and (stop_on_failure is True or str(stop_on_failure).lower() in ("1","true","yes","on")):
+        if not res.get("success", False) and (
+            stop_on_failure is True
+            or str(stop_on_failure).lower() in ("1", "true", "yes", "on")
+        ):
             break
     return results
 
@@ -940,7 +1129,23 @@ async def set_variables(
         "global": "Set Global Variable",
     }.get(scope.lower(), "Set Test Variable")
 
+    # If bridge configured, set in external context using client
+    client = _get_external_client_if_configured()
     results: Dict[str, bool] = {}
+    if client is not None:
+        for name, value in pairs.items():
+            try:
+                resp = client.set_variable(name, value)
+                results[name] = bool(resp.get("success"))
+            except Exception:
+                results[name] = False
+        return {
+            "success": all(results.values()),
+            "session_id": session_id,
+            "set": list(results.keys()),
+            "scope": scope,
+            "external": True,
+        }
     for name, value in pairs.items():
         # Use RF keyword so scoping is honored
         res = await execution_engine.execute_step(
@@ -952,7 +1157,12 @@ async def set_variables(
         )
         results[name] = bool(res.get("success"))
 
-    return {"success": all(results.values()), "session_id": session_id, "set": list(results.keys()), "scope": scope}
+    return {
+        "success": all(results.values()),
+        "session_id": session_id,
+        "set": list(results.keys()),
+        "scope": scope,
+    }
 
 
 @mcp.tool
@@ -970,8 +1180,8 @@ async def execute_if(
         block = {
             "type": "if",
             "condition": condition,
-            "then": [ _normalize_step(s) for s in (then_steps or []) ],
-            "else": [ _normalize_step(s) for s in (else_steps or []) ],
+            "then": [_normalize_step(s) for s in (then_steps or [])],
+            "else": [_normalize_step(s) for s in (else_steps or [])],
         }
         sess.flow_blocks.append(block)
     except Exception:
@@ -1016,7 +1226,7 @@ async def execute_for_each(
             "type": "for_each",
             "item_var": item_var,
             "items": list(items or []),
-            "body": [ _normalize_step(s) for s in (steps or []) ],
+            "body": [_normalize_step(s) for s in (steps or [])],
         }
         sess.flow_blocks.append(block)
     except Exception:
@@ -1065,10 +1275,14 @@ async def execute_try_except(
         sess = execution_engine.session_manager.get_or_create_session(session_id)
         block = {
             "type": "try",
-            "try": [ _normalize_step(s) for s in (try_steps or []) ],
+            "try": [_normalize_step(s) for s in (try_steps or [])],
             "except_patterns": list(except_patterns or []),
-            "except": [ _normalize_step(s) for s in (except_steps or []) ] if except_steps else [],
-            "finally": [ _normalize_step(s) for s in (finally_steps or []) ] if finally_steps else [],
+            "except": [_normalize_step(s) for s in (except_steps or [])]
+            if except_steps
+            else [],
+            "finally": [_normalize_step(s) for s in (finally_steps or [])]
+            if finally_steps
+            else [],
         }
         sess.flow_blocks.append(block)
     except Exception:
@@ -1092,24 +1306,39 @@ async def execute_try_except(
         else:
             try:
                 from fnmatch import fnmatch
+
                 for p in pats:
                     if isinstance(p, str):
                         pat = p.strip()
-                        if pat == "*" or fnmatch(err_text.lower(), pat.lower()) or (pat.lower() in err_text.lower()):
+                        if (
+                            pat == "*"
+                            or fnmatch(err_text.lower(), pat.lower())
+                            or (pat.lower() in err_text.lower())
+                        ):
                             match = True
                             break
             except Exception:
-                match = any((isinstance(p, str) and p.lower() in err_text.lower()) for p in pats)
+                match = any(
+                    (isinstance(p, str) and p.lower() in err_text.lower()) for p in pats
+                )
         if match and (except_steps or []):
-            exc_res = await _run_steps_in_context(session_id, except_steps or [], stop_on_failure=False)
+            exc_res = await _run_steps_in_context(
+                session_id, except_steps or [], stop_on_failure=False
+            )
             handled = True
 
     if finally_steps:
-        fin_res = await _run_steps_in_context(session_id, finally_steps, stop_on_failure=False)
+        fin_res = await _run_steps_in_context(
+            session_id, finally_steps, stop_on_failure=False
+        )
 
     success = first_fail is None or handled
     result: Dict[str, Any] = {
-        "success": success if not bool(rethrow) else False if (first_fail and not handled) else success,
+        "success": success
+        if not bool(rethrow)
+        else False
+        if (first_fail and not handled)
+        else success,
         "handled": handled,
         "try_results": try_res,
     }
@@ -1960,6 +2189,14 @@ async def diagnose_rf_context(session_id: str) -> Dict[str, Any]:
     and where possible, the current RF library search order.
     """
     try:
+        client = _get_external_client_if_configured()
+        if client is not None:
+            r = client.diagnostics()
+            return {
+                "context_exists": r.get("success", False),
+                "external": True,
+                "result": r.get("result"),
+            }
         mgr = get_rf_native_context_manager()
         info = mgr.get_session_context_info(session_id)
         # Try to enrich with Namespace search order and imported libraries
@@ -1985,12 +2222,74 @@ async def diagnose_rf_context(session_id: str) -> Dict[str, Any]:
 
 
 @mcp.tool(
+    name="attach_status",
+    description="Report attach-mode configuration and bridge health. Indicates whether execute_step(use_context=true) will route externally.",
+)
+async def attach_status() -> Dict[str, Any]:
+    try:
+        client = _get_external_client_if_configured()
+        configured = client is not None
+        mode = os.environ.get("ROBOTMCP_ATTACH_DEFAULT", "auto").strip().lower()
+        strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {"1", "true", "yes"}
+        if not configured:
+            return {
+                "configured": False,
+                "default_mode": mode,
+                "strict": strict,
+                "hint": "Set ROBOTMCP_ATTACH_HOST to enable attach mode.",
+            }
+        diag = client.diagnostics()
+        return {
+            "configured": True,
+            "host": client.host,
+            "port": client.port,
+            "reachable": bool(diag.get("success")),
+            "diagnostics": diag.get("result"),
+            "default_mode": mode,
+            "strict": strict,
+            "hint": "execute_step(..., use_context=true) routes to the bridge when reachable.",
+        }
+    except Exception as e:
+        logger.error(f"attach_status failed: {e}")
+        return {"configured": False, "error": str(e)}
+
+
+@mcp.tool(
+    name="attach_stop_bridge",
+    description="Send a stop command to the external attach bridge (McpAttach) to exit MCP Serve in the debugged suite.",
+)
+async def attach_stop_bridge() -> Dict[str, Any]:
+    try:
+        client = _get_external_client_if_configured()
+        if client is None:
+            return {
+                "success": False,
+                "error": "Attach mode not configured (ROBOTMCP_ATTACH_HOST not set)",
+            }
+        resp = client.stop()
+        ok = bool(resp.get("success"))
+        return {"success": ok, "response": resp}
+    except Exception as e:
+        logger.error(f"attach_stop_bridge failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# note: variable tools consolidated into get_context_variables/set_variables with attach routing
+
+
+@mcp.tool(
     name="import_resource",
     description="Import a Robot Framework resource file into the session RF Namespace.",
 )
 async def import_resource(session_id: str, path: str) -> Dict[str, Any]:
-    mgr = get_rf_native_context_manager()
-    return mgr.import_resource_for_session(session_id, path)
+    def _local_call() -> Dict[str, Any]:
+        mgr = get_rf_native_context_manager()
+        return mgr.import_resource_for_session(session_id, path)
+
+    def _external_call(client: ExternalRFClient) -> Dict[str, Any]:
+        return client.import_resource(path)
+
+    return _call_attach_tool_with_fallback("import_resource", _external_call, _local_call)
 
 
 @mcp.tool(
@@ -2003,9 +2302,17 @@ async def import_custom_library(
     args: List[str] | None = None,
     alias: str | None = None,
 ) -> Dict[str, Any]:
-    mgr = get_rf_native_context_manager()
-    return mgr.import_library_for_session(
-        session_id, name_or_path, tuple(args or ()), alias
+    def _local_call() -> Dict[str, Any]:
+        mgr = get_rf_native_context_manager()
+        return mgr.import_library_for_session(
+            session_id, name_or_path, tuple(args or ()), alias
+        )
+
+    def _external_call(client: ExternalRFClient) -> Dict[str, Any]:
+        return client.import_library(name_or_path, list(args or ()), alias)
+
+    return _call_attach_tool_with_fallback(
+        "import_custom_library", _external_call, _local_call
     )
 
 
@@ -2014,8 +2321,22 @@ async def import_custom_library(
     description="List available keywords from imported libraries and resources in the session RF Namespace.",
 )
 async def list_available_keywords(session_id: str) -> Dict[str, Any]:
-    mgr = get_rf_native_context_manager()
-    return mgr.list_available_keywords(session_id)
+    def _local_call() -> Dict[str, Any]:
+        mgr = get_rf_native_context_manager()
+        return mgr.list_available_keywords(session_id)
+
+    def _external_call(client: ExternalRFClient) -> Dict[str, Any]:
+        r = client.list_keywords()
+        return {
+            "success": r.get("success", False),
+            "session_id": session_id,
+            "external": True,
+            "keywords_by_library": r.get("result"),
+        }
+
+    return _call_attach_tool_with_fallback(
+        "list_available_keywords", _external_call, _local_call
+    )
 
 
 @mcp.tool(
@@ -2025,10 +2346,38 @@ async def list_available_keywords(session_id: str) -> Dict[str, Any]:
 async def get_session_keyword_documentation(
     session_id: str, keyword_name: str
 ) -> Dict[str, Any]:
-    mgr = get_rf_native_context_manager()
-    return mgr.get_keyword_documentation(session_id, keyword_name)
+    def _local_call() -> Dict[str, Any]:
+        mgr = get_rf_native_context_manager()
+        return mgr.get_keyword_documentation(session_id, keyword_name)
+
+    def _external_call(client: ExternalRFClient) -> Dict[str, Any]:
+        r = client.get_keyword_doc(keyword_name)
+        if r.get("success"):
+            return {
+                "success": True,
+                "session_id": session_id,
+                "name": r["result"]["name"],
+                "source": r["result"]["source"],
+                "doc": r["result"]["doc"],
+                "args": r["result"].get("args", []),
+                "type": "external",
+            }
+        return {
+            "success": False,
+            "error": r.get("error", "failed"),
+            "session_id": session_id,
+        }
+
+    return _call_attach_tool_with_fallback(
+        "get_session_keyword_documentation", _external_call, _local_call
+    )
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    # Log attach status at startup
+    try:
+        _log_attach_banner()
+    except Exception:
+        pass
     mcp.run()

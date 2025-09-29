@@ -133,6 +133,14 @@ class RobotFrameworkNativeContextManager:
                     # Create settings with output directory - this fixes Browser Library initialization
                     settings = RobotSettings(outputdir=temp_output_dir, output=None)
                     output = Output(settings)
+
+                    # Library listeners expect a suite scope before registering any
+                    try:
+                        output.library_listeners.new_suite_scope()
+                    except Exception as listener_err:
+                        logger.debug(
+                            f"Unable to initialize library listener scope: {listener_err}"
+                        )
                     
                     # Set OUTPUTDIR variable for Browser Library compatibility
                     # Browser Library uses BuiltIn().get_variable_value("${OUTPUTDIR}")
@@ -142,10 +150,15 @@ class RobotFrameworkNativeContextManager:
                     # SeleniumLibrary needs os.path.dirname(logfile) in log_dir property
                     log_file_path = os.path.join(temp_output_dir, "log.html")
                     variables["${LOGFILE}"] = log_file_path
+
+                    # Provide Robot's standard ${OUTPUT} variable (output.xml path)
+                    output_file_path = os.path.join(temp_output_dir, "output.xml")
+                    variables["${OUTPUT}"] = output_file_path
                     
                     logger.info(f"Created RF context with output directory: {temp_output_dir}")
                     logger.info(f"Set ${{OUTPUTDIR}} variable to: {temp_output_dir}")
                     logger.info(f"Set ${{LOGFILE}} variable to: {log_file_path}")
+                    logger.info(f"Set ${{OUTPUT}} variable to: {output_file_path}")
                 except Exception:
                     # If Output still fails, try a different approach
                     logger.warning("Could not create Output, using minimal logging")
@@ -166,6 +179,12 @@ class RobotFrameworkNativeContextManager:
                     ctx = _ExecutionContext(suite, namespace, output, dry_run=False)
                     EXECUTION_CONTEXTS._contexts.append(ctx)
                     EXECUTION_CONTEXTS._context = ctx
+
+                # Tag the execution context so tests can clean up deterministically
+                try:
+                    setattr(ctx, "_mcp_session", session_id)
+                except Exception:
+                    pass
                 
                 logger.info(f"Minimal RF context created for session {session_id}")
                 
@@ -361,8 +380,15 @@ class RobotFrameworkNativeContextManager:
                     temp_output_dir = tempfile.mkdtemp(prefix="rf_mcp_")
                     settings = RobotSettings(outputdir=temp_output_dir, output=None)
                     active_ctx.output = Output(settings)
-                    # Update ${OUTPUTDIR} and ${LOGFILE} for library compatibility
+                    try:
+                        active_ctx.output.library_listeners.new_suite_scope()
+                    except Exception as listener_err:
+                        logger.debug(
+                            f"Unable to initialize library listener scope during refresh: {listener_err}"
+                        )
+                    # Update ${OUTPUTDIR}, ${OUTPUT}, and ${LOGFILE} for library compatibility
                     variables["${OUTPUTDIR}"] = temp_output_dir
+                    variables["${OUTPUT}"] = os.path.join(temp_output_dir, "output.xml")
                     variables["${LOGFILE}"] = os.path.join(temp_output_dir, "log.html")
 
                 # Ensure global LOGGER has an output file registered
@@ -372,10 +398,17 @@ class RobotFrameworkNativeContextManager:
                         if not temp_output_dir:
                             temp_output_dir = tempfile.mkdtemp(prefix="rf_mcp_")
                             variables["${OUTPUTDIR}"] = temp_output_dir
+                            variables["${OUTPUT}"] = os.path.join(temp_output_dir, "output.xml")
                             variables["${LOGFILE}"] = os.path.join(temp_output_dir, "log.html")
                         settings = RobotSettings(outputdir=temp_output_dir, output=None)
                         # Creating Output registers output file with LOGGER
                         new_output = Output(settings)
+                        try:
+                            new_output.library_listeners.new_suite_scope()
+                        except Exception as listener_err:
+                            logger.debug(
+                                f"Unable to initialize library listener scope during logger setup: {listener_err}"
+                            )
                         # Prefer to use the most recent output on the context too
                         active_ctx.output = new_output
                 except Exception:
