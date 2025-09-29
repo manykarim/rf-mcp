@@ -175,3 +175,53 @@ async def test_custom_library_docs_and_errors(mcp_client):
         timeout=TIMEOUT,
     )
     assert nodoc.data.get("success") is False
+
+
+@pytest.mark.asyncio
+async def test_import_custom_library_attach_bridge_fallback(monkeypatch):
+    monkeypatch.setenv("ROBOTMCP_ATTACH_HOST", "127.0.0.1")
+    monkeypatch.setenv("ROBOTMCP_ATTACH_PORT", "7317")
+    monkeypatch.setenv("ROBOTMCP_ATTACH_TOKEN", "change-me")
+    monkeypatch.setenv("ROBOTMCP_ATTACH_DEFAULT", "auto")
+    monkeypatch.setenv("ROBOTMCP_ATTACH_STRICT", "0")
+
+    async with Client(mcp) as client:
+        analyze = await client.call_tool(
+            "analyze_scenario",
+            {"scenario": "Attach custom library fallback", "context": "data"},
+        )
+        session = analyze.data["session_info"]["session_id"]
+
+        result = await client.call_tool(
+            "import_custom_library",
+            {"session_id": session, "name_or_path": LIB_PATH},
+            timeout=TIMEOUT,
+        )
+
+        assert result.data.get("success") is True
+        assert result.data.get("library") == LIB_PATH
+
+
+@pytest.mark.asyncio
+async def test_import_custom_library_attach_bridge_strict_error(monkeypatch):
+    monkeypatch.setenv("ROBOTMCP_ATTACH_HOST", "127.0.0.1")
+    monkeypatch.setenv("ROBOTMCP_ATTACH_PORT", "7317")
+    monkeypatch.setenv("ROBOTMCP_ATTACH_TOKEN", "change-me")
+    monkeypatch.setenv("ROBOTMCP_ATTACH_DEFAULT", "auto")
+    monkeypatch.setenv("ROBOTMCP_ATTACH_STRICT", "1")
+
+    async with Client(mcp) as client:
+        analyze = await client.call_tool(
+            "analyze_scenario",
+            {"scenario": "Attach custom library strict", "context": "data"},
+        )
+        session = analyze.data["session_info"]["session_id"]
+
+        result = await client.call_tool(
+            "import_custom_library",
+            {"session_id": session, "name_or_path": LIB_PATH},
+            timeout=TIMEOUT,
+        )
+
+        assert result.data.get("success") is False
+        assert "Attach bridge call failed" in str(result.data.get("error", ""))

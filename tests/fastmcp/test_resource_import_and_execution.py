@@ -152,3 +152,54 @@ async def test_resource_import_errors_and_docs(mcp_client):
     )
     assert nodoc.data.get("success") is False
     assert "not found" in str(nodoc.data.get("error", "")).lower()
+
+
+@pytest.mark.asyncio
+async def test_import_resource_attach_bridge_fallback(monkeypatch):
+    monkeypatch.setenv("ROBOTMCP_ATTACH_HOST", "127.0.0.1")
+    monkeypatch.setenv("ROBOTMCP_ATTACH_PORT", "7317")
+    monkeypatch.setenv("ROBOTMCP_ATTACH_TOKEN", "change-me")
+    monkeypatch.setenv("ROBOTMCP_ATTACH_DEFAULT", "auto")
+    monkeypatch.setenv("ROBOTMCP_ATTACH_STRICT", "0")
+
+    async with Client(mcp) as client:
+        analyze = await client.call_tool(
+            "analyze_scenario",
+            {"scenario": "Attach mode fallback", "context": "data"},
+        )
+        session = analyze.data["session_info"]["session_id"]
+
+        result = await client.call_tool(
+            "import_resource",
+            {"session_id": session, "path": RESOURCE_PATH},
+            timeout=TIMEOUT,
+        )
+
+        assert result.data.get("success") is True
+        # Local fallback returns the original resource path for confirmation
+        assert result.data.get("resource") == RESOURCE_PATH
+
+
+@pytest.mark.asyncio
+async def test_import_resource_attach_bridge_strict_error(monkeypatch):
+    monkeypatch.setenv("ROBOTMCP_ATTACH_HOST", "127.0.0.1")
+    monkeypatch.setenv("ROBOTMCP_ATTACH_PORT", "7317")
+    monkeypatch.setenv("ROBOTMCP_ATTACH_TOKEN", "change-me")
+    monkeypatch.setenv("ROBOTMCP_ATTACH_DEFAULT", "auto")
+    monkeypatch.setenv("ROBOTMCP_ATTACH_STRICT", "1")
+
+    async with Client(mcp) as client:
+        analyze = await client.call_tool(
+            "analyze_scenario",
+            {"scenario": "Attach mode strict", "context": "data"},
+        )
+        session = analyze.data["session_info"]["session_id"]
+
+        result = await client.call_tool(
+            "import_resource",
+            {"session_id": session, "path": RESOURCE_PATH},
+            timeout=TIMEOUT,
+        )
+
+        assert result.data.get("success") is False
+        assert "Attach bridge call failed" in str(result.data.get("error", ""))
