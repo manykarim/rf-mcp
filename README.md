@@ -58,20 +58,6 @@ Execute the test suite stepwise and build the final version afterwards.
 
 ---
 
-## 🎯 Core Concept
-
-**Traditional Way:**
-1. Write Robot Framework code manually
-2. Debug syntax and locator issues
-3. Maintain test suites over time
-
-**RobotMCP Way:**
-1. **Describe** what you want to test in natural language
-2. **Execute** steps interactively with AI guidance
-3. **Generate** production-ready Robot Framework suites automatically
-
----
-
 ## 🚀 Key Features
 
 ### 🧠 **Natural Language Processing**
@@ -107,6 +93,7 @@ Execute the test suite stepwise and build the final version afterwards.
 
 ## 🧭 Latest Updates
 
+- MCP Debug Attach Bridge: drive RobotMCP tools against a live Robot Framework debug session via the new `McpAttach` library and attach-aware tools.
 - RF native context execution: persistent per-session Namespace + ExecutionContext.
 - Runner-first keyword execution with BuiltIn fallback for maximum compatibility.
 - New tools to import Resources and custom Python libraries into the session context.
@@ -214,6 +201,52 @@ If you set up a virtual environment, make sure to also use the python executable
 
 ### Other AI Agents
 RobotMCP works with any MCP-compatible AI agent. Use the stdio configuration above.
+
+## 🪝 Debug Attach Bridge
+
+RobotMCP ships with `robotmcp.attach.McpAttach`, a lightweight Robot Framework library that exposes the live `ExecutionContext` over a localhost HTTP bridge. When you debug a suite from VS Code (RobotCode) or another IDE, the bridge lets RobotMCP reuse the in-process variables, imports, and keyword search order instead of creating a separate context.
+
+### Robot Framework setup
+
+Import the library and start the serve loop inside the suite that you are debugging:
+
+```robotframework
+*** Settings ***
+Library    robotmcp.attach.McpAttach    token=${DEBUG_TOKEN}
+
+*** Variables ***
+${DEBUG_TOKEN}    change-me
+
+*** Test Cases ***
+Serve From Debugger
+    MCP Serve    port=7317    token=${DEBUG_TOKEN}    mode=blocking    poll_ms=100
+    [Teardown]    MCP Stop
+```
+
+- `MCP Serve    port=7317    token=${TOKEN}    mode=blocking|step    poll_ms=100` — starts the HTTP server (if not running) and processes bridge commands. Use `mode=step` during keyword body execution to process exactly one queued request.
+- `MCP Stop` — signals the serve loop to exit (used from the suite or remotely via RobotMCP `attach_stop_bridge`).
+- `MCP Process Once` — processes a single pending request and returns immediately; useful when the suite polls between test actions.
+- `MCP Start` — alias for `MCP Serve` for backwards compatibility.
+
+The bridge binds to `127.0.0.1` by default and expects clients to send the shared token in the `X-MCP-Token` header.
+
+### Configure RobotMCP to attach
+
+Start `robotmcp.server` with attach routing by providing the bridge connection details via environment variables (token must match the suite):
+
+```bash
+export ROBOTMCP_ATTACH_HOST=127.0.0.1
+export ROBOTMCP_ATTACH_PORT=7317          # optional, defaults to 7317
+export ROBOTMCP_ATTACH_TOKEN=change-me    # optional, defaults to 'change-me'
+export ROBOTMCP_ATTACH_DEFAULT=auto       # auto|force|off (auto routes when reachable)
+export ROBOTMCP_ATTACH_STRICT=0           # set to 1/true to fail when bridge is unreachable
+uv run python -m robotmcp.server
+```
+
+When `ROBOTMCP_ATTACH_HOST` is set, `execute_step(..., use_context=true)` and other context-aware tools first try to run inside the live debug session. Use the new MCP tools to manage the bridge from any agent:
+
+- `attach_status` — reports configuration, reachability, and diagnostics from the bridge (`/diagnostics`).
+- `attach_stop_bridge` — sends a `/stop` command, which in turn triggers `MCP Stop` in the debugged suite.
 
 ---
 
@@ -323,6 +356,8 @@ RobotMCP provides a comprehensive toolset organized by function. Highlights:
 - `list_available_keywords` - List keywords from session libraries/resources (context-aware)
 - `get_session_keyword_documentation` - Get docs/signature for a session keyword
 - `diagnose_rf_context` - Inspect session RF context (libraries, variables count)
+- `attach_status` - Inspect attach-mode configuration and bridge reachability
+- `attach_stop_bridge` - Stop the active MCP bridge loop inside the debugged suite
 
 ### Locator Guidance
 - `get_selenium_locator_guidance` - SeleniumLibrary selector help
@@ -418,6 +453,32 @@ Get comprehensive Browser Library locator strategies and error guidance.
 - Advanced features (cascaded selectors, iframe piercing, shadow DOM)
 - Error-specific guidance and suggestions
 - Best practices for element location
+
+### `attach_status`
+Inspect the attach bridge configuration and diagnostics before routing `execute_step` calls into a live debug session.
+
+```python
+{}
+```
+
+**Returns:**
+- `configured`: whether attach mode is active (based on `ROBOTMCP_ATTACH_HOST`)
+- `host`, `port`: bridge connection values when configured
+- `reachable`: true when `/diagnostics` succeeds; includes diagnostics payload when available
+- `default_mode`: value of `ROBOTMCP_ATTACH_DEFAULT` (`auto|force|off`)
+- `strict`: true when `ROBOTMCP_ATTACH_STRICT` demands a reachable bridge
+- `hint`: actionable guidance when not configured or unreachable
+
+### `attach_stop_bridge`
+Send a stop command to the McpAttach bridge to exit `MCP Serve` inside the debugged suite.
+
+```python
+{}
+```
+
+**Returns:**
+- `success`: true when the bridge acknowledged the stop request
+- `response`: raw payload returned by the bridge (`{"success": true}` on success)
 
 ### `get_selenium_locator_guidance`
 Get comprehensive SeleniumLibrary locator strategies and troubleshooting.
