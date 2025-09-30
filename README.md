@@ -120,7 +120,7 @@ pip install rf-mcp
 
 # Install browser automation libraries
 pip install robotframework-browser
-playwright install  # Install browser binaries
+rfbrowser init  # Install browser binaries
 
 # Or install Selenium support
 pip install robotframework-seleniumlibrary
