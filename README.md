@@ -17,7 +17,9 @@ https://github.com/user-attachments/assets/ad89064f-cab3-4ae6-a4c4-5e8c241301a1
 
 https://github.com/user-attachments/assets/8448cb70-6fb3-4f04-9742-a8a8453a9c7f
 
+**Debug Bridge**
 
+https://github.com/user-attachments/assets/8d87cd6e-c32e-4481-9f37-48b83f69f72f
 
 ---
 
