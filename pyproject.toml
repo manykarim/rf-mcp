@@ -32,6 +32,14 @@ dev = [
     "pre-commit>=2.20.0"
 ]
 
+desktop = [
+    "platynui-spy; sys_platform == 'win32' or sys_platform == 'darwin' or sys_platform == 'linux'",
+    "robotframework-platynui>=0.1.0",
+    "pythonnet>=3.0.0",
+    "robotframework-pythonlibcore>=4.4.0",
+    "robotframework-assertion-engine>=3.0.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/manykarim/rf-mcp"
 Repository = "https://github.com/manykarim/rf-mcp"
@@ -61,8 +69,23 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 
+[tool.uv.sources]
+# Bundled platform-specific wheels for PlatynUI Spy bindings to simplify local development.
+platynui-spy = [
+    { path = "platynui_spy-0.1.0-cp310-abi3-win_amd64.whl", marker = "sys_platform == 'win32'" },
+    { path = "platynui_spy-0.1.0-cp310-abi3-macosx_11_0_arm64.whl", marker = "sys_platform == 'darwin'" },
+    { path = "platynui_spy-0.1.0-cp310-abi3-manylinux_2_34_x86_64.whl", marker = "sys_platform == 'linux'" },
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.4.1",
     "pytest-asyncio>=1.1.0",
+]
+desktop = [
+    "platynui-spy; sys_platform == 'win32' or sys_platform == 'darwin' or sys_platform == 'linux'",
+    "robotframework-platynui>=0.1.0",
+    "pythonnet>=3.0.0",
+    "robotframework-pythonlibcore>=4.4.0",
+    "robotframework-assertion-engine>=3.0.0",
 ]

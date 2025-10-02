@@ -146,6 +146,15 @@ pip install -e .
 ### Playwright/Browsers for UI Tests
 - Browser Library: run `rfbrowser init` (downloads Playwright and browsers)
 
+### Desktop Automation (PlatynUI)
+- Install desktop prerequisites with `uv sync --group desktop` (installs PlatynUI, pythonnet, assertion engine).
+- Requires a desktop automation backend:
+  - Windows: .NET 8 runtime with UIA enabled (`win32` backend).
+  - macOS: Accessibility permissions for the host (`macos` backend).
+  - Linux: X11 or AT-SPI2 session with `$DISPLAY` configured (`x11` / `at-spi2` backends).
+- Validate readiness via `diagnose_desktop_environment` before executing desktop keywords.
+- Capture UI trees (recorded JSON or live) with `capture_desktop_tree` to assist locator authoring.
+
 ### Hint: When using a venv 
 
 If you are using a virtual environment (venv) for your project, I recommend to install the `rf-mcp` package within the same venv.
