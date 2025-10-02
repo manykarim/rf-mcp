@@ -222,6 +222,15 @@ class LibraryRecommender:
                 filtered.append(r)
             return filtered
 
+        if ctx == 'desktop':
+            filtered = []
+            for r in recs:
+                name = r.library.name
+                if name in {"Browser", "SeleniumLibrary", "AppiumLibrary"}:
+                    continue
+                filtered.append(r)
+            return filtered
+
         return recs
 
     def _apply_preferences(self, recs: List['LibraryRecommendation'], context: str) -> List['LibraryRecommendation']:
@@ -246,6 +255,10 @@ class LibraryRecommender:
             recs = [r for r in recs if r.library.name != 'Browser']
             # Ensure AppiumLibrary is first if present
             recs.sort(key=lambda r: 0 if r.library.name == 'AppiumLibrary' else 1)
+        elif ctx == 'desktop':
+            # Prefer PlatynUI and exclude web/mobile libraries by default
+            recs = [r for r in recs if r.library.name not in {'Browser', 'SeleniumLibrary', 'AppiumLibrary'}]
+            recs.sort(key=lambda r: 0 if r.library.name == 'PlatynUI' else 1)
         return recs
 
     def _normalize_text(self, text: str) -> str:
@@ -268,7 +281,7 @@ class LibraryRecommender:
             'api': ['api', 'rest', 'http', 'json', 'request', 'response', 'endpoint', 'service'],
             'mobile': ['mobile', 'app', 'android', 'ios', 'touch', 'swipe', 'device'],
             'database': ['database', 'sql', 'query', 'table', 'data', 'record'],
-            'desktop': ['desktop', 'window', 'gui', 'application', 'dialog'],
+            'desktop': ['desktop', 'window', 'gui', 'application', 'dialog', 'win32', 'native', 'platynui'],
             'visual': ['image', 'screenshot', 'visual', 'compare', 'pdf', 'document'],
             'system': ['file', 'directory', 'process', 'command', 'system', 'ssh', 'remote']
         }
@@ -318,7 +331,7 @@ class LibraryRecommender:
             'mobile': ['mobile', 'app'],
             'api': ['api', 'http', 'rest'], 
             'database': ['database', 'data'],
-            'desktop': ['gui', 'windows', 'visual'],
+            'desktop': ['desktop', 'gui', 'windows', 'native'],
             'system': ['system', 'network']
         }
         
@@ -347,7 +360,7 @@ class LibraryRecommender:
             'mobile': ['AppiumLibrary'],
             'api': ['RequestsLibrary', 'REST'],
             'database': ['DatabaseLibrary'],
-            'desktop': ['FlaUILibrary', 'ImageHorizonLibrary', 'SikuliLibrary'],
+            'desktop': ['PlatynUI', 'FlaUILibrary', 'ImageHorizonLibrary', 'SikuliLibrary'],
             'system': ['SSHLibrary', 'Process', 'OperatingSystem'],
             'visual': ['DocTest.VisualTest', 'DocTest.PdfTest', 'Screenshot'],
             'enterprise': ['RoboSAPiens'],

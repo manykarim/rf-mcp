@@ -17,6 +17,7 @@ class SessionType(Enum):
     API_TESTING = "api_testing"
     DATA_PROCESSING = "data_processing"
     SYSTEM_TESTING = "system_testing"
+    DESKTOP_TESTING = "desktop_testing"
     MIXED = "mixed"
     UNKNOWN = "unknown"
 
@@ -119,6 +120,24 @@ class SessionManager:
                     r"\b(start process|terminate|ssh)\b",
                 ],
                 description="System and process testing",
+            ),
+            SessionType.DESKTOP_TESTING: SessionProfile(
+                session_type=SessionType.DESKTOP_TESTING,
+                core_libraries=["BuiltIn", "PlatynUI", "Collections", "String"],
+                optional_libraries=["Screenshot", "OperatingSystem", "Process"],
+                search_order=[
+                    "PlatynUI",
+                    "BuiltIn",
+                    "Collections",
+                    "String",
+                    "Screenshot",
+                ],
+                keywords_patterns=[
+                    r"\b(desktop|native|win32|macos|linux\s+desktop)\b",
+                    r"\b(window|dialog|menu|toolbar)\b",
+                    r"\b(accessibility|uia|spy\s+tool)\b",
+                ],
+                description="Desktop UI automation with PlatynUI",
             ),
         }
 

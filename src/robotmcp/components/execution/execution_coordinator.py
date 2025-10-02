@@ -12,6 +12,9 @@ from robotmcp.components.execution import (
     SessionManager,
 )
 from robotmcp.components.execution.suite_execution_service import SuiteExecutionService
+from robotmcp.components.execution.desktop_capability_service import (
+    DesktopAutomationService,
+)
 from robotmcp.models.config_models import ExecutionConfig
 from robotmcp.models.session_models import ExecutionSession
 from robotmcp.utils.library_checker import LibraryAvailabilityChecker
@@ -42,6 +45,7 @@ class ExecutionCoordinator:
         self.keyword_executor = KeywordExecutor(self.config, self.override_registry)
         self.locator_converter = LocatorConverter(self.config)
         self.suite_execution_service = SuiteExecutionService(self.config)
+        self.desktop_service = DesktopAutomationService()
 
         # Initialize additional components for backward compatibility
         self.library_checker = LibraryAvailabilityChecker()
@@ -253,6 +257,21 @@ class ExecutionCoordinator:
                 f"Successfully loaded {loaded_count} libraries for session {session.session_id}"
             )
 
+            if session.is_desktop_session():
+                diagnostics = self.desktop_service.validate_environment(session)
+                if diagnostics.issues:
+                    logger.warning(
+                        "Desktop automation readiness issues for session %s: %s",
+                        session.session_id,
+                        "; ".join(diagnostics.issues),
+                    )
+                if diagnostics.warnings:
+                    logger.info(
+                        "Desktop automation readiness warnings for session %s: %s",
+                        session.session_id,
+                        "; ".join(diagnostics.warnings),
+                    )
+
         except Exception as e:
             logger.error(
                 f"Error loading libraries for session {session.session_id}: {e}"
@@ -267,6 +286,15 @@ class ExecutionCoordinator:
     def get_all_sessions_info(self) -> Dict[str, Dict[str, Any]]:
         """Get summary information about all sessions."""
         return self.session_manager.get_all_sessions_info()
+
+    def get_desktop_environment_status(self, session_id: str | None = None) -> Dict[str, Any]:
+        """Return diagnostics for PlatynUI desktop automation readiness."""
+        target_session_id = session_id or "default"
+        session = self.session_manager.get_or_create_session(target_session_id)
+        diagnostics = self.desktop_service.validate_environment(session)
+        result = diagnostics.to_dict()
+        result["session_id"] = target_session_id
+        return result
 
     @property
     def sessions(self) -> Dict[str, Any]:

@@ -775,6 +775,56 @@ async def get_application_state(
     )
 
 
+@mcp.tool
+async def diagnose_desktop_environment(session_id: str = "default") -> Dict[str, Any]:
+    """Inspect the host readiness for PlatynUI desktop automation."""
+
+    try:
+        diagnostics = execution_engine.get_desktop_environment_status(session_id)
+        diagnostics["success"] = True
+        return diagnostics
+    except Exception as exc:
+        logger.error("diagnose_desktop_environment failed: %s", exc)
+        return {"success": False, "error": str(exc), "session_id": session_id}
+
+
+@mcp.tool
+async def capture_desktop_tree(
+    backend: str = "file",
+    input_path: str | None = None,
+    window_title: str | None = None,
+    process_id: int | None = None,
+    attribute_set: str | None = None,
+    session_id: str = "default",
+) -> Dict[str, Any]:
+    """Capture a desktop UI tree using PlatynUI Spy."""
+
+    try:
+        from platynui_spy import SpyConfig, capture
+    except ImportError as exc:  # pragma: no cover - platform specific
+        logger.error("platynui_spy import failed: %s", exc)
+        return {"success": False, "error": "platynui_spy module not available. Install the desktop dependency group.", "session_id": session_id}
+
+    try:
+        config = SpyConfig.backend(backend)
+        if input_path:
+            config = config.with_input(os.path.abspath(input_path))
+        if window_title:
+            config = config.with_window_title(window_title)
+        if process_id is not None:
+            config = config.with_process_id(int(process_id))
+        if attribute_set:
+            config = config.with_attribute_set(attribute_set)
+
+        tree = capture(config)
+        session = execution_engine.session_manager.get_or_create_session(session_id)
+        session.update_activity()
+        return {"success": True, "tree": tree, "backend": backend, "session_id": session_id}
+    except Exception as exc:
+        logger.error("capture_desktop_tree failed: %s", exc)
+        return {"success": False, "error": str(exc), "session_id": session_id}
+
+
 @mcp.tool(enabled=False)
 async def suggest_next_step(
     current_state: Dict[str, Any],
@@ -879,6 +929,56 @@ async def build_test_suite(
     return result
 
 
+@mcp.tool
+async def diagnose_desktop_environment(session_id: str = "default") -> Dict[str, Any]:
+    """Inspect the host readiness for PlatynUI desktop automation."""
+
+    try:
+        diagnostics = execution_engine.get_desktop_environment_status(session_id)
+        diagnostics["success"] = True
+        return diagnostics
+    except Exception as exc:
+        logger.error("diagnose_desktop_environment failed: %s", exc)
+        return {"success": False, "error": str(exc), "session_id": session_id}
+
+
+@mcp.tool
+async def capture_desktop_tree(
+    backend: str = "file",
+    input_path: str | None = None,
+    window_title: str | None = None,
+    process_id: int | None = None,
+    attribute_set: str | None = None,
+    session_id: str = "default",
+) -> Dict[str, Any]:
+    """Capture a desktop UI tree using PlatynUI Spy."""
+
+    try:
+        from platynui_spy import SpyConfig, capture
+    except ImportError as exc:  # pragma: no cover - platform specific
+        logger.error("platynui_spy import failed: %s", exc)
+        return {"success": False, "error": "platynui_spy module not available. Install the desktop dependency group.", "session_id": session_id}
+
+    try:
+        config = SpyConfig.backend(backend)
+        if input_path:
+            config = config.with_input(os.path.abspath(input_path))
+        if window_title:
+            config = config.with_window_title(window_title)
+        if process_id is not None:
+            config = config.with_process_id(int(process_id))
+        if attribute_set:
+            config = config.with_attribute_set(attribute_set)
+
+        tree = capture(config)
+        session = execution_engine.session_manager.get_or_create_session(session_id)
+        session.update_activity()
+        return {"success": True, "tree": tree, "backend": backend, "session_id": session_id}
+    except Exception as exc:
+        logger.error("capture_desktop_tree failed: %s", exc)
+        return {"success": False, "error": str(exc), "session_id": session_id}
+
+
 @mcp.tool(enabled=False)
 async def validate_scenario(
     parsed_scenario: Dict[str, Any], available_libraries: List[str] = None
@@ -981,6 +1081,56 @@ async def check_library_availability(libraries: List[str]) -> Dict[str, Any]:
         availability = await check_library_availability(recommendations["recommended_libraries"])
     """
     return execution_engine.check_library_requirements(libraries)
+
+
+@mcp.tool
+async def diagnose_desktop_environment(session_id: str = "default") -> Dict[str, Any]:
+    """Inspect the host readiness for PlatynUI desktop automation."""
+
+    try:
+        diagnostics = execution_engine.get_desktop_environment_status(session_id)
+        diagnostics["success"] = True
+        return diagnostics
+    except Exception as exc:
+        logger.error("diagnose_desktop_environment failed: %s", exc)
+        return {"success": False, "error": str(exc), "session_id": session_id}
+
+
+@mcp.tool
+async def capture_desktop_tree(
+    backend: str = "file",
+    input_path: str | None = None,
+    window_title: str | None = None,
+    process_id: int | None = None,
+    attribute_set: str | None = None,
+    session_id: str = "default",
+) -> Dict[str, Any]:
+    """Capture a desktop UI tree using PlatynUI Spy."""
+
+    try:
+        from platynui_spy import SpyConfig, capture
+    except ImportError as exc:  # pragma: no cover - platform specific
+        logger.error("platynui_spy import failed: %s", exc)
+        return {"success": False, "error": "platynui_spy module not available. Install the desktop dependency group.", "session_id": session_id}
+
+    try:
+        config = SpyConfig.backend(backend)
+        if input_path:
+            config = config.with_input(os.path.abspath(input_path))
+        if window_title:
+            config = config.with_window_title(window_title)
+        if process_id is not None:
+            config = config.with_process_id(int(process_id))
+        if attribute_set:
+            config = config.with_attribute_set(attribute_set)
+
+        tree = capture(config)
+        session = execution_engine.session_manager.get_or_create_session(session_id)
+        session.update_activity()
+        return {"success": True, "tree": tree, "backend": backend, "session_id": session_id}
+    except Exception as exc:
+        logger.error("capture_desktop_tree failed: %s", exc)
+        return {"success": False, "error": str(exc), "session_id": session_id}
 
 
 @mcp.tool(enabled=False)
@@ -1602,6 +1752,56 @@ async def get_session_validation_status(session_id: str = "") -> Dict[str, Any]:
         }
 
     return result
+
+
+@mcp.tool
+async def diagnose_desktop_environment(session_id: str = "default") -> Dict[str, Any]:
+    """Inspect the host readiness for PlatynUI desktop automation."""
+
+    try:
+        diagnostics = execution_engine.get_desktop_environment_status(session_id)
+        diagnostics["success"] = True
+        return diagnostics
+    except Exception as exc:
+        logger.error("diagnose_desktop_environment failed: %s", exc)
+        return {"success": False, "error": str(exc), "session_id": session_id}
+
+
+@mcp.tool
+async def capture_desktop_tree(
+    backend: str = "file",
+    input_path: str | None = None,
+    window_title: str | None = None,
+    process_id: int | None = None,
+    attribute_set: str | None = None,
+    session_id: str = "default",
+) -> Dict[str, Any]:
+    """Capture a desktop UI tree using PlatynUI Spy."""
+
+    try:
+        from platynui_spy import SpyConfig, capture
+    except ImportError as exc:  # pragma: no cover - platform specific
+        logger.error("platynui_spy import failed: %s", exc)
+        return {"success": False, "error": "platynui_spy module not available. Install the desktop dependency group.", "session_id": session_id}
+
+    try:
+        config = SpyConfig.backend(backend)
+        if input_path:
+            config = config.with_input(os.path.abspath(input_path))
+        if window_title:
+            config = config.with_window_title(window_title)
+        if process_id is not None:
+            config = config.with_process_id(int(process_id))
+        if attribute_set:
+            config = config.with_attribute_set(attribute_set)
+
+        tree = capture(config)
+        session = execution_engine.session_manager.get_or_create_session(session_id)
+        session.update_activity()
+        return {"success": True, "tree": tree, "backend": backend, "session_id": session_id}
+    except Exception as exc:
+        logger.error("capture_desktop_tree failed: %s", exc)
+        return {"success": False, "error": str(exc), "session_id": session_id}
 
 
 @mcp.tool(enabled=False)

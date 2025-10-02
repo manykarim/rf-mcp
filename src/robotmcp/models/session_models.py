@@ -87,6 +87,7 @@ class SessionType(Enum):
     DATA_PROCESSING = "data_processing"
     SYSTEM_TESTING = "system_testing"
     MOBILE_TESTING = "mobile_testing"
+    DESKTOP_TESTING = "desktop_testing"
     DATABASE_TESTING = "database_testing"
     VISUAL_TESTING = "visual_testing"
     MIXED = "mixed"
@@ -194,6 +195,14 @@ class ExecutionSession:
             or self.session_type == SessionType.MOBILE_TESTING
         )
 
+    def is_desktop_session(self) -> bool:
+        """Check if this is a desktop testing session."""
+        return (
+            self.platform_type == PlatformType.DESKTOP
+            or "PlatynUI" in self.imported_libraries
+            or self.session_type == SessionType.DESKTOP_TESTING
+        )
+
     def is_web_session(self) -> bool:
         """Check if this is a web testing session."""
         return self.platform_type == PlatformType.WEB or self.is_browser_session()
@@ -249,6 +258,11 @@ class ExecutionSession:
 
             # CRITICAL FIX: Trigger immediate library loading
             self._ensure_library_loaded_immediately(library_name)
+
+            if library_name == "PlatynUI":
+                self.platform_type = PlatformType.DESKTOP
+                if self.session_type == SessionType.UNKNOWN:
+                    self.session_type = SessionType.DESKTOP_TESTING
 
             self.update_activity()
 
@@ -463,6 +477,25 @@ class ExecutionSession:
                 ],
                 description="Mobile application testing with Appium",
             ),
+            SessionType.DESKTOP_TESTING: SessionProfile(
+                session_type=SessionType.DESKTOP_TESTING,
+                core_libraries=["BuiltIn", "PlatynUI", "Collections", "String"],
+                optional_libraries=["Screenshot", "OperatingSystem", "Process"],
+                search_order=[
+                    "PlatynUI",
+                    "BuiltIn",
+                    "Collections",
+                    "String",
+                    "Screenshot",
+                ],
+                keywords_patterns=[
+                    r"\b(desktop|native|win32|windows|macos|linux\s+gui)\b",
+                    r"\b(application|app|window|dialog|menu|toolbar)\b",
+                    r"\b(accessibility|uia|at\-spi|spy\s+tool)\b",
+                    r"\b(activate|click|type|capture)\s+(window|button|menu)\b",
+                ],
+                description="Desktop UI automation with PlatynUI",
+            ),
             SessionType.DATABASE_TESTING: SessionProfile(
                 session_type=SessionType.DATABASE_TESTING,
                 core_libraries=["BuiltIn", "DatabaseLibrary", "Collections", "String"],
@@ -579,6 +612,15 @@ class ExecutionSession:
             (r"\b(native|hybrid)\s+(app|mobile)\s+(testing|automation)\b", 6),
         ]
 
+        desktop_patterns = [
+            (r"\b(use|using|with)\s+(platynui|platyn\s*ui)\b", 12),
+            (r"\bplatynui\b", 11),
+            (r"\bdesktop\s+(automation|testing)\b", 7),
+            (r"\bnative\s+(app|application)\s+(testing|automation)\b", 6),
+            (r"\b(win32|uia|accessibility|at\-spi)\b", 5),
+            (r"\bspy\s+tool\b", 4),
+        ]
+
         # Enhanced database testing patterns
         database_patterns = [
             (
@@ -599,6 +641,7 @@ class ExecutionSession:
             ("RequestsLibrary", api_patterns),
             ("XML", xml_patterns),
             ("AppiumLibrary", mobile_patterns),
+            ("PlatynUI", desktop_patterns),
             ("DatabaseLibrary", database_patterns),
         ]
 
@@ -692,6 +735,12 @@ class ExecutionSession:
                 (r"\b(tap|swipe|scroll|pinch|gesture)\b", 3),
                 (r"\bmobile\s+(testing|automation|app)\b", 4),
             ],
+            SessionType.DESKTOP_TESTING: [
+                (r"\b(desktop|native|win32|windows|macos|linux\s+desktop)\b", 3),
+                (r"\b(platynui|uia|accessibility|spy\s+tool)\b", 4),
+                (r"\b(window|dialog|menu|toolbar|tray|control)\b", 2),
+                (r"\b(desktop\s+automation|desktop\s+testing)\b", 4),
+            ],
             SessionType.DATABASE_TESTING: [
                 (r"\b(database|sql|query|table|record)\b", 3),
                 (r"\b(mysql|postgresql|sqlite|oracle|mongodb)\b", 3),
@@ -773,6 +822,16 @@ class ExecutionSession:
         # Apply conflict resolution before setting search order
         self._resolve_library_conflicts()
 
+        # Update platform type based on detected session
+        if self.session_type == SessionType.MOBILE_TESTING:
+            self.platform_type = PlatformType.MOBILE
+        elif self.session_type == SessionType.WEB_AUTOMATION:
+            self.platform_type = PlatformType.WEB
+        elif self.session_type == SessionType.DESKTOP_TESTING:
+            self.platform_type = PlatformType.DESKTOP
+        elif self.session_type == SessionType.API_TESTING:
+            self.platform_type = PlatformType.API
+
         # Set intelligent search order using RF Set Library Search Order concept
         self.search_order = self._build_intelligent_search_order(profile)
 
@@ -821,7 +880,8 @@ class ExecutionSession:
             # Get all possible libraries and exclude the non-allowed ones
             # For now, return a basic set of common web libraries that should be excluded from XML sessions
             common_web_libraries = {"Browser", "SeleniumLibrary", "AppiumLibrary"}
-            excluded = common_web_libraries - allowed_libraries
+            desktop_libraries = {"PlatynUI"}
+            excluded = (common_web_libraries | desktop_libraries) - allowed_libraries
 
             return excluded
 
@@ -838,6 +898,11 @@ class ExecutionSession:
                 "libraries": {"Browser", "SeleniumLibrary"},
                 "description": "Web automation libraries",
                 "default_priority": "Browser",  # Modern default
+            },
+            {
+                "libraries": {"PlatynUI", "Browser", "SeleniumLibrary"},
+                "description": "UI automation library family",
+                "default_priority": "PlatynUI",
             },
             # Future: Add more exclusion groups as needed
             # {
@@ -910,6 +975,10 @@ class ExecutionSession:
             elif self.explicit_library_preference == "AppiumLibrary":
                 self.session_type = SessionType.MOBILE_TESTING
                 return profiles[SessionType.MOBILE_TESTING]
+
+            elif self.explicit_library_preference == "PlatynUI":
+                self.session_type = SessionType.DESKTOP_TESTING
+                return profiles.get(SessionType.DESKTOP_TESTING)
 
             # API testing libraries
             elif self.explicit_library_preference == "RequestsLibrary":

@@ -24,6 +24,7 @@ class LibraryCategory(Enum):
     MOBILE = "mobile"
     DATABASE = "database"
     DATA = "data"
+    DESKTOP = "desktop"
     SYSTEM = "system"
     NETWORK = "network"
     VISUAL = "visual"
@@ -277,6 +278,38 @@ ROBOT_FRAMEWORK_LIBRARIES: Dict[str, LibraryConfig] = {
         dependencies=['appium'],
         load_priority=27,
         default_enabled=False  # PHASE 3: Disable by default to prevent conflicts with web testing
+    ),
+
+    'PlatynUI': LibraryConfig(
+        name='PlatynUI',
+        package_name='robotframework-platynui',
+        import_path='PlatynUI',
+        library_type=LibraryType.EXTERNAL,
+        description='Cross-platform desktop UI automation built on .NET with native element access.',
+        use_cases=[
+            'desktop automation',
+            'native application testing',
+            'accessibility tree inspection',
+            'cross-platform ui validation',
+        ],
+        categories=[
+            LibraryCategory.DESKTOP,
+            LibraryCategory.TESTING,
+            LibraryCategory.VISUAL,
+        ],
+        installation_command='uv sync --group desktop',
+        post_install_commands=[],
+        platform_requirements=[
+            '.NET 8.0 runtime available on host',
+            'Win32, macOS Accessibility, or Linux (X11/AT-SPI2) desktop environment',
+        ],
+        dependencies=[
+            'pythonnet>=3.0.0',
+            'robotframework-pythonlibcore>=4.4.0',
+            'robotframework-assertion-engine>=3.0.0',
+        ],
+        load_priority=32,
+        default_enabled=False,
     ),
     
     'SSHLibrary': LibraryConfig(
