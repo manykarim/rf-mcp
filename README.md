@@ -113,22 +113,26 @@ Details below.
 
 ### Method 1: PyPI Installation (Recommended)
 ```bash
-# Install RobotMCP
+# Install RobotMCP core (minimal dependencies)
 pip install rf-mcp
+# or explicitly
+pip install rf-mcp[slim]
 
-# Install browser automation libraries
-pip install robotframework-browser
-playwright install  # Install browser binaries
+# Feature bundles (install what you need)
+pip install rf-mcp[web]       # Browser Library + SeleniumLibrary
+pip install rf-mcp[mobile]    # AppiumLibrary
+pip install rf-mcp[api]       # RequestsLibrary
+pip install rf-mcp[database]  # DatabaseLibrary
+pip install rf-mcp[full]      # All optional Robot Framework libraries
 
-# Or install Selenium support
-pip install robotframework-seleniumlibrary
-
-# For API testing
-pip install robotframework-requests
-
-# For mobile testing
-pip install robotframework-appiumlibrary
+# Browser Library still needs Playwright browsers
+rfbrowser init
+# or
+python -m Browser.entry install
 ```
+
+Prefer installing individual Robot Framework libraries instead? You still can—
+each extra maps 1:1 to the original packages and their setup guidance below.
 
 ### Method 2: Development Installation
 ```bash
