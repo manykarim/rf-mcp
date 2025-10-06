@@ -13,7 +13,7 @@ from robotmcp.components.execution import (
 )
 from robotmcp.components.execution.suite_execution_service import SuiteExecutionService
 from robotmcp.models.config_models import ExecutionConfig
-from robotmcp.models.session_models import ExecutionSession
+from robotmcp.models.session_models import ExecutionSession, PlatformType
 from robotmcp.utils.library_checker import LibraryAvailabilityChecker
 from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
 
@@ -102,6 +102,30 @@ class ExecutionCoordinator:
 
             # Get or create session and ensure libraries are loaded
             session = self.session_manager.get_or_create_session(session_id)
+
+            # Align locator conversion strategy with session platform (web/mobile/desktop)
+            try:
+                self.locator_converter.set_platform_type(session.platform_type)
+            except Exception:
+                logger.debug(
+                    "Locator converter platform sync failed; proceeding with existing configuration"
+                )
+
+            if session.platform_type == PlatformType.DESKTOP and not getattr(
+                session, "desktop_supported", True
+            ):
+                message = (
+                    "Desktop automation requires a Windows host with rpaframework-windows."
+                    " Current environment does not support RPA.Windows keywords."
+                )
+                logger.error(message)
+                return {
+                    "success": False,
+                    "error": message,
+                    "keyword": keyword,
+                    "arguments": arguments or [],
+                    "session_id": session_id,
+                }
 
             # Ensure session libraries are loaded
             if not session.libraries_loaded:
@@ -643,9 +667,14 @@ class ExecutionCoordinator:
                 from robotmcp.components.execution.rf_native_context_manager import (
                     get_rf_native_context_manager,
                 )
+
                 mgr = get_rf_native_context_manager()
                 try:
-                    libs = list(session.search_order) if getattr(session, "search_order", None) else None
+                    libs = (
+                        list(session.search_order)
+                        if getattr(session, "search_order", None)
+                        else None
+                    )
                 except Exception:
                     libs = None
                 _ = mgr.create_context_for_session(session_id, libraries=libs)
@@ -786,10 +815,15 @@ class ExecutionCoordinator:
                 from robotmcp.components.execution.rf_native_context_manager import (
                     get_rf_native_context_manager,
                 )
+
                 mgr = get_rf_native_context_manager()
                 # Prefer the session's search order if available
                 try:
-                    libs = list(session.search_order) if getattr(session, "search_order", None) else None
+                    libs = (
+                        list(session.search_order)
+                        if getattr(session, "search_order", None)
+                        else None
+                    )
                 except Exception:
                     libs = None
                 _ = mgr.create_context_for_session(session_id, libraries=libs)
@@ -905,7 +939,9 @@ class ExecutionCoordinator:
             libdoc_map: Dict[str, Any] = {}
             if self.rf_doc_storage.is_available():
                 try:
-                    for libdoc_kw in self.rf_doc_storage.get_keywords_by_library(library_name) or []:
+                    for libdoc_kw in (
+                        self.rf_doc_storage.get_keywords_by_library(library_name) or []
+                    ):
                         libdoc_map[libdoc_kw.name] = libdoc_kw
                 except Exception:
                     pass
@@ -943,7 +979,9 @@ class ExecutionCoordinator:
                     libs = {kw.library for kw in items if kw.library}
                     for lib in libs:
                         libdoc_maps[lib] = {}
-                        for libdoc_kw in self.rf_doc_storage.get_keywords_by_library(lib) or []:
+                        for libdoc_kw in (
+                            self.rf_doc_storage.get_keywords_by_library(lib) or []
+                        ):
                             libdoc_maps[lib][libdoc_kw.name] = libdoc_kw
                 except Exception:
                     libdoc_maps = {}
@@ -1014,7 +1052,9 @@ class ExecutionCoordinator:
         # LibDoc preferred path
         if self.rf_doc_storage.is_available():
             if library_name:
-                kw = self.rf_doc_storage.get_keyword_documentation(keyword_name, library_name)
+                kw = self.rf_doc_storage.get_keyword_documentation(
+                    keyword_name, library_name
+                )
                 if kw:
                     return {
                         "success": True,
@@ -1035,12 +1075,18 @@ class ExecutionCoordinator:
                 # Provide suggestions from that library via fuzzy match
                 suggestions = []
                 try:
-                    lib_keywords = self.rf_doc_storage.get_keywords_by_library(library_name)
+                    lib_keywords = self.rf_doc_storage.get_keywords_by_library(
+                        library_name
+                    )
                     # simple fuzzy: match words ignoring case/underscores/spaces
-                    target = keyword_name.lower().replace('_', ' ').strip()
+                    target = keyword_name.lower().replace("_", " ").strip()
                     for k in lib_keywords:
-                        name_norm = k.name.lower().replace('_', ' ').strip()
-                        if target in name_norm or name_norm in target or k.name.lower().startswith(keyword_name.lower()[0:3]):
+                        name_norm = k.name.lower().replace("_", " ").strip()
+                        if (
+                            target in name_norm
+                            or name_norm in target
+                            or k.name.lower().startswith(keyword_name.lower()[0:3])
+                        ):
                             suggestions.append(k.name)
                 except Exception:
                     pass
@@ -1051,7 +1097,9 @@ class ExecutionCoordinator:
                 }
             else:
                 # Return all matches across libraries
-                matches = self.rf_doc_storage.get_keywords_documentation_all(keyword_name)
+                matches = self.rf_doc_storage.get_keywords_documentation_all(
+                    keyword_name
+                )
                 if matches:
                     return {
                         "success": True,
@@ -1072,13 +1120,18 @@ class ExecutionCoordinator:
                         ],
                     }
                 # No matches anywhere
-                return {"success": False, "error": f"Keyword '{keyword_name}' not found in any loaded library"}
+                return {
+                    "success": False,
+                    "error": f"Keyword '{keyword_name}' not found in any loaded library",
+                }
 
         # Inspection-based fallback (no LibDoc available)
         keyword_discovery = self.keyword_executor.keyword_discovery
         if library_name:
             # Strict filter: use library_prefix to restrict search
-            ki = keyword_discovery.find_keyword(keyword_name, active_library=library_name)
+            ki = keyword_discovery.find_keyword(
+                keyword_name, active_library=library_name
+            )
             if ki and ki.library == library_name:
                 return {
                     "success": True,
@@ -1095,7 +1148,10 @@ class ExecutionCoordinator:
                         "lineno": getattr(ki, "lineno", 0),
                     },
                 }
-            return {"success": False, "error": f"Keyword '{keyword_name}' not found in library '{library_name}'"}
+            return {
+                "success": False,
+                "error": f"Keyword '{keyword_name}' not found in library '{library_name}'",
+            }
         else:
             # No library specified: return first match for backward compatibility
             ki = keyword_discovery.find_keyword(keyword_name)
@@ -1142,24 +1198,26 @@ class ExecutionCoordinator:
         # Try libdoc-based lookup first
         if self.rf_doc_storage.is_available():
             library_info = self.rf_doc_storage.get_library_documentation(library_name)
-            
+
             if library_info:
                 # Convert keyword dict to list for API consistency
                 keywords_list = []
                 for keyword_info in library_info.keywords.values():
-                    keywords_list.append({
-                        "name": keyword_info.name,
-                        "library": keyword_info.library,
-                        "args": keyword_info.args,
-                        "arg_types": keyword_info.arg_types,
-                        "doc": keyword_info.doc,
-                        "short_doc": keyword_info.short_doc,
-                        "tags": keyword_info.tags,
-                        "is_deprecated": keyword_info.is_deprecated,
-                        "source": keyword_info.source,
-                        "lineno": keyword_info.lineno,
-                    })
-                
+                    keywords_list.append(
+                        {
+                            "name": keyword_info.name,
+                            "library": keyword_info.library,
+                            "args": keyword_info.args,
+                            "arg_types": keyword_info.arg_types,
+                            "doc": keyword_info.doc,
+                            "short_doc": keyword_info.short_doc,
+                            "tags": keyword_info.tags,
+                            "is_deprecated": keyword_info.is_deprecated,
+                            "source": keyword_info.source,
+                            "lineno": keyword_info.lineno,
+                        }
+                    )
+
                 return {
                     "success": True,
                     "library": {
@@ -1171,36 +1229,38 @@ class ExecutionCoordinator:
                         "source": library_info.source,
                         "keywords": keywords_list,
                         "keyword_count": len(keywords_list),
-                        "data_source": "libdoc"
-                    }
+                        "data_source": "libdoc",
+                    },
                 }
-        
+
         # Fall back to inspection-based search via keyword_executor
         keyword_discovery = self.keyword_executor.keyword_discovery
         if library_name in keyword_discovery.libraries:
             library_obj = keyword_discovery.libraries[library_name]
-            
+
             # Get all keywords for this library from inspection-based discovery
             keywords_list = []
             for keyword_info in keyword_discovery.get_keywords_by_library(library_name):
-                keywords_list.append({
-                    "name": keyword_info.name,
-                    "library": keyword_info.library,
-                    "args": keyword_info.args,
-                    "arg_types": getattr(keyword_info, "arg_types", []),
-                    "doc": getattr(keyword_info, "doc", ""),
-                    "short_doc": keyword_info.short_doc,
-                    "tags": keyword_info.tags,
-                    "is_deprecated": False,
-                    "source": getattr(keyword_info, "source", ""),
-                    "lineno": getattr(keyword_info, "lineno", 0),
-                })
-            
+                keywords_list.append(
+                    {
+                        "name": keyword_info.name,
+                        "library": keyword_info.library,
+                        "args": keyword_info.args,
+                        "arg_types": getattr(keyword_info, "arg_types", []),
+                        "doc": getattr(keyword_info, "doc", ""),
+                        "short_doc": keyword_info.short_doc,
+                        "tags": keyword_info.tags,
+                        "is_deprecated": False,
+                        "source": getattr(keyword_info, "source", ""),
+                        "lineno": getattr(keyword_info, "lineno", 0),
+                    }
+                )
+
             # Extract library metadata from the library object
-            library_doc = getattr(library_obj, '__doc__', '') or ''
-            library_version = getattr(library_obj, 'ROBOT_LIBRARY_VERSION', 'Unknown')
-            library_scope = getattr(library_obj, 'ROBOT_LIBRARY_SCOPE', 'TEST')
-            
+            library_doc = getattr(library_obj, "__doc__", "") or ""
+            library_version = getattr(library_obj, "ROBOT_LIBRARY_VERSION", "Unknown")
+            library_scope = getattr(library_obj, "ROBOT_LIBRARY_SCOPE", "TEST")
+
             return {
                 "success": True,
                 "library": {
@@ -1209,14 +1269,17 @@ class ExecutionCoordinator:
                     "version": library_version,
                     "type": "LIBRARY",
                     "scope": library_scope,
-                    "source": getattr(library_obj, '__file__', ''),
+                    "source": getattr(library_obj, "__file__", ""),
                     "keywords": keywords_list,
                     "keyword_count": len(keywords_list),
-                    "data_source": "inspection"
-                }
+                    "data_source": "inspection",
+                },
             }
         else:
-            return {"success": False, "error": f"Library '{library_name}' not found or not loaded"}
+            return {
+                "success": False,
+                "error": f"Library '{library_name}' not found or not loaded",
+            }
 
     def get_installation_status(self, library_name: str) -> Dict[str, Any]:
         """Get detailed installation status for a specific library."""
@@ -1250,9 +1313,11 @@ class ExecutionCoordinator:
                     "import_available": import_available,
                     "pip_installed": True,
                     "is_loaded": is_loaded,
-                    "status": "available"
-                    if (import_available and is_loaded)
-                    else "not_available",
+                    "status": (
+                        "available"
+                        if (import_available and is_loaded)
+                        else "not_available"
+                    ),
                     "installation_command": "Built-in with Robot Framework",
                     "description": lib_info.get("description", ""),
                 }
@@ -1331,9 +1396,9 @@ class ExecutionCoordinator:
                 if lib_info.get("post_install") and import_available and is_loaded:
                     status["post_install"] = lib_info["post_install"]
                     if "Note:" not in status["message"]:
-                        status["message"] += (
-                            f" Note: Run '{lib_info['post_install']}' for full functionality."
-                        )
+                        status[
+                            "message"
+                        ] += f" Note: Run '{lib_info['post_install']}' for full functionality."
 
             return status
         else:
@@ -1372,9 +1437,9 @@ class ExecutionCoordinator:
             return {
                 "inspection_based": inspection_status,
                 "libdoc_based": libdoc_status,
-                "preferred_source": "libdoc"
-                if libdoc_status["libdoc_available"]
-                else "inspection",
+                "preferred_source": (
+                    "libdoc" if libdoc_status["libdoc_available"] else "inspection"
+                ),
             }
         else:
             return {
@@ -1415,14 +1480,16 @@ class ExecutionCoordinator:
             "total_steps": total_steps,
             "validated_steps": passed_steps,
             "failed_steps": 0,  # Failed steps are not stored
-            "validation_rate": 100.0
-            if total_steps > 0
-            else 0.0,  # All stored steps are validated
+            "validation_rate": (
+                100.0 if total_steps > 0 else 0.0
+            ),  # All stored steps are validated
             "steps": validated_steps,
             "ready_for_test_suite": total_steps > 0,
-            "message": f"Session has {total_steps} validated steps ready for test suite generation"
-            if total_steps > 0
-            else "Session has no validated steps yet",
+            "message": (
+                f"Session has {total_steps} validated steps ready for test suite generation"
+                if total_steps > 0
+                else "Session has no validated steps yet"
+            ),
         }
 
     def get_session_browser_status(self, session_id: str) -> Dict[str, Any]:

@@ -57,14 +57,20 @@ def _call_attach_tool_with_fallback(
 
     client = _get_external_client_if_configured()
     mode = os.environ.get("ROBOTMCP_ATTACH_DEFAULT", "auto").strip().lower()
-    strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {"1", "true", "yes"}
+    strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {
+        "1",
+        "true",
+        "yes",
+    }
 
     if client is None or mode == "off":
         return local_call()
 
     try:
         response = external_call(client)
-    except Exception as exc:  # pragma: no cover - defensive conversion to attach-style error
+    except (
+        Exception
+    ) as exc:  # pragma: no cover - defensive conversion to attach-style error
         err = str(exc)
         logger.error(
             "ATTACH tool '%s' raised exception: %s", tool_name, err, exc_info=False
@@ -117,7 +123,11 @@ def _log_attach_banner() -> None:
             err = diag.get("error", "not reachable yet")
             logger.info(f"Attach bridge: not reachable ({err})")
         mode = os.environ.get("ROBOTMCP_ATTACH_DEFAULT", "auto").strip().lower()
-        strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {"1", "true", "yes"}
+        strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {
+            "1",
+            "true",
+            "yes",
+        }
         logger.info(f"Attach default: {mode}{' (strict)' if strict else ''}")
     except Exception as e:  # defensive
         logger.info(f"Attach bridge: check failed ({e})")
@@ -133,7 +143,11 @@ def _compute_effective_use_context(
     - strict: True if ROBOTMCP_ATTACH_STRICT is enabled
     """
     mode = os.environ.get("ROBOTMCP_ATTACH_DEFAULT", "auto").strip().lower()
-    strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {"1", "true", "yes"}
+    strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {
+        "1",
+        "true",
+        "yes",
+    }
     effective = bool(use_context) if use_context is not None else False
     if client is not None:
         if use_context is None:
@@ -590,7 +604,7 @@ async def analyze_scenario(
 
     # Detect platform type from scenario
     platform_type = execution_engine.session_manager.detect_platform_from_scenario(
-        scenario
+        scenario, context
     )
 
     # Initialize mobile session if detected
@@ -599,6 +613,10 @@ async def analyze_scenario(
         logger.info(
             f"Initialized mobile session for platform: {session.mobile_config.platform_name if session.mobile_config else 'Unknown'}"
         )
+    elif platform_type == PlatformType.DESKTOP:
+        session.configure_from_scenario(scenario)
+        execution_engine.session_manager.initialize_desktop_session(session, scenario)
+        logger.info("Initialized desktop session with RPA.Windows support")
     else:
         # Auto-configure session based on scenario (existing web flow)
         session.configure_from_scenario(scenario)
@@ -612,6 +630,7 @@ async def analyze_scenario(
         "recommended_libraries": session.get_libraries_to_load(),
         "search_order": session.get_search_order(),
         "libraries_loaded": list(session.loaded_libraries),
+        "desktop_supported": getattr(session, "desktop_supported", True),
         "next_step_guidance": f"Use session_id='{session_id}' in all subsequent tool calls",
         "status": "active",
         "ready_for_execution": True,
@@ -1277,12 +1296,16 @@ async def execute_try_except(
             "type": "try",
             "try": [_normalize_step(s) for s in (try_steps or [])],
             "except_patterns": list(except_patterns or []),
-            "except": [_normalize_step(s) for s in (except_steps or [])]
-            if except_steps
-            else [],
-            "finally": [_normalize_step(s) for s in (finally_steps or [])]
-            if finally_steps
-            else [],
+            "except": (
+                [_normalize_step(s) for s in (except_steps or [])]
+                if except_steps
+                else []
+            ),
+            "finally": (
+                [_normalize_step(s) for s in (finally_steps or [])]
+                if finally_steps
+                else []
+            ),
         }
         sess.flow_blocks.append(block)
     except Exception:
@@ -1334,11 +1357,11 @@ async def execute_try_except(
 
     success = first_fail is None or handled
     result: Dict[str, Any] = {
-        "success": success
-        if not bool(rethrow)
-        else False
-        if (first_fail and not handled)
-        else success,
+        "success": (
+            success
+            if not bool(rethrow)
+            else False if (first_fail and not handled) else success
+        ),
         "handled": handled,
         "try_results": try_res,
     }
@@ -2230,7 +2253,11 @@ async def attach_status() -> Dict[str, Any]:
         client = _get_external_client_if_configured()
         configured = client is not None
         mode = os.environ.get("ROBOTMCP_ATTACH_DEFAULT", "auto").strip().lower()
-        strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {"1", "true", "yes"}
+        strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {
+            "1",
+            "true",
+            "yes",
+        }
         if not configured:
             return {
                 "configured": False,
@@ -2289,7 +2316,9 @@ async def import_resource(session_id: str, path: str) -> Dict[str, Any]:
     def _external_call(client: ExternalRFClient) -> Dict[str, Any]:
         return client.import_resource(path)
 
-    return _call_attach_tool_with_fallback("import_resource", _external_call, _local_call)
+    return _call_attach_tool_with_fallback(
+        "import_resource", _external_call, _local_call
+    )
 
 
 @mcp.tool(

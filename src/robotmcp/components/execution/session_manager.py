@@ -1,13 +1,19 @@
 """Session management service with mobile platform detection."""
 
 import logging
+import sys
 import uuid
 import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, List
 
 from robotmcp.models.config_models import ExecutionConfig
-from robotmcp.models.session_models import ExecutionSession, PlatformType, MobileConfig, SessionType
+from robotmcp.models.session_models import (
+    ExecutionSession,
+    PlatformType,
+    MobileConfig,
+    SessionType,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +39,7 @@ class SessionManager:
 
         session = ExecutionSession(session_id=session_id)
         self.sessions[session_id] = session
-        
+
         # Add reference to session manager for Phase 2 synchronization
         session._session_manager = self
 
@@ -53,71 +59,84 @@ class SessionManager:
             # Update activity timestamp
             session.update_activity()
             # Ensure session manager reference exists for Phase 2
-            if not hasattr(session, '_session_manager') or session._session_manager is None:
+            if (
+                not hasattr(session, "_session_manager")
+                or session._session_manager is None
+            ):
                 session._session_manager = self
         return session
 
     def synchronize_requests_library_state(self, session: ExecutionSession) -> bool:
         """
         Synchronize RequestsLibrary session state between MCP and RF contexts.
-        
+
         This is Phase 2 of the RequestsLibrary fix: Session State Synchronization.
         The issue is that RequestsLibrary session state is not properly initialized
         in the MCP context, leading to 500 errors even when library registration works.
-        
+
         Args:
             session: ExecutionSession to synchronize
-            
+
         Returns:
             True if synchronization was successful, False otherwise
         """
         try:
             from robot.running.context import EXECUTION_CONTEXTS
-            
+
             # Check if we have an active RF context
             if not EXECUTION_CONTEXTS.current:
                 logger.debug("No active RF execution context for RequestsLibrary sync")
                 return False
-            
+
             rf_context = EXECUTION_CONTEXTS.current
-            
+
             # Try to get the RequestsLibrary instance from RF context
             try:
-                requests_lib = rf_context.namespace.get_library_instance('RequestsLibrary')
-                
+                requests_lib = rf_context.namespace.get_library_instance(
+                    "RequestsLibrary"
+                )
+
                 if not requests_lib:
                     logger.debug("RequestsLibrary not found in RF context during sync")
                     return False
-                
+
                 # Ensure proper session state initialization for RequestsLibrary
-                if not hasattr(requests_lib, '_session_store'):
+                if not hasattr(requests_lib, "_session_store"):
                     logger.debug("Initializing RequestsLibrary session store")
                     requests_lib._session_store = {}
-                
+
                 # Check if RequestsLibrary has a session attribute for default session
-                if not hasattr(requests_lib, 'session'):
-                    logger.debug("Initializing RequestsLibrary default session attribute")
+                if not hasattr(requests_lib, "session"):
+                    logger.debug(
+                        "Initializing RequestsLibrary default session attribute"
+                    )
                     # RequestsLibrary creates sessions on demand, but we ensure the structure exists
-                    requests_lib.session = None  # This will be populated by RequestsLibrary when needed
-                
+                    requests_lib.session = (
+                        None  # This will be populated by RequestsLibrary when needed
+                    )
+
                 # Verify RequestsLibrary is in a working state
-                if hasattr(requests_lib, 'builtin'):
+                if hasattr(requests_lib, "builtin"):
                     logger.debug("RequestsLibrary has proper BuiltIn integration")
                 else:
                     logger.debug("Setting up RequestsLibrary BuiltIn integration")
                     from robot.libraries.BuiltIn import BuiltIn
+
                     requests_lib.builtin = BuiltIn()
-                
+
                 logger.debug("RequestsLibrary session state synchronized successfully")
                 return True
-                
+
             except Exception as e:
-                logger.warning(f"Failed to get RequestsLibrary instance during sync: {e}")
+                logger.warning(
+                    f"Failed to get RequestsLibrary instance during sync: {e}"
+                )
                 return False
-            
+
         except Exception as e:
             logger.error(f"RequestsLibrary session synchronization failed: {e}")
             import traceback
+
             logger.debug(f"RequestsLibrary sync traceback: {traceback.format_exc()}")
             return False
 
@@ -201,118 +220,280 @@ class SessionManager:
         """Get list of all active session IDs."""
         return list(self.sessions.keys())
 
-    def detect_platform_from_scenario(self, scenario: str) -> PlatformType:
+    def detect_platform_from_scenario(
+        self, scenario: str, context: Optional[str] = None
+    ) -> PlatformType:
         """
         Detect platform type from scenario description.
-        
+
         Args:
             scenario: Natural language scenario description
-            
+            context: Optional explicit context hint (e.g., 'web', 'mobile', 'desktop')
+
         Returns:
             Detected platform type
         """
         scenario_lower = scenario.lower()
-        
+        context_lower = (context or "").strip().lower()
+
         # Mobile indicators
-        mobile_keywords = ['app', 'mobile', 'android', 'ios', 'iphone', 'ipad', 
-                          'device', 'appium', 'emulator', 'simulator', 'apk',
-                          'bundle', 'tap', 'swipe', 'gesture']
-        
-        # Web indicators  
-        web_keywords = ['browser', 'web', 'website', 'url', 'page', 'chrome',
-                       'firefox', 'safari', 'edge', 'selenium', 'click link']
-        
+        mobile_keywords = [
+            "app",
+            "mobile",
+            "android",
+            "ios",
+            "iphone",
+            "ipad",
+            "device",
+            "appium",
+            "emulator",
+            "simulator",
+            "apk",
+            "bundle",
+            "tap",
+            "swipe",
+            "gesture",
+        ]
+
+        # Web indicators
+        web_keywords = [
+            "browser",
+            "web",
+            "website",
+            "url",
+            "page",
+            "chrome",
+            "firefox",
+            "safari",
+            "edge",
+            "selenium",
+            "click link",
+        ]
+
         # API indicators
-        api_keywords = ['api', 'rest', 'soap', 'endpoint', 'request', 'response',
-                       'json', 'xml', 'http', 'graphql']
-        
+        api_keywords = [
+            "api",
+            "rest",
+            "soap",
+            "endpoint",
+            "request",
+            "response",
+            "json",
+            "xml",
+            "http",
+            "graphql",
+        ]
+
+        # Desktop indicators
+        desktop_keywords = [
+            "desktop",
+            "windows app",
+            "win32",
+            "rpa.windows",
+            "notepad",
+            "calculator",
+            "outlook",
+            "excel",
+            "word",
+            "teams",
+            "uiautomation",
+            "window element",
+            "control window",
+        ]
+
         # Count keyword matches
-        mobile_score = sum(1 for keyword in mobile_keywords if keyword in scenario_lower)
+        mobile_score = sum(
+            1 for keyword in mobile_keywords if keyword in scenario_lower
+        )
         web_score = sum(1 for keyword in web_keywords if keyword in scenario_lower)
         api_score = sum(1 for keyword in api_keywords if keyword in scenario_lower)
-        
-        # Determine platform based on scores
-        if mobile_score > web_score and mobile_score > api_score:
-            return PlatformType.MOBILE
-        elif api_score > web_score:
-            return PlatformType.API
-        else:
-            return PlatformType.WEB  # Default to web
-    
-    def initialize_mobile_session(self, session: ExecutionSession, scenario: str = None) -> None:
+        desktop_score = sum(
+            1 for keyword in desktop_keywords if keyword in scenario_lower
+        )
+
+        scores = {
+            PlatformType.MOBILE: mobile_score,
+            PlatformType.API: api_score,
+            PlatformType.DESKTOP: desktop_score,
+            PlatformType.WEB: web_score,
+        }
+
+        # Apply context hints as tie-breakers
+        if context_lower == "mobile":
+            scores[PlatformType.MOBILE] += 2
+        elif context_lower == "api":
+            scores[PlatformType.API] += 2
+        elif context_lower == "desktop":
+            scores[PlatformType.DESKTOP] += 2
+        elif context_lower == "web":
+            scores[PlatformType.WEB] += 1
+
+        # Determine platform based on highest score
+        best_platform = max(scores, key=scores.get)
+
+        if scores[best_platform] == 0:
+            return PlatformType.WEB  # Default to web when no signals detected
+
+        # Prefer desktop when desktop signals present to avoid defaulting to web
+        if (
+            scores[PlatformType.DESKTOP] > 0
+            and scores[PlatformType.DESKTOP] >= scores[PlatformType.WEB]
+            and scores[PlatformType.DESKTOP] >= scores[PlatformType.MOBILE]
+            and scores[PlatformType.DESKTOP] >= scores[PlatformType.API]
+        ):
+            return PlatformType.DESKTOP
+
+        return best_platform
+
+    def initialize_mobile_session(
+        self, session: ExecutionSession, scenario: str = None
+    ) -> None:
         """
         Initialize session with mobile configuration.
-        
+
         Args:
             session: Session to initialize
             scenario: Optional scenario text for parsing requirements
         """
         session.platform_type = PlatformType.MOBILE
         session.session_type = SessionType.MOBILE_TESTING
-        
+
         # Parse mobile requirements from scenario if provided
         if scenario:
             config = self.parse_mobile_requirements(scenario)
             session.mobile_config = config
-            
+
         # Set mobile-specific exclusions and ensure AppiumLibrary is properly tracked
-        session.loaded_libraries.add('AppiumLibrary')
-        if 'AppiumLibrary' not in session.imported_libraries:
-            session.imported_libraries.append('AppiumLibrary')  # Track both loaded and imported
-        
+        session.loaded_libraries.add("AppiumLibrary")
+        if "AppiumLibrary" not in session.imported_libraries:
+            session.imported_libraries.append(
+                "AppiumLibrary"
+            )  # Track both loaded and imported
+
         # Set mobile session context
         session.current_context = "NATIVE_APP"  # Default mobile context
-        
-        logger.info(f"Initialized mobile session: {session.session_id} with AppiumLibrary loaded")
-    
+
+        logger.info(
+            f"Initialized mobile session: {session.session_id} with AppiumLibrary loaded"
+        )
+
+    def initialize_desktop_session(
+        self, session: ExecutionSession, scenario: str | None = None
+    ) -> None:
+        """Initialize session for Windows desktop automation."""
+        session.platform_type = PlatformType.DESKTOP
+        session.session_type = SessionType.DESKTOP_AUTOMATION
+
+        is_windows = sys.platform.startswith("win")
+        session.desktop_supported = is_windows
+
+        if is_windows:
+            # Ensure RPA.Windows is tracked and prioritized
+            try:
+                session.import_library("RPA.Windows", force=True)
+                session.loaded_libraries.add("RPA.Windows")
+            except Exception as exc:
+                session.desktop_supported = False
+                logger.warning(
+                    "Failed to import RPA.Windows during desktop session init: %s", exc
+                )
+
+            if session.desktop_supported:
+                if "RPA.Windows" not in session.imported_libraries:
+                    session.imported_libraries.append("RPA.Windows")
+
+                current_order = list(session.search_order)
+                session.search_order = ["RPA.Windows"] + [
+                    lib for lib in current_order if lib != "RPA.Windows"
+                ]
+
+                logger.info(
+                    "Initialized desktop session: %s with RPA.Windows ready",
+                    session.session_id,
+                )
+            else:
+                logger.warning(
+                    "Desktop automation detected but RPA.Windows could not be initialized; keywords will be unavailable"
+                )
+        else:
+            # Provide safe fallback libraries to avoid loading Windows-only modules
+            logger.warning(
+                "Desktop automation requested but host platform is %s; RPA.Windows requires Windows",
+                sys.platform,
+            )
+            fallback_order = [
+                "BuiltIn",
+                "Process",
+                "Collections",
+                "OperatingSystem",
+                "String",
+            ]
+            session.search_order = fallback_order
+            for lib in [
+                "BuiltIn",
+                "Process",
+                "Collections",
+                "OperatingSystem",
+                "String",
+            ]:
+                try:
+                    session.import_library(lib, force=False)
+                except Exception:
+                    # Built-ins should always import; ignore failures to avoid cascading issues
+                    pass
+
     def parse_mobile_requirements(self, scenario: str) -> MobileConfig:
         """
         Parse mobile configuration from scenario text.
-        
+
         Args:
             scenario: Natural language scenario
-            
+
         Returns:
             MobileConfig with parsed requirements
         """
         config = MobileConfig()
         scenario_lower = scenario.lower()
-        
+
         # Detect platform
-        if 'android' in scenario_lower:
-            config.platform_name = 'Android'
-            config.automation_name = 'UiAutomator2'
-            
+        if "android" in scenario_lower:
+            config.platform_name = "Android"
+            config.automation_name = "UiAutomator2"
+
             # Look for package/activity mentions
-            package_match = re.search(r'com\.\w+(?:\.\w+)*', scenario)
+            package_match = re.search(r"com\.\w+(?:\.\w+)*", scenario)
             if package_match:
                 config.app_package = package_match.group(0)
-                
-        elif 'ios' in scenario_lower or 'iphone' in scenario_lower or 'ipad' in scenario_lower:
-            config.platform_name = 'iOS'
-            config.automation_name = 'XCUITest'
-            
+
+        elif (
+            "ios" in scenario_lower
+            or "iphone" in scenario_lower
+            or "ipad" in scenario_lower
+        ):
+            config.platform_name = "iOS"
+            config.automation_name = "XCUITest"
+
             # Look for bundle ID mentions
-            bundle_match = re.search(r'com\.\w+(?:\.\w+)*', scenario)
+            bundle_match = re.search(r"com\.\w+(?:\.\w+)*", scenario)
             if bundle_match:
                 config.bundle_id = bundle_match.group(0)
-        
+
         # Detect device name
-        if 'emulator' in scenario_lower:
-            config.device_name = 'emulator-5554'
-        elif 'simulator' in scenario_lower:
-            config.device_name = 'iPhone Simulator'
-        elif 'real device' in scenario_lower or 'physical device' in scenario_lower:
+        if "emulator" in scenario_lower:
+            config.device_name = "emulator-5554"
+        elif "simulator" in scenario_lower:
+            config.device_name = "iPhone Simulator"
+        elif "real device" in scenario_lower or "physical device" in scenario_lower:
             # Would need actual device UDID
             pass
-            
+
         # Detect app path
-        app_match = re.search(r'[\/\\][\w\/\\]+\.(apk|app|ipa)', scenario)
+        app_match = re.search(r"[\/\\][\w\/\\]+\.(apk|app|ipa)", scenario)
         if app_match:
             config.app_path = app_match.group(0)
-            
+
         return config
-    
+
     def get_session_info(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get summary information about a session."""
         session = self.get_session(session_id)
@@ -331,13 +512,15 @@ class SessionManager:
             "variables_count": len(session.variables),
             "platform_type": session.platform_type.value,
             "is_mobile": session.is_mobile_session(),
+            "is_desktop": session.platform_type == PlatformType.DESKTOP,
+            "desktop_supported": getattr(session, "desktop_supported", True),
             "current_url": session.browser_state.current_url,
             "browser_type": session.browser_state.browser_type,
-            "libraries_loaded": getattr(session, 'libraries_loaded', False),
-            "search_order": getattr(session, 'search_order', []),
-            "loaded_libraries": list(getattr(session, 'loaded_libraries', set())),
+            "libraries_loaded": getattr(session, "libraries_loaded", False),
+            "search_order": getattr(session, "search_order", []),
+            "loaded_libraries": list(getattr(session, "loaded_libraries", set())),
         }
-        
+
         # Add mobile-specific info if applicable
         if session.is_mobile_session() and session.mobile_config:
             info["mobile_config"] = {
@@ -346,11 +529,11 @@ class SessionManager:
                 "app_package": session.mobile_config.app_package,
                 "app_activity": session.mobile_config.app_activity,
                 "automation_name": session.mobile_config.automation_name,
-                "appium_server_url": session.mobile_config.appium_server_url
+                "appium_server_url": session.mobile_config.appium_server_url,
             }
             info["appium_session_id"] = session.appium_session_id
             info["current_context"] = session.current_context
-            
+
         return info
 
     def get_all_sessions_info(self) -> Dict[str, Dict[str, Any]]:
@@ -370,28 +553,28 @@ class SessionManager:
 
         logger.info(f"Cleaned up all {count} sessions")
         return count
-    
+
     def get_most_recent_session(self) -> Optional[ExecutionSession]:
         """Get the most recently active session."""
         if not self.sessions:
             return None
-        
+
         most_recent = max(self.sessions.values(), key=lambda s: s.last_activity)
         return most_recent
-    
+
     def get_sessions_with_steps(self) -> List[ExecutionSession]:
         """Get all sessions that have executed steps."""
         sessions_with_steps = [s for s in self.sessions.values() if s.step_count > 0]
         # Sort by last activity (most recent first)
         sessions_with_steps.sort(key=lambda s: s.last_activity, reverse=True)
         return sessions_with_steps
-    
+
     def suggest_session_for_suite_build(self) -> Optional[str]:
         """Suggest best session ID for test suite building."""
         sessions_with_steps = self.get_sessions_with_steps()
-        
+
         if not sessions_with_steps:
             return None
-        
+
         # Return the most recently active session with steps
         return sessions_with_steps[0].session_id

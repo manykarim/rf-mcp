@@ -88,6 +88,7 @@ class SessionType(Enum):
     SYSTEM_TESTING = "system_testing"
     MOBILE_TESTING = "mobile_testing"
     DATABASE_TESTING = "database_testing"
+    DESKTOP_AUTOMATION = "desktop_automation"
     VISUAL_TESTING = "visual_testing"
     MIXED = "mixed"
     UNKNOWN = "unknown"
@@ -145,6 +146,7 @@ class ExecutionSession:
     mobile_config: Optional[MobileConfig] = None
     appium_session_id: Optional[str] = None
     current_context: Optional[str] = None  # NATIVE_APP, WEBVIEW_*, etc.
+    desktop_supported: bool = True  # Set false when environment lacks Windows support
 
     def add_step(self, step: ExecutionStep) -> None:
         """Add a successful step to the session."""
@@ -463,6 +465,31 @@ class ExecutionSession:
                 ],
                 description="Mobile application testing with Appium",
             ),
+            SessionType.DESKTOP_AUTOMATION: SessionProfile(
+                session_type=SessionType.DESKTOP_AUTOMATION,
+                core_libraries=[
+                    "BuiltIn",
+                    "RPA.Windows",
+                    "Collections",
+                    "OperatingSystem",
+                    "Process",
+                ],
+                optional_libraries=["String", "Screenshot"],
+                search_order=[
+                    "RPA.Windows",
+                    "BuiltIn",
+                    "Collections",
+                    "OperatingSystem",
+                    "String",
+                    "Process",
+                ],
+                keywords_patterns=[
+                    r"\b(desktop|windows\s+app|win32)\b",
+                    r"\b(window|pane|dialog|control)\b",
+                    r"\b(notepad|calculator|outlook|excel|word|teams)\b",
+                ],
+                description="Windows desktop automation with RPA.Windows",
+            ),
             SessionType.DATABASE_TESTING: SessionProfile(
                 session_type=SessionType.DATABASE_TESTING,
                 core_libraries=["BuiltIn", "DatabaseLibrary", "Collections", "String"],
@@ -592,6 +619,19 @@ class ExecutionSession:
             (r"\bdatabase\s+(validation|testing|automation)\b", 6),
         ]
 
+        # Enhanced desktop automation patterns
+        desktop_patterns = [
+            (
+                r"\b(use|using|with|via|through)\s+(rpa\.windows|windows\s+library|desktop\s+library)\b",
+                10,
+            ),
+            (r"\bautomate\s+(windows|desktop)\s+application\b", 8),
+            (r"\brpa\.windows\b", 9),
+            (r"\b(desktop|win32|windows)\s+(automation|testing)\b", 7),
+            (r"\b(open|control|assert)\s+(notepad|calculator|outlook|excel)\b", 6),
+            (r"\b(ui\s*automation|window\s+elements|print\s+tree)\b", 6),
+        ]
+
         # Score all patterns
         all_patterns = [
             ("SeleniumLibrary", selenium_patterns),
@@ -600,6 +640,7 @@ class ExecutionSession:
             ("XML", xml_patterns),
             ("AppiumLibrary", mobile_patterns),
             ("DatabaseLibrary", database_patterns),
+            ("RPA.Windows", desktop_patterns),
         ]
 
         for library_name, patterns in all_patterns:
@@ -626,6 +667,10 @@ class ExecutionSession:
             (r"\b(api|http|rest|request)\b", "RequestsLibrary"),
             (r"\b(mobile|android|ios|device)\b", "AppiumLibrary"),
             (r"\b(database|sql|mysql|postgresql)\b", "DatabaseLibrary"),
+            (
+                r"\b(desktop|windows\s+app|win32|notepad|calculator|outlook|excel)\b",
+                "RPA.Windows",
+            ),
         ]
 
         for pattern, library in fallback_patterns:
@@ -697,6 +742,13 @@ class ExecutionSession:
                 (r"\b(mysql|postgresql|sqlite|oracle|mongodb)\b", 3),
                 (r"\b(select|insert|update|delete|create)\s+(table|from|into)\b", 3),
                 (r"\bdatabase\s+(testing|automation|validation)\b", 4),
+            ],
+            SessionType.DESKTOP_AUTOMATION: [
+                (r"\b(desktop|win32|windows\s+app|windows\s+application)\b", 3),
+                (r"\brpa\.windows\b", 5),
+                (r"\b(control\s+window|window\s+elements|ui\s+automation)\b", 4),
+                (r"\b(notepad|calculator|outlook|excel|word|teams)\b", 3),
+                (r"\b(click|type|press)\s+(?:the\s+)?(menu|tab|window|dialog)\b", 2),
             ],
         }
 
@@ -775,6 +827,20 @@ class ExecutionSession:
 
         # Set intelligent search order using RF Set Library Search Order concept
         self.search_order = self._build_intelligent_search_order(profile)
+
+        # Align platform type with detected session type for downstream services
+        platform_map = {
+            SessionType.WEB_AUTOMATION: PlatformType.WEB,
+            SessionType.API_TESTING: PlatformType.API,
+            SessionType.MOBILE_TESTING: PlatformType.MOBILE,
+            SessionType.DESKTOP_AUTOMATION: PlatformType.DESKTOP,
+        }
+        mapped_platform = platform_map.get(self.session_type)
+        if mapped_platform and self.platform_type != mapped_platform:
+            self.platform_type = mapped_platform
+            logger.debug(
+                f"Session {self.session_id} platform set to {self.platform_type.value} based on session type"
+            )
 
         # Import the preferred library if explicit preference exists
         if self.explicit_library_preference:
@@ -1184,9 +1250,11 @@ class ExecutionSession:
             "web_automation_library": self.get_web_automation_library(),
             "active_library": self.get_active_library(),
             "is_browser_session": self.is_browser_session(),
-            "scenario_text": self.scenario_text[:100] + "..."
-            if self.scenario_text and len(self.scenario_text) > 100
-            else self.scenario_text,
+            "scenario_text": (
+                self.scenario_text[:100] + "..."
+                if self.scenario_text and len(self.scenario_text) > 100
+                else self.scenario_text
+            ),
             "created_at": self.created_at.isoformat(),
             "last_activity": self.last_activity.isoformat(),
             "duration": self.duration,

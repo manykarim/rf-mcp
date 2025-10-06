@@ -1,6 +1,7 @@
 """Library loading and management functionality."""
 
 import importlib
+import inspect
 import logging
 from typing import Any, Dict, Set
 
@@ -209,8 +210,17 @@ class LibraryManager:
             else:
                 # Try generic import
                 module = importlib.import_module(library_name)
-                if hasattr(module, library_name):
-                    instance = getattr(module, library_name)()
+                attr_name = library_name.split(".")[-1]
+                attr = getattr(module, attr_name, None)
+
+                if inspect.isclass(attr) or callable(attr):
+                    try:
+                        instance = attr()
+                    except TypeError:
+                        # Attribute may already be an instance or expect args
+                        instance = attr
+                elif attr is not None:
+                    instance = attr
                 else:
                     instance = module
 
