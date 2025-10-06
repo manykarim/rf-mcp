@@ -16,14 +16,30 @@ dependencies = [
     "pydantic>=2.0.0",
     "beautifulsoup4>=4.11.0",
     "lxml>=4.9.0",
-    "robotframework-seleniumlibrary",
-    "robotframework-requests",
-    "robotframework-databaselibrary",
-    "robotframework-browser",
-    "robotframework-appiumlibrary",
 ]
 
 [project.optional-dependencies]
+slim = []
+web = [
+    "robotframework-browser",
+    "robotframework-seleniumlibrary",
+]
+mobile = [
+    "robotframework-appiumlibrary",
+]
+api = [
+    "robotframework-requests",
+]
+database = [
+    "robotframework-databaselibrary",
+]
+full = [
+    "robotframework-browser",
+    "robotframework-seleniumlibrary",
+    "robotframework-appiumlibrary",
+    "robotframework-requests",
+    "robotframework-databaselibrary",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",

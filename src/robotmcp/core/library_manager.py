@@ -4,6 +4,10 @@ import importlib
 import logging
 from typing import Any, Dict, Set
 
+from robotmcp.config.library_registry import (
+    get_library_install_hint,
+    get_library_names_for_loading,
+)
 from robotmcp.models.library_models import LibraryInfo
 
 logger = logging.getLogger(__name__)
@@ -29,9 +33,14 @@ class LibraryManager:
         self.excluded_libraries: Set[str] = set()
 
         # Load library list from centralized registry
-        from robotmcp.config.library_registry import get_library_names_for_loading
-
         self.common_libraries = get_library_names_for_loading()
+
+    def _format_missing_library_message(self, library_name: str) -> str:
+        """Create a user-friendly message for missing optional libraries."""
+        hint = get_library_install_hint(library_name)
+        if hint:
+            return f"Not installed. {hint}"
+        return "Not installed"
 
     def load_all_libraries(self, keyword_extractor) -> None:
         """
@@ -126,7 +135,9 @@ class LibraryManager:
                     instance = Browser()
                 except ImportError:
                     logger.debug("Browser library not available")
-                    self.failed_imports[library_name] = "Not installed"
+                    self.failed_imports[library_name] = self._format_missing_library_message(
+                        library_name
+                    )
                     return False
             elif library_name == "SeleniumLibrary":
                 try:
@@ -140,7 +151,9 @@ class LibraryManager:
                     # with keyword extraction since the class methods exist.
                 except ImportError:
                     logger.debug("SeleniumLibrary not available")
-                    self.failed_imports[library_name] = "Not installed"
+                    self.failed_imports[library_name] = self._format_missing_library_message(
+                        library_name
+                    )
                     return False
                 except Exception as e:
                     logger.debug(
@@ -168,7 +181,9 @@ class LibraryManager:
                     instance = RequestsLibrary()
                 except ImportError:
                     logger.debug("RequestsLibrary not available")
-                    self.failed_imports[library_name] = "Not installed"
+                    self.failed_imports[library_name] = self._format_missing_library_message(
+                        library_name
+                    )
                     return False
             elif library_name == "Collections":
                 from robot.libraries.Collections import Collections
@@ -225,7 +240,12 @@ class LibraryManager:
 
         except Exception as e:
             logger.debug(f"Failed to import library '{library_name}': {e}")
-            self.failed_imports[library_name] = str(e)
+            if isinstance(e, ImportError):
+                self.failed_imports[library_name] = self._format_missing_library_message(
+                    library_name
+                )
+            else:
+                self.failed_imports[library_name] = str(e)
             return False
 
     def resolve_library_conflicts(self) -> None:

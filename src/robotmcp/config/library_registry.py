@@ -59,6 +59,7 @@ class LibraryConfig:
     # Priority and filtering
     load_priority: int = 100  # Lower numbers = higher priority
     default_enabled: bool = True
+    extra_name: Optional[str] = None
     
     @property
     def is_builtin(self) -> bool:
@@ -215,6 +216,7 @@ ROBOT_FRAMEWORK_LIBRARIES: Dict[str, LibraryConfig] = {
         package_name='robotframework-browser',
         import_path='Browser',
         library_type=LibraryType.EXTERNAL,
+        extra_name='web',
         description='Modern web testing with Playwright backend',
         use_cases=['modern web testing', 'playwright automation', 'web performance', 'mobile web'],
         categories=[LibraryCategory.WEB, LibraryCategory.TESTING],
@@ -231,6 +233,7 @@ ROBOT_FRAMEWORK_LIBRARIES: Dict[str, LibraryConfig] = {
         package_name='robotframework-seleniumlibrary',
         import_path='SeleniumLibrary',
         library_type=LibraryType.EXTERNAL,
+        extra_name='web',
         description='Traditional web testing with Selenium WebDriver',
         use_cases=['web testing', 'browser automation', 'web elements', 'form filling'],
         categories=[LibraryCategory.WEB, LibraryCategory.TESTING],
@@ -245,6 +248,7 @@ ROBOT_FRAMEWORK_LIBRARIES: Dict[str, LibraryConfig] = {
         package_name='robotframework-requests',
         import_path='RequestsLibrary',
         library_type=LibraryType.EXTERNAL,
+        extra_name='api',
         description='HTTP API testing by wrapping Python Requests Library',
         use_cases=['api testing', 'http requests', 'rest api', 'json validation'],
         categories=[LibraryCategory.API, LibraryCategory.TESTING, LibraryCategory.NETWORK],
@@ -258,6 +262,7 @@ ROBOT_FRAMEWORK_LIBRARIES: Dict[str, LibraryConfig] = {
         package_name='robotframework-databaselibrary',
         import_path='DatabaseLibrary',
         library_type=LibraryType.EXTERNAL,
+        extra_name='database',
         description='Database testing with multiple DB support',
         use_cases=['database testing', 'sql queries', 'data validation', 'database connections'],
         categories=[LibraryCategory.DATABASE, LibraryCategory.TESTING, LibraryCategory.DATA],
@@ -270,6 +275,7 @@ ROBOT_FRAMEWORK_LIBRARIES: Dict[str, LibraryConfig] = {
         package_name='robotframework-appiumlibrary',
         import_path='AppiumLibrary',
         library_type=LibraryType.EXTERNAL,
+        extra_name='mobile',
         description='Mobile app testing with Appium',
         use_cases=['mobile testing', 'android automation', 'ios testing', 'app testing'],
         categories=[LibraryCategory.MOBILE, LibraryCategory.TESTING],
@@ -313,6 +319,37 @@ ROBOT_FRAMEWORK_LIBRARIES: Dict[str, LibraryConfig] = {
 def get_all_libraries() -> Dict[str, LibraryConfig]:
     """Get all registered Robot Framework libraries."""
     return ROBOT_FRAMEWORK_LIBRARIES.copy()
+
+
+def get_library_config(library_name: str) -> Optional[LibraryConfig]:
+    """Fetch a single library configuration by name."""
+    return ROBOT_FRAMEWORK_LIBRARIES.get(library_name)
+
+
+def get_library_extra_name(library_name: str) -> Optional[str]:
+    """Return the optional dependency extra tied to a library, if any."""
+    config = get_library_config(library_name)
+    return config.extra_name if config else None
+
+
+def get_library_install_hint(library_name: str) -> Optional[str]:
+    """Return a human-friendly installation hint for a library."""
+    config = get_library_config(library_name)
+    if not config:
+        return None
+
+    extra_name = config.extra_name
+    if extra_name:
+        return (
+            f"Install via `pip install rf-mcp[{extra_name}]` or `{config.installation_command}`."
+            if config.installation_command
+            else f"Install via `pip install rf-mcp[{extra_name}]`."
+        )
+
+    if config.installation_command:
+        return f"Install via `{config.installation_command}`."
+
+    return None
 
 
 def get_builtin_libraries() -> Dict[str, LibraryConfig]:
