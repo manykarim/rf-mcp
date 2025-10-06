@@ -9,7 +9,7 @@ description = "Robot Framework MCP Server - Natural Language Test Automation Bri
 authors = [{name = "Many Kasiriha"}]
 license = {text = "Apache-2.0"}
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<4.0"
 dependencies = [
     "fastmcp>=2.0.0",
     "robotframework>=6.0",
@@ -21,6 +21,7 @@ dependencies = [
     "robotframework-databaselibrary",
     "robotframework-browser",
     "robotframework-appiumlibrary",
+    "rpaframework-windows>=10.0.0",
 ]
 
 [project.optional-dependencies]
