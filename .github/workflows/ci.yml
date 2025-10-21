@@ -30,7 +30,7 @@ jobs:
           uv run python --version
 
       - name: Install dependencies (dev)
-        run: uv sync
+        run: uv sync --all-extras
 
       - name: Setup Google Chrome
         uses: browser-actions/setup-chrome@v1
