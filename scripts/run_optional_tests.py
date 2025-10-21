@@ -9,8 +9,11 @@ on PATH and that ``uv sync`` has been run at least once.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
+from functools import lru_cache
+from pathlib import Path
 from typing import Dict
 
 COMBO_CONFIG: Dict[str, Dict[str, str | list[str]]] = {
@@ -57,6 +60,34 @@ def run_command(command: list[str]) -> None:
     subprocess.run(command, check=True)
 
 
+@lru_cache(maxsize=1)
+def current_python() -> str:
+    """Return the interpreter path for the active uv project environment."""
+
+    env_path = os.environ.get("UV_PROJECT_ENVIRONMENT")
+    if env_path:
+        path = Path(env_path)
+        bin_dir = "Scripts" if os.name == "nt" else "bin"
+        candidate = path / bin_dir / ("python.exe" if os.name == "nt" else "python")
+        if candidate.exists():
+            return str(candidate)
+
+    result = subprocess.check_output(
+        ["uv", "run", "python", "-c", "import sys; print(sys.executable)"]
+    )
+    return result.decode().strip()
+
+
+def install_extras(extras: str | None) -> None:
+    """Install optional extras into the current uv project environment."""
+
+    run_command(['uv', 'sync', '--frozen'])
+
+    if extras:
+        python_executable = current_python()
+        run_command(['uv', 'pip', 'install', '--python', python_executable, '-e', f'.[{extras}]'])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -78,11 +109,9 @@ def main() -> int:
         config = COMBO_CONFIG[combo]
         extras = config["extras"]
         print(f"\n=== Running optional dependency combo: {combo} ===")
-        if extras and not args.skip_install:
-            run_command(["uv", "pip", "install", "-e", f".[{extras}]" ])
-        elif extras is None and not args.skip_install:
-            run_command(["uv", "sync", "--frozen"])
-        run_command(config["command"])  # type: ignore[arg-type]
+        if not args.skip_install:
+            install_extras(extras if isinstance(extras, str) else None)
+        run_command(list(config["command"]))  # type: ignore[arg-type]
 
     return 0
 
