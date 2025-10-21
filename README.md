@@ -123,7 +123,7 @@ pip install rf-mcp[web]       # Browser Library + SeleniumLibrary
 pip install rf-mcp[mobile]    # AppiumLibrary
 pip install rf-mcp[api]       # RequestsLibrary
 pip install rf-mcp[database]  # DatabaseLibrary
-pip install rf-mcp[full]      # All optional Robot Framework libraries
+pip install rf-mcp[all]       # All optional Robot Framework libraries
 
 # Browser Library still needs Playwright browsers
 rfbrowser init
@@ -686,6 +686,21 @@ We welcome contributions! Here's how to get started:
 5. **Add** comprehensive tests for new functionality
 6. **Run** tests: `uv run pytest tests/`
 7. **Submit** a pull request
+
+### Optional Dependency Matrix
+```bash
+# Run Browser/Selenium focused tests
+uv run pytest -m optional_web -q
+
+# Run API smoke tests
+uv run pytest -m optional_api -q
+
+# Run combined web+api tests
+uv run pytest -m optional_web_api -q
+
+# Convenience helper (installs extras + executes markers)
+python scripts/run_optional_tests.py web api web+api
+```
 
 ### Development Commands
 ```bash

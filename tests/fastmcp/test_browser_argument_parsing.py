@@ -11,6 +11,14 @@ import pytest_asyncio
 from fastmcp import Client
 from robotmcp.server import mcp
 
+from tests.utils.dependency_matrix import requires_extras
+
+pytestmark = [
+    requires_extras("web"),
+    pytest.mark.optional_dependency("web"),
+    pytest.mark.optional_web,
+]
+
 
 @pytest_asyncio.fixture
 async def mcp_client():
