@@ -57,6 +57,9 @@ Documentation = "https://github.com/manykarim/rf-mcp#readme"
 [project.scripts]
 robotmcp = "robotmcp.server:main"
 
+[tool.uv]
+default-groups = ["dev", "all"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/robotmcp"]
 
