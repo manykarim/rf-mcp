@@ -11,7 +11,7 @@ import pytest_asyncio
 from fastmcp import Client
 from robotmcp.server import mcp
 
-from tests.utils.dependency_matrix import requires_extras
+from tests.utils.dependency_matrix import extras_available, missing_libraries, requires_extras
 
 pytestmark = [
     requires_extras("mobile"),
@@ -66,6 +66,10 @@ async def test_appium_open_application_named_kwargs(mcp_client):
 
 @pytest.mark.asyncio
 async def test_locator_like_strings_treated_correctly(mcp_client):
+    if not extras_available(['web']):
+        missing = ', '.join(missing_libraries(['web'])) or 'Browser'
+        pytest.skip(f"Missing optional dependencies: {missing}")
+
     # For a Browser keyword with a 'selector' param, this should be named
     res_named = await mcp_client.call_tool(
         "debug_parse_keyword_arguments",
