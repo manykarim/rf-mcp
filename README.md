@@ -17,7 +17,9 @@ https://github.com/user-attachments/assets/ad89064f-cab3-4ae6-a4c4-5e8c241301a1
 
 https://github.com/user-attachments/assets/8448cb70-6fb3-4f04-9742-a8a8453a9c7f
 
+**Debug Bridge**
 
+https://github.com/user-attachments/assets/8d87cd6e-c32e-4481-9f37-48b83f69f72f
 
 ---
 
@@ -209,6 +211,28 @@ RobotMCP works with any MCP-compatible AI agent. Use the stdio configuration abo
 ## 🪝 Debug Attach Bridge
 
 RobotMCP ships with `robotmcp.attach.McpAttach`, a lightweight Robot Framework library that exposes the live `ExecutionContext` over a localhost HTTP bridge. When you debug a suite from VS Code (RobotCode) or another IDE, the bridge lets RobotMCP reuse the in-process variables, imports, and keyword search order instead of creating a separate context.
+
+### MCP Server Setup
+
+Example configuration with passed environment variables for Debug Bridge
+
+```json
+{
+  "servers": {
+    "RobotMCP": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "src/robotmcp/server.py"],
+      "env": {
+        "ROBOTMCP_ATTACH_HOST": "127.0.0.1",
+        "ROBOTMCP_ATTACH_PORT": "7317",
+        "ROBOTMCP_ATTACH_TOKEN": "change-me",
+        "ROBOTMCP_ATTACH_DEFAULT": "auto"
+      }
+    }
+  }
+}
+```
 
 ### Robot Framework setup
 
