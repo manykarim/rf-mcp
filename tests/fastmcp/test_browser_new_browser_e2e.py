@@ -10,6 +10,14 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 from robotmcp.server import mcp
 
+from tests.utils.dependency_matrix import requires_extras
+
+pytestmark = [
+    requires_extras("web"),
+    pytest.mark.optional_dependency("web"),
+    pytest.mark.optional_web,
+]
+
 
 @pytest_asyncio.fixture
 async def mcp_client():
@@ -102,3 +110,4 @@ async def test_browser_new_browser_e2e_headless(mcp_client):
         },
     )
     assert close.data.get("success") is True
+

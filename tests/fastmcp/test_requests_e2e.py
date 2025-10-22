@@ -8,6 +8,15 @@ import pytest_asyncio
 from fastmcp import Client
 from robotmcp.server import mcp
 
+from tests.utils.dependency_matrix import requires_extras
+
+pytestmark = [
+    requires_extras("api"),
+    pytest.mark.optional_dependency("api"),
+    pytest.mark.optional_api,
+]
+
+
 
 BASE_URL = "https://restful-booker.herokuapp.com"
 TIMEOUT = 60

@@ -3,6 +3,7 @@
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
+from robotmcp.config.library_registry import get_library_install_hint
 from robotmcp.models.session_models import ExecutionSession
 from robotmcp.models.config_models import ExecutionConfig
 from robotmcp.models.browser_models import BrowserState
@@ -16,7 +17,11 @@ try:
 except ImportError:
     BrowserLibrary = None
     BROWSER_LIBRARY_AVAILABLE = False
-    logger.warning("Browser Library not available")
+    browser_hint = get_library_install_hint("Browser")
+    message = "Browser Library not available"
+    if browser_hint:
+        message = f"{message}. {browser_hint}"
+    logger.warning(message)
 
 # Check for SeleniumLibrary availability
 try:
@@ -25,7 +30,11 @@ try:
 except ImportError:
     SeleniumLibrary = None
     SELENIUM_LIBRARY_AVAILABLE = False
-    logger.warning("SeleniumLibrary not available")
+    selenium_hint = get_library_install_hint("SeleniumLibrary")
+    message = "SeleniumLibrary not available"
+    if selenium_hint:
+        message = f"{message}. {selenium_hint}"
+    logger.warning(message)
 
 
 class BrowserLibraryManager:

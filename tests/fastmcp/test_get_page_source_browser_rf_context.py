@@ -8,6 +8,15 @@ import pytest_asyncio
 
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
+
+from tests.utils.dependency_matrix import requires_extras
+
+pytestmark = [
+    requires_extras("web"),
+    pytest.mark.optional_dependency("web"),
+    pytest.mark.optional_web,
+]
+
 from robotmcp.server import mcp
 
 

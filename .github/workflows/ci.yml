@@ -30,7 +30,7 @@ jobs:
           uv run python --version
 
       - name: Install dependencies (dev)
-        run: uv sync
+        run: uv sync --all-extras
 
       - name: Setup Google Chrome
         uses: browser-actions/setup-chrome@v1
@@ -60,3 +60,59 @@ jobs:
         with:
           name: dist-${{ matrix.os }}-py${{ matrix.python-version }}
           path: dist/*
+  optional-matrix:
+    name: Optional Dependency Matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - combo: slim
+            extras: 'slim'
+            test-command: 'uv run pytest tests/test_mcp_simple.py -q'
+          - combo: web
+            extras: 'web'
+            test-command: 'uv run pytest -m optional_web -q'
+          - combo: api
+            extras: 'api'
+            test-command: 'uv run pytest -m optional_api -q'
+          - combo: mobile
+            extras: 'mobile'
+            test-command: 'uv run pytest -m optional_mobile -q'
+          - combo: database
+            extras: 'database'
+            test-command: 'uv run pytest -m optional_database -q'
+          - combo: web+api
+            extras: 'web,api'
+            test-command: 'uv run pytest -m optional_web_api -q'
+          - combo: all
+            extras: 'all'
+            test-command: 'uv run pytest -m optional_all -q'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: 'latest'
+
+      - name: Setup Python 3.12 (via uv)
+        run: uv python install 3.12
+
+      - name: Install base dependencies
+        run: uv sync
+
+      - name: Install optional extras
+        if: ${{ matrix.extras != '' }}
+        run: uv pip install -e ".[${{ matrix.extras }}]"
+
+      - name: Initialize Browser Library (rfbrowser)
+        if: contains(matrix.extras, 'web')
+        run: uv run rfbrowser init
+        continue-on-error: true
+
+      - name: Run optional tests
+        env:
+          ROBOTMCP_RF_RUNNER_REQUESTS: '1'
+        run: ${{ matrix.test-command }}

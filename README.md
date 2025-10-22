@@ -115,22 +115,26 @@ Details below.
 
 ### Method 1: PyPI Installation (Recommended)
 ```bash
-# Install RobotMCP
+# Install RobotMCP core (minimal dependencies)
 pip install rf-mcp
+# or explicitly
+pip install rf-mcp[slim]
 
-# Install browser automation libraries
-pip install robotframework-browser
-rfbrowser init  # Install browser binaries
+# Feature bundles (install what you need)
+pip install rf-mcp[web]       # Browser Library + SeleniumLibrary
+pip install rf-mcp[mobile]    # AppiumLibrary
+pip install rf-mcp[api]       # RequestsLibrary
+pip install rf-mcp[database]  # DatabaseLibrary
+pip install rf-mcp[all]       # All optional Robot Framework libraries
 
-# Or install Selenium support
-pip install robotframework-seleniumlibrary
-
-# For API testing
-pip install robotframework-requests
-
-# For mobile testing
-pip install robotframework-appiumlibrary
+# Browser Library still needs Playwright browsers
+rfbrowser init
+# or
+python -m Browser.entry install
 ```
+
+Prefer installing individual Robot Framework libraries instead? You still can—
+each extra maps 1:1 to the original packages and their setup guidance below.
 
 ### Method 2: Development Installation
 ```bash
@@ -706,6 +710,21 @@ We welcome contributions! Here's how to get started:
 5. **Add** comprehensive tests for new functionality
 6. **Run** tests: `uv run pytest tests/`
 7. **Submit** a pull request
+
+### Optional Dependency Matrix
+```bash
+# Run Browser/Selenium focused tests
+uv run pytest -m optional_web -q
+
+# Run API smoke tests
+uv run pytest -m optional_api -q
+
+# Run combined web+api tests
+uv run pytest -m optional_web_api -q
+
+# Convenience helper (installs extras + executes markers)
+python scripts/run_optional_tests.py web api web+api
+```
 
 ### Development Commands
 ```bash
