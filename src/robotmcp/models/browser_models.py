@@ -13,6 +13,9 @@ class BrowserState:
     page_title: Optional[str] = None
     viewport: Dict[str, int] = field(default_factory=lambda: {"width": 1280, "height": 720})
     page_source: Optional[str] = None
+    aria_snapshot: Optional[Any] = None
+    aria_snapshot_format: Optional[str] = None
+    aria_snapshot_selector: Optional[str] = None
     cookies: List[Dict[str, Any]] = field(default_factory=list)
     local_storage: Dict[str, str] = field(default_factory=dict)
     
@@ -54,6 +57,9 @@ class BrowserState:
         self.current_url = None
         self.page_title = None
         self.page_source = None
+        self.aria_snapshot = None
+        self.aria_snapshot_format = None
+        self.aria_snapshot_selector = None
         self.cookies.clear()
         self.local_storage.clear()
         self.browser_id = None

@@ -903,6 +903,7 @@ async def get_page_source(
     full_source: bool = False,
     filtered: bool = False,
     filtering_level: str = "standard",
+    include_reduced_dom: bool = True,
 ) -> Dict[str, Any]:
     """Get page source and context for a browser session with optional DOM filtering.
     Call this tool after opening a web page or when changes are done to the page.
@@ -915,6 +916,7 @@ async def get_page_source(
                         - 'minimal': Remove only scripts and styles
                         - 'standard': Remove scripts, styles, metadata, SVG, embeds (default)
                         - 'aggressive': Remove all non-interactive elements and media
+        include_reduced_dom: When True, capture Browser Library aria snapshot alongside HTML.
 
     Returns:
         Dict with page source, metadata, and filtering information. When filtered=True,
@@ -923,28 +925,44 @@ async def get_page_source(
     # Bridge path: try Browser.Get Page Source or SeleniumLibrary.Get Source in live debug session
     client = _get_external_client_if_configured()
     if client is not None:
+        last_error = None
         # Prefer Browser's keyword
         for kw in ("Get Page Source", "Get Source"):
             resp = client.run_keyword(kw, [])
             if resp.get("success") and resp.get("result") is not None:
                 src = resp.get("result")
                 # Minimal normalized payload with external flag
+                aria_snapshot_payload = {
+                    "success": False,
+                    "selector": "css=html",
+                    "library": "Browser",
+                }
+                if include_reduced_dom:
+                    aria_snapshot_payload["error"] = "not_supported_in_attach_mode"
+                else:
+                    aria_snapshot_payload["skipped"] = True
+
                 return {
                     "success": True,
                     "external": True,
                     "keyword_used": kw,
                     "page_source": src,
                     "metadata": {"full": True, "filtered": False},
+                    "aria_snapshot": aria_snapshot_payload,
                 }
-        return {
-            "success": False,
-            "external": True,
-            "error": "Could not retrieve page source via bridge (no keyword succeeded)",
-        }
+            last_error = resp.get("error") or resp.get("message")
+        logger.warning(
+            "Attach bridge could not retrieve page source (last error: %s); falling back to local execution",
+            last_error,
+        )
 
     # Local path
     return await execution_engine.get_page_source(
-        session_id, full_source, filtered, filtering_level
+        session_id,
+        full_source,
+        filtered,
+        filtering_level,
+        include_reduced_dom,
     )
 
 

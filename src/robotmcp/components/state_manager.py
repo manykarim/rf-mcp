@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from dataclasses import dataclass, field
 from datetime import datetime
 import asyncio
@@ -43,6 +43,9 @@ class PageState:
     cookies: Dict[str, str] = field(default_factory=dict)
     local_storage: Dict[str, str] = field(default_factory=dict)
     page_source: Optional[str] = None
+    aria_snapshot: Optional[Union[str, Dict[str, Any]]] = None
+    aria_snapshot_format: Optional[str] = None
+    aria_snapshot_selector: Optional[str] = None
 
 @dataclass
 class APIState:
@@ -207,6 +210,12 @@ class StateManager:
                 "total_elements": len(page_state.elements),
                 "interactive_elements": len([e for e in visible_elements if e.clickable])
             }
+            if page_state.aria_snapshot is not None:
+                result["aria_snapshot"] = {
+                    "content": page_state.aria_snapshot,
+                    "format": page_state.aria_snapshot_format or "yaml",
+                    "selector": page_state.aria_snapshot_selector or "css=html"
+                }
             
             # Add Browser Library specific state if available
             if browser_state:
@@ -218,6 +227,9 @@ class StateManager:
                         "page_id": browser_state.get("page_id"),
                         "viewport": browser_state.get("viewport", {}),
                         "page_source": page_state.page_source,
+                        "aria_snapshot": page_state.aria_snapshot,
+                        "aria_snapshot_format": page_state.aria_snapshot_format,
+                        "aria_snapshot_selector": page_state.aria_snapshot_selector,
                         "cookies": page_state.cookies,
                         "local_storage": page_state.local_storage
                     }
@@ -753,6 +765,9 @@ class StateManager:
             # Extract cookies and storage if available in browser state
             cookies = browser_state.get("cookies", {})
             local_storage = browser_state.get("local_storage", {})
+            aria_snapshot_content = None
+            aria_snapshot_format = None
+            aria_snapshot_selector = None
             
             # Try to get real page source from execution engine
             real_page_source = None
@@ -768,6 +783,11 @@ class StateManager:
                     if page_source_result.get("success") and page_source_result.get("page_source"):
                         real_page_source = page_source_result["page_source"]
                         logger.debug(f"Retrieved real page source: {len(real_page_source)} characters")
+                        snapshot_info = page_source_result.get("aria_snapshot") or {}
+                        if snapshot_info.get("success") and snapshot_info.get("content"):
+                            aria_snapshot_content = snapshot_info.get("content")
+                            aria_snapshot_format = snapshot_info.get("format")
+                            aria_snapshot_selector = snapshot_info.get("selector")
                         
                         # Update URL and title from the page source result
                         if page_source_result.get("url"):
@@ -798,7 +818,10 @@ class StateManager:
                 links=self._extract_links_from_elements(elements),
                 cookies=cookies,
                 local_storage=local_storage,
-                page_source=page_source
+                page_source=page_source,
+                aria_snapshot=aria_snapshot_content,
+                aria_snapshot_format=aria_snapshot_format,
+                aria_snapshot_selector=aria_snapshot_selector,
             )
             
         except Exception as e:

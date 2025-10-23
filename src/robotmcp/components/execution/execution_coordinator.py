@@ -149,6 +149,7 @@ class ExecutionCoordinator:
         full_source: bool = False,
         filtered: bool = False,
         filtering_level: str = "standard",
+        include_reduced_dom: bool = True,
     ) -> Dict[str, Any]:
         """
         Get page source for a session.
@@ -158,6 +159,7 @@ class ExecutionCoordinator:
             full_source: If True, returns complete page source
             filtered: If True, returns filtered page source
             filtering_level: Filtering intensity ('minimal', 'standard', 'aggressive')
+            include_reduced_dom: When True, attempt Browser reduced DOM snapshot (aria tree)
 
         Returns:
             Page source data and metadata
@@ -173,6 +175,7 @@ class ExecutionCoordinator:
                 full_source=full_source,
                 filtered=filtered,
                 filtering_level=filtering_level,
+                include_reduced_dom=include_reduced_dom,
             )
 
         except Exception as e:
