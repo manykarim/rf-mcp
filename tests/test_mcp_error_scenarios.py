@@ -170,6 +170,49 @@ class TestMCPErrorScenarios:
         # Either returns empty/error state or creates a session
 
     @pytest.mark.asyncio
+    async def test_get_page_source_attach_fallback(self, monkeypatch):
+        """Ensure attach bridge failures fall back to local page source retrieval."""
+        import robotmcp.server as server_module
+
+        calls: List[str] = []
+
+        class DummyClient:
+            def run_keyword(self, keyword, args):
+                calls.append(keyword)
+                return {"success": False, "error": "keyword-not-available"}
+
+        dummy_client = DummyClient()
+        monkeypatch.setattr(
+            server_module, "_get_external_client_if_configured", lambda: dummy_client
+        )
+
+        async def fake_get_page_source(
+            session_id: str,
+            full_source: bool,
+            filtered: bool,
+            filtering_level: str,
+            include_reduced_dom: bool,
+        ):
+            return {
+                "success": True,
+                "session_id": session_id,
+                "page_source": "<html></html>",
+                "aria_snapshot": {"success": False, "skipped": not include_reduced_dom},
+            }
+
+        monkeypatch.setattr(
+            server_module.execution_engine, "get_page_source", fake_get_page_source
+        )
+
+        result = await server_module.get_page_source.fn(
+            session_id="attach_fallback_session", full_source=True
+        )
+
+        assert result["success"] is True
+        assert result["page_source"] == "<html></html>"
+        assert calls == ["Get Page Source", "Get Source"]
+
+    @pytest.mark.asyncio
     async def test_build_test_suite_empty_session(self, mcp_client):
         """Test building test suite from session with no steps."""
         result = await mcp_client.call_tool(

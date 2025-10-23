@@ -164,7 +164,8 @@ class PageSourceService:
         browser_library_manager: Any,  # BrowserLibraryManager
         full_source: bool = False, 
         filtered: bool = False, 
-        filtering_level: str = "standard"
+        filtering_level: str = "standard",
+        include_reduced_dom: bool = True,
     ) -> Dict[str, Any]:
         """
         Get page source for a session (web or mobile).
@@ -175,6 +176,7 @@ class PageSourceService:
             full_source: If True, returns complete page source. If False, returns preview.
             filtered: If True, returns filtered page source with only automation-relevant content.
             filtering_level: Filtering intensity when filtered=True ('minimal', 'standard', 'aggressive').
+            include_reduced_dom: When True, attempts to capture Browser Library reduced DOM (aria snapshot).
         """
         try:
             # Prefer web path if a web automation library is active/selected
@@ -254,6 +256,42 @@ class PageSourceService:
                     "success": False,
                     "error": "No page source available for this session"
                 }
+
+            aria_snapshot_info: Optional[Dict[str, Any]] = None
+            if include_reduced_dom:
+                try:
+                    aria_snapshot_info = await self._capture_browser_aria_snapshot(
+                        session=session,
+                        browser_library_manager=browser_library_manager,
+                    )
+                except Exception as snapshot_error:
+                    logger.debug(
+                        "Browser reduced DOM capture failed for session %s: %s",
+                        session.session_id,
+                        snapshot_error,
+                    )
+                    aria_snapshot_info = {
+                        "success": False,
+                        "selector": "css=html",
+                        "error": str(snapshot_error),
+                    }
+            else:
+                aria_snapshot_info = {
+                    "success": False,
+                    "selector": "css=html",
+                    "skipped": True,
+                }
+
+            if aria_snapshot_info and aria_snapshot_info.get("success"):
+                session.browser_state.aria_snapshot = aria_snapshot_info.get("content")
+                session.browser_state.aria_snapshot_format = aria_snapshot_info.get("format")
+                session.browser_state.aria_snapshot_selector = aria_snapshot_info.get(
+                    "selector"
+                )
+            elif include_reduced_dom:
+                session.browser_state.aria_snapshot = None
+                session.browser_state.aria_snapshot_format = None
+                session.browser_state.aria_snapshot_selector = None
             
             # Apply filtering if requested
             if filtered:
@@ -269,6 +307,8 @@ class PageSourceService:
                     "filtering_applied": True,
                     "filtering_level": filtering_level
                 }
+                if aria_snapshot_info is not None:
+                    result["aria_snapshot"] = aria_snapshot_info
                 
                 if full_source:
                     result["page_source"] = filtered_source
@@ -292,6 +332,8 @@ class PageSourceService:
                     "context": await self.extract_page_context(page_source),
                     "filtering_applied": False
                 }
+                if aria_snapshot_info is not None:
+                    result["aria_snapshot"] = aria_snapshot_info
                 
                 if full_source:
                     result["page_source"] = page_source
@@ -316,6 +358,86 @@ class PageSourceService:
                 "success": False,
                 "error": f"Failed to get page source: {str(e)}"
             }
+
+    async def _capture_browser_aria_snapshot(
+        self,
+        session: ExecutionSession,
+        browser_library_manager: Any,
+        selector: str = "css=html",
+    ) -> Dict[str, Any]:
+        """Attempt to capture Browser Library reduced DOM (aria snapshot)."""
+        info: Dict[str, Any] = {
+            "success": False,
+            "selector": selector,
+            "format": "yaml",
+            "library": "Browser",
+        }
+
+        try:
+            _, library_type = browser_library_manager.get_active_browser_library(session)
+        except Exception as detection_error:
+            info["error"] = f"library_detection_failed: {detection_error}"
+            logger.debug(
+                "Browser library detection failed for session %s: %s",
+                session.session_id,
+                detection_error,
+            )
+            return info
+
+        if library_type != "browser":
+            info["error"] = "browser_library_not_active"
+            return info
+
+        try:
+            from robotmcp.components.execution.rf_native_context_manager import (
+                get_rf_native_context_manager,
+            )
+
+            rf_mgr = get_rf_native_context_manager()
+        except Exception as ctx_error:
+            info["error"] = f"rf_context_unavailable: {ctx_error}"
+            logger.debug(
+                "RF native context unavailable when requesting aria snapshot for session %s: %s",
+                session.session_id,
+                ctx_error,
+            )
+            return info
+
+        # Rely on Browser/Playwright to traverse frames and shadow-dom when capturing the root element.
+        arguments = [selector, "return_type=yaml"]
+
+        try:
+            res = rf_mgr.execute_keyword_with_context(
+                session_id=session.session_id,
+                keyword_name="Get Aria Snapshot",
+                arguments=arguments,
+                assign_to=None,
+                session_variables=dict(session.variables),
+            )
+        except Exception as exec_error:
+            info["error"] = f"keyword_execution_failed: {exec_error}"
+            logger.debug(
+                "Executing Browser.Get Aria Snapshot failed for session %s: %s",
+                session.session_id,
+                exec_error,
+            )
+            return info
+
+        if not res:
+            info["error"] = "no_response"
+            return info
+
+        if res.get("success"):
+            snapshot = res.get("output") or res.get("result")
+            if snapshot:
+                info["success"] = True
+                info["content"] = snapshot
+                return info
+            info["error"] = "empty_snapshot"
+            return info
+
+        info["error"] = res.get("error") or res.get("message") or "keyword_failed"
+        return info
 
     async def _get_page_source_unified_async(self, session: ExecutionSession, browser_library_manager: Any) -> Optional[str]:
         """
