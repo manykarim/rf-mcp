@@ -1,3 +1,28 @@
+"""HTTP bridge that lets external clients drive Robot Framework sessions.
+
+The attach bridge exposes a tiny REST interface that forwards commands
+into the currently executing Robot Framework context.  It is primarily
+used by the MCP server when running in *attach* mode, but it can also
+be imported and controlled directly from Robot Framework test cases.
+
+Examples:
+| *** Settings ***
+| Library    robotmcp.attach.McpAttach    token=${MCP_TOKEN}
+|
+| *** Test Cases ***
+| Serve External Commands
+| MCP Serve    mode=step
+| FOR    ${index}    IN RANGE    0    10
+| ...    MCP Process Once
+| ...    Sleep    0.1 seconds
+| END
+| MCP Stop
+
+The keywords provided by this module follow the same conventions as
+other Robot Framework libraries: keyword names use spaces and the
+docstrings below document arguments and return values.
+"""
+
 import json
 import threading
 import queue
@@ -79,12 +104,29 @@ class _Server(threading.Thread):
 
 
 class McpAttach:
-    """Robot Framework Library: Debug attach bridge.
+    """Robot Framework library that exposes an HTTP bridge for MCP attach mode.
 
-    Keywords:
-    - MCP Serve: Start server (if needed) and process commands (blocking or one step).
-    - MCP Process Once: Process a single pending command and return.
-    - MCP Stop: Stop processing loop.
+    The library spins up a small HTTP server that accepts authenticated
+    JSON requests and forwards them to the currently active Robot Framework
+    execution context.  External tools can use this bridge to execute
+    keywords, import resources, or inspect variables during a live run.
+
+    Examples:
+    | *** Settings ***
+    | Library    robotmcp.attach.McpAttach    host=0.0.0.0    port=7317    token=${TOKEN}
+    |
+    | *** Test Cases ***
+    | Serve In Background
+    | Start Process    python    -m    my_agent    --attach    stdout=NONE
+    | MCP Serve    mode=blocking
+
+    The library exposes the following keywords:
+
+    - ``MCP Serve`` / ``MCP Start`` – start the HTTP server and process
+      incoming commands.
+    - ``MCP Process Once`` – process at most one pending command and
+      return immediately (useful for custom loops).
+    - ``MCP Stop`` – request the processing loop to stop.
     """
 
     ROBOT_LIBRARY_VERSION = "0.1"
@@ -101,13 +143,19 @@ class McpAttach:
     def MCP_Serve(
         self, port: Optional[int] = None, token: Optional[str] = None, mode: str = "blocking", poll_ms: int = 100
     ) -> None:
-        """Start the bridge and process commands.
+        """Start the bridge server and process incoming commands.
 
-        Arguments:
-        - port: Override server port (default self.port).
-        - token: Override auth token (default self.token).
-        - mode: "blocking" (loop until /stop) or "step" (process once and return).
-        - poll_ms: Sleep between queue polls when blocking.
+        Args:
+            port: Optional port override.  Defaults to the library level port.
+            token: Optional token override.  Defaults to the library level token.
+            mode: ``"blocking"`` keeps looping until ``MCP Stop`` or the ``/stop``
+                HTTP command is received. ``"step"`` processes exactly one command
+                and returns immediately.
+            poll_ms: Polling interval in milliseconds while in blocking mode.
+
+        Examples:
+        | MCP Serve    mode=blocking
+        | MCP Serve    port=7320    token=${TOKEN}    mode=step
         """
         if self._srv is None:
             self._srv = _Server(self.host, int(port or self.port), str(token or self.token), self._cmdq)
@@ -150,7 +198,14 @@ class McpAttach:
     def MCP_Start(
         self, port: Optional[int] = None, token: Optional[str] = None, mode: str = "blocking", poll_ms: int = 100
     ) -> None:
-        """Start the MCP attach bridge (alias for MCP Serve)."""
+        """Start the MCP attach bridge (alias for :keyword:`MCP Serve`).
+
+        This keyword exists for backwards compatibility with older
+        suites that used ``MCP Start`` instead of ``MCP Serve``.
+
+        Examples:
+        | MCP Start    mode=blocking
+        """
         try:
             BuiltIn().log_to_console("[MCP] MCP Start invoked (alias of MCP Serve).")
         except Exception:
@@ -158,7 +213,17 @@ class McpAttach:
         return self.MCP_Serve(port=port, token=token, mode=mode, poll_ms=poll_ms)
 
     def MCP_Process_Once(self) -> None:
-        """Process a single pending command if any and return immediately."""
+        """Process at most one pending command and return immediately.
+
+        Useful when the test suite wants to interleave custom logic with
+        bridge commands instead of yielding completely to ``MCP Serve``.
+
+        Example:
+        | FOR    ${index}    IN RANGE    0    5
+        | ...    MCP Process Once
+        | ...    Sleep    0.2 seconds
+        | END
+        """
         try:
             cmd: _Command = self._cmdq.get_nowait()
         except queue.Empty:
@@ -170,7 +235,15 @@ class McpAttach:
         cmd.replyq.put(resp)
 
     def MCP_Stop(self) -> None:
-        """Stop the serve loop (if running)."""
+        """Request the serve loop to stop.
+
+        Sets an internal flag that causes the next iteration of
+        ``MCP Serve`` to exit gracefully.  External clients can also
+        trigger the same behaviour by POSTing ``/stop`` to the bridge.
+
+        Example:
+        | MCP Stop
+        """
         self._stop_flag = True
 
     # --- Internal command execution on RF thread ---
