@@ -6,4 +6,9 @@ from robotmcp.attach.mcp_attach import McpAttach  # noqa: F401
 
 __all__ = ["McpAttach"]
 
-__version__ = "0.1.0"
+from importlib import metadata
+
+try:
+    __version__ = metadata.version("rf-mcp")
+except metadata.PackageNotFoundError:
+    pass

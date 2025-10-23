@@ -24,8 +24,8 @@ docstrings below document arguments and return values.
 """
 
 import json
-import threading
 import queue
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, Optional, Tuple
@@ -35,7 +35,9 @@ from robot.running.context import EXECUTION_CONTEXTS
 
 
 class _Command:
-    def __init__(self, verb: str, payload: Dict[str, Any], replyq: "queue.Queue") -> None:
+    def __init__(
+        self, verb: str, payload: Dict[str, Any], replyq: "queue.Queue"
+    ) -> None:
         self.verb = verb
         self.payload = payload
         self.replyq = replyq
@@ -96,7 +98,9 @@ class _Server(threading.Thread):
                 self.end_headers()
                 self.wfile.write(body)
 
-            def log_message(self, format: str, *args: Any) -> None:  # silence console spam
+            def log_message(
+                self, format: str, *args: Any
+            ) -> None:  # silence console spam
                 return
 
         self.httpd = HTTPServer((self.host, self.port), Handler)
@@ -129,9 +133,17 @@ class McpAttach:
     - ``MCP Stop`` – request the processing loop to stop.
     """
 
-    ROBOT_LIBRARY_VERSION = "0.1"
+    from importlib import metadata
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 7317, token: str = "change-me") -> None:
+    try:
+        ROBOT_LIBRARY_VERSION = metadata.version("rf-mcp")
+    except metadata.PackageNotFoundError:
+        ROBOT_LIBRARY_VERSION = "0.1"
+        pass
+
+    def __init__(
+        self, host: str = "127.0.0.1", port: int = 7317, token: str = "change-me"
+    ) -> None:
         self.host = host
         self.port = int(port)
         self.token = token
@@ -141,7 +153,11 @@ class McpAttach:
 
     # --- Public Library Keywords ---
     def MCP_Serve(
-        self, port: Optional[int] = None, token: Optional[str] = None, mode: str = "blocking", poll_ms: int = 100
+        self,
+        port: Optional[int] = None,
+        token: Optional[str] = None,
+        mode: str = "blocking",
+        poll_ms: int = 100,
     ) -> None:
         """Start the bridge server and process incoming commands.
 
@@ -158,7 +174,9 @@ class McpAttach:
         | MCP Serve    port=7320    token=${TOKEN}    mode=step
         """
         if self._srv is None:
-            self._srv = _Server(self.host, int(port or self.port), str(token or self.token), self._cmdq)
+            self._srv = _Server(
+                self.host, int(port or self.port), str(token or self.token), self._cmdq
+            )
             self._srv.start()
             try:
                 BuiltIn().log_to_console(
@@ -196,7 +214,11 @@ class McpAttach:
 
     # Backwards-compatible alias with improved naming
     def MCP_Start(
-        self, port: Optional[int] = None, token: Optional[str] = None, mode: str = "blocking", poll_ms: int = 100
+        self,
+        port: Optional[int] = None,
+        token: Optional[str] = None,
+        mode: str = "blocking",
+        poll_ms: int = 100,
     ) -> None:
         """Start the MCP attach bridge (alias for :keyword:`MCP Serve`).
 
@@ -278,15 +300,24 @@ class McpAttach:
     def _diagnostics(self) -> Dict[str, Any]:
         ctx = EXECUTION_CONTEXTS.current
         libs = []
-        if ctx and getattr(ctx, "namespace", None) and hasattr(ctx.namespace, "libraries"):
+        if (
+            ctx
+            and getattr(ctx, "namespace", None)
+            and hasattr(ctx.namespace, "libraries")
+        ):
             libraries = ctx.namespace.libraries
             if hasattr(libraries, "keys"):
                 libs = list(libraries.keys())
             elif hasattr(libraries, "__iter__"):
-                libs = [getattr(li, "name", getattr(li, "__class__", type(li)).__name__) for li in libraries]
+                libs = [
+                    getattr(li, "name", getattr(li, "__class__", type(li)).__name__)
+                    for li in libraries
+                ]
         return {"success": True, "result": {"libraries": libs, "context": bool(ctx)}}
 
-    def _parse_run_keyword_payload(self, payload: Dict[str, Any]) -> Tuple[str, list, Optional[Any]]:
+    def _parse_run_keyword_payload(
+        self, payload: Dict[str, Any]
+    ) -> Tuple[str, list, Optional[Any]]:
         name = str(payload.get("name", ""))
         args = payload.get("args", []) or []
         assign_to = payload.get("assign_to")
@@ -294,7 +325,9 @@ class McpAttach:
             raise ValueError("args must be a list of strings")
         return name, args, assign_to
 
-    def _run_keyword(self, name: str, args: list, assign_to: Optional[Any]) -> Dict[str, Any]:
+    def _run_keyword(
+        self, name: str, args: list, assign_to: Optional[Any]
+    ) -> Dict[str, Any]:
         bi = BuiltIn()
         result: Any
         result = bi.run_keyword(name, *args)
@@ -382,7 +415,15 @@ class McpAttach:
             if hasattr(libs, "items"):
                 iter_libs = list(libs.items())
             elif hasattr(libs, "__iter__"):
-                iter_libs = [(getattr(li, "name", getattr(li, "__class__", type(li)).__name__), li) for li in libs]
+                iter_libs = [
+                    (
+                        getattr(
+                            li, "name", getattr(li, "__class__", type(li)).__name__
+                        ),
+                        li,
+                    )
+                    for li in libs
+                ]
             else:
                 iter_libs = []
             for lib_name, lib in iter_libs:
