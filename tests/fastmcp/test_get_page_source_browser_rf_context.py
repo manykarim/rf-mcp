@@ -124,6 +124,13 @@ async def test_get_page_source_browser_rf_context_filtered(mcp_client):
     assert ps.data.get("filtering_applied") is True
     assert ps.data.get("page_source_length", 0) > 0
     assert ps.data.get("filtered_page_source_length", 0) > 0
+    aria_info = ps.data.get("aria_snapshot") or {}
+    assert isinstance(aria_info, dict)
+    if aria_info.get("success"):
+        assert aria_info.get("content")
+    else:
+        # when keyword unavailable we expect an informative error or skip flag
+        assert aria_info.get("error") or aria_info.get("skipped")
     # Title should be picked up from the data URL
     assert ps.data.get("page_title") in ("RF", None)  # Some environments may not parse title
     # Ensure it did not route to mobile error
@@ -144,3 +151,36 @@ async def test_get_page_source_browser_rf_context_filtered(mcp_client):
     assert len(ps_full.data.get("page_source")) == ps_full.data.get(
         "filtered_page_source_length"
     )
+    aria_full = ps_full.data.get("aria_snapshot") or {}
+    assert isinstance(aria_full, dict)
+    if aria_full.get("success"):
+        assert aria_full.get("content")
+    else:
+        assert aria_full.get("error") or aria_full.get("skipped")
+
+    # Allow callers to skip reduced DOM collection explicitly
+    ps_no_reduced = await mcp_client.call_tool(
+        "get_page_source",
+        {
+            "session_id": session_id,
+            "include_reduced_dom": False,
+        },
+    )
+    assert ps_no_reduced.data.get("success") is True
+    aria_skipped = ps_no_reduced.data.get("aria_snapshot") or {}
+    assert aria_skipped.get("skipped") is True
+
+    # Validate application state reflects the snapshot metadata when available
+    app_state = await mcp_client.call_tool(
+        "get_application_state",
+        {
+            "session_id": session_id,
+            "state_type": "dom",
+        },
+    )
+    assert app_state.data.get("success") is True
+    dom_info = (app_state.data.get("dom") or {})
+    if isinstance(dom_info, dict) and dom_info.get("aria_snapshot"):
+        dom_snapshot = dom_info["aria_snapshot"]
+        assert dom_snapshot.get("content")
+        assert dom_snapshot.get("selector")
