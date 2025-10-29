@@ -44,19 +44,13 @@ jobs:
 
       - name: Install Playwright browsers
         run: |
-          uv run python -m playwright install --with-deps chromium firefox webkit
+          uv run playwright install --with-deps chromium firefox webkit
 
       - name: Verify Playwright installation
         run: |
-          uv run python -m playwright --version
-          echo "Checking Playwright browser cache..."
-          ls -la ~/.cache/ms-playwright/ 2>/dev/null || echo "Cache directory not found, but installation completed"
-
-      # - name: Setup Google Chrome
-      #   uses: browser-actions/setup-chrome@v1
-
-      # - name: Setup Mozilla Firefox
-      #   uses: browser-actions/setup-firefox@v1
+          uv run playwright --version
+          echo "Checking Playwright browser locations..."
+          uv run python -c "from playwright.sync_api import sync_playwright; print('Playwright import successful')"
 
       - name: Configure OpenAI Model with Fallback
         shell: bash
@@ -137,16 +131,16 @@ jobs:
         run: uv pip install -e ".[${{ matrix.extras }}]"
 
       - name: Install Playwright browsers
-        if: ${{ contains(matrix.extras, 'web') }}
+        if: ${{ contains(matrix.extras, 'web') || matrix.extras == 'all' }}
         run: |
-          uv run python -m playwright install --with-deps chromium firefox webkit
+          uv run playwright install --with-deps chromium firefox webkit
 
       - name: Verify Playwright installation
-        if: ${{ contains(matrix.extras, 'web') }}
+        if: ${{ contains(matrix.extras, 'web') || matrix.extras == 'all' }}
         run: |
-          uv run python -m playwright --version
-          echo "Checking Playwright browser cache..."
-          ls -la ~/.cache/ms-playwright/ 2>/dev/null || echo "Cache directory not found, but installation completed"
+          uv run playwright --version
+          echo "Checking Playwright browser locations..."
+          uv run python -c "from playwright.sync_api import sync_playwright; print('Playwright import successful')"
 
       - name: Configure OpenAI credentials
         shell: bash
@@ -163,7 +157,7 @@ jobs:
           echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> $GITHUB_ENV
 
       - name: Initialize Browser Library (rfbrowser)
-        if: contains(matrix.extras, 'web')
+        if: ${{ contains(matrix.extras, 'web') || matrix.extras == 'all' }}
         run: uv run rfbrowser init
         continue-on-error: true
 
