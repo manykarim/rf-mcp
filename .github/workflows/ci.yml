@@ -6,6 +6,10 @@ jobs:
   build-and-test:
     name: Build and Test (uv)
     runs-on: ${{ matrix.os }}
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+    
     strategy:
       fail-fast: false
       matrix:
