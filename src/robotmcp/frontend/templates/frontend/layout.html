@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RobotMCP Frontend</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/prismjs@1/themes/prism-tomorrow.min.css"
+    />
+    <link rel="stylesheet" href="{{ base_path }}static/frontend/base.css" />
+    <script>
+      window.ROBOTMCP_FRONTEND = {
+        basePath: "{{ base_path }}",
+      };
+    </script>
+  </head>
+  <body data-base-path="{{ base_path }}">
+    <div class="app-shell">
+      <header class="app-topbar">
+        <h1 class="app-title"><i data-feather="layers"></i>RobotMCP Command Center</h1>
+        <nav class="app-actions">
+          <a href="{{ base_path }}" class="action-link"><i data-feather="home"></i>Dashboard</a>
+          <button type="button" class="action-button" id="header-refresh">
+            <i data-feather="refresh-cw"></i>
+            Refresh
+          </button>
+        </nav>
+      </header>
+      <main class="app-content">
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+    <script src="https://unpkg.com/feather-icons"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-core.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-clike.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-robotframework.min.js" defer></script>
+    <script src="{{ base_path }}static/frontend/app.js" defer></script>
+  </body>
+</html>

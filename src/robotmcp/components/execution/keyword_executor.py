@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Union
 from robotmcp.components.execution.rf_native_context_manager import (
     get_rf_native_context_manager,
 )
+from robotmcp.core.event_bus import FrontendEvent, event_bus
 from robotmcp.components.variables.variable_resolver import VariableResolver
 from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
 from robotmcp.models.config_models import ExecutionConfig
@@ -99,6 +100,14 @@ class KeywordExecutor:
                 keyword=keyword,
                 arguments=arguments,
                 start_time=datetime.now(),
+            )
+            event_bus.publish_sync(
+                FrontendEvent(
+                    event_type="step_started",
+                    session_id=session.session_id,
+                    step_id=step.step_id,
+                    payload={"keyword": keyword, "arguments": arguments},
+                )
             )
 
             # Update session activity
@@ -199,7 +208,10 @@ class KeywordExecutor:
             step.result = result.get("output")
 
             if result["success"]:
-                step.mark_success(result.get("output"))
+                step_result_value = result.get("result")
+                if step_result_value is None and "output" in result:
+                    step_result_value = result.get("output")
+                step.mark_success(step_result_value)
                 # Only append successful steps to the session for suite generation
                 session.add_step(step)
                 logger.debug(f"Added successful step to session: {keyword}")
@@ -212,6 +224,10 @@ class KeywordExecutor:
             # Update session variables if any were set
             if "variables" in result:
                 session.variables.update(result["variables"])
+                try:
+                    step.variables.update(result["variables"])
+                except Exception:
+                    pass
 
             # Validate assignment compatibility
             if assign_to:
@@ -258,6 +274,10 @@ class KeywordExecutor:
                         )
                     )
                     result["assigned_variables"] = serialized_assigned_vars
+                    try:
+                        step.variables.update(serialized_assigned_vars)
+                    except Exception:
+                        pass
 
                     # Log assignment for debugging
                     for var_name, var_value in assignment_vars.items():
@@ -277,6 +297,45 @@ class KeywordExecutor:
                 arguments,
                 session,
                 resolved_arguments,
+            )
+
+            def _serialize_event_value(value: Any) -> Any:
+                if isinstance(value, (str, int, float, bool)) or value is None:
+                    return value
+                if isinstance(value, (list, tuple)):
+                    return [_serialize_event_value(item) for item in value]
+                if isinstance(value, dict):
+                    return {str(k): _serialize_event_value(v) for k, v in value.items()}
+                return str(value)
+
+            event_payload = {
+                "status": step.status,
+                "keyword": keyword,
+                "arguments": arguments,
+            }
+
+            if result["success"]:
+                event_payload["result"] = _serialize_event_value(step.result)
+                if step.assigned_variables:
+                    event_payload["assigned_variables"] = list(step.assigned_variables)
+                    event_payload["assignment_type"] = step.assignment_type
+                    assigned_values = {}
+                    for var_name in step.assigned_variables:
+                        value = step.variables.get(var_name)
+                        if value is None:
+                            value = session.variables.get(var_name)
+                        assigned_values[var_name] = _serialize_event_value(value)
+                    event_payload["assigned_values"] = assigned_values
+            else:
+                event_payload["error"] = result.get("error")
+
+            event_bus.publish_sync(
+                FrontendEvent(
+                    event_type="step_completed" if result["success"] else "step_failed",
+                    session_id=session.session_id,
+                    step_id=step.step_id,
+                    payload=event_payload,
+                )
             )
             return response
 
@@ -937,6 +996,35 @@ class KeywordExecutor:
                         if prefix == "browser":
                             lib_type = "browser"
                         elif prefix in ("seleniumlibrary", "selenium"):
+                            lib_type = "selenium"
+                    if not lib_type or lib_type == "auto":
+                        keyword_lower = keyword.strip().lower()
+                        browser_aliases = {
+                            "new browser",
+                            "new context",
+                            "new page",
+                            "go to",
+                            "click",
+                            "fill text",
+                            "type text",
+                            "press keys",
+                            "get text",
+                            "wait for elements state",
+                            "get url",
+                            "close browser",
+                        }
+                        selenium_aliases = {
+                            "open browser",
+                            "go to",
+                            "click element",
+                            "input text",
+                            "press keys",
+                            "get text",
+                            "get location",
+                        }
+                        if session.browser_state.active_library == "browser" or keyword_lower in browser_aliases:
+                            lib_type = "browser"
+                        elif session.browser_state.active_library == "selenium" or keyword_lower in selenium_aliases:
                             lib_type = "selenium"
 
                     if lib_type:

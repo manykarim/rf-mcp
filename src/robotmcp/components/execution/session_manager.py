@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, List
 
+from robotmcp.core.event_bus import FrontendEvent, event_bus
 from robotmcp.models.config_models import ExecutionConfig
 from robotmcp.models.session_models import ExecutionSession, PlatformType, MobileConfig, SessionType
 
@@ -38,6 +39,13 @@ class SessionManager:
         session._session_manager = self
 
         logger.info(f"Created new session: {session_id}")
+        event_bus.publish_sync(
+            FrontendEvent(
+                event_type="session_created",
+                session_id=session_id,
+                payload={"session_id": session_id},
+            )
+        )
         return session
 
     def get_session(self, session_id: str) -> Optional[ExecutionSession]:
@@ -128,6 +136,13 @@ class SessionManager:
             session.cleanup()
             del self.sessions[session_id]
             logger.info(f"Removed session: {session_id}")
+            event_bus.publish_sync(
+                FrontendEvent(
+                    event_type="session_removed",
+                    session_id=session_id,
+                    payload={"session_id": session_id},
+                )
+            )
             return True
         return False
 

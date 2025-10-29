@@ -1,0 +1,71 @@
+{% extends "frontend/layout.html" %}
+
+{% block content %}
+<div class="workspace">
+  <aside class="sidebar">
+    <section class="panel" id="sessions-panel">
+      <header>
+        <span class="tag"><i data-feather="activity"></i> Active Sessions</span>
+        <button class="ghost-button" id="refresh-sessions"><i data-feather="refresh-cw"></i>Refresh</button>
+      </header>
+      <div id="sessions-list" class="session-list" aria-live="polite"></div>
+    </section>
+
+    <section class="panel" id="summary-panel">
+      <header>
+        <span class="tag"><i data-feather="monitor"></i> Session Summary</span>
+      </header>
+      <div class="summary-grid" id="session-meta"></div>
+    </section>
+
+    <section class="panel" id="variables-panel">
+      <header>
+        <span class="tag"><i data-feather="sliders"></i> Variables</span>
+      </header>
+      <div id="session-variables" class="variable-chips"></div>
+    </section>
+  </aside>
+
+  <section class="main-pane" id="session-detail" data-empty="true">
+    <section class="panel banner" id="detail-header">
+      <div>
+        <span class="tag"><i data-feather="info"></i> Details</span>
+        <h2 id="session-title">Select a session</h2>
+        <p class="muted" id="session-subtitle">Choose a session on the left to inspect steps and generate a suite.</p>
+      </div>
+      <div class="detail-actions" id="session-actions" hidden>
+        <button class="ghost-button" id="reload-session"><i data-feather="refresh-ccw"></i>Reload</button>
+        <button class="ghost-button" id="toggle-compact" data-mode="expanded"><i data-feather="minimize-2"></i>Compact</button>
+      </div>
+    </section>
+
+    <section class="panel resizable" id="steps-panel">
+      <header>
+        <span class="tag"><i data-feather="list"></i> Executed Steps</span>
+      </header>
+      <div id="session-steps" class="step-list"></div>
+    </section>
+
+    <section class="panel resizable" id="suite-panel">
+      <header class="suite-header">
+        <span class="tag"><i data-feather="code"></i> Suite Preview</span>
+        <div class="suite-actions">
+          <span class="muted" id="suite-status"></span>
+          <button class="ghost-button" id="copy-suite" type="button">
+            <i data-feather="copy"></i>Copy
+          </button>
+          <button class="ghost-button" id="preview-suite"><i data-feather="play"></i>Generate</button>
+        </div>
+      </header>
+      <pre id="suite-preview" class="suite-preview"><code id="suite-code" class="language-robot"></code></pre>
+    </section>
+
+    <section class="panel subtile resizable" id="events-panel">
+      <header>
+        <span class="tag"><i data-feather="zap"></i> Live Event Feed</span>
+      </header>
+      <ol id="events-log" class="event-list" aria-live="polite"></ol>
+    </section>
+  </section>
+</div>
+{% endblock %}
