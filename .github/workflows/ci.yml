@@ -44,8 +44,6 @@ jobs:
 
       - name: Install Playwright browsers
         run: |
-          # Set PLAYWRIGHT_BROWSERS_PATH to install browsers in the venv
-          export PLAYWRIGHT_BROWSERS_PATH=0
           uv run playwright install --with-deps chromium firefox webkit
           # Also try the python module approach in case the above doesn't work
           uv run python -m playwright install --with-deps chromium firefox webkit || true
