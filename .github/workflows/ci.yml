@@ -36,8 +36,13 @@ jobs:
       - name: Install dependencies (dev)
         run: uv sync --all-extras
 
-      - name: Setup Playwright browsers
-        uses: microsoft/playwright-github-action@v1
+      - name: Install Playwright browsers
+        run: |
+          uv run python -m playwright install --with-deps chromium firefox webkit
+
+      - name: Verify Playwright installation
+        run: |
+          uv run python -m playwright --version
 
       # - name: Setup Google Chrome
       #   uses: browser-actions/setup-chrome@v1
@@ -116,9 +121,15 @@ jobs:
         if: ${{ matrix.extras != '' }}
         run: uv pip install -e ".[${{ matrix.extras }}]"
 
-      - name: Setup Playwright browsers
+      - name: Install Playwright browsers
         if: ${{ contains(matrix.extras, 'web') }}
-        uses: microsoft/playwright-github-action@v1
+        run: |
+          uv run python -m playwright install --with-deps chromium firefox webkit
+
+      - name: Verify Playwright installation
+        if: ${{ contains(matrix.extras, 'web') }}
+        run: |
+          uv run python -m playwright --version
 
       - name: Configure OpenAI credentials
         run: |
