@@ -53,7 +53,7 @@ jobs:
           uv run python -c "from playwright.sync_api import sync_playwright; print('Playwright import successful')"
 
       - name: Check installed packages
-        run: uv run pip list
+        run: uv pip list
 
       - name: Run tests
         env:
