@@ -32,6 +32,22 @@ jobs:
       - name: Install dependencies (dev)
         run: uv sync --all-extras
 
+      - name: Install Playwright browsers
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            uv run playwright install --with-deps
+          else
+            uv run playwright install
+          fi
+
+      - name: Configure OpenAI credentials
+        run: |
+          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" > .env
+          OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
+          if [ -z "$OPENAI_MODEL_VALUE" ]; then OPENAI_MODEL_VALUE="gpt-4o-mini"; fi
+          echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> .env
+
       - name: Setup Google Chrome
         uses: browser-actions/setup-chrome@v1
 
@@ -48,6 +64,8 @@ jobs:
         env:
           # Keep runner path enabled for RequestsLibrary in CI
           ROBOTMCP_RF_RUNNER_REQUESTS: '1'
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
         run: |
           uv run pytest tests/ -q
 
@@ -107,6 +125,23 @@ jobs:
         if: ${{ matrix.extras != '' }}
         run: uv pip install -e ".[${{ matrix.extras }}]"
 
+      - name: Install Playwright browsers
+        if: ${{ contains(matrix.extras, 'web') }}
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            uv run playwright install --with-deps
+          else
+            uv run playwright install
+          fi
+
+      - name: Configure OpenAI credentials
+        run: |
+          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" > .env
+          OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
+          if [ -z "$OPENAI_MODEL_VALUE" ]; then OPENAI_MODEL_VALUE="gpt-4o-mini"; fi
+          echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> .env
+
       - name: Initialize Browser Library (rfbrowser)
         if: contains(matrix.extras, 'web')
         run: uv run rfbrowser init
@@ -115,4 +150,6 @@ jobs:
       - name: Run optional tests
         env:
           ROBOTMCP_RF_RUNNER_REQUESTS: '1'
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
         run: ${{ matrix.test-command }}
