@@ -45,18 +45,11 @@ jobs:
             uv run playwright install
           fi
 
-      - name: Configure OpenAI credentials
-        run: |
-          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" > .env
-          OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
-          if [ -z "$OPENAI_MODEL_VALUE" ]; then OPENAI_MODEL_VALUE="gpt-4o-mini"; fi
-          echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> .env
+      # - name: Setup Google Chrome
+      #   uses: browser-actions/setup-chrome@v1
 
-      - name: Setup Google Chrome
-        uses: browser-actions/setup-chrome@v1
-
-      - name: Setup Mozilla Firefox
-        uses: browser-actions/setup-firefox@v1
+      # - name: Setup Mozilla Firefox
+      #   uses: browser-actions/setup-firefox@v1
 
       - name: Initialize Browser Library (rfbrowser)
         # This installs Playwright and browser engines for the Robot Framework Browser library.
