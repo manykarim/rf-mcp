@@ -52,17 +52,8 @@ jobs:
           echo "Checking Playwright browser locations..."
           uv run python -c "from playwright.sync_api import sync_playwright; print('Playwright import successful')"
 
-      - name: Configure OpenAI Model with Fallback
-        shell: bash
-        run: |
-          OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
-          if [ -z "$OPENAI_MODEL_VALUE" ] || [ "$OPENAI_MODEL_VALUE" = "gpt-5-mini" ]; then
-            echo "⚠️ Invalid or missing OPENAI_MODEL, using fallback: gpt-4o-mini"
-            OPENAI_MODEL_VALUE="gpt-4o-mini"
-          else
-            echo "✅ Using OPENAI_MODEL: $OPENAI_MODEL_VALUE"
-          fi
-          echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> $GITHUB_ENV
+      - name: Check installed packages
+        run: uv run pip list
 
       - name: Run tests
         env:
