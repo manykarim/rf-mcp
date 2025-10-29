@@ -36,6 +36,12 @@ jobs:
       - name: Install dependencies (dev)
         run: uv sync --all-extras
 
+      - name: Initialize Browser Library (rfbrowser)
+        # This installs Playwright and browser engines for the Robot Framework Browser library.
+        # It is safe to run even if Browser is not used; failures are ignored to avoid breaking non-UI PRs.
+        run: uv run rfbrowser init
+        continue-on-error: true
+
       - name: Install Playwright browsers
         run: |
           uv run python -m playwright install --with-deps chromium firefox webkit
@@ -51,12 +57,6 @@ jobs:
 
       # - name: Setup Mozilla Firefox
       #   uses: browser-actions/setup-firefox@v1
-
-      - name: Initialize Browser Library (rfbrowser)
-        # This installs Playwright and browser engines for the Robot Framework Browser library.
-        # It is safe to run even if Browser is not used; failures are ignored to avoid breaking non-UI PRs.
-        run: uv run rfbrowser init
-        continue-on-error: true
 
       - name: Configure OpenAI Model with Fallback
         shell: bash
