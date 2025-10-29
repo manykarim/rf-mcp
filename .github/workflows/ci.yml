@@ -43,6 +43,8 @@ jobs:
         continue-on-error: true
 
       - name: Install Playwright browsers
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: '0'  # Install browsers in the virtual environment
         run: |
           uv run playwright install --with-deps chromium firefox webkit
           # Also try the python module approach in case the above doesn't work
