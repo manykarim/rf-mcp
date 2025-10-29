@@ -43,6 +43,8 @@ jobs:
       - name: Verify Playwright installation
         run: |
           uv run python -m playwright --version
+          echo "Checking Playwright browser cache..."
+          ls -la ~/.cache/ms-playwright/ 2>/dev/null || echo "Cache directory not found, but installation completed"
 
       # - name: Setup Google Chrome
       #   uses: browser-actions/setup-chrome@v1
@@ -56,12 +58,24 @@ jobs:
         run: uv run rfbrowser init
         continue-on-error: true
 
+      - name: Configure OpenAI Model with Fallback
+        shell: bash
+        run: |
+          OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
+          if [ -z "$OPENAI_MODEL_VALUE" ] || [ "$OPENAI_MODEL_VALUE" = "gpt-5-mini" ]; then
+            echo "⚠️ Invalid or missing OPENAI_MODEL, using fallback: gpt-4o-mini"
+            OPENAI_MODEL_VALUE="gpt-4o-mini"
+          else
+            echo "✅ Using OPENAI_MODEL: $OPENAI_MODEL_VALUE"
+          fi
+          echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> $GITHUB_ENV
+
       - name: Run tests
         env:
           # Keep runner path enabled for RequestsLibrary in CI
           ROBOTMCP_RF_RUNNER_REQUESTS: '1'
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          OPENAI_MODEL: ${{ env.OPENAI_MODEL }}
         run: |
           uv run pytest tests/ -q
 
@@ -74,6 +88,7 @@ jobs:
         with:
           name: dist-${{ matrix.os }}-py${{ matrix.python-version }}
           path: dist/*
+
   optional-matrix:
     name: Optional Dependency Matrix
     runs-on: ubuntu-latest
@@ -130,13 +145,22 @@ jobs:
         if: ${{ contains(matrix.extras, 'web') }}
         run: |
           uv run python -m playwright --version
+          echo "Checking Playwright browser cache..."
+          ls -la ~/.cache/ms-playwright/ 2>/dev/null || echo "Cache directory not found, but installation completed"
 
       - name: Configure OpenAI credentials
+        shell: bash
         run: |
           echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" > .env
           OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
-          if [ -z "$OPENAI_MODEL_VALUE" ]; then OPENAI_MODEL_VALUE="gpt-4o-mini"; fi
+          if [ -z "$OPENAI_MODEL_VALUE" ] || [ "$OPENAI_MODEL_VALUE" = "gpt-5-mini" ]; then
+            echo "⚠️ Invalid or missing OPENAI_MODEL, using fallback: gpt-4o-mini"
+            OPENAI_MODEL_VALUE="gpt-4o-mini"
+          else
+            echo "✅ Using OPENAI_MODEL: $OPENAI_MODEL_VALUE"
+          fi
           echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> .env
+          echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> $GITHUB_ENV
 
       - name: Initialize Browser Library (rfbrowser)
         if: contains(matrix.extras, 'web')
@@ -147,5 +171,5 @@ jobs:
         env:
           ROBOTMCP_RF_RUNNER_REQUESTS: '1'
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          OPENAI_MODEL: ${{ env.OPENAI_MODEL }}
         run: ${{ matrix.test-command }}
