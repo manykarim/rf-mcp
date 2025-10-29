@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 playwright = pytest.importorskip("playwright.sync_api")
+from playwright.sync_api import Error as PlaywrightError  # type: ignore
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = Path(sys.executable)
@@ -63,7 +64,10 @@ def frontend_process():
 
     yield proc
 
-    proc.send_signal(signal.SIGINT)
+    if sys.platform == "win32":
+        proc.terminate()
+    else:
+        proc.send_signal(signal.SIGINT)
     try:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
@@ -74,7 +78,12 @@ def test_frontend_renders_dashboard(frontend_process):
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        try:
+            browser = p.chromium.launch()
+        except PlaywrightError as exc:  # pragma: no cover - environment dependency
+            if "Executable doesn't exist" in str(exc):
+                pytest.skip("Playwright browsers unavailable on host; install via `playwright install`.")
+            raise
         page = browser.new_page()
         try:
             _wait_for_server("http://127.0.0.1:8065/", process=frontend_process)
@@ -118,7 +127,12 @@ def test_frontend_session_summary(frontend_process):
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        try:
+            browser = p.chromium.launch()
+        except PlaywrightError as exc:  # pragma: no cover - environment dependency
+            if "Executable doesn't exist" in str(exc):
+                pytest.skip("Playwright browsers unavailable on host; install via `playwright install`.")
+            raise
         page = browser.new_page()
         try:
             _wait_for_server("http://127.0.0.1:8065/", process=frontend_process)
