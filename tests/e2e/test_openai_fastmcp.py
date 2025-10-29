@@ -73,7 +73,6 @@ async def test_openai_driven_workflow(openai_client: OpenAI, openai_model: str, 
             {"role": "system", "content": "You design high-quality Robot Framework automation plans."},
             {"role": "user", "content": seed_prompt},
         ],
-        "temperature": 0.2,
     }
 
     try:

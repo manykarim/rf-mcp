@@ -36,14 +36,8 @@ jobs:
       - name: Install dependencies (dev)
         run: uv sync --all-extras
 
-      - name: Install Playwright browsers
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            uv run python -m playwright install --with-deps chromium
-          else
-            uv run python -m playwright install chromium
-          fi
+      - name: Setup Playwright browsers
+        uses: microsoft/playwright-github-action@v1
 
       # - name: Setup Google Chrome
       #   uses: browser-actions/setup-chrome@v1
@@ -122,15 +116,9 @@ jobs:
         if: ${{ matrix.extras != '' }}
         run: uv pip install -e ".[${{ matrix.extras }}]"
 
-      - name: Install Playwright browsers
+      - name: Setup Playwright browsers
         if: ${{ contains(matrix.extras, 'web') }}
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            uv run python -m playwright install --with-deps chromium
-          else
-            uv run python -m playwright install chromium
-          fi
+        uses: microsoft/playwright-github-action@v1
 
       - name: Configure OpenAI credentials
         run: |
