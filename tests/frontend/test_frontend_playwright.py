@@ -45,14 +45,21 @@ def frontend_process():
         "8065",
     ]
     proc = subprocess.Popen(
-        cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        cmd,
+        cwd=ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
     )
     try:
         _wait_for_server("http://127.0.0.1:8065/", process=proc)
     except Exception:
         proc.terminate()
-        stdout, _ = proc.communicate(timeout=5)
-        raise RuntimeError(f"Failed to start devserver. Output:\n{stdout}")
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        raise RuntimeError("Failed to start devserver.")
 
     yield proc
 
