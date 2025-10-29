@@ -10,7 +10,7 @@ import pytest
 import pytest_asyncio
 from fastmcp import Client
 from fastmcp.client import FastMCPTransport
-from openai import OpenAI
+from openai import BadRequestError, OpenAI
 
 from robotmcp.server import mcp
 
@@ -67,15 +67,28 @@ async def test_openai_driven_workflow(openai_client: OpenAI, openai_model: str, 
         "'scenario' (string) and 'context' (string)."
     )
 
-    completion = openai_client.chat.completions.create(
-        model=openai_model,
-        messages=[
+    request_kwargs = {
+        "model": openai_model,
+        "messages": [
             {"role": "system", "content": "You design high-quality Robot Framework automation plans."},
             {"role": "user", "content": seed_prompt},
         ],
-        temperature=0.2,
-        max_tokens=300,
-    )
+        "temperature": 0.2,
+    }
+
+    try:
+        completion = openai_client.chat.completions.create(
+            **request_kwargs,
+            max_completion_tokens=300,
+        )
+    except (BadRequestError, TypeError) as error:
+        message = str(error)
+        if "max_completion_tokens" not in message and "max_tokens" not in message:
+            raise
+        completion = openai_client.chat.completions.create(
+            **request_kwargs,
+            max_tokens=300,
+        )
 
     scenario_payload = _extract_text_from_openai_response(completion).strip()
     assert scenario_payload, "OpenAI response should not be empty"
