@@ -6,6 +6,10 @@ jobs:
   build-and-test:
     name: Build and Test (uv)
     runs-on: ${{ matrix.os }}
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+    
     strategy:
       fail-fast: false
       matrix:
@@ -30,13 +34,7 @@ jobs:
           uv run python --version
 
       - name: Install dependencies (dev)
-        run: uv sync --all-extras
-
-      - name: Setup Google Chrome
-        uses: browser-actions/setup-chrome@v1
-
-      - name: Setup Mozilla Firefox
-        uses: browser-actions/setup-firefox@v1
+        run: uv sync --all-extras --group dev
 
       - name: Initialize Browser Library (rfbrowser)
         # This installs Playwright and browser engines for the Robot Framework Browser library.
@@ -44,12 +42,55 @@ jobs:
         run: uv run rfbrowser init
         continue-on-error: true
 
+      - name: Install Playwright browsers
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: '0'  # Install browsers in the virtual environment
+        run: |
+          uv run playwright install --with-deps chromium firefox webkit
+          # Also try the python module approach in case the above doesn't work
+          uv run python -m playwright install --with-deps chromium firefox webkit || true
+
+      - name: Verify Playwright installation
+        run: |
+          uv run playwright --version
+          echo "Checking Playwright browser locations..."
+          uv run python -c "from playwright.sync_api import sync_playwright; print('Playwright import successful')"
+          # Check where browsers are installed
+          uv run python -c "import playwright; import os; print(f'Playwright path: {playwright.__file__}'); print(f'Browser path would be: {os.path.dirname(playwright.__file__)}')"
+
+      - name: Prepare results directory
+        run: mkdir -p results
+
+      - name: Configure OpenAI Model with Fallback
+        shell: bash
+        run: |
+          OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
+          if [ -z "$OPENAI_MODEL_VALUE" ] || [ "$OPENAI_MODEL_VALUE" = "gpt-5-mini" ]; then
+            echo "⚠️ Invalid or missing OPENAI_MODEL, using fallback: gpt-4o-mini"
+            OPENAI_MODEL_VALUE="gpt-4o-mini"
+          else
+            echo "✅ Using OPENAI_MODEL: $OPENAI_MODEL_VALUE"
+          fi
+          echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> $GITHUB_ENV
+
       - name: Run tests
         env:
           # Keep runner path enabled for RequestsLibrary in CI
           ROBOTMCP_RF_RUNNER_REQUESTS: '1'
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ env.OPENAI_MODEL }}
+          # Ensure Playwright uses the correct browser path
+          PLAYWRIGHT_BROWSERS_PATH: '0'
         run: |
-          uv run pytest tests/ -q
+          uv run pytest tests/ --junitxml=results/pytest.xml
+
+      - name: Test Report
+        uses: dorny/test-reporter@main
+        if: success() || failure()
+        with:
+          name: xUnit Tests ${{ matrix.python-version }}
+          path: results/pytest.xml
+          reporter: java-junit
 
       - name: Build package (wheel + sdist)
         run: uv build
@@ -60,6 +101,7 @@ jobs:
         with:
           name: dist-${{ matrix.os }}-py${{ matrix.python-version }}
           path: dist/*
+
   optional-matrix:
     name: Optional Dependency Matrix
     runs-on: ubuntu-latest
@@ -101,18 +143,42 @@ jobs:
         run: uv python install 3.12
 
       - name: Install base dependencies
-        run: uv sync
+        run: uv sync --group dev
 
       - name: Install optional extras
         if: ${{ matrix.extras != '' }}
         run: uv pip install -e ".[${{ matrix.extras }}]"
 
+      - name: Prepare results directory
+        run: mkdir -p results
+
+      - name: Configure OpenAI Model with Fallback
+        shell: bash
+        run: |
+          OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
+          if [ -z "$OPENAI_MODEL_VALUE" ] || [ "$OPENAI_MODEL_VALUE" = "gpt-5-mini" ]; then
+            OPENAI_MODEL_VALUE="gpt-4o-mini"
+          fi
+          echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> $GITHUB_ENV
+
       - name: Initialize Browser Library (rfbrowser)
-        if: contains(matrix.extras, 'web')
+        if: ${{ contains(matrix.extras, 'web') || matrix.extras == 'all' }}
         run: uv run rfbrowser init
         continue-on-error: true
 
       - name: Run optional tests
         env:
           ROBOTMCP_RF_RUNNER_REQUESTS: '1'
-        run: ${{ matrix.test-command }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ env.OPENAI_MODEL }}
+          # Ensure Playwright uses the correct browser path
+          PLAYWRIGHT_BROWSERS_PATH: '0'
+        run: ${{ matrix.test-command }} --junitxml=results/pytest.xml
+
+      - name: Test Report
+        uses: dorny/test-reporter@main
+        if: success() || failure()
+        with:
+          name: xUnit Optional Tests (${{ matrix.combo }})
+          path: results/pytest.xml
+          reporter: java-junit

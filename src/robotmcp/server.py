@@ -1,8 +1,11 @@
 """Main MCP Server implementation for Robot Framework integration."""
 
+import argparse
+import asyncio
 import logging
 import os
-from typing import Any, Callable, Dict, List, Union
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Union
 
 from fastmcp import FastMCP
 
@@ -24,9 +27,15 @@ from robotmcp.utils.server_integration import initialize_enhanced_serialization
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from robotmcp.frontend.controller import FrontendServerController
+
 
 # Initialize FastMCP server
 mcp = FastMCP("Robot Framework MCP Server")
+
+# Optional reference to the running frontend controller
+_frontend_controller: "FrontendServerController | None" = None
 
 
 def _get_external_client_if_configured() -> ExternalRFClient | None:
@@ -87,6 +96,43 @@ def _call_attach_tool_with_fallback(
         "ATTACH unreachable for '%s'; falling back to local execution", tool_name
     )
     return local_call()
+
+def _frontend_dependencies_available() -> bool:
+    """Check whether optional frontend dependencies are installed."""
+
+    try:
+        import django  # noqa: F401
+        import uvicorn  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _install_frontend_lifespan(config: "FrontendConfig") -> None:
+    """Attach a custom FastMCP lifespan that manages the Django frontend."""
+
+    from robotmcp.frontend.controller import FrontendServerController
+
+    global _frontend_controller
+
+    controller = FrontendServerController(config)
+
+    @asynccontextmanager
+    async def frontend_lifespan(server: FastMCP):  # type: ignore[override]
+        try:
+            await controller.start()
+            yield {"frontend_url": controller.url}
+        finally:
+            await controller.stop()
+
+    mcp._mcp_server.lifespan = frontend_lifespan  # type: ignore[attr-defined]
+    _frontend_controller = controller
+    logger.info(
+        "Frontend enabled at http://%s:%s%s",
+        config.host,
+        config.port,
+        config.base_path,
+    )
 
 
 def _log_attach_banner() -> None:
@@ -2391,11 +2437,121 @@ async def get_session_keyword_documentation(
     )
 
 
-if __name__ == "__main__":
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="RobotMCP server entry point with optional Django frontend."
+    )
+    parser.add_argument(
+        "--with-frontend",
+        dest="frontend_enabled_flag",
+        action="store_const",
+        const=True,
+        help="Start the optional Django-based frontend alongside the MCP server.",
+    )
+    parser.add_argument(
+        "--without-frontend",
+        dest="frontend_enabled_flag",
+        action="store_const",
+        const=False,
+        help="Disable the optional frontend even if the environment enables it.",
+    )
+    parser.add_argument(
+        "--frontend-host",
+        dest="frontend_host",
+        help="Host interface for the frontend server (default 127.0.0.1).",
+    )
+    parser.add_argument(
+        "--frontend-port",
+        dest="frontend_port",
+        type=int,
+        help="Port for the frontend server (default 8001).",
+    )
+    parser.add_argument(
+        "--frontend-base-path",
+        dest="frontend_base_path",
+        help="Base path prefix for the frontend (default '/').",
+    )
+    parser.add_argument(
+        "--frontend-debug",
+        dest="frontend_debug",
+        action="store_const",
+        const=True,
+        help="Enable Django debug mode for the frontend.",
+    )
+    parser.add_argument(
+        "--frontend-no-debug",
+        dest="frontend_debug",
+        action="store_const",
+        const=False,
+        help="Disable Django debug mode for the frontend.",
+    )
+    return parser
+
+
+def main(argv: List[str] | None = None) -> None:
+    """Start the RobotMCP server, optionally booting the Django frontend."""
+
+    parser = _build_arg_parser()
+    args = parser.parse_args(argv)
+
     logging.basicConfig(level=logging.INFO)
-    # Log attach status at startup
+
     try:
         _log_attach_banner()
     except Exception:
         pass
-    mcp.run()
+
+    from robotmcp.frontend.config import (
+        FrontendConfig,
+        build_frontend_config,
+        frontend_enabled_from_env,
+    )
+
+    enable_frontend = frontend_enabled_from_env(default=False)
+    if args.frontend_enabled_flag is not None:
+        enable_frontend = args.frontend_enabled_flag
+
+    frontend_config = FrontendConfig(enabled=False)
+    if enable_frontend:
+        if not _frontend_dependencies_available():
+            logger.warning(
+                "Frontend requested but Django/uvicorn dependencies are missing. "
+                "Install with 'pip install rf-mcp[frontend]' or disable the frontend."
+            )
+            enable_frontend = False
+        else:
+            frontend_config = build_frontend_config(
+                enabled=True,
+                host=args.frontend_host,
+                port=args.frontend_port,
+                base_path=args.frontend_base_path,
+                debug=args.frontend_debug,
+            )
+            _install_frontend_lifespan(frontend_config)
+
+    if enable_frontend:
+        logger.info("Starting RobotMCP with frontend at %s", frontend_config.url)
+    else:
+        logger.info("Starting RobotMCP without frontend")
+
+    try:
+        mcp.run()
+    except KeyboardInterrupt:
+        logger.info("RobotMCP interrupted by user")
+    finally:
+        try:
+            execution_engine.session_manager.cleanup_all_sessions()
+        except Exception:
+            logger.debug("Failed to cleanup sessions on shutdown", exc_info=True)
+
+        if _frontend_controller:
+            try:
+                asyncio.run(_frontend_controller.stop())
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                loop.run_until_complete(_frontend_controller.stop())
+                loop.close()
+
+
+if __name__ == "__main__":
+    main()

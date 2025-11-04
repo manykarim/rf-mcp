@@ -133,6 +133,10 @@ class LibraryManager:
                     from Browser import Browser
 
                     instance = Browser()
+                    try:
+                        setattr(instance, "pause_on_failure", False)
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.debug(f"Unable to disable Browser pause_on_failure during import: {exc}")
                 except ImportError:
                     logger.debug("Browser library not available")
                     self.failed_imports[library_name] = self._format_missing_library_message(

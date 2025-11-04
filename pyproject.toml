@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rf-mcp"
-version = "0.23.0dev01"
+version = "0.24.0dev01"
 description = "Robot Framework MCP Server - Natural Language Test Automation Bridge"
 authors = [{name = "Many Kasiriha"}]
 license = {text = "Apache-2.0"}
@@ -16,6 +16,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "beautifulsoup4>=4.11.0",
     "lxml>=4.9.0",
+    "python-dotenv>=1.0.1",
 ]
 
 [project.optional-dependencies]
@@ -23,6 +24,10 @@ slim = []
 web = [
     "robotframework-browser",
     "robotframework-seleniumlibrary",
+]
+frontend = [
+    "django>=4.2,<5.0",
+    "uvicorn[standard]>=0.24",
 ]
 mobile = [
     "robotframework-appiumlibrary",
@@ -45,7 +50,9 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "black>=22.0.0",
     "mypy>=1.0.0",
-    "pre-commit>=2.20.0"
+    "pre-commit>=2.20.0",
+    "python-dotenv>=1.0.1",
+    "openai>=1.51.0"
 ]
 
 [project.urls]
@@ -59,12 +66,18 @@ robotmcp = "robotmcp.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/robotmcp"]
+include = [
+    "src/robotmcp/frontend/templates/**/*.html",
+    "src/robotmcp/frontend/static/**/*",
+]
 
 [tool.hatch.build.targets.sdist]
 include = [
     "src/robotmcp",
     "README.md",
     "pyproject.toml",
+    "src/robotmcp/frontend/templates/**/*.html",
+    "src/robotmcp/frontend/static/**/*",
 ]
 
 [tool.black]
@@ -81,4 +94,7 @@ disallow_untyped_defs = true
 dev = [
     "pytest>=8.4.1",
     "pytest-asyncio>=1.1.0",
+    "pytest-playwright>=0.7.1",
+    "openai>=1.51.0",
+    "python-dotenv>=1.0.1",
 ]

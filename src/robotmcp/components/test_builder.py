@@ -16,6 +16,7 @@ except ImportError:
     RunningKeyword = None
 
 # Import shared library detection utility
+from robotmcp.core.event_bus import FrontendEvent, event_bus
 from robotmcp.utils.library_detector import detect_library_from_keyword
 
 logger = logging.getLogger(__name__)
@@ -168,7 +169,7 @@ class TestBuilder:
                     "structured_steps": self._build_structured_steps(tc, suite.flow_blocks),
                 })
 
-            return {
+            result = {
                 "success": True,
                 "session_id": session_id,
                 "suite": {
@@ -230,6 +231,17 @@ class TestBuilder:
                 "statistics": stats,
                 "optimization_applied": list(self.optimization_rules.keys()),
             }
+            event_bus.publish_sync(
+                FrontendEvent(
+                    event_type="suite_built",
+                    session_id=session_id,
+                    payload={
+                        "test_cases": len(suite.test_cases),
+                        "step_count": sum(len(tc.steps) for tc in suite.test_cases),
+                    },
+                )
+            )
+            return result
 
         except Exception as e:
             logger.error(f"Error building test suite: {e}")
@@ -1023,10 +1035,10 @@ class TestBuilder:
         if step.assigned_variables and step.assignment_type:
             if step.assignment_type == "single" and len(step.assigned_variables) == 1:
                 var_assignment = step.assigned_variables[0]
-                step_line = f"    {var_assignment}    {step.keyword}"
+                step_line = f"    {var_assignment} =    {step.keyword}"
             elif step.assignment_type == "multiple" and len(step.assigned_variables) > 1:
                 var_assignments = "    ".join(step.assigned_variables)
-                step_line = f"    {var_assignments}    {step.keyword}"
+                step_line = f"    {var_assignments} =    {step.keyword}"
             else:
                 step_line = f"    {step.keyword}"
         else:

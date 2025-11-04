@@ -59,8 +59,13 @@ class BrowserLibraryManager:
                 self.browser_lib = None
                 return
             
-            # Initialize Browser Library instance
+            # Initialize Browser Library instance with safer defaults
             self.browser_lib = BrowserLibrary()
+            try:
+                # Disable interactive pause prompts on failures to prevent blocking execution
+                setattr(self.browser_lib, "pause_on_failure", False)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug(f"Browser pause_on_failure override failed: {exc}")
             logger.info("Browser Library initialized successfully")
             
         except Exception as e:

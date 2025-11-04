@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import pytest
+from dotenv import load_dotenv
 
 from tests.utils.dependency_matrix import EXTRA_COMBINATIONS, install_matrix
 
 
 def pytest_configure(config: pytest.Config) -> None:
     """Register custom markers used for optional dependency suites."""
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if env_path.exists():
+        load_dotenv(env_path, override=True)
+
     config.addinivalue_line(
         "markers",
         "optional_dependency(name): tests that require an optional dependency combination",
