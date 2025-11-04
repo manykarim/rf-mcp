@@ -12,10 +12,7 @@ from robotmcp.components.execution.page_source_service import PageSourceService
 from robotmcp.components.execution.session_manager import SessionManager
 from robotmcp.config import library_registry
 from robotmcp.models.session_models import ExecutionSession
-from robotmcp.plugins import (
-    get_library_plugin_manager,
-    reset_library_plugin_manager_for_tests,
-)
+from robotmcp.plugins import get_library_plugin_manager
 from robotmcp.plugins.base import StaticLibraryPlugin
 from robotmcp.plugins.contracts import (
     InstallAction,
@@ -29,10 +26,8 @@ from robotmcp.plugins.contracts import (
 @pytest.fixture(autouse=True)
 def reset_plugin_state():
     """Reset plugin manager and registry state before and after each test."""
-    reset_library_plugin_manager_for_tests()
     library_registry._reset_plugin_state_for_tests()  # type: ignore[attr-defined]
     yield
-    reset_library_plugin_manager_for_tests()
     library_registry._reset_plugin_state_for_tests()  # type: ignore[attr-defined]
 
 
@@ -47,6 +42,7 @@ def _make_metadata(name: str) -> LibraryMetadata:
         categories=["web"],
         installation_command="pip install example",
         load_priority=42,
+        requires_type_conversion=True,
     )
 
 
