@@ -35,6 +35,10 @@ Only `get_metadata` is required; every other method is optional.
 
 ## Quick Start (Python Package)
 
+Follow these steps to go from an empty plugin to running inside rf-mcp.
+
+### 1. Scaffold the Plugin Class
+
 1. Add `rf-mcp` as a dependency (or assume the target env already has it).
 2. Create a module implementing `LibraryPlugin`.
 
@@ -64,14 +68,32 @@ class BrowserPlusPlugin(StaticLibraryPlugin):
         super().__init__(metadata=metadata, capabilities=capabilities)
 ```
 
-3. Register the plugin via entry points (in `pyproject.toml`):
+### 2. Register the Plugin
+
+Add an entry point so rf-mcp can discover it automatically:
 
 ```toml
 [project.entry-points."robotmcp.library_plugins"]
 browser_plus = "my_plugins.browser_plus:BrowserPlusPlugin"
 ```
 
-4. Publish/install the package. `rf-mcp` will load the plugin automatically on startup.
+### 3. Install & Verify
+
+```bash
+pip install -e .  # or publish package
+```
+
+Start a Python shell:
+
+```python
+from robotmcp.config import library_registry
+libs = library_registry.get_all_libraries()
+print("BrowserPlus" in libs)  # -> True if discovery worked
+```
+
+### 4. Run in rf-mcp
+
+Launch the server (`uv run robotmcp`) and use tools such as `recommend_libraries` or `set_library_search_order` to confirm the new library appears. Agents can now execute keywords with your plugin’s overrides/hooks.
 
 ### Optional hooks
 
@@ -143,6 +165,75 @@ Manifest plugins are ideal for workspace-local overrides or staging a new plugin
 - **Keyword Routing**: Return a map from keyword name → library with `get_keyword_library_map()`. Names are normalised to lowercase so both `"Get"` and `"get"` work. This is how the Browser/Selenium/Requests builtin plugins claim specific keywords.
 - **Pre-execution Hooks**: Implement `before_keyword_execution()` to prepare state or register RF contexts before a keyword is executed. The Requests plugin uses this to synchronise sessions.
 - **Keyword Overrides**: Supply async handlers via `get_keyword_overrides()` when you need to execute a keyword yourself (bypassing default resolution). Return the usual execution payload (`success`, `output`, `error`, `state_updates`, …) to short-circuit normal execution.
+- **Application State**: Provide a `LibraryStateProvider` when the plugin can expose domain-specific state. The example below demonstrates how an override writes comparison results into session variables and the state provider surfaces it through MDC agents.
+
+### Example: State Provider + Override
+
+```python
+from robotmcp.plugins.base import StaticLibraryPlugin
+from robotmcp.plugins.contracts import LibraryStateProvider
+from robotmcp.components.execution.keyword_executor import ExecutionSession
+from robot.libraries.BuiltIn import BuiltIn
+
+class ScreenshotStateProvider(LibraryStateProvider):
+    async def get_page_source(self, *args, **kwargs):
+        return None  # no DOM
+
+    async def get_application_state(self, session: ExecutionSession):
+        result = session.variables.get("_doctest_visual_result")
+        if not result:
+            return {"success": False, "error": "No visual comparison recorded."}
+        return {"success": True, "visual": result}
+
+class DocTestVisualPlugin(StaticLibraryPlugin):
+    def __init__(self, metadata, capabilities):
+        super().__init__(metadata=metadata, capabilities=capabilities)
+        self._state_provider = ScreenshotStateProvider()
+
+    def get_state_provider(self):
+        return self._state_provider
+
+    def get_keyword_overrides(self):
+        async def override(session, keyword_name, args, keyword_info):
+            session.import_library("DocTest.VisualTest", force=False)
+            built_in = BuiltIn()
+            try:
+                built_in.run_keyword(keyword_name, args)
+            except AssertionError as exc:
+                # Serialise diff artefacts & store in session for later retrieval
+                summary = {
+                    "status": "failed",
+                    "message": str(exc),
+                    "artifacts": [{"path": "/tmp/diff.png"}],
+                }
+                session.variables["_doctest_visual_result"] = summary
+                return {
+                    "success": False,
+                    "output": summary["message"],
+                    "error": summary["message"],
+                    "state_updates": {"doctest": {"visual": summary}},
+                }
+            # success path
+            summary = {"status": "passed", "message": "Visual comparison passed"}
+            session.variables["_doctest_visual_result"] = summary
+            return {
+                "success": True,
+                "output": summary["message"],
+                "state_updates": {"doctest": {"visual": summary}},
+            }
+        return {"compare images": override}
+```
+
+- `get_keyword_overrides()` intercepts failures, persists a rich summary in `session.variables`, and returns structured data back to the agent.
+- `get_state_provider()` surfaces the latest result through `get_application_state`.
+- Attachments could be stored as files (paths) or small base64 strings depending on size constraints.
+
+### Tips
+
+- **Attach Artifacts**: Use temp files (`tempfile.NamedTemporaryFile`) to store images / JSON and pass the file paths in the plugin response. Agents can fetch them via attachments.
+- **State Keys**: Namespaced state updates (e.g. `{"doctest": {"visual": summary}}`) avoid collisions with other plugins.
+- **Async Hooks**: Keyword overrides are awaited, so you can perform asynchronous work if needed (e.g. call external APIs).
+- **MCP Tools**: Document how agents should request the additional state (e.g. via `get_application_state(session_id)` with a `state_type` convention).
 
 ## Tips
 
