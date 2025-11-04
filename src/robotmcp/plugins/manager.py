@@ -117,6 +117,9 @@ class LibraryPluginManager:
     def get_prompt_bundle(self, name: str) -> Optional[PromptBundle]:
         return self._prompts.get(name)
 
+    def get_plugin_source(self, name: str) -> Optional[str]:
+        return self._sources.get(name)
+
     def get_state_provider(self, name: str) -> Optional[LibraryStateProvider]:
         plugin = self.get_plugin(name)
         if plugin:
@@ -170,4 +173,3 @@ def reset_library_plugin_manager_for_tests() -> None:
     global _GLOBAL_MANAGER
     with _GLOBAL_MANAGER_LOCK:
         _GLOBAL_MANAGER = LibraryPluginManager()
-

@@ -5,7 +5,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 from fastmcp import FastMCP
 
@@ -24,6 +24,8 @@ from robotmcp.components.state_manager import StateManager
 from robotmcp.components.test_builder import TestBuilder
 from robotmcp.models.session_models import PlatformType
 from robotmcp.utils.server_integration import initialize_enhanced_serialization
+from robotmcp.config import library_registry
+from robotmcp.plugins import get_library_plugin_manager
 
 logger = logging.getLogger(__name__)
 
@@ -454,6 +456,124 @@ async def list_available_libraries_for_prompt() -> Dict[str, Any]:
     for lib in libs:
         lib.setdefault("conflicts", [])
     return {"success": True, "available_libraries": libs}
+
+
+@mcp.tool(
+    name="list_library_plugins",
+    description="List discovered library plugins with basic metadata.",
+)
+async def list_library_plugins() -> Dict[str, Any]:
+    """Return a summary of every loaded library plugin."""
+
+    library_registry.get_all_libraries()
+    manager = get_library_plugin_manager()
+
+    plugins: List[Dict[str, Any]] = []
+    for name in manager.list_plugin_names():
+        metadata = manager.get_metadata(name)
+        if not metadata:
+            continue
+        plugins.append(
+            {
+                "name": metadata.name,
+                "package_name": metadata.package_name,
+                "import_path": metadata.import_path,
+                "library_type": metadata.library_type,
+                "load_priority": metadata.load_priority,
+                "source": manager.get_plugin_source(name) or "unknown",
+                "default_enabled": metadata.default_enabled,
+            }
+        )
+
+    return {"success": True, "plugins": plugins, "count": len(plugins)}
+
+
+@mcp.tool(
+    name="reload_library_plugins",
+    description="Reload library plugins from builtin definitions, entry points, and manifests.",
+)
+async def reload_library_plugins_tool(
+    manifest_paths: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Reload library plugins and return the resulting library list."""
+
+    snapshot = library_registry.reload_library_plugins(manifest_paths)
+    return {
+        "success": True,
+        "libraries": sorted(snapshot.keys()),
+        "count": len(snapshot),
+    }
+
+
+@mcp.tool(
+    name="diagnose_library_plugin",
+    description="Inspect metadata, capabilities, and hooks for a specific library plugin.",
+)
+async def diagnose_library_plugin(plugin_name: str) -> Dict[str, Any]:
+    """Return detailed information about a specific library plugin."""
+
+    library_registry.get_all_libraries()
+    manager = get_library_plugin_manager()
+
+    metadata = manager.get_metadata(plugin_name)
+    if not metadata:
+        return {
+            "success": False,
+            "error": f"Plugin '{plugin_name}' not found.",
+        }
+
+    capabilities = manager.get_capabilities(plugin_name)
+    install_actions = [
+        {"description": action.description, "command": list(action.command)}
+        for action in manager.get_install_actions(plugin_name)
+    ]
+    hints = manager.get_hints(plugin_name)
+    prompts = manager.get_prompt_bundle(plugin_name)
+
+    return {
+        "success": True,
+        "metadata": {
+            "name": metadata.name,
+            "package_name": metadata.package_name,
+            "import_path": metadata.import_path,
+            "library_type": metadata.library_type,
+            "description": metadata.description,
+            "use_cases": metadata.use_cases,
+            "categories": metadata.categories,
+            "contexts": metadata.contexts,
+            "installation_command": metadata.installation_command,
+            "post_install_commands": metadata.post_install_commands,
+            "platform_requirements": metadata.platform_requirements,
+            "dependencies": metadata.dependencies,
+            "load_priority": metadata.load_priority,
+            "default_enabled": metadata.default_enabled,
+            "requires_type_conversion": metadata.requires_type_conversion,
+            "supports_async": metadata.supports_async,
+            "is_deprecated": metadata.is_deprecated,
+            "extra_name": metadata.extra_name,
+        },
+        "capabilities": {
+            "contexts": capabilities.contexts if capabilities else [],
+            "features": capabilities.features if capabilities else [],
+            "technology": capabilities.technology if capabilities else [],
+            "supports_page_source": capabilities.supports_page_source if capabilities else False,
+            "supports_application_state": capabilities.supports_application_state if capabilities else False,
+            "requires_type_conversion": capabilities.requires_type_conversion if capabilities else False,
+            "supports_async": capabilities.supports_async if capabilities else False,
+        },
+        "install_actions": install_actions,
+        "hints": {
+            "standard_keywords": hints.standard_keywords if hints else [],
+            "error_hints": hints.error_hints if hints else [],
+            "usage_examples": hints.usage_examples if hints else [],
+        },
+        "prompt_bundle": {
+            "recommendation": prompts.recommendation if prompts else None,
+            "troubleshooting": prompts.troubleshooting if prompts else None,
+            "sampling_notes": prompts.sampling_notes if prompts else None,
+        },
+        "source": manager.get_plugin_source(plugin_name) or "unknown",
+    }
 
 
 @mcp.tool
