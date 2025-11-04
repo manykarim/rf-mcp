@@ -24,6 +24,9 @@ class LibraryPlugin(Protocol):
     def get_prompt_bundle(self) -> Optional[PromptBundle]: ...
     def get_state_provider(self) -> Optional[LibraryStateProvider]: ...
     def get_type_converters(self) -> Optional[TypeConversionProvider]: ...
+    def get_keyword_library_map(self) -> Optional[Dict[str, str]]: ...
+    def get_keyword_overrides(self) -> Optional[Dict[str, KeywordOverrideHandler]]: ...
+    def before_keyword_execution(self, session, keyword_name, library_manager, keyword_discovery) -> None: ...
     def on_session_start(self, session: ExecutionSession) -> None: ...
     def on_session_end(self, session: ExecutionSession) -> None: ...
 ```
@@ -131,8 +134,15 @@ Manifest plugins are ideal for workspace-local overrides or staging a new plugin
 ## Debugging & Diagnostics
 
 - `get_library_plugin_manager().list_plugin_names()` lists loaded plugins.
+- Use MCP tools `list_library_plugins` and `diagnose_library_plugin` (or the CLI equivalents) to inspect plugin state without restarting the server.
 - The plugin manager logs warnings if a plugin fails to load or has incompatible `schema_version`.
 - `library_registry.get_all_libraries()` shows the `LibraryConfig` view after plugins are applied.
+
+## Advanced Hooks
+
+- **Keyword Routing**: Return a map from keyword name → library with `get_keyword_library_map()`. Names are normalised to lowercase so both `"Get"` and `"get"` work. This is how the Browser/Selenium/Requests builtin plugins claim specific keywords.
+- **Pre-execution Hooks**: Implement `before_keyword_execution()` to prepare state or register RF contexts before a keyword is executed. The Requests plugin uses this to synchronise sessions.
+- **Keyword Overrides**: Supply async handlers via `get_keyword_overrides()` when you need to execute a keyword yourself (bypassing default resolution). Return the usual execution payload (`success`, `output`, `error`, `state_updates`, …) to short-circuit normal execution.
 
 ## Tips
 
@@ -143,4 +153,3 @@ Manifest plugins are ideal for workspace-local overrides or staging a new plugin
 - When supplying page-source providers, return a dict compatible with `PageSourceService` (see `DummyStateProvider` in tests).
 
 See `examples/plugins/sample_plugin/` for a complete runnable example with hooks and manifest integration.
-

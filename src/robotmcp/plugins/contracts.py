@@ -3,7 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Protocol, Sequence, runtime_checkable
+from typing import (
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Protocol,
+    Sequence,
+    runtime_checkable,
+    Callable,
+    Awaitable,
+)
 
 
 @dataclass(frozen=True)
@@ -84,6 +95,7 @@ class LibraryStateProvider(Protocol):
         filtered: bool = False,
         filtering_level: str = "standard",
         include_reduced_dom: bool = True,
+        **kwargs: Any,
     ) -> Optional[Dict[str, Any]]:
         ...
 
@@ -102,6 +114,17 @@ class TypeConversionProvider(Protocol):
 
     def get_conversion_map(self) -> Dict[str, Any]:
         """Return optional conversion metadata for advanced scenarios."""
+
+
+KeywordOverrideHandler = Callable[
+    [
+        "ExecutionSession",
+        str,
+        List[str],
+        Optional[Any],
+    ],
+    Awaitable[Optional[Dict[str, Any]]],
+]
 
 
 @runtime_checkable
@@ -130,6 +153,21 @@ class LibraryPlugin(Protocol):
 
     def get_type_converters(self) -> Optional[TypeConversionProvider]:
         """Return type conversion provider if available."""
+
+    def get_keyword_library_map(self) -> Optional[Dict[str, str]]:
+        """Return mapping of keyword names to this library."""
+
+    def get_keyword_overrides(self) -> Optional[Dict[str, KeywordOverrideHandler]]:
+        """Return async override handlers for specific keywords."""
+
+    def before_keyword_execution(
+        self,
+        session: "ExecutionSession",
+        keyword_name: str,
+        library_manager: Any,
+        keyword_discovery: Any,
+    ) -> None:
+        """Hook executed before a keyword is run."""
 
     def on_session_start(self, session: "ExecutionSession") -> None:
         """Hook executed when a new session starts."""

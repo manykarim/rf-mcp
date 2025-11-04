@@ -7,6 +7,10 @@ from typing import List, Sequence
 from robotmcp.plugins.base import StaticLibraryPlugin
 from robotmcp.plugins.contracts import InstallAction, LibraryCapabilities, LibraryMetadata
 
+from .browser_plugin import BrowserLibraryPlugin
+from .requests_plugin import RequestsLibraryPlugin
+from .selenium_plugin import SeleniumLibraryPlugin
+
 from .definitions import BUILTIN_LIBRARY_DEFINITIONS
 
 
@@ -87,8 +91,15 @@ def generate_builtin_plugins() -> List[StaticLibraryPlugin]:
         )
         plugins.append(plugin)
 
+    plugins.extend(
+        [
+            BrowserLibraryPlugin(),
+            SeleniumLibraryPlugin(),
+            RequestsLibraryPlugin(),
+        ]
+    )
+
     return plugins
 
 
 __all__ = ["generate_builtin_plugins"]
-

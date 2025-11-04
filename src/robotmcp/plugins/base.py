@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from .contracts import (
     InstallAction,
@@ -50,6 +50,21 @@ class StaticLibraryPlugin(LibraryPlugin):
     def get_type_converters(self) -> Optional[TypeConversionProvider]:
         return None
 
+    def get_keyword_library_map(self) -> Optional[Dict[str, str]]:  # type: ignore[override]
+        return None
+
+    def get_keyword_overrides(self):  # type: ignore[override]
+        return None
+
+    def before_keyword_execution(
+        self,
+        session: "ExecutionSession",
+        keyword_name: str,
+        library_manager,
+        keyword_discovery,
+    ) -> None:  # type: ignore[override]
+        return None
+
     def on_session_start(self, session: "ExecutionSession") -> None:
         return None
 
@@ -69,4 +84,3 @@ try:  # pragma: no cover - typing guard
     from robotmcp.models.session_models import ExecutionSession  # noqa: F401
 except Exception:  # pragma: no cover
     ExecutionSession = object  # type: ignore
-

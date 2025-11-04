@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List, Optional
 
 from .contracts import (
     InstallAction,
+    KeywordOverrideHandler,
     LibraryCapabilities,
     LibraryHints,
     LibraryPlugin,
@@ -33,6 +34,8 @@ class LibraryPluginManager:
         self._prompts: Dict[str, PromptBundle] = {}
         self._lock = threading.RLock()
         self._sources: Dict[str, str] = {}
+        self._keyword_map: Dict[str, str] = {}
+        self._keyword_overrides: Dict[tuple[str, str], KeywordOverrideHandler] = {}
 
     # ------------------------------------------------------------------
     # Registration
@@ -78,6 +81,20 @@ class LibraryPluginManager:
                 self._prompts.pop(metadata.name, None)
 
             self._sources[metadata.name] = source
+
+            keyword_map = plugin.get_keyword_library_map()
+            if keyword_map:
+                for keyword, lib_name in keyword_map.items():
+                    if not keyword:
+                        continue
+                    self._keyword_map[keyword.lower()] = lib_name
+
+            overrides = plugin.get_keyword_overrides()
+            if overrides:
+                for keyword, handler in overrides.items():
+                    if not keyword or handler is None:
+                        continue
+                    self._keyword_overrides[(metadata.name, keyword.lower())] = handler
 
             logger.debug("Registered library plugin '%s' from %s", metadata.name, source)
 
@@ -152,6 +169,43 @@ class LibraryPluginManager:
     def iter_capabilities(self):
         for name, cap in self._capabilities.items():
             yield name, cap
+
+    def get_library_for_keyword(self, keyword: str) -> Optional[str]:
+        return self._keyword_map.get(keyword.lower())
+
+    def get_keyword_override(
+        self, library_name: Optional[str], keyword: str
+    ) -> Optional[KeywordOverrideHandler]:
+        if not library_name:
+            return None
+        return self._keyword_overrides.get((library_name, keyword.lower()))
+
+    def run_before_keyword_execution(
+        self,
+        library_name: Optional[str],
+        session: Any,
+        keyword_name: str,
+        library_manager: Any,
+        keyword_discovery: Any,
+    ) -> None:
+        if not library_name:
+            return
+        plugin = self._plugins.get(library_name)
+        if not plugin:
+            return
+        try:
+            plugin.before_keyword_execution(
+                session,
+                keyword_name,
+                library_manager,
+                keyword_discovery,
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning(
+                "Plugin %s before_keyword_execution failed: %s",
+                library_name,
+                exc,
+            )
 
 
 _GLOBAL_MANAGER: Optional[LibraryPluginManager] = None

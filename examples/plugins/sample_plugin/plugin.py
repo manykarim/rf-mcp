@@ -28,6 +28,7 @@ class CalculatorStateProvider(LibraryStateProvider):
         filtered: bool,
         filtering_level: str,
         include_reduced_dom: bool,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         return {
             "success": True,
@@ -115,4 +116,3 @@ try:  # pragma: no cover
     from robotmcp.models.session_models import ExecutionSession  # noqa: F401
 except Exception:  # pragma: no cover
     ExecutionSession = object  # type: ignore
-

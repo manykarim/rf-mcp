@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import pytest
 
@@ -115,6 +115,7 @@ class DummyStateProvider:
         filtered: bool,
         filtering_level: str,
         include_reduced_dom: bool,
+        **kwargs: Any,
     ) -> Dict[str, str]:
         return {
             "success": True,
