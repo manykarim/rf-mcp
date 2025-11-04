@@ -1,0 +1,4 @@
+{
+  "module": "examples.plugins.doctest_plugin.visual_test_plugin",
+  "class": "DocTestVisualPlugin"
+}

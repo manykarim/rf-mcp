@@ -1,0 +1,4 @@
+{
+  "module": "examples.plugins.doctest_plugin.print_job_plugin",
+  "class": "DocTestPrintJobPlugin"
+}

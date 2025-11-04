@@ -1,0 +1,4 @@
+{
+  "module": "examples.plugins.doctest_plugin.pdf_test_plugin",
+  "class": "DocTestPdfPlugin"
+}
