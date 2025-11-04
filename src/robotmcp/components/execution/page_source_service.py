@@ -4,8 +4,10 @@ import logging
 import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional, Union
 
+from robotmcp.config import library_registry
 from robotmcp.models.session_models import ExecutionSession, PlatformType
 from robotmcp.models.config_models import ExecutionConfig
+from robotmcp.plugins import get_library_plugin_manager
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +26,47 @@ class PageSourceService:
     
     def __init__(self, config: Optional[ExecutionConfig] = None):
         self.config = config or ExecutionConfig()
-    
+
+    async def _get_page_source_from_plugin(
+        self,
+        session: ExecutionSession,
+        *,
+        full_source: bool,
+        filtered: bool,
+        filtering_level: str,
+        include_reduced_dom: bool,
+    ) -> Optional[Dict[str, Any]]:
+        """Attempt to retrieve page source via a plugin-provided state provider."""
+        try:
+            # Ensure plugin registry is initialized before lookup
+            library_registry.get_all_libraries()
+            plugin_manager = get_library_plugin_manager()
+            active_library = (
+                session.get_web_automation_library()
+                or session.get_active_library()
+            )
+            if not active_library:
+                return None
+
+            provider = plugin_manager.get_state_provider(active_library)
+            if not provider:
+                return None
+
+            return await provider.get_page_source(
+                session,
+                full_source=full_source,
+                filtered=filtered,
+                filtering_level=filtering_level,
+                include_reduced_dom=include_reduced_dom,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Plugin page source provider failed for %s: %s",
+                getattr(session, "session_id", "unknown"),
+                exc,
+            )
+            return None
+
     def filter_page_source(self, html: str, filtering_level: str = "standard") -> str:
         """
         Filter HTML page source to keep only automation-relevant content.
@@ -179,6 +221,16 @@ class PageSourceService:
             include_reduced_dom: When True, attempts to capture Browser Library reduced DOM (aria snapshot).
         """
         try:
+            plugin_result = await self._get_page_source_from_plugin(
+                session,
+                full_source=full_source,
+                filtered=filtered,
+                filtering_level=filtering_level,
+                include_reduced_dom=include_reduced_dom,
+            )
+            if plugin_result is not None:
+                return plugin_result
+
             # Prefer web path if a web automation library is active/selected
             active_lib = None
             try:

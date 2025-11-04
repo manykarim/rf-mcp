@@ -5,9 +5,20 @@ supported by the MCP server. It eliminates duplication across components and
 ensures consistent library support.
 """
 
+import logging
+import threading
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
 from enum import Enum
+from typing import Any, Dict, List, Optional
+
+from robotmcp.plugins import get_library_plugin_manager
+from robotmcp.plugins.base import StaticLibraryPlugin
+from robotmcp.plugins.contracts import (
+    InstallAction,
+    LibraryCapabilities,
+    LibraryMetadata,
+)
+
 
 
 class LibraryType(Enum):
@@ -311,18 +322,181 @@ ROBOT_FRAMEWORK_LIBRARIES: Dict[str, LibraryConfig] = {
     
 }
 
+logger = logging.getLogger(__name__)
+_PLUGIN_STATE_LOCK = threading.Lock()
+_PLUGINS_REGISTERED = False
+
+
+def _config_to_metadata(config: LibraryConfig) -> LibraryMetadata:
+    return LibraryMetadata(
+        name=config.name,
+        package_name=config.package_name,
+        import_path=config.import_path,
+        description=config.description,
+        library_type=config.library_type.value,
+        use_cases=list(config.use_cases),
+        categories=[category.value for category in config.categories],
+        contexts=[],
+        installation_command=config.installation_command,
+        post_install_commands=list(config.post_install_commands),
+        platform_requirements=list(config.platform_requirements),
+        dependencies=list(config.dependencies),
+        supports_async=config.supports_async,
+        is_deprecated=config.is_deprecated,
+        requires_type_conversion=config.requires_type_conversion,
+        load_priority=config.load_priority,
+        default_enabled=config.default_enabled,
+        extra_name=config.extra_name,
+    )
+
+
+def _config_to_capabilities(config: LibraryConfig) -> LibraryCapabilities:
+    contexts = [
+        category.value
+        for category in config.categories
+        if category.value in {"web", "mobile", "api", "desktop"}
+    ]
+    return LibraryCapabilities(
+        contexts=contexts,
+        features=[],
+        technology=[],
+        supports_page_source=False,
+        supports_application_state=False,
+        requires_type_conversion=config.requires_type_conversion,
+        supports_async=config.supports_async,
+    )
+
+
+def _config_to_install_actions(config: LibraryConfig) -> List[InstallAction]:
+    actions: List[InstallAction] = []
+    command = config.installation_command.strip()
+    if command and "built-in" not in command.lower():
+        actions.append(
+            InstallAction(
+                description=f"Install {config.name}",
+                command=[command],
+            )
+        )
+    for idx, post_command in enumerate(config.post_install_commands, start=1):
+        if post_command:
+            actions.append(
+                InstallAction(
+                    description=f"Post-install step {idx} for {config.name}",
+                    command=[post_command],
+                )
+            )
+    return actions
+
+
+def _metadata_to_config(
+    metadata: LibraryMetadata,
+    capabilities: Optional[LibraryCapabilities],
+) -> LibraryConfig:
+    categories: List[LibraryCategory] = []
+    for category in metadata.categories:
+        try:
+            categories.append(LibraryCategory(category))
+        except ValueError:
+            logger.debug("Unknown library category '%s' for %s; skipping", category, metadata.name)
+
+    library_type = (
+        LibraryType.BUILTIN
+        if metadata.library_type == LibraryType.BUILTIN.value
+        else LibraryType.EXTERNAL
+    )
+
+    requires_type_conversion = metadata.requires_type_conversion or (
+        capabilities.requires_type_conversion if capabilities else False
+    )
+    supports_async = metadata.supports_async or (
+        capabilities.supports_async if capabilities else False
+    )
+
+    return LibraryConfig(
+        name=metadata.name,
+        package_name=metadata.package_name,
+        import_path=metadata.import_path,
+        library_type=library_type,
+        description=metadata.description,
+        use_cases=list(metadata.use_cases),
+        categories=categories,
+        installation_command=metadata.installation_command,
+        post_install_commands=list(metadata.post_install_commands),
+        platform_requirements=list(metadata.platform_requirements),
+        dependencies=list(metadata.dependencies),
+        requires_type_conversion=requires_type_conversion,
+        supports_async=supports_async,
+        is_deprecated=metadata.is_deprecated,
+        load_priority=metadata.load_priority,
+        default_enabled=metadata.default_enabled,
+        extra_name=metadata.extra_name,
+    )
+
+
+def _ensure_plugins_registered() -> None:
+    global _PLUGINS_REGISTERED
+    if _PLUGINS_REGISTERED:
+        return
+    with _PLUGIN_STATE_LOCK:
+        if _PLUGINS_REGISTERED:
+            return
+        manager = get_library_plugin_manager()
+        builtin_plugins: List[StaticLibraryPlugin] = []
+        for config in ROBOT_FRAMEWORK_LIBRARIES.values():
+            metadata = _config_to_metadata(config)
+            capabilities = _config_to_capabilities(config)
+            install_actions = _config_to_install_actions(config)
+            plugin = StaticLibraryPlugin(
+                metadata=metadata,
+                capabilities=capabilities,
+                install_actions=install_actions or None,
+            )
+            builtin_plugins.append(plugin)
+        manager.register_plugins(builtin_plugins, source="builtin")
+        # Discover external plugins through entry points and manifests
+        manager.discover_entry_point_plugins()
+        manager.discover_manifest_plugins()
+        _PLUGINS_REGISTERED = True
+
+
+def _reset_plugin_state_for_tests() -> None:
+    """Reset plugin registration state (testing helper)."""
+    global _PLUGINS_REGISTERED
+    with _PLUGIN_STATE_LOCK:
+        _PLUGINS_REGISTERED = False
+
 
 # ============================================================================
 # UTILITY FUNCTIONS
 # ============================================================================
 
+
+def _build_config_snapshot() -> Dict[str, LibraryConfig]:
+    _ensure_plugins_registered()
+    manager = get_library_plugin_manager()
+    configs: Dict[str, LibraryConfig] = {
+        name: _metadata_to_config(meta, manager.get_capabilities(name))
+        for name, meta in manager.iter_metadata()
+    }
+    # Ensure legacy entries remain accessible if plugin discovery failed
+    for name, legacy in ROBOT_FRAMEWORK_LIBRARIES.items():
+        configs.setdefault(name, legacy)
+    return configs
+
+
 def get_all_libraries() -> Dict[str, LibraryConfig]:
     """Get all registered Robot Framework libraries."""
-    return ROBOT_FRAMEWORK_LIBRARIES.copy()
+    return _build_config_snapshot()
 
 
 def get_library_config(library_name: str) -> Optional[LibraryConfig]:
     """Fetch a single library configuration by name."""
+    _ensure_plugins_registered()
+    manager = get_library_plugin_manager()
+    metadata = manager.get_metadata(library_name)
+    if metadata:
+        capabilities = manager.get_capabilities(library_name)
+        return _metadata_to_config(metadata, capabilities)
     return ROBOT_FRAMEWORK_LIBRARIES.get(library_name)
 
 
@@ -346,7 +520,7 @@ def get_library_install_hint(library_name: str) -> Optional[str]:
             else f"Install via `pip install rf-mcp[{extra_name}]`."
         )
 
-    if config.installation_command:
+    if config.installation_command and "built-in" not in config.installation_command.lower():
         return f"Install via `{config.installation_command}`."
 
     return None
@@ -354,70 +528,84 @@ def get_library_install_hint(library_name: str) -> Optional[str]:
 
 def get_builtin_libraries() -> Dict[str, LibraryConfig]:
     """Get only built-in Robot Framework libraries."""
-    return {name: lib for name, lib in ROBOT_FRAMEWORK_LIBRARIES.items() 
-            if lib.is_builtin}
+    return {
+        name: lib
+        for name, lib in _build_config_snapshot().items()
+        if lib.is_builtin
+    }
 
 
 def get_external_libraries() -> Dict[str, LibraryConfig]:
     """Get only external Robot Framework libraries."""
-    return {name: lib for name, lib in ROBOT_FRAMEWORK_LIBRARIES.items() 
-            if lib.is_external}
+    return {
+        name: lib
+        for name, lib in _build_config_snapshot().items()
+        if lib.is_external
+    }
 
 
 def get_libraries_by_category(category: LibraryCategory) -> Dict[str, LibraryConfig]:
     """Get libraries belonging to a specific category."""
-    return {name: lib for name, lib in ROBOT_FRAMEWORK_LIBRARIES.items() 
-            if lib.has_category(category)}
+    return {
+        name: lib
+        for name, lib in _build_config_snapshot().items()
+        if lib.has_category(category)
+    }
 
 
 def get_libraries_requiring_type_conversion() -> List[str]:
     """Get list of library names that require Robot Framework type conversion."""
-    return [lib.name for lib in ROBOT_FRAMEWORK_LIBRARIES.values() 
-            if lib.requires_type_conversion]
+    return [
+        lib.name
+        for lib in _build_config_snapshot().values()
+        if lib.requires_type_conversion
+    ]
 
 
 def get_library_names_for_loading() -> List[str]:
     """Get ordered list of library names for loading (by priority)."""
-    libs = sorted(ROBOT_FRAMEWORK_LIBRARIES.values(), key=lambda x: x.load_priority)
+    libs = sorted(
+        _build_config_snapshot().values(),
+        key=lambda x: x.load_priority,
+    )
     return [lib.name for lib in libs if lib.default_enabled]
 
 
-def get_library_config(name: str) -> Optional[LibraryConfig]:
-    """Get configuration for a specific library."""
-    return ROBOT_FRAMEWORK_LIBRARIES.get(name)
-
-
-def get_installation_info() -> Dict[str, Dict[str, any]]:
+def get_installation_info() -> Dict[str, Dict[str, Any]]:
     """Get installation information for all libraries (for library_checker compatibility)."""
+    libraries = _build_config_snapshot()
     return {
         name: {
-            'package': lib.package_name,
-            'import': lib.import_path,
-            'description': lib.description,
-            'is_builtin': lib.is_builtin,
-            'post_install': lib.post_install_commands[0] if lib.post_install_commands else None
+            "package": lib.package_name,
+            "import": lib.import_path,
+            "description": lib.description,
+            "is_builtin": lib.is_builtin,
+            "post_install": lib.post_install_commands[0]
+            if lib.post_install_commands
+            else None,
         }
-        for name, lib in ROBOT_FRAMEWORK_LIBRARIES.items()
+        for name, lib in libraries.items()
     }
 
 
-def get_recommendation_info() -> List[Dict[str, any]]:
+def get_recommendation_info() -> List[Dict[str, Any]]:
     """Get library information for recommendations (for library_recommender compatibility)."""
+    libraries = _build_config_snapshot()
     return [
         {
-            'name': lib.name,
-            'package_name': lib.package_name,
-            'installation_command': lib.installation_command,
-            'use_cases': lib.use_cases,
-            'categories': [cat.value for cat in lib.categories],
-            'description': lib.description,
-            'is_builtin': lib.is_builtin,
-            'requires_setup': bool(lib.post_install_commands),
-            'setup_commands': lib.post_install_commands,
-            'platform_requirements': lib.platform_requirements,
-            'dependencies': lib.dependencies
+            "name": lib.name,
+            "package_name": lib.package_name,
+            "installation_command": lib.installation_command,
+            "use_cases": lib.use_cases,
+            "categories": [cat.value for cat in lib.categories],
+            "description": lib.description,
+            "is_builtin": lib.is_builtin,
+            "requires_setup": bool(lib.post_install_commands),
+            "setup_commands": lib.post_install_commands,
+            "platform_requirements": lib.platform_requirements,
+            "dependencies": lib.dependencies,
         }
-        for lib in ROBOT_FRAMEWORK_LIBRARIES.values()
+        for lib in libraries.values()
     ]
 
 
@@ -425,12 +613,13 @@ def get_recommendation_info() -> List[Dict[str, any]]:
 # VALIDATION
 # ============================================================================
 
+
 def validate_registry() -> List[str]:
     """Validate the library registry for consistency and completeness."""
-    errors = []
-    
-    # Check for required fields
-    for name, lib in ROBOT_FRAMEWORK_LIBRARIES.items():
+    errors: List[str] = []
+    libraries = _build_config_snapshot()
+
+    for name, lib in libraries.items():
         if not lib.name:
             errors.append(f"Library {name}: Missing name")
         if not lib.package_name:
@@ -439,22 +628,25 @@ def validate_registry() -> List[str]:
             errors.append(f"Library {name}: Missing import_path")
         if not lib.description:
             errors.append(f"Library {name}: Missing description")
-        
-        # Validate builtin libraries
-        if lib.is_builtin and lib.package_name != 'robotframework':
-            errors.append(f"Library {name}: Built-in library should have package_name='robotframework'")
-        
-        # Validate external libraries
+
+        if lib.is_builtin and lib.package_name != "robotframework":
+            errors.append(
+                f"Library {name}: Built-in library should have package_name='robotframework'"
+            )
+
         if lib.is_external and not lib.installation_command:
-            errors.append(f"Library {name}: External library missing installation_command")
-    
-    # Check for duplicate priorities
-    priorities = {}
-    for name, lib in ROBOT_FRAMEWORK_LIBRARIES.items():
+            errors.append(
+                f"Library {name}: External library missing installation_command"
+            )
+
+    priorities: Dict[int, str] = {}
+    for name, lib in libraries.items():
         if lib.load_priority in priorities:
-            errors.append(f"Duplicate priority {lib.load_priority}: {name} and {priorities[lib.load_priority]}")
+            errors.append(
+                f"Duplicate priority {lib.load_priority}: {name} and {priorities[lib.load_priority]}"
+            )
         priorities[lib.load_priority] = name
-    
+
     return errors
 
 
@@ -462,4 +654,5 @@ def validate_registry() -> List[str]:
 _VALIDATION_ERRORS = validate_registry()
 if _VALIDATION_ERRORS:
     import warnings
+
     warnings.warn(f"Library registry validation errors: {_VALIDATION_ERRORS}")
