@@ -634,19 +634,20 @@ async def recommend_libraries(
         )
         result["availability"] = availability_info
 
-    # 3) Optionally apply search order to session
-    if session_id and apply_search_order and recommended_names:
+    session = None
+    if session_id:
         session = execution_engine.session_manager.get_or_create_session(session_id)
-        old_order = session.get_search_order()
 
-        # Respect explicit library preference detected during analyze_scenario
+    auto_imported: List[str] = []
+    auto_import_errors: List[Dict[str, Any]] = []
+
+    if session and recommended_names:
         explicit = getattr(session, "explicit_library_preference", None)
+
         if explicit:
-            # Put explicit preference first
             recommended_names = [explicit] + [
                 n for n in recommended_names if n != explicit
             ]
-            # Resolve web lib conflicts by removing the opposite when explicit is set
             if explicit == "SeleniumLibrary" and "Browser" in recommended_names:
                 recommended_names = [n for n in recommended_names if n != "Browser"]
             if explicit == "Browser" and "SeleniumLibrary" in recommended_names:
@@ -654,7 +655,6 @@ async def recommend_libraries(
                     n for n in recommended_names if n != "SeleniumLibrary"
                 ]
 
-            # Also align the detailed recommendations list with the adjusted names/order
             name_to_rec = {r.get("library_name"): r for r in recommendations}
             recommendations = [
                 name_to_rec[n] for n in recommended_names if n in name_to_rec
@@ -662,43 +662,81 @@ async def recommend_libraries(
             result["recommendations"] = recommendations
             result["recommended_libraries"] = recommended_names
 
-        # Ensure recommended libraries are imported/loaded into the session so they can be applied to search order
         for lib in recommended_names:
             try:
-                # Force switch if conflicting web libraries
                 session.import_library(lib, force=True)
             except Exception as e:
                 logger.debug(f"Could not import {lib} into session {session_id}: {e}")
 
-        # Prefer available libraries first if we have that info, else use all recommendations
-        preferred = (
-            availability_info.get("available_libraries", [])
+        available_set = set(
+            (availability_info.get("available_libraries") or [])
             if availability_info
-            else recommended_names
+            else []
         )
-        # If explicit preference exists, ensure it leads and resolve web conflicts in preferred list as well
-        if explicit:
-            # Put explicit first
-            preferred = [explicit] + [n for n in preferred if n != explicit]
-            # Resolve Browser/Selenium conflict
-            if explicit == "SeleniumLibrary":
-                preferred = [n for n in preferred if n != "Browser"]
-            if explicit == "Browser":
-                preferred = [n for n in preferred if n != "SeleniumLibrary"]
-        # Merge with existing order while preserving priority
-        new_order = list(
-            dict.fromkeys(
-                preferred + [lib for lib in old_order if lib not in preferred]
-            )
-        )
-        session.set_library_search_order(new_order)
 
-        result["session_setup"] = {
+        rf_mgr = get_rf_native_context_manager()
+        processed: set[str] = set()
+        for entry in recommendations:
+            name = entry.get("library_name")
+            if not name or name in processed:
+                continue
+            processed.add(name)
+            if entry.get("is_builtin"):
+                continue
+            if availability_info and name not in available_set:
+                continue
+            try:
+                import_result = rf_mgr.import_library_for_session(
+                    session_id, name, args=(), alias=None
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                auto_import_errors.append({"library": name, "error": str(exc)})
+                continue
+            if import_result.get("success"):
+                auto_imported.append(name)
+            else:
+                auto_import_errors.append(
+                    {"library": name, "error": import_result.get("error")}
+                )
+
+        session_setup_info: Dict[str, Any] = {
             "session_id": session_id,
-            "old_search_order": old_order,
-            "new_search_order": new_order,
-            "applied": True,
+            "auto_imports": {
+                "imported": auto_imported,
+                "errors": auto_import_errors,
+            },
         }
+
+        if apply_search_order:
+            old_order = session.get_search_order()
+            preferred = (
+                availability_info.get("available_libraries", [])
+                if availability_info
+                else recommended_names
+            )
+            if explicit:
+                preferred = [explicit] + [n for n in preferred if n != explicit]
+                if explicit == "SeleniumLibrary":
+                    preferred = [n for n in preferred if n != "Browser"]
+                if explicit == "Browser":
+                    preferred = [n for n in preferred if n != "SeleniumLibrary"]
+            new_order = list(
+                dict.fromkeys(
+                    preferred + [lib for lib in old_order if lib not in preferred]
+                )
+            )
+            session.set_library_search_order(new_order)
+            session_setup_info.update(
+                {
+                    "old_search_order": old_order,
+                    "new_search_order": new_order,
+                    "applied": True,
+                }
+            )
+        else:
+            session_setup_info["applied"] = False
+
+        result["session_setup"] = session_setup_info
 
     return result
 
