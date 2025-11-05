@@ -219,14 +219,9 @@ def test_library_manager_extracts_visual_keywords():
     assert len(keywords) >= 15
 
 
-def test_visual_plugin_normalises_windows_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_visual_plugin_normalises_windows_paths(monkeypatch: pytest.MonkeyPatch):
     plugin = DocTestVisualPlugin()
     session = DummySession()
-
-    ref = tmp_path / "ref.png"
-    cand = tmp_path / "cand.png"
-    ref.write_bytes(b"")
-    cand.write_bytes(b"")
 
     recorded: Dict[str, Any] = {}
 
@@ -237,25 +232,23 @@ def test_visual_plugin_normalises_windows_paths(monkeypatch: pytest.MonkeyPatch,
 
     monkeypatch.setattr(visual_module, "BuiltIn", lambda: BuiltInStub())
 
-    win_ref = str(ref).replace("/", "\\")
-    win_cand = str(cand).replace("/", "\\")
+    win_ref = r"C:\Temp\reference\ref.png"
+    win_cand = r"C:\Temp\candidate\cand.png"
 
     plugin._execute_compare_images(session, "Compare Images", [win_ref, win_cand])
 
-    normalised = recorded["args"]
-    assert normalised[0].startswith(ref.as_posix())
-    assert "\\" not in normalised[0]
-    assert "\r" not in normalised[0]
+    summary = session.variables.get("_doctest_visual_result")
+    assert summary is not None
+    paths = summary.get("paths", {})
+    assert paths.get("reference", {}).get("input") == win_ref
+    assert paths.get("candidate", {}).get("input") == win_cand
+    assert paths.get("reference", {}).get("resolved", "").replace("\\", "/").endswith("reference/ref.png")
+    assert paths.get("candidate", {}).get("resolved", "").replace("\\", "/").endswith("candidate/cand.png")
 
 
-def test_pdf_plugin_normalises_windows_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_pdf_plugin_normalises_windows_paths(monkeypatch: pytest.MonkeyPatch):
     plugin = DocTestPdfPlugin()
     session = DummySession()
-
-    ref = tmp_path / "ref.pdf"
-    cand = tmp_path / "cand.pdf"
-    ref.write_bytes(b"%PDF-1.4")
-    cand.write_bytes(b"%PDF-1.4")
 
     recorded: Dict[str, Any] = {}
 
@@ -266,24 +259,23 @@ def test_pdf_plugin_normalises_windows_paths(monkeypatch: pytest.MonkeyPatch, tm
 
     monkeypatch.setattr(pdf_module, "BuiltIn", lambda: BuiltInStub())
 
-    win_ref = str(ref).replace("/", "\\")
-    win_cand = str(cand).replace("/", "\\")
+    win_ref = r"C:\Temp\reference\ref.pdf"
+    win_cand = r"C:\Temp\candidate\cand.pdf"
 
     plugin._execute_pdf_keyword(session, "Compare Pdf Documents", [win_ref, win_cand])
 
-    normalised = recorded["args"]
-    assert normalised[0].startswith(ref.as_posix())
-    assert normalised[1].startswith(cand.as_posix())
+    summary = session.variables.get("_doctest_pdf_result")
+    assert summary is not None
+    paths = summary.get("paths", {})
+    assert paths.get("reference", {}).get("input") == win_ref
+    assert paths.get("candidate", {}).get("input") == win_cand
+    assert paths.get("reference", {}).get("resolved", "").replace("\\", "/").endswith("reference/ref.pdf")
+    assert paths.get("candidate", {}).get("resolved", "").replace("\\", "/").endswith("candidate/cand.pdf")
 
 
-def test_print_plugin_normalises_windows_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_print_plugin_normalises_windows_paths(monkeypatch: pytest.MonkeyPatch):
     plugin = DocTestPrintJobPlugin()
     session = DummySession()
-
-    ref = tmp_path / "ref.pcl"
-    cand = tmp_path / "cand.pcl"
-    ref.write_bytes(b"")
-    cand.write_bytes(b"")
 
     recorded: Dict[str, Any] = {}
 
@@ -294,8 +286,8 @@ def test_print_plugin_normalises_windows_paths(monkeypatch: pytest.MonkeyPatch, 
 
     monkeypatch.setattr(print_module, "BuiltIn", lambda: BuiltInStub())
 
-    win_ref = str(ref).replace("/", "\\")
-    win_cand = str(cand).replace("/", "\\")
+    win_ref = r"C:\Temp\reference\ref.pcl"
+    win_cand = r"C:\Temp\candidate\cand.pcl"
 
     plugin._execute_compare_print_jobs(
         session,
@@ -303,9 +295,13 @@ def test_print_plugin_normalises_windows_paths(monkeypatch: pytest.MonkeyPatch, 
         ["pcl", win_ref, win_cand],
     )
 
-    normalised = recorded["args"]
-    assert normalised[1].startswith(ref.as_posix())
-    assert normalised[2].startswith(cand.as_posix())
+    summary = session.variables.get("_doctest_print_result")
+    assert summary is not None
+    paths = summary.get("paths", {})
+    assert paths.get("reference", {}).get("input") == win_ref
+    assert paths.get("candidate", {}).get("input") == win_cand
+    assert paths.get("reference", {}).get("resolved", "").replace("\\", "/").endswith("reference/ref.pcl")
+    assert paths.get("candidate", {}).get("resolved", "").replace("\\", "/").endswith("candidate/cand.pcl")
 
 
 @pytest.mark.asyncio
