@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,11 +16,40 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[2] / "examples" / "plugins" / "do
 if str(PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_ROOT))
 
-import rfmcp_doctest_plugin.ai as ai_module  # noqa: E402
+REQUIRED_MODULES = [
+    "DocTest.VisualTest",
+    "DocTest.PdfTest",
+    "DocTest.PrintJobTests",
+]
+
+for module_name in REQUIRED_MODULES:
+    try:
+        importlib.import_module(module_name)
+    except ImportError:
+        pytest.skip(
+            "robotframework-doctestlibrary not installed (missing {module_name})".format(
+                module_name=module_name
+            ),
+            allow_module_level=True,
+        )
+
+try:
+    importlib.import_module("DocTest.Ai")
+    AI_AVAILABLE = True
+except ImportError:
+    AI_AVAILABLE = False
+
 import rfmcp_doctest_plugin.pdf as pdf_module  # noqa: E402
 import rfmcp_doctest_plugin.print_jobs as print_module  # noqa: E402
 import rfmcp_doctest_plugin.visual as visual_module  # noqa: E402
-from rfmcp_doctest_plugin.ai import DocTestAiPlugin  # noqa: E402
+
+if AI_AVAILABLE:
+    import rfmcp_doctest_plugin.ai as ai_module  # noqa: E402
+    from rfmcp_doctest_plugin.ai import DocTestAiPlugin  # noqa: E402
+else:  # pragma: no cover - optional dependency not installed
+    ai_module = None  # type: ignore
+    DocTestAiPlugin = None  # type: ignore
+
 from rfmcp_doctest_plugin.pdf import DocTestPdfPlugin  # noqa: E402
 from rfmcp_doctest_plugin.print_jobs import DocTestPrintJobPlugin  # noqa: E402
 from rfmcp_doctest_plugin.visual import DocTestVisualPlugin  # noqa: E402
@@ -305,6 +335,7 @@ def test_print_plugin_normalises_windows_paths(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(not AI_AVAILABLE, reason="DocTest.Ai not installed")
 async def test_ai_plugin_failure_includes_context(monkeypatch: pytest.MonkeyPatch):
     plugin = DocTestAiPlugin()
     session = DummySession()
