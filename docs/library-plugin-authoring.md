@@ -33,6 +33,14 @@ class LibraryPlugin(Protocol):
 
 Only `get_metadata` is required; every other method is optional.
 
+## Get Started Checklist
+
+- Pick a discovery mechanism: **entry point** for packaged plugins or a **manifest** for workspace-only experiments.
+- Implement a plugin class that returns `LibraryMetadata` (and optional hooks such as `LibraryStateProvider` or keyword overrides).
+- Register the plugin (entry point in `pyproject.toml` or manifest JSON) and install it into the environment running `rf-mcp` (for example `uv pip install --editable path/to/plugin`).
+- Restart `rf-mcp` or call `reload_library_plugins` so the new metadata is loaded.
+- Add targeted tests that exercise overrides/state providers (see `tests/unit/test_doctest_plugins.py`).
+
 ## Quick Start (Python Package)
 
 Follow these steps to go from an empty plugin to running inside rf-mcp.
@@ -111,6 +119,8 @@ class BrowserPlusPlugin(StaticLibraryPlugin):
 ```
 
 Implement `LibraryStateProvider` or `TypeConversionProvider` if your library requires custom page-source management or argument conversions.
+
+The DocTest plugins under `examples/plugins/doctest_plugin/rfmcp_doctest_plugin/` show real-world overrides and state providers (visual diff artefacts, PDF comparison summaries, print job metadata, and AI diagnostics).
 
 ## Quick Start (Manifest-Based Plugin)
 
@@ -227,6 +237,8 @@ class DocTestVisualPlugin(StaticLibraryPlugin):
 - `get_keyword_overrides()` intercepts failures, persists a rich summary in `session.variables`, and returns structured data back to the agent.
 - `get_state_provider()` surfaces the latest result through `get_application_state`.
 - Attachments could be stored as files (paths) or small base64 strings depending on size constraints.
+
+The production-ready implementation lives in `examples/plugins/doctest_plugin/rfmcp_doctest_plugin/visual.py`. The companion modules (`pdf.py`, `print_jobs.py`, `ai.py`) demonstrate other override patterns and are covered by `tests/unit/test_doctest_plugins.py`.
 
 ### Tips
 

@@ -2,22 +2,21 @@
 
 from __future__ import annotations
 
-import inspect
 import json
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from robot.libraries.BuiltIn import BuiltIn
 
 from robotmcp.plugins.base import StaticLibraryPlugin
 from robotmcp.plugins.contracts import (
     InstallAction,
+    KeywordOverrideHandler,
     LibraryCapabilities,
     LibraryHints,
     LibraryMetadata,
     LibraryStateProvider,
-    PromptBundle,
 )
 
 
@@ -53,8 +52,10 @@ class DocTestPdfPlugin(StaticLibraryPlugin):
             categories=["documents", "testing"],
             contexts=["desktop"],
             installation_command="pip install robotframework-doctestlibrary",
-            platform_requirements=["MuPDF", "Tesseract OCR (for scanned PDFs)"],
-            dependencies=[],
+            platform_requirements=[
+                "MuPDF",
+                "Tesseract OCR (for scanned PDFs)",
+            ],
             requires_type_conversion=False,
             supports_async=False,
             load_priority=65,
@@ -64,6 +65,7 @@ class DocTestPdfPlugin(StaticLibraryPlugin):
             contexts=["desktop"],
             features=["pdf-diff", "metadata"],
             technology=["mupdf"],
+            supports_application_state=True,
         )
         hints = LibraryHints(
             standard_keywords=[
@@ -72,16 +74,12 @@ class DocTestPdfPlugin(StaticLibraryPlugin):
             ],
             error_hints=[
                 "Use `compare=text`, `compare=structure`, or `compare=metadata` to scope comparisons.",
-                "Ensure MuPDF / PyMuPDF is installed to parse PDFs.",
+                "Install MuPDF/PyMuPDF to analyse PDFs.",
             ],
             usage_examples=[
                 "Compare Pdf Documents    reference.pdf    candidate.pdf    compare=text",
                 "Pdf Should Contain Strings    ${strings}    candidate.pdf",
             ],
-        )
-        prompts = PromptBundle(
-            recommendation="Use DocTest.PdfTest to compare PDF text, structure, or metadata without rendering.",
-            troubleshooting="For scanned PDFs, pair with VisualTest to extract OCR before comparing.",
         )
         install_actions = [
             InstallAction(
@@ -94,29 +92,37 @@ class DocTestPdfPlugin(StaticLibraryPlugin):
             metadata=metadata,
             capabilities=capabilities,
             hints=hints,
-            prompt_bundle=prompts,
             install_actions=install_actions,
         )
         self._state_provider = _PdfStateProvider()
-
-    def get_keyword_library_map(self) -> Dict[str, str]:  # type: ignore[override]
-        keywords = {
+        self._override_keywords = (
             "compare pdf documents",
             "pdf should contain strings",
-        }
-        return {kw: "DocTest.PdfTest" for kw in keywords}
+        )
+
+    def get_keyword_library_map(self) -> Dict[str, str]:  # type: ignore[override]
+        keywords = [
+            "compare pdf documents",
+            "pdf should contain strings",
+        ]
+        mapping: Dict[str, str] = {}
+        for keyword in keywords:
+            for alias in self._expand_aliases(keyword):
+                mapping[alias] = "DocTest.PdfTest"
+        return mapping
 
     def get_state_provider(self) -> Optional[LibraryStateProvider]:  # type: ignore[override]
         return self._state_provider
 
-    def get_keyword_overrides(self):  # type: ignore[override]
+    def get_keyword_overrides(self) -> Dict[str, KeywordOverrideHandler]:  # type: ignore[override]
         async def _override(session, keyword_name, args, keyword_info):
             return self._execute_pdf_keyword(session, keyword_name, args)
 
-        return {
-            "compare pdf documents": _override,
-            "pdf should contain strings": _override,
-        }
+        overrides: Dict[str, KeywordOverrideHandler] = {}
+        for keyword in self._override_keywords:
+            for alias in self._expand_aliases(keyword):
+                overrides[alias] = _override
+        return overrides
 
     def _execute_pdf_keyword(
         self,
@@ -127,9 +133,11 @@ class DocTestPdfPlugin(StaticLibraryPlugin):
         session.import_library("DocTest.PdfTest", force=False)
         built_in = BuiltIn()
 
+        normalised_args = [self._normalise_argument(arg) for arg in args]
+
         try:
-            built_in.run_keyword(keyword_name, args)
-        except AssertionError as exc:
+            built_in.run_keyword(keyword_name, normalised_args)
+        except Exception as exc:
             summary = self._build_failure_summary(exc)
             session.variables["_doctest_pdf_result"] = summary
             return {
@@ -150,7 +158,12 @@ class DocTestPdfPlugin(StaticLibraryPlugin):
             "state_updates": {"doctest": {"pdf": summary}},
         }
 
-    def _build_failure_summary(self, exc: AssertionError) -> Dict[str, Any]:
+    def _expand_aliases(self, keyword: str) -> Sequence[str]:
+        base = keyword.strip().lower()
+        qualified = f"{self.metadata.name.lower()}.{base}"
+        return {base, qualified}
+
+    def _build_failure_summary(self, exc: BaseException) -> Dict[str, Any]:
         frames: List[Any] = []
         tb = exc.__traceback__
         while tb:
@@ -177,6 +190,7 @@ class DocTestPdfPlugin(StaticLibraryPlugin):
         summary = {
             "status": "failed",
             "message": str(exc),
+            "exception": exc.__class__.__name__,
             "compare_facets": compare_facets,
             "mask_used": mask_applied,
             "differences": serialized_diffs,
@@ -194,6 +208,40 @@ class DocTestPdfPlugin(StaticLibraryPlugin):
                 return tmp.name
         except Exception:
             return None
+
+    def _normalise_argument(self, argument: Any) -> Any:
+        if not isinstance(argument, str):
+            return argument
+        if "=" in argument:
+            name, value = argument.split("=", 1)
+            if self._looks_like_path(value):
+                value = self._normalise_path_string(value)
+            return f"{name}={value}"
+        if self._looks_like_path(argument):
+            return self._normalise_path_string(argument)
+        return argument
+
+    def _looks_like_path(self, value: str) -> bool:
+        lowered = value.lower()
+        if any(lowered.endswith(ext) for ext in (".pdf", ".png", ".jpg", ".jpeg", ".json")):
+            return True
+        if "\\" in value or "/" in value:
+            return True
+        if len(value) > 1 and value[1] == ":":
+            return True
+        return False
+
+    def _normalise_path_string(self, value: str) -> str:
+        cleaned = value.replace("\r", "").replace("\n", "").strip()
+        if not cleaned:
+            return cleaned
+        cleaned = cleaned.replace("\\", "/")
+        try:
+            path = Path(cleaned)
+            resolved = path.resolve(strict=False)
+            return resolved.as_posix()
+        except Exception:
+            return cleaned
 
 
 try:  # pragma: no cover

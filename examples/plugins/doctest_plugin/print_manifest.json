@@ -1,4 +1,4 @@
 {
-  "module": "examples.plugins.doctest_plugin.print_job_plugin",
+  "module": "rfmcp_doctest_plugin.print_jobs",
   "class": "DocTestPrintJobPlugin"
 }

@@ -1,4 +1,4 @@
 {
-  "module": "examples.plugins.doctest_plugin.ai_plugin",
+  "module": "rfmcp_doctest_plugin.ai",
   "class": "DocTestAiPlugin"
 }

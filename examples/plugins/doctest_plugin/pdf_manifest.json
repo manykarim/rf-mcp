@@ -1,4 +1,4 @@
 {
-  "module": "examples.plugins.doctest_plugin.pdf_test_plugin",
+  "module": "rfmcp_doctest_plugin.pdf",
   "class": "DocTestPdfPlugin"
 }

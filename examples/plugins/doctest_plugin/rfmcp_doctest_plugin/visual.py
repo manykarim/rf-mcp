@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import imageio.v2 as imageio
 import numpy as np
@@ -14,6 +14,7 @@ from robot.libraries.BuiltIn import BuiltIn
 from robotmcp.plugins.base import StaticLibraryPlugin
 from robotmcp.plugins.contracts import (
     InstallAction,
+    KeywordOverrideHandler,
     LibraryCapabilities,
     LibraryHints,
     LibraryMetadata,
@@ -46,7 +47,7 @@ class _VisualStateProvider(LibraryStateProvider):
 
 
 class DocTestVisualPlugin(StaticLibraryPlugin):
-    """Expose VisualTest keywords, overrides, and application state."""
+    """Expose VisualTest metadata, overrides, and application state."""
 
     def __init__(self) -> None:
         metadata = LibraryMetadata(
@@ -67,7 +68,7 @@ class DocTestVisualPlugin(StaticLibraryPlugin):
             platform_requirements=[
                 "ImageMagick",
                 "Tesseract OCR",
-                "Ghostscript/GhostPCL (for PostScript/Printer control files)",
+                "Ghostscript/GhostPCL",
             ],
             dependencies=["Pillow"],
             requires_type_conversion=False,
@@ -79,10 +80,13 @@ class DocTestVisualPlugin(StaticLibraryPlugin):
             contexts=["desktop"],
             features=["visual-diff", "ocr", "barcode"],
             technology=["pillow", "pytesseract"],
+            supports_page_source=False,
+            supports_application_state=True,
         )
         hints = LibraryHints(
             standard_keywords=[
                 "Compare Images",
+                "Compare Images With LLM",
                 "Image Should Contain",
                 "Get Text From Document",
                 "Get Barcodes From Document",
@@ -91,7 +95,7 @@ class DocTestVisualPlugin(StaticLibraryPlugin):
                 "Ensure Tesseract, ImageMagick, and Ghostscript binaries are installed and on PATH.",
                 "Use `placeholder_file` to mask known differences.",
                 "Set `show_diff=${True}` to persist diff artefacts in log.html.",
-                "Leverage `watermark_file` when ignoring repeated watermarks.",
+                "Configure `watermark_file` to ignore recurring overlays.",
             ],
             usage_examples=[
                 "Compare Images    Reference.png    Candidate.png    show_diff=${True}",
@@ -102,8 +106,8 @@ class DocTestVisualPlugin(StaticLibraryPlugin):
         prompts = PromptBundle(
             recommendation="For pixel-perfect visual regression or OCR checks, use DocTest.VisualTest.",
             troubleshooting=(
-                "If comparisons fail, confirm images render at consistent DPI and external binaries are installed. "
-                "Use masks/watermarks to ignore intentional differences."
+                "If comparisons fail, confirm documents render at consistent DPI and external binaries are installed. "
+                "Use masks or watermarks to ignore intentional differences."
             ),
         )
         install_actions = [
@@ -121,9 +125,14 @@ class DocTestVisualPlugin(StaticLibraryPlugin):
             install_actions=install_actions,
         )
         self._state_provider = _VisualStateProvider()
+        self._override_keywords = ("compare images",)
+
+    # ------------------------------------------------------------------
+    # Discovery / state
+    # ------------------------------------------------------------------
 
     def get_keyword_library_map(self) -> Dict[str, str]:  # type: ignore[override]
-        keywords = {
+        keywords = [
             "compare images",
             "compare images with llm",
             "image should contain",
@@ -131,8 +140,12 @@ class DocTestVisualPlugin(StaticLibraryPlugin):
             "get text from document",
             "get barcodes from document",
             "compare gifs",
-        }
-        return {kw: "DocTest.VisualTest" for kw in keywords}
+        ]
+        mapping: Dict[str, str] = {}
+        for keyword in keywords:
+            for alias in self._expand_aliases(keyword):
+                mapping[alias] = "DocTest.VisualTest"
+        return mapping
 
     def on_session_start(self, session: "ExecutionSession") -> None:
         session.variables.setdefault("DOCTEST_SHOW_DIFF", False)
@@ -145,15 +158,19 @@ class DocTestVisualPlugin(StaticLibraryPlugin):
     def get_state_provider(self) -> Optional[LibraryStateProvider]:  # type: ignore[override]
         return self._state_provider
 
-    def get_keyword_overrides(self):  # type: ignore[override]
+    # ------------------------------------------------------------------
+    # Keyword overrides
+    # ------------------------------------------------------------------
+
+    def get_keyword_overrides(self) -> Dict[str, KeywordOverrideHandler]:  # type: ignore[override]
         async def _override(session, keyword_name, args, keyword_info):
             return self._execute_compare_images(session, keyword_name, args)
 
-        return {"compare images": _override}
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
+        overrides: Dict[str, KeywordOverrideHandler] = {}
+        for keyword in self._override_keywords:
+            for alias in self._expand_aliases(keyword):
+                overrides[alias] = _override
+        return overrides
 
     def _execute_compare_images(
         self,
@@ -164,9 +181,11 @@ class DocTestVisualPlugin(StaticLibraryPlugin):
         session.import_library("DocTest.VisualTest", force=False)
         built_in = BuiltIn()
 
+        normalised_args = [self._normalise_argument(arg) for arg in args]
+
         try:
-            built_in.run_keyword(keyword_name, args)
-        except AssertionError as exc:
+            built_in.run_keyword(keyword_name, normalised_args)
+        except Exception as exc:  # Catch both assertion failures and runtime errors
             summary = self._build_failure_summary(exc)
             session.variables["_doctest_visual_result"] = summary
             return {
@@ -187,7 +206,53 @@ class DocTestVisualPlugin(StaticLibraryPlugin):
             "state_updates": {"doctest": {"visual": summary}},
         }
 
-    def _build_failure_summary(self, exc: AssertionError) -> Dict[str, Any]:
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _normalise_argument(self, argument: Any) -> Any:
+        if not isinstance(argument, str):
+            return argument
+
+        if "=" in argument:
+            name, value = argument.split("=", 1)
+            if self._looks_like_path(value):
+                value = self._normalise_path_string(value)
+            return f"{name}={value}"
+
+        if self._looks_like_path(argument):
+            return self._normalise_path_string(argument)
+        return argument
+
+    def _looks_like_path(self, value: str) -> bool:
+        lowered = value.lower()
+        if any(lowered.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".pdf")):
+            return True
+        if "\\" in value or "/" in value:
+            return True
+        if len(value) > 1 and value[1] == ":":
+            return True
+        return False
+
+    def _normalise_path_string(self, value: str) -> str:
+        cleaned = value.replace("\r", "").replace("\n", "").strip()
+        if not cleaned:
+            return cleaned
+
+        cleaned = cleaned.replace("\\", "/")
+        try:
+            path = Path(cleaned)
+            resolved = path.resolve(strict=False)
+            return resolved.as_posix()
+        except Exception:
+            return cleaned
+
+    def _expand_aliases(self, keyword: str) -> Sequence[str]:
+        base = keyword.strip().lower()
+        qualified = f"{self.metadata.name.lower()}.{base}"
+        return {base, qualified}
+
+    def _build_failure_summary(self, exc: BaseException) -> Dict[str, Any]:
         frames: List[Any] = []
         tb = exc.__traceback__
         while tb:
@@ -211,6 +276,7 @@ class DocTestVisualPlugin(StaticLibraryPlugin):
         summary = {
             "status": "failed",
             "message": message,
+            "exception": exc.__class__.__name__,
             "differences": diff_info,
             "artifacts": artifacts,
         }
@@ -253,7 +319,6 @@ class DocTestVisualPlugin(StaticLibraryPlugin):
                 return tmp.name
         except Exception:
             return None
-
 
 
 try:  # pragma: no cover
