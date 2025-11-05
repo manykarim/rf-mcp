@@ -160,13 +160,27 @@ class DocTestPrintJobPlugin(StaticLibraryPlugin):
         session.import_library("DocTest.PrintJobTests", force=False)
         built_in = BuiltIn()
 
-        normalised_args = [self._normalise_argument(arg, index=i) for i, arg in enumerate(args)]
+        raw_args = list(args)
+        normalised_args = [self._normalise_argument(arg, index=i) for i, arg in enumerate(raw_args)]
 
         try:
             built_in.run_keyword(keyword_name, list(normalised_args))
         except Exception as exc:
             summary = self._build_compare_failure_summary(exc)
             session.variables["_doctest_print_result"] = summary
+            summary.setdefault(
+                "paths",
+                {
+                    "reference": self._path_diagnostics(
+                        raw_args[1] if len(raw_args) > 1 else "",
+                        normalised_args[1] if len(normalised_args) > 1 else "",
+                    ),
+                    "candidate": self._path_diagnostics(
+                        raw_args[2] if len(raw_args) > 2 else "",
+                        normalised_args[2] if len(normalised_args) > 2 else "",
+                    ),
+                },
+            )
             return {
                 "success": False,
                 "output": summary.get("message", "DocTest print job comparison failed."),
@@ -201,6 +215,15 @@ class DocTestPrintJobPlugin(StaticLibraryPlugin):
         except Exception as exc:
             summary = self._build_property_failure_summary(exc)
             session.variables["_doctest_print_result"] = summary
+            summary.setdefault(
+                "paths",
+                {
+                    "print_job": self._path_diagnostics(
+                        raw_args[0] if raw_args else "",
+                        normalised_args[0] if normalised_args else "",
+                    ),
+                },
+            )
             return {
                 "success": False,
                 "output": summary.get("message", "DocTest print job property check failed."),
@@ -355,16 +378,40 @@ class DocTestPrintJobPlugin(StaticLibraryPlugin):
         return False
 
     def _normalise_path_string(self, value: str) -> str:
-        cleaned = value.replace("\r", "").replace("\n", "").strip()
+        cleaned = value.replace("\r", "").replace("\n", "").strip().strip('"')
         if not cleaned:
             return cleaned
+        if len(cleaned) > 1 and cleaned[1] == ":":
+            try:
+                from pathlib import PureWindowsPath
+
+                return str(PureWindowsPath(cleaned))
+            except Exception:
+                return cleaned
         cleaned = cleaned.replace("\\", "/")
         try:
             path = Path(cleaned)
+            if path.is_absolute():
+                return path.as_posix()
             resolved = path.resolve(strict=False)
             return resolved.as_posix()
         except Exception:
             return cleaned
+
+    def _path_diagnostics(self, raw_value: Any, normalised_value: Any) -> Dict[str, Any]:
+        normalised_str = normalised_value if isinstance(normalised_value, str) and normalised_value else str(raw_value)
+        info: Dict[str, Any] = {"input": raw_value, "normalised": normalised_str}
+        if not normalised_str:
+            info["exists"] = False
+            return info
+        try:
+            path_obj = Path(str(normalised_str))
+            info["resolved"] = str(path_obj.resolve(strict=False))
+            info["exists"] = path_obj.exists()
+        except Exception:
+            info["resolved"] = normalised_str
+            info["exists"] = False
+        return info
 
 
 try:  # pragma: no cover
