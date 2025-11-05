@@ -4,8 +4,10 @@ import logging
 import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional, Union
 
+from robotmcp.config import library_registry
 from robotmcp.models.session_models import ExecutionSession, PlatformType
 from robotmcp.models.config_models import ExecutionConfig
+from robotmcp.plugins import get_library_plugin_manager
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +26,102 @@ class PageSourceService:
     
     def __init__(self, config: Optional[ExecutionConfig] = None):
         self.config = config or ExecutionConfig()
-    
+
+    def _get_page_source_via_rf_context(self, session: ExecutionSession) -> str:
+        """Attempt to fetch page source through the Robot Framework native context."""
+        page_source = ""
+        try:
+            from robotmcp.components.execution.rf_native_context_manager import (
+                get_rf_native_context_manager,
+            )
+
+            rf_mgr = get_rf_native_context_manager()
+            for kw in ("Get Page Source", "Get Source"):
+                res = rf_mgr.execute_keyword_with_context(
+                    session_id=session.session_id,
+                    keyword_name=kw,
+                    arguments=[],
+                    assign_to=None,
+                    session_variables=dict(session.variables),
+                )
+                if res and res.get("success"):
+                    out = res.get("output") or res.get("result")
+                    if isinstance(out, str) and out:
+                        page_source = out
+                        session.browser_state.page_source = out
+                        break
+
+            # Update URL and title where possible
+            try:
+                res = rf_mgr.execute_keyword_with_context(
+                    session_id=session.session_id,
+                    keyword_name="Get Url",
+                    arguments=[],
+                )
+                if res and res.get("success") and res.get("output"):
+                    session.browser_state.current_url = res.get("output")
+            except Exception:
+                pass
+
+            try:
+                res = rf_mgr.execute_keyword_with_context(
+                    session_id=session.session_id,
+                    keyword_name="Get Title",
+                    arguments=[],
+                )
+                if res and res.get("success") and res.get("output"):
+                    session.browser_state.page_title = res.get("output")
+            except Exception:
+                pass
+        except Exception as exc:
+            logger.debug("RF-context page source retrieval failed: %s", exc)
+            page_source = session.browser_state.page_source or ""
+
+        return page_source
+
+    async def _get_page_source_from_plugin(
+        self,
+        session: ExecutionSession,
+        *,
+        browser_library_manager: Any,
+        full_source: bool,
+        filtered: bool,
+        filtering_level: str,
+        include_reduced_dom: bool,
+    ) -> Optional[Dict[str, Any]]:
+        """Attempt to retrieve page source via a plugin-provided state provider."""
+        try:
+            # Ensure plugin registry is initialized before lookup
+            library_registry.get_all_libraries()
+            plugin_manager = get_library_plugin_manager()
+            active_library = (
+                session.get_web_automation_library()
+                or session.get_active_library()
+            )
+            if not active_library:
+                return None
+
+            provider = plugin_manager.get_state_provider(active_library)
+            if not provider:
+                return None
+
+            return await provider.get_page_source(
+                session,
+                full_source=full_source,
+                filtered=filtered,
+                filtering_level=filtering_level,
+                include_reduced_dom=include_reduced_dom,
+                service=self,
+                browser_library_manager=browser_library_manager,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Plugin page source provider failed for %s: %s",
+                getattr(session, "session_id", "unknown"),
+                exc,
+            )
+            return None
+
     def filter_page_source(self, html: str, filtering_level: str = "standard") -> str:
         """
         Filter HTML page source to keep only automation-relevant content.
@@ -179,120 +276,38 @@ class PageSourceService:
             include_reduced_dom: When True, attempts to capture Browser Library reduced DOM (aria snapshot).
         """
         try:
-            # Prefer web path if a web automation library is active/selected
-            active_lib = None
-            try:
-                active_lib = session.get_active_library()
-            except Exception:
-                active_lib = None
-            web_pref = None
+            plugin_result = await self._get_page_source_from_plugin(
+                session,
+                browser_library_manager=browser_library_manager,
+                full_source=full_source,
+                filtered=filtered,
+                filtering_level=filtering_level,
+                include_reduced_dom=include_reduced_dom,
+            )
+            if plugin_result is not None:
+                return plugin_result
+
+            # Mobile sessions fall back to mobile source path
             try:
                 web_pref = session.get_web_automation_library()
             except Exception:
                 web_pref = None
 
-            if (
-                (active_lib in ("browser", "selenium"))
-                or (web_pref in ("Browser", "SeleniumLibrary"))
-            ):
-                # Continue with web page source retrieval below
-                pass
-            elif session.is_mobile_session():
+            if session.is_mobile_session() and web_pref not in ("Browser", "SeleniumLibrary"):
                 # Only use mobile source path when not in a web automation session
                 return await self._get_mobile_source(
                     session, full_source, filtered, filtering_level
                 )
-            
-            # RF-context only: get page source directly through the session RF context
-            page_source = ""
-            try:
-                from robotmcp.components.execution.rf_native_context_manager import (
-                    get_rf_native_context_manager,
-                )
 
-                rf_mgr = get_rf_native_context_manager()
-                # Try Browser first, then Selenium keyword name
-                for kw in ("Get Page Source", "Get Source"):
-                    res = rf_mgr.execute_keyword_with_context(
-                        session_id=session.session_id,
-                        keyword_name=kw,
-                        arguments=[],
-                        assign_to=None,
-                        session_variables=dict(session.variables),
-                    )
-                    if res and res.get("success"):
-                        out = res.get("output") or res.get("result")
-                        if isinstance(out, str) and out:
-                            page_source = out
-                            session.browser_state.page_source = out
-                            break
-                # Update URL and title, best-effort
-                try:
-                    res = rf_mgr.execute_keyword_with_context(
-                        session_id=session.session_id,
-                        keyword_name="Get Url",
-                        arguments=[],
-                    )
-                    if res and res.get("success") and res.get("output"):
-                        session.browser_state.current_url = res.get("output")
-                except Exception:
-                    pass
-                try:
-                    res = rf_mgr.execute_keyword_with_context(
-                        session_id=session.session_id,
-                        keyword_name="Get Title",
-                        arguments=[],
-                    )
-                    if res and res.get("success") and res.get("output"):
-                        session.browser_state.page_title = res.get("output")
-                except Exception:
-                    pass
-            except Exception as e:
-                logger.debug(f"RF-context page source retrieval failed: {e}")
-                page_source = session.browser_state.page_source or ""
-            
+            # RF-context fallback when no plugin handles the library
+            page_source = self._get_page_source_via_rf_context(session)
+
             if not page_source:
                 return {
                     "success": False,
                     "error": "No page source available for this session"
                 }
 
-            aria_snapshot_info: Optional[Dict[str, Any]] = None
-            if include_reduced_dom:
-                try:
-                    aria_snapshot_info = await self._capture_browser_aria_snapshot(
-                        session=session,
-                        browser_library_manager=browser_library_manager,
-                    )
-                except Exception as snapshot_error:
-                    logger.debug(
-                        "Browser reduced DOM capture failed for session %s: %s",
-                        session.session_id,
-                        snapshot_error,
-                    )
-                    aria_snapshot_info = {
-                        "success": False,
-                        "selector": "css=html",
-                        "error": str(snapshot_error),
-                    }
-            else:
-                aria_snapshot_info = {
-                    "success": False,
-                    "selector": "css=html",
-                    "skipped": True,
-                }
-
-            if aria_snapshot_info and aria_snapshot_info.get("success"):
-                session.browser_state.aria_snapshot = aria_snapshot_info.get("content")
-                session.browser_state.aria_snapshot_format = aria_snapshot_info.get("format")
-                session.browser_state.aria_snapshot_selector = aria_snapshot_info.get(
-                    "selector"
-                )
-            elif include_reduced_dom:
-                session.browser_state.aria_snapshot = None
-                session.browser_state.aria_snapshot_format = None
-                session.browser_state.aria_snapshot_selector = None
-            
             # Apply filtering if requested
             if filtered:
                 filtered_source = self.filter_page_source(page_source, filtering_level)
@@ -307,8 +322,6 @@ class PageSourceService:
                     "filtering_applied": True,
                     "filtering_level": filtering_level
                 }
-                if aria_snapshot_info is not None:
-                    result["aria_snapshot"] = aria_snapshot_info
                 
                 if full_source:
                     result["page_source"] = filtered_source
@@ -332,8 +345,6 @@ class PageSourceService:
                     "context": await self.extract_page_context(page_source),
                     "filtering_applied": False
                 }
-                if aria_snapshot_info is not None:
-                    result["aria_snapshot"] = aria_snapshot_info
                 
                 if full_source:
                     result["page_source"] = page_source

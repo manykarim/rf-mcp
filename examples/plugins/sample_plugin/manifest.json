@@ -1,0 +1,4 @@
+{
+  "module": "examples.plugins.sample_plugin",
+  "class": "ExampleCalculatorPlugin"
+}

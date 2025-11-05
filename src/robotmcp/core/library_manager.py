@@ -1,6 +1,7 @@
 """Library loading and management functionality."""
 
 import importlib
+import inspect
 import logging
 from typing import Any, Dict, Set
 
@@ -226,11 +227,26 @@ class LibraryManager:
 
                 instance = Dialogs
             else:
-                # Try generic import
-                module = importlib.import_module(library_name)
-                if hasattr(module, library_name):
-                    instance = getattr(module, library_name)()
-                else:
+                # Try generic import; handle dotted module names gracefully
+                module_name = library_name
+                attr_candidates = []
+                if '.' in library_name:
+                    attr_candidates.append(library_name.split('.')[-1])
+                attr_candidates.append(library_name)
+
+                module = importlib.import_module(module_name)
+
+                instance = None
+                for attr_name in attr_candidates:
+                    if hasattr(module, attr_name):
+                        target = getattr(module, attr_name)
+                        if inspect.isclass(target):
+                            instance = target()
+                        else:
+                            instance = target
+                        break
+
+                if instance is None:
                     instance = module
 
             # Extract keywords from the library instance

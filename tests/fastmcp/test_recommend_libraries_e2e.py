@@ -110,6 +110,9 @@ async def test_recommend_libraries_applies_search_order(mcp_client):
     recs = res.data.get("recommended_libraries", [])
     assert isinstance(recs, list) and len(recs) >= 1
     assert isinstance(res.data.get("session_setup"), dict)
+    setup = res.data["session_setup"]
+    assert "auto_imports" in setup
+    assert set(setup["auto_imports"].keys()) == {"imported", "errors"}
 
     # Confirm session search order contains some recommended libraries
     sess = await mcp_client.call_tool("get_session_info", {"session_id": session_id})

@@ -125,7 +125,10 @@ pip install rf-mcp[web]       # Browser Library + SeleniumLibrary
 pip install rf-mcp[mobile]    # AppiumLibrary
 pip install rf-mcp[api]       # RequestsLibrary
 pip install rf-mcp[database]  # DatabaseLibrary
+pip install rf-mcp[frontend]  # Django-based web frontend dashboard
 pip install rf-mcp[all]       # All optional Robot Framework libraries
+# Run the optional frontend alongside MCP
+python -m robotmcp.server --with-frontend
 
 # Browser Library still needs Playwright browsers
 rfbrowser init
@@ -144,6 +147,8 @@ cd rf-mcp
 
 # Install with uv (recommended)
 uv sync
+# Include optional extras & dev tooling
+uv sync --all-extras --dev
 
 # Or with pip
 pip install -e .
@@ -155,6 +160,17 @@ pip install -e .
 ### Hint: When using a venv 
 
 If you are using a virtual environment (venv) for your project, I recommend to install the `rf-mcp` package within the same venv.
+
+---
+
+## 🔌 Library Plugins
+
+Extend RobotMCP with custom libraries via the plugin system. Two discovery modes are available:
+
+- **Entry points** (`robotmcp.library_plugins`) for packaged plugins.
+- **Manifest files** (JSON) under `.robotmcp/plugins/` for workspace overrides.
+
+See the [Library Plugin Authoring Guide](docs/library-plugin-authoring.md) for detailed instructions and explore the sample plugin in [`examples/plugins/sample_plugin`](examples/plugins/sample_plugin/) to get started quickly.
 When starting the MCP server, make sure to use the Python interpreter from that venv.
 
 ---

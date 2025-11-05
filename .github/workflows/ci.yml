@@ -9,6 +9,7 @@ jobs:
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+      RUN_NETWORK_TESTS: '1'  # Enable network tests in CI
     
     strategy:
       fail-fast: false
@@ -173,6 +174,7 @@ jobs:
           OPENAI_MODEL: ${{ env.OPENAI_MODEL }}
           # Ensure Playwright uses the correct browser path
           PLAYWRIGHT_BROWSERS_PATH: '0'
+          RUN_NETWORK_TESTS: '1'
         run: ${{ matrix.test-command }} --junitxml=results/pytest.xml
 
       - name: Test Report

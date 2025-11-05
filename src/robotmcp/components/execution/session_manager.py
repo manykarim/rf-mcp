@@ -7,8 +7,10 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, List
 
 from robotmcp.core.event_bus import FrontendEvent, event_bus
+from robotmcp.config import library_registry
 from robotmcp.models.config_models import ExecutionConfig
 from robotmcp.models.session_models import ExecutionSession, PlatformType, MobileConfig, SessionType
+from robotmcp.plugins import get_library_plugin_manager
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,25 @@ class SessionManager:
         
         # Add reference to session manager for Phase 2 synchronization
         session._session_manager = self
+
+        # Notify plugins about the new session
+        try:
+            library_registry.get_all_libraries()
+            plugin_manager = get_library_plugin_manager()
+            for plugin_name in plugin_manager.list_plugin_names():
+                plugin = plugin_manager.get_plugin(plugin_name)
+                if not plugin:
+                    continue
+                try:
+                    plugin.on_session_start(session)
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.warning(
+                        "Plugin %s failed during on_session_start: %s",
+                        plugin_name,
+                        exc,
+                    )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Unable to notify plugins for session start: %s", exc)
 
         logger.info(f"Created new session: {session_id}")
         event_bus.publish_sync(
@@ -133,6 +154,23 @@ class SessionManager:
         """Remove a session."""
         if session_id in self.sessions:
             session = self.sessions[session_id]
+            try:
+                library_registry.get_all_libraries()
+                plugin_manager = get_library_plugin_manager()
+                for plugin_name in plugin_manager.list_plugin_names():
+                    plugin = plugin_manager.get_plugin(plugin_name)
+                    if not plugin:
+                        continue
+                    try:
+                        plugin.on_session_end(session)
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.warning(
+                            "Plugin %s failed during on_session_end: %s",
+                            plugin_name,
+                            exc,
+                        )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Unable to notify plugins for session end: %s", exc)
             session.cleanup()
             del self.sessions[session_id]
             logger.info(f"Removed session: {session_id}")

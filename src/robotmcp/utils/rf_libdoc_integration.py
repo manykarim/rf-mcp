@@ -106,6 +106,7 @@ class RobotFrameworkDocStorage:
                 self.keyword_index_by_name[norm][library_name] = keyword_info
             
             self.libraries[library_name] = lib_info
+            self.failed_imports.pop(library_name, None)
             
             logger.info(f"Successfully loaded library '{library_name}' with {len(lib_info.keywords)} keywords using libdoc")
             return True
@@ -244,9 +245,11 @@ class RobotFrameworkDocStorage:
     
     def get_keywords_by_library(self, library_name: str) -> List[RFKeywordInfo]:
         """Get all keywords from a specific library."""
-        if not HAS_LIBDOC or library_name not in self.libraries:
+        if not HAS_LIBDOC:
             return []
-        
+        if library_name not in self.libraries:
+            if not self.ensure_library_loaded(library_name):
+                return []
         return list(self.libraries[library_name].keywords.values())
     
     def get_all_keywords(self) -> List[RFKeywordInfo]:
@@ -273,6 +276,8 @@ class RobotFrameworkDocStorage:
             
         keywords = []
         for library_name in library_names:
+            if library_name not in self.libraries:
+                self.ensure_library_loaded(library_name)
             if library_name in self.libraries:
                 keywords.extend(self.libraries[library_name].keywords.values())
         
@@ -299,6 +304,10 @@ class RobotFrameworkDocStorage:
         """Get full documentation for a library."""
         if not HAS_LIBDOC:
             return None
+        
+        if library_name not in self.libraries:
+            if not self.ensure_library_loaded(library_name):
+                return None
             
         return self.libraries.get(library_name)
     
@@ -314,6 +323,9 @@ class RobotFrameworkDocStorage:
 
         norm = self._normalize_name(keyword_name)
         if library_name:
+            if library_name not in self.libraries:
+                if not self.ensure_library_loaded(library_name):
+                    return None
             by_lib = self.keyword_index_by_name.get(norm, {})
             # Strict per-library search
             return by_lib.get(library_name)
@@ -509,6 +521,14 @@ class RobotFrameworkDocStorage:
             del self.libraries[library_name]
         
         # Reload
+        return self._load_library_documentation(library_name)
+
+    def ensure_library_loaded(self, library_name: str) -> bool:
+        """Ensure documentation for a library is available, loading it on demand if needed."""
+        if not HAS_LIBDOC:
+            return False
+        if library_name in self.libraries:
+            return True
         return self._load_library_documentation(library_name)
     
     def get_library_status(self) -> Dict[str, Any]:

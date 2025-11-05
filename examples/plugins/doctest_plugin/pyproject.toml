@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rfmcp-doctest-plugin-example"
+version = "0.1.0"
+description = "Example rf-mcp plugins for robotframework-doctestlibrary"
+authors = [{ name = "rf-mcp maintainers" }]
+requires-python = ">=3.10"
+dependencies = [
+    "robotframework-doctestlibrary",
+]
+
+[project.optional-dependencies]
+ai = ["robotframework-doctestlibrary[ai]"]
+
+[project.entry-points."robotmcp.library_plugins"]
+doctest_visual = "rfmcp_doctest_plugin.visual:DocTestVisualPlugin"
+doctest_pdf = "rfmcp_doctest_plugin.pdf:DocTestPdfPlugin"
+doctest_print = "rfmcp_doctest_plugin.print_jobs:DocTestPrintJobPlugin"
+doctest_ai = "rfmcp_doctest_plugin.ai:DocTestAiPlugin"
+
+[tool.hatch.build.targets.wheel]
+packages = ["rfmcp_doctest_plugin"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "rfmcp_doctest_plugin",
+    "README.md",
+    "pyproject.toml",
+    "ai_manifest.json",
+    "pdf_manifest.json",
+    "print_manifest.json",
+    "visual_manifest.json",
+]

@@ -5,7 +5,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 from fastmcp import FastMCP
 
@@ -24,6 +24,8 @@ from robotmcp.components.state_manager import StateManager
 from robotmcp.components.test_builder import TestBuilder
 from robotmcp.models.session_models import PlatformType
 from robotmcp.utils.server_integration import initialize_enhanced_serialization
+from robotmcp.config import library_registry
+from robotmcp.plugins import get_library_plugin_manager
 
 logger = logging.getLogger(__name__)
 
@@ -456,6 +458,124 @@ async def list_available_libraries_for_prompt() -> Dict[str, Any]:
     return {"success": True, "available_libraries": libs}
 
 
+@mcp.tool(
+    name="list_library_plugins",
+    description="List discovered library plugins with basic metadata.",
+)
+async def list_library_plugins() -> Dict[str, Any]:
+    """Return a summary of every loaded library plugin."""
+
+    library_registry.get_all_libraries()
+    manager = get_library_plugin_manager()
+
+    plugins: List[Dict[str, Any]] = []
+    for name in manager.list_plugin_names():
+        metadata = manager.get_metadata(name)
+        if not metadata:
+            continue
+        plugins.append(
+            {
+                "name": metadata.name,
+                "package_name": metadata.package_name,
+                "import_path": metadata.import_path,
+                "library_type": metadata.library_type,
+                "load_priority": metadata.load_priority,
+                "source": manager.get_plugin_source(name) or "unknown",
+                "default_enabled": metadata.default_enabled,
+            }
+        )
+
+    return {"success": True, "plugins": plugins, "count": len(plugins)}
+
+
+@mcp.tool(
+    name="reload_library_plugins",
+    description="Reload library plugins from builtin definitions, entry points, and manifests.",
+)
+async def reload_library_plugins_tool(
+    manifest_paths: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Reload library plugins and return the resulting library list."""
+
+    snapshot = library_registry.reload_library_plugins(manifest_paths)
+    return {
+        "success": True,
+        "libraries": sorted(snapshot.keys()),
+        "count": len(snapshot),
+    }
+
+
+@mcp.tool(
+    name="diagnose_library_plugin",
+    description="Inspect metadata, capabilities, and hooks for a specific library plugin.",
+)
+async def diagnose_library_plugin(plugin_name: str) -> Dict[str, Any]:
+    """Return detailed information about a specific library plugin."""
+
+    library_registry.get_all_libraries()
+    manager = get_library_plugin_manager()
+
+    metadata = manager.get_metadata(plugin_name)
+    if not metadata:
+        return {
+            "success": False,
+            "error": f"Plugin '{plugin_name}' not found.",
+        }
+
+    capabilities = manager.get_capabilities(plugin_name)
+    install_actions = [
+        {"description": action.description, "command": list(action.command)}
+        for action in manager.get_install_actions(plugin_name)
+    ]
+    hints = manager.get_hints(plugin_name)
+    prompts = manager.get_prompt_bundle(plugin_name)
+
+    return {
+        "success": True,
+        "metadata": {
+            "name": metadata.name,
+            "package_name": metadata.package_name,
+            "import_path": metadata.import_path,
+            "library_type": metadata.library_type,
+            "description": metadata.description,
+            "use_cases": metadata.use_cases,
+            "categories": metadata.categories,
+            "contexts": metadata.contexts,
+            "installation_command": metadata.installation_command,
+            "post_install_commands": metadata.post_install_commands,
+            "platform_requirements": metadata.platform_requirements,
+            "dependencies": metadata.dependencies,
+            "load_priority": metadata.load_priority,
+            "default_enabled": metadata.default_enabled,
+            "requires_type_conversion": metadata.requires_type_conversion,
+            "supports_async": metadata.supports_async,
+            "is_deprecated": metadata.is_deprecated,
+            "extra_name": metadata.extra_name,
+        },
+        "capabilities": {
+            "contexts": capabilities.contexts if capabilities else [],
+            "features": capabilities.features if capabilities else [],
+            "technology": capabilities.technology if capabilities else [],
+            "supports_page_source": capabilities.supports_page_source if capabilities else False,
+            "supports_application_state": capabilities.supports_application_state if capabilities else False,
+            "requires_type_conversion": capabilities.requires_type_conversion if capabilities else False,
+            "supports_async": capabilities.supports_async if capabilities else False,
+        },
+        "install_actions": install_actions,
+        "hints": {
+            "standard_keywords": hints.standard_keywords if hints else [],
+            "error_hints": hints.error_hints if hints else [],
+            "usage_examples": hints.usage_examples if hints else [],
+        },
+        "prompt_bundle": {
+            "recommendation": prompts.recommendation if prompts else None,
+            "troubleshooting": prompts.troubleshooting if prompts else None,
+            "sampling_notes": prompts.sampling_notes if prompts else None,
+        },
+        "source": manager.get_plugin_source(plugin_name) or "unknown",
+    }
+
+
 @mcp.tool
 async def recommend_libraries(
     scenario: str,
@@ -514,19 +634,20 @@ async def recommend_libraries(
         )
         result["availability"] = availability_info
 
-    # 3) Optionally apply search order to session
-    if session_id and apply_search_order and recommended_names:
+    session = None
+    if session_id:
         session = execution_engine.session_manager.get_or_create_session(session_id)
-        old_order = session.get_search_order()
 
-        # Respect explicit library preference detected during analyze_scenario
+    auto_imported: List[str] = []
+    auto_import_errors: List[Dict[str, Any]] = []
+
+    if session and recommended_names:
         explicit = getattr(session, "explicit_library_preference", None)
+
         if explicit:
-            # Put explicit preference first
             recommended_names = [explicit] + [
                 n for n in recommended_names if n != explicit
             ]
-            # Resolve web lib conflicts by removing the opposite when explicit is set
             if explicit == "SeleniumLibrary" and "Browser" in recommended_names:
                 recommended_names = [n for n in recommended_names if n != "Browser"]
             if explicit == "Browser" and "SeleniumLibrary" in recommended_names:
@@ -534,7 +655,6 @@ async def recommend_libraries(
                     n for n in recommended_names if n != "SeleniumLibrary"
                 ]
 
-            # Also align the detailed recommendations list with the adjusted names/order
             name_to_rec = {r.get("library_name"): r for r in recommendations}
             recommendations = [
                 name_to_rec[n] for n in recommended_names if n in name_to_rec
@@ -542,43 +662,81 @@ async def recommend_libraries(
             result["recommendations"] = recommendations
             result["recommended_libraries"] = recommended_names
 
-        # Ensure recommended libraries are imported/loaded into the session so they can be applied to search order
         for lib in recommended_names:
             try:
-                # Force switch if conflicting web libraries
                 session.import_library(lib, force=True)
             except Exception as e:
                 logger.debug(f"Could not import {lib} into session {session_id}: {e}")
 
-        # Prefer available libraries first if we have that info, else use all recommendations
-        preferred = (
-            availability_info.get("available_libraries", [])
+        available_set = set(
+            (availability_info.get("available_libraries") or [])
             if availability_info
-            else recommended_names
+            else []
         )
-        # If explicit preference exists, ensure it leads and resolve web conflicts in preferred list as well
-        if explicit:
-            # Put explicit first
-            preferred = [explicit] + [n for n in preferred if n != explicit]
-            # Resolve Browser/Selenium conflict
-            if explicit == "SeleniumLibrary":
-                preferred = [n for n in preferred if n != "Browser"]
-            if explicit == "Browser":
-                preferred = [n for n in preferred if n != "SeleniumLibrary"]
-        # Merge with existing order while preserving priority
-        new_order = list(
-            dict.fromkeys(
-                preferred + [lib for lib in old_order if lib not in preferred]
-            )
-        )
-        session.set_library_search_order(new_order)
 
-        result["session_setup"] = {
+        rf_mgr = get_rf_native_context_manager()
+        processed: set[str] = set()
+        for entry in recommendations:
+            name = entry.get("library_name")
+            if not name or name in processed:
+                continue
+            processed.add(name)
+            if entry.get("is_builtin"):
+                continue
+            if availability_info and name not in available_set:
+                continue
+            try:
+                import_result = rf_mgr.import_library_for_session(
+                    session_id, name, args=(), alias=None
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                auto_import_errors.append({"library": name, "error": str(exc)})
+                continue
+            if import_result.get("success"):
+                auto_imported.append(name)
+            else:
+                auto_import_errors.append(
+                    {"library": name, "error": import_result.get("error")}
+                )
+
+        session_setup_info: Dict[str, Any] = {
             "session_id": session_id,
-            "old_search_order": old_order,
-            "new_search_order": new_order,
-            "applied": True,
+            "auto_imports": {
+                "imported": auto_imported,
+                "errors": auto_import_errors,
+            },
         }
+
+        if apply_search_order:
+            old_order = session.get_search_order()
+            preferred = (
+                availability_info.get("available_libraries", [])
+                if availability_info
+                else recommended_names
+            )
+            if explicit:
+                preferred = [explicit] + [n for n in preferred if n != explicit]
+                if explicit == "SeleniumLibrary":
+                    preferred = [n for n in preferred if n != "Browser"]
+                if explicit == "Browser":
+                    preferred = [n for n in preferred if n != "SeleniumLibrary"]
+            new_order = list(
+                dict.fromkeys(
+                    preferred + [lib for lib in old_order if lib not in preferred]
+                )
+            )
+            session.set_library_search_order(new_order)
+            session_setup_info.update(
+                {
+                    "old_search_order": old_order,
+                    "new_search_order": new_order,
+                    "applied": True,
+                }
+            )
+        else:
+            session_setup_info["applied"] = False
+
+        result["session_setup"] = session_setup_info
 
     return result
 

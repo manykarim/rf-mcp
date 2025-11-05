@@ -1,0 +1,4 @@
+{
+  "module": "rfmcp_doctest_plugin.visual",
+  "class": "DocTestVisualPlugin"
+}

@@ -33,6 +33,8 @@ class KeywordDiscovery:
             version=getattr(instance, '__version__', getattr(instance, 'ROBOT_LIBRARY_VERSION', '')),
             scope=getattr(instance, 'ROBOT_LIBRARY_SCOPE', 'SUITE')
         )
+
+        auto_keywords = getattr(instance, 'ROBOT_AUTO_KEYWORDS', True)
         
         # Get all public methods that could be keywords
         for attr_name in dir(instance):
@@ -41,11 +43,22 @@ class KeywordDiscovery:
             
             try:
                 attr = getattr(instance, attr_name)
-                if not callable(attr):
+                if not inspect.isroutine(attr):
                     continue
-                
-                # Convert method name to Robot Framework keyword format
-                keyword_name = self.method_to_keyword_name(attr_name)
+
+                decorated = any(
+                    hasattr(attr, marker)
+                    for marker in ('robot_name', 'robot_tags', 'robot_types')
+                )
+                robot_name_attr = getattr(attr, 'robot_name', None)
+
+                # Respect ROBOT_AUTO_KEYWORDS flag: when disabled, only include decorated keywords
+                if decorated:
+                    keyword_name = robot_name_attr or self.method_to_keyword_name(attr_name)
+                elif auto_keywords:
+                    keyword_name = self.method_to_keyword_name(attr_name)
+                else:
+                    continue
                 
                 # Extract keyword information
                 keyword_info = self.extract_keyword_info(library_name, keyword_name, attr_name, attr)
@@ -296,9 +309,11 @@ class KeywordDiscovery:
     
     def get_keywords_by_library(self, library_name: str) -> List[KeywordInfo]:
         """Get all keywords from a specific library."""
-        library_prefix = f"{library_name.lower()}."
-        return [info for key, info in self.keyword_cache.items() 
-                if key.startswith(library_prefix) or info.library == library_name]
+        results: Dict[str, KeywordInfo] = {}
+        for info in self.keyword_cache.values():
+            if info.library == library_name:
+                results[info.name.lower()] = info
+        return list(results.values())
     
     def get_all_keywords(self) -> List[KeywordInfo]:
         """Get all cached keywords."""
