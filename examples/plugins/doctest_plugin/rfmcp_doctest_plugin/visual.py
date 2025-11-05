@@ -7,8 +7,15 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-import imageio.v2 as imageio
-import numpy as np
+try:  # Optional dependency for artifact serialization
+    import imageio.v2 as imageio
+except ImportError:  # pragma: no cover - optional runtime dependency
+    imageio = None  # type: ignore[assignment]
+
+try:  # Optional dependency for artifact serialization
+    import numpy as np
+except ImportError:  # pragma: no cover - optional runtime dependency
+    np = None  # type: ignore[assignment]
 from robot.libraries.BuiltIn import BuiltIn
 
 from robotmcp.plugins.base import StaticLibraryPlugin
@@ -338,6 +345,9 @@ class DocTestVisualPlugin(StaticLibraryPlugin):
         return info
 
     def _write_image(self, image: Any, label: str) -> Optional[str]:
+        if imageio is None or np is None:
+            return None
+
         try:
             array = np.asarray(image)
             if array.ndim == 2:
