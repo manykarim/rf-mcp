@@ -50,7 +50,9 @@ def coverage(_context):
             "--junitxml=results/pytest.xml",
         ]
     )
-    _run(["uv", "run", "coverage", "combine"])
+    parallel_data = list(ROOT.glob(".coverage.*"))
+    if parallel_data:
+        _run(["uv", "run", "coverage", "combine"])
     _run(["uv", "run", "coverage", "report"])
     _run(["uv", "run", "coverage", "html", "-d", "results/htmlcov"])
     _run(["uv", "run", "coverage", "xml", "-o", "results/coverage.xml"])
