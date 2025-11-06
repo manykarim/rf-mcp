@@ -86,15 +86,7 @@ jobs:
         run: |
           uv run coverage erase
           uv run coverage run -m pytest tests/ --junitxml=results/pytest.xml
-          uv run python - <<'PY'
-import glob
-import subprocess
-
-if glob.glob(".coverage.*"):
-    subprocess.run(["coverage", "combine"], check=True)
-else:
-    print("No parallel coverage files found; skipping 'coverage combine'.")
-PY
+          uv run python -c "import glob, subprocess; files = glob.glob('.coverage.*'); subprocess.run(['coverage', 'combine'], check=True) if files else print('No parallel coverage files found; skipping coverage combine.')"
           uv run coverage report
           uv run coverage html -d results/htmlcov
           uv run coverage xml -o results/coverage.xml
