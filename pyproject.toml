@@ -52,7 +52,9 @@ dev = [
     "mypy>=1.0.0",
     "pre-commit>=2.20.0",
     "python-dotenv>=1.0.1",
-    "openai>=1.51.0"
+    "openai>=1.51.0",
+    "coverage[toml]>=7.6.0",
+    "invoke>=2.2.0"
 ]
 
 [project.urls]
@@ -97,4 +99,14 @@ dev = [
     "pytest-playwright>=0.7.1",
     "openai>=1.51.0",
     "python-dotenv>=1.0.1",
+    "coverage[toml]>=7.6.0",
+    "invoke>=2.2.0",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["src/robotmcp"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

@@ -130,18 +130,6 @@ class TestMCPErrorScenarios:
         elif "unavailable" in result.data:
             assert "FakeLibrary123" in result.data["unavailable"]
 
-    @pytest.mark.asyncio
-    async def test_get_library_status_nonexistent(self, mcp_client):
-        pytest.skip("get_library_status tool is disabled in this build")
-        """Test getting status of non-existent library."""
-        result = await mcp_client.call_tool(
-            "get_library_status",
-            {"library_name": "NonExistentLibrary123"}
-        )
-        
-        assert isinstance(result.data, dict)
-        # Handle different possible response structures
-        assert ("available" in result.data or "status" in result.data or "library_name" in result.data)
 
     @pytest.mark.asyncio
     async def test_get_session_state_invalid_session(self, mcp_client):
@@ -236,20 +224,13 @@ class TestMCPErrorScenarios:
         # Might succeed with empty suite or provide appropriate feedback
 
     @pytest.mark.asyncio
-    async def test_validate_scenario_malformed_input(self, mcp_client):
-        """Test validate_scenario with malformed input."""
-        pytest.xfail("validate_scenario tool not listed in this build")
-        malformed_scenario = {
-            "invalid_structure": "this is not a proper scenario"
-        }
-        
-        result = await mcp_client.call_tool(
-            "validate_scenario",
-            {"parsed_scenario": malformed_scenario}
-        )
-        
-        # Should handle malformed input gracefully
-        assert isinstance(result.data, dict)
+    async def test_validate_scenario_tool_missing(self, mcp_client):
+        """Ensure legacy validate_scenario tool is absent."""
+        malformed_scenario = {"invalid_structure": "this is not a proper scenario"}
+        with pytest.raises(Exception):
+            await mcp_client.call_tool(
+                "validate_scenario", {"parsed_scenario": malformed_scenario}
+            )
 
     @pytest.mark.asyncio
     async def test_recommend_libraries_invalid_context(self, mcp_client):
@@ -265,21 +246,18 @@ class TestMCPErrorScenarios:
         # Should still provide recommendations or handle gracefully
         assert isinstance(result.data, dict)
 
-    @pytest.mark.xfail(reason="suggest_next_step tool not listed in this build", strict=False)
     @pytest.mark.asyncio
-    async def test_suggest_next_step_empty_state(self, mcp_client):
-        """Test suggesting next step with empty/invalid state."""
-        result = await mcp_client.call_tool(
-            "suggest_next_step",
-            {
-                "current_state": {},
-                "test_objective": "",
-                "session_id": "empty_suggestion_test"
-            }
-        )
-        
-        # Should handle empty inputs gracefully
-        assert isinstance(result.data, dict)
+    async def test_suggest_next_step_tool_missing(self, mcp_client):
+        """Ensure legacy suggest_next_step tool is absent."""
+        with pytest.raises(Exception):
+            await mcp_client.call_tool(
+                "suggest_next_step",
+                {
+                    "current_state": {},
+                    "test_objective": "",
+                    "session_id": "empty_suggestion_test",
+                },
+            )
 
     # TOOL DISABLED: validate_step_before_suite
     # This tool has been disabled due to functional redundancy with execute_step().
@@ -320,18 +298,13 @@ class TestMCPErrorScenarios:
         assert resolution.get("resolved_session_id")
 
     @pytest.mark.asyncio
-    async def test_validate_test_readiness_empty_session(self, mcp_client):
-        """Test validating test readiness for empty session."""
-        pytest.skip("validate_test_readiness tool is disabled in this build")
-        result = await mcp_client.call_tool(
-            "validate_test_readiness",
-            {"session_id": "empty_readiness_session_123"}
-        )
-        
-        # Should indicate not ready
-        assert isinstance(result.data, dict)
-        # Handle different possible response structures
-        assert ("ready" in result.data or "ready_for_suite_generation" in result.data or "guidance" in result.data)
+    async def test_validate_test_readiness_tool_missing(self, mcp_client):
+        """Ensure legacy validate_test_readiness tool is absent."""
+        with pytest.raises(Exception):
+            await mcp_client.call_tool(
+                "validate_test_readiness",
+                {"session_id": "empty_readiness_session_123"},
+            )
 
     @pytest.mark.asyncio
     async def test_execute_step_invalid_arguments(self, mcp_client):
