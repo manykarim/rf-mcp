@@ -127,8 +127,6 @@ pip install rf-mcp[api]       # RequestsLibrary
 pip install rf-mcp[database]  # DatabaseLibrary
 pip install rf-mcp[frontend]  # Django-based web frontend dashboard
 pip install rf-mcp[all]       # All optional Robot Framework libraries
-# Run the optional frontend alongside MCP
-python -m robotmcp.server --with-frontend
 
 # Browser Library still needs Playwright browsers
 rfbrowser init
@@ -161,7 +159,7 @@ pip install -e .
 
 If you are using a virtual environment (venv) for your project, I recommend to install the `rf-mcp` package within the same venv.
 
----
+--- 
 
 ## 🔌 Library Plugins
 
@@ -172,6 +170,29 @@ Extend RobotMCP with custom libraries via the plugin system. Two discovery modes
 
 See the [Library Plugin Authoring Guide](docs/library-plugin-authoring.md) for detailed instructions and explore the sample plugin in [`examples/plugins/sample_plugin`](examples/plugins/sample_plugin/) to get started quickly.
 When starting the MCP server, make sure to use the Python interpreter from that venv.
+
+---
+
+## 🖥️ Frontend Dashboard
+
+RobotMCP ships with an optional Django-based dashboard that mirrors active sessions, keywords, and tool activity.
+
+![RobotMCP Frontend Dashboard](media/frontend.png)
+
+1. **Install frontend extras**
+   ```bash
+   pip install rf-mcp[frontend]
+   ```
+2. **Start the MCP server with the frontend enabled**
+   ```bash
+   uv run python -m robotmcp.server --with-frontend
+   ```
+   - Default URL: <http://127.0.0.1:8001/>
+   - Quick toggles: `--frontend-host`, `--frontend-port`, `--frontend-base-path`
+   - Environment equivalents: `ROBOTMCP_ENABLE_FRONTEND=1`, `ROBOTMCP_FRONTEND_HOST`, `ROBOTMCP_FRONTEND_PORT`, `ROBOTMCP_FRONTEND_BASE_PATH`, `ROBOTMCP_FRONTEND_DEBUG`
+3. **Connect your MCP client** (Cline, Claude Desktop, etc.) to the same server process—the dashboard automatically streams events once the session is active.
+
+To disable the dashboard for a given run, either omit the flag or pass `--without-frontend`.
 
 ---
 
