@@ -75,6 +75,7 @@ jobs:
           echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> $GITHUB_ENV
 
       - name: Run tests with coverage
+        shell: bash
         env:
           # Keep runner path enabled for RequestsLibrary in CI
           ROBOTMCP_RF_RUNNER_REQUESTS: '1'
@@ -85,7 +86,15 @@ jobs:
         run: |
           uv run coverage erase
           uv run coverage run -m pytest tests/ --junitxml=results/pytest.xml
-          uv run coverage combine
+          uv run python - <<'PY'
+import glob
+import subprocess
+
+if glob.glob(".coverage.*"):
+    subprocess.run(["coverage", "combine"], check=True)
+else:
+    print("No parallel coverage files found; skipping 'coverage combine'.")
+PY
           uv run coverage report
           uv run coverage html -d results/htmlcov
           uv run coverage xml -o results/coverage.xml
