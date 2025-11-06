@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 import os
+from dataclasses import asdict
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
@@ -359,108 +360,9 @@ def automate(scenario: str) -> str:
 
 
 @mcp.tool(
-    name="recommend_libraries_sampling_tool",
-    description="STEP 2 (planning): Recommend the best libraries for a scenario using sampling; returns prompt text and suggested sampling config.",
-)
-async def recommend_libraries_sampling_tool(
-    scenario: str,
-    k: int = 4,
-    available_libraries: List[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """Recommend the best Robot Framework libraries for a scenario (sampling-enabled).
-
-    Purpose:
-    - Produce a prioritized list of libraries with reasons and scores, chosen strictly
-      from the provided environment and tailored to the scenario. Use sampling to
-      generate diverse candidates, then select/merge with the chooser tool.
-
-    How to use:
-    - Call this tool to get the plain prompt text and a suggested sampling config.
-    - Use your model to generate k sampled recommendations from that prompt.
-    - Then call `choose_recommendations_tool` to merge/score into a final set.
-    - Follow with `check_library_availability`, `set_library_search_order`, then `execute_step`.
-
-    Arguments:
-    - scenario: Plain-language scenario to analyze.
-    - k: Number of samples to generate (e.g., 3–5).
-    - available_libraries: Array of objects with: name, description, categories,
-      requires_setup, setup_commands, use_cases, conflicts (optional).
-
-    Returns:
-    - success: True
-    - prompt: Prompt text for your model to sample against
-    - recommended_sampling: Suggested sampling config, e.g., {count: k, temperature: 0.4}
-    """
-    prompt_text = _build_recommend_libraries_sampling_prompt(
-        scenario, k, available_libraries
-    )
-    return {
-        "success": True,
-        "prompt": prompt_text,
-        "recommended_sampling": {"count": k, "temperature": 0.4},
-    }
-
-
-@mcp.tool(
-    name="choose_recommendations_tool",
-    description="STEP 2b (selection): Merge/score sampled recommendation payloads into a final prioritized set before availability checks.",
-)
-async def choose_recommendations_tool(
-    candidates: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-    """Choose/merge sampled recommender outputs into a final recommendation set.
-
-    Purpose:
-    - Turn multiple sampled recommendation payloads into a single, deduplicated,
-      conflict‑resolved, prioritized list with normalized scores.
-
-    How to use:
-    - Call this tool to get the chooser prompt text, then use your model to produce
-      the final set from the provided candidates. Proceed to `check_library_availability`
-      and `set_library_search_order`.
-
-    Arguments:
-    - candidates: List of sampled recommendation payloads (objects with a `recommendations`
-      array of {name, reason, score} and optional `conflicts`).
-
-    Returns:
-    - success: True
-    - prompt: Chooser prompt text for your model
-    """
-    prompt_text = _build_choose_recommendations_prompt(candidates)
-    return {
-        "success": True,
-        "prompt": prompt_text,
-    }
-
-
-@mcp.tool(
-    name="list_available_libraries_for_prompt",
-    description="Emit the available_libraries payload shaped for the sampling recommender (names, descriptions, categories, setup flags).",
-)
-async def list_available_libraries_for_prompt() -> Dict[str, Any]:
-    """List available libraries formatted for recommend_libraries_sampling.
-
-    Produces an array of library objects containing fields referenced by the
-    sampling prompt: name, description, categories, requires_setup, setup_commands,
-    use_cases, conflicts (optional), platform_requirements, dependencies, is_builtin.
-
-    Returns:
-    - success: True
-    - available_libraries: Array of library objects suitable for the sampling prompt
-    """
-    from robotmcp.config.library_registry import get_recommendation_info
-
-    libs = get_recommendation_info()
-    # Add an explicit empty conflicts field for consistency in prompts
-    for lib in libs:
-        lib.setdefault("conflicts", [])
-    return {"success": True, "available_libraries": libs}
-
-
-@mcp.tool(
     name="list_library_plugins",
     description="List discovered library plugins with basic metadata.",
+    enabled=False,
 )
 async def list_library_plugins() -> Dict[str, Any]:
     """Return a summary of every loaded library plugin."""
@@ -491,6 +393,7 @@ async def list_library_plugins() -> Dict[str, Any]:
 @mcp.tool(
     name="reload_library_plugins",
     description="Reload library plugins from builtin definitions, entry points, and manifests.",
+    enabled=False,
 )
 async def reload_library_plugins_tool(
     manifest_paths: Optional[List[str]] = None,
@@ -508,6 +411,7 @@ async def reload_library_plugins_tool(
 @mcp.tool(
     name="diagnose_library_plugin",
     description="Inspect metadata, capabilities, and hooks for a specific library plugin.",
+    enabled=False,
 )
 async def diagnose_library_plugin(plugin_name: str) -> Dict[str, Any]:
     """Return detailed information about a specific library plugin."""
@@ -577,36 +481,123 @@ async def diagnose_library_plugin(plugin_name: str) -> Dict[str, Any]:
 
 
 @mcp.tool
+async def manage_library_plugins(
+    action: str = "list", plugin_name: str | None = None
+) -> Dict[str, Any]:
+    """Consolidated plugin management entry point.
+
+    Args:
+        action: 'list', 'reload', or 'diagnose'.
+        plugin_name: Required when using action='diagnose'.
+    """
+
+    action_norm = (action or "list").strip().lower()
+    manager = get_library_plugin_manager()
+
+    def _plugin_payload(name: str) -> Dict[str, Any]:
+        metadata = manager.get_metadata(name)
+        plugin = manager.get_plugin(name)
+        capabilities = manager.get_capabilities(name)
+        install_actions = manager.get_install_actions(name)
+        hints = manager.get_hints(name)
+        prompts = manager.get_prompt_bundle(name)
+        return {
+            "name": name,
+            "metadata": asdict(metadata) if metadata else None,
+            "capabilities": asdict(capabilities) if capabilities else None,
+            "install_actions": [asdict(action) for action in install_actions],
+            "hints": asdict(hints) if hints else None,
+            "prompts": asdict(prompts) if prompts else None,
+            "source": manager.get_plugin_source(name),
+            "has_plugin": plugin is not None,
+        }
+
+    def _dump_plugins() -> List[Dict[str, Any]]:
+        library_registry.get_all_libraries()
+        items: List[Dict[str, Any]] = []
+        for name in manager.list_plugin_names():
+            items.append(_plugin_payload(name))
+        return items
+
+    if action_norm == "list":
+        return {"success": True, "action": "list", "plugins": _dump_plugins()}
+    if action_norm == "reload":
+        reload_result = library_registry.reload_library_plugins()
+        return {
+            "success": True,
+            "action": "reload",
+            "reload_result": reload_result,
+            "plugins": _dump_plugins(),
+        }
+    if action_norm == "diagnose":
+        if not plugin_name:
+            return {
+                "success": False,
+                "error": "plugin_name is required for action='diagnose'",
+                "action": "diagnose",
+            }
+        if plugin_name not in manager.list_plugin_names():
+            return {
+                "success": False,
+                "error": f"Plugin '{plugin_name}' not found",
+                "action": "diagnose",
+            }
+        return {
+            "success": True,
+            "action": "diagnose",
+            "plugin": _plugin_payload(plugin_name),
+        }
+    return {"success": False, "error": f"Unsupported action '{action}'"}
+
+
+@mcp.tool
 async def recommend_libraries(
     scenario: str,
     context: str = "web",
+    session_id: str | None = None,
     max_recommendations: int = 5,
-    session_id: str = None,
     check_availability: bool = True,
     apply_search_order: bool = True,
+    mode: str = "direct",
+    samples: List[Dict[str, Any]] | None = None,
+    k: int | None = None,
+    available_libraries: List[Dict[str, Any]] | None = None,
 ) -> Dict[str, Any]:
-    """Recommend Robot Framework libraries for a scenario and optionally apply them.
+    """Recommend libraries, generate sampling prompts, or merge sampled payloads."""
 
-    Returns a prioritized list of recommended Robot Framework libraries based on
-    the scenario description and context. Can also check availability and, when a
-    session_id is provided, apply the recommended search order to that session.
+    mode_norm = (mode or "direct").strip().lower()
+    if mode_norm in {"sampling", "sampling_prompt"}:
+        from robotmcp.config.library_registry import get_recommendation_info
 
-    Args:
-        scenario: Scenario description.
-        context: Testing context (web, mobile, api, data, etc.).
-        max_recommendations: Max number of libraries to return.
-        session_id: If provided, apply the search order to this session.
-        check_availability: When True, includes availability and install suggestions.
-        apply_search_order: When True and session_id provided, sets session search order.
+        libs = available_libraries or get_recommendation_info()
+        for lib in libs:
+            lib.setdefault("conflicts", [])
+        sample_count = k or 4
+        prompt_text = _build_recommend_libraries_sampling_prompt(
+            scenario, sample_count, libs
+        )
+        return {
+            "success": True,
+            "mode": "sampling_prompt",
+            "prompt": prompt_text,
+            "available_libraries": libs,
+            "recommended_sampling": {"count": sample_count, "temperature": 0.4},
+        }
 
-    Returns:
-        - success: True on success
-        - recommended_libraries: Ordered list of library names (primary output)
-        - recommendations: Detailed entries (name, rationale, confidence, etc.)
-        - availability: When requested, available/missing lists and installation suggestions
-        - session_setup: When applied, session_id and resulting search order
-    """
-    # 1) Compute recommendations deterministically
+    if mode_norm in {"merge", "merge_samples"}:
+        if not samples:
+            return {
+                "success": False,
+                "mode": "merge_samples",
+                "error": "samples are required when mode='merge_samples'",
+            }
+        prompt_text = _build_choose_recommendations_prompt(samples)
+        return {
+            "success": True,
+            "mode": "merge_samples",
+            "prompt": prompt_text,
+        }
+
     rec = library_recommender.recommend_libraries(
         scenario, context=context, max_recommendations=max_recommendations
     )
@@ -620,13 +611,13 @@ async def recommend_libraries(
 
     result: Dict[str, Any] = {
         "success": True,
+        "mode": "direct",
         "scenario": scenario,
         "context": context,
         "recommended_libraries": recommended_names,
         "recommendations": recommendations,
     }
 
-    # 2) Optionally check availability
     availability_info = None
     if check_availability and recommended_names:
         availability_info = execution_engine.check_library_requirements(
@@ -825,10 +816,91 @@ async def analyze_scenario(
         f"Session '{session_id}' configured: type={session.session_type.value}, preference={session.explicit_library_preference}"
     )
 
+    result["session_id"] = session_id
+
     return result
 
 
 @mcp.tool
+async def find_keywords(
+    query: str,
+    strategy: str = "semantic",
+    context: str = "web",
+    session_id: str | None = None,
+    library_name: str | None = None,
+    current_state: Dict[str, Any] | None = None,
+    limit: int | None = None,
+) -> Dict[str, Any]:
+    """Unified keyword discovery across semantic, pattern, catalog, and session scopes."""
+
+    strategy_norm = (strategy or "semantic").strip().lower()
+    current_state = current_state or {}
+    limit_value: int | None = None
+    if limit is not None:
+        try:
+            limit_value = int(limit)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            limit_value = None
+
+    if strategy_norm in {"semantic", "intent"}:
+        discovery = await keyword_matcher.discover_keywords(
+            query, context, current_state
+        )
+        return {
+            "success": bool(discovery.get("success", True)),
+            "strategy": "semantic",
+            "query": query,
+            "result": discovery,
+        }
+
+    if strategy_norm in {"pattern", "search"}:
+        await _ensure_all_session_libraries_loaded()
+        matches = execution_engine.search_keywords(query)
+        if limit_value is not None:
+            matches = matches[:limit_value]
+        return {
+            "success": True,
+            "strategy": "pattern",
+            "query": query,
+            "results": matches,
+        }
+
+    if strategy_norm in {"catalog", "library"}:
+        await _ensure_all_session_libraries_loaded()
+        catalog = execution_engine.get_available_keywords(library_name)
+        if query:
+            lowered = query.lower()
+            catalog = [
+                item
+                for item in catalog
+                if lowered in (item.get("name") or "").lower()
+                or lowered in (item.get("library") or "").lower()
+            ]
+        if limit_value is not None:
+            catalog = catalog[:limit_value]
+        return {
+            "success": True,
+            "strategy": "catalog",
+            "query": query,
+            "library": library_name,
+            "results": catalog,
+        }
+
+    if strategy_norm in {"session", "namespace"}:
+        if not session_id:
+            return {
+                "success": False,
+                "error": "session_id is required when strategy='session'",
+            }
+        mgr = get_rf_native_context_manager()
+        payload = mgr.list_available_keywords(session_id)
+        payload.update({"strategy": "session", "query": query})
+        return payload
+
+    return {"success": False, "error": f"Unsupported strategy '{strategy}'"}
+
+
+@mcp.tool(enabled=False)
 async def discover_keywords(
     action_description: str, context: str = "web", current_state: Dict[str, Any] = None
 ) -> Dict[str, Any]:
@@ -847,6 +919,283 @@ async def discover_keywords(
 
 
 @mcp.tool
+async def manage_session(
+    action: str,
+    session_id: str,
+    libraries: List[str] | None = None,
+    variables: Dict[str, Any] | List[str] | None = None,
+    resource_path: str | None = None,
+    library_name: str | None = None,
+    args: List[str] | None = None,
+    alias: str | None = None,
+    scope: str = "test",
+) -> Dict[str, Any]:
+    """Consolidated session management (initialize, import, set variables)."""
+
+    action_norm = (action or "").strip().lower()
+    session = execution_engine.session_manager.get_or_create_session(session_id)
+
+    if action_norm in {"init", "initialize", "bootstrap"}:
+        loaded: List[str] = []
+        problems: List[Dict[str, Any]] = []
+
+        if libraries:
+            for library in libraries:
+                try:
+                    session.import_library(library)
+                    session.loaded_libraries.add(library)
+                    loaded.append(library)
+                except Exception as lib_error:
+                    problems.append({"library": library, "error": str(lib_error)})
+
+        set_vars: List[str] = []
+        if variables:
+            if isinstance(variables, dict):
+                iterable = variables.items()
+            else:
+                iterable = []
+                for item in variables:
+                    if isinstance(item, str) and "=" in item:
+                        name, value = item.split("=", 1)
+                        iterable.append((name, value))
+            for name, value in iterable:
+                key = name if name.startswith("${") else f"${{{name}}}"
+                session.set_variable(key, value)
+                set_vars.append(name)
+
+        return {
+            "success": True,
+            "action": "init",
+            "session_id": session_id,
+            "libraries_loaded": list(session.loaded_libraries),
+            "variables_set": set_vars,
+            "import_issues": problems,
+            "note": "Context mode is managed via session namespace; use execute_step(use_context=True) when needed.",
+        }
+
+    if action_norm in {"import_resource", "resource"}:
+        if not resource_path:
+            return {"success": False, "error": "resource_path is required"}
+
+        def _local_call() -> Dict[str, Any]:
+            mgr = get_rf_native_context_manager()
+            return mgr.import_resource_for_session(session_id, resource_path)
+
+        def _external_call(client: ExternalRFClient) -> Dict[str, Any]:
+            return client.import_resource(resource_path)
+
+        result = _call_attach_tool_with_fallback(
+            "import_resource", _external_call, _local_call
+        )
+        result.update({"action": "import_resource", "session_id": session_id})
+        return result
+
+    if action_norm in {"import_library", "library"}:
+        if not library_name:
+            return {"success": False, "error": "library_name is required"}
+
+        def _local_call() -> Dict[str, Any]:
+            mgr = get_rf_native_context_manager()
+            return mgr.import_library_for_session(
+                session_id, library_name, tuple(args or ()), alias
+            )
+
+        def _external_call(client: ExternalRFClient) -> Dict[str, Any]:
+            return client.import_library(library_name, list(args or ()), alias)
+
+        result = _call_attach_tool_with_fallback(
+            "import_custom_library", _external_call, _local_call
+        )
+        result.update({"action": "import_library", "session_id": session_id})
+        return result
+
+    if action_norm in {"set_variables", "variables"}:
+        data: Dict[str, Any] = {}
+        if isinstance(variables, dict):
+            data = variables
+        elif isinstance(variables, list):
+            for item in variables:
+                if isinstance(item, str) and "=" in item:
+                    name, value = item.split("=", 1)
+                    data[name.strip()] = value
+
+        set_kw = {
+            "test": "Set Test Variable",
+            "suite": "Set Suite Variable",
+            "global": "Set Global Variable",
+        }.get(scope.lower(), "Set Test Variable")
+
+        results: Dict[str, bool] = {}
+        client = _get_external_client_if_configured()
+        if client is not None:
+            for name, value in data.items():
+                try:
+                    resp = client.set_variable(name, value)
+                    results[name] = bool(resp.get("success"))
+                except Exception:
+                    results[name] = False
+            return {
+                "success": all(results.values()),
+                "action": "set_variables",
+                "session_id": session_id,
+                "set": list(results.keys()),
+                "scope": scope,
+                "external": True,
+            }
+
+        for name, value in data.items():
+            res = await execution_engine.execute_step(
+                set_kw,
+                [f"${{{name}}}", value],
+                session_id,
+                detail_level="minimal",
+                use_context=True,
+            )
+            results[name] = bool(res.get("success"))
+
+        return {
+            "success": all(results.values()),
+            "action": "set_variables",
+            "session_id": session_id,
+            "set": list(results.keys()),
+            "scope": scope,
+        }
+
+    return {"success": False, "error": f"Unsupported action '{action}'"}
+
+
+def _chunk_string(value: str, size: int) -> List[str]:
+    if size <= 0:
+        size = 65536
+    return [value[i : i + size] for i in range(0, len(value), size)]
+
+
+@mcp.tool
+async def execute_flow(
+    structure: str,
+    session_id: str,
+    condition: str | None = None,
+    then_steps: List[Dict[str, Any]] | None = None,
+    else_steps: List[Dict[str, Any]] | None = None,
+    items: List[Any] | None = None,
+    item_var: str = "item",
+    stop_on_failure: bool = True,
+    max_iterations: int = 1000,
+    try_steps: List[Dict[str, Any]] | None = None,
+    except_patterns: List[str] | None = None,
+    except_steps: List[Dict[str, Any]] | None = None,
+    finally_steps: List[Dict[str, Any]] | None = None,
+    rethrow: bool = False,
+) -> Dict[str, Any]:
+    """Unified flow control wrapper over if/for/try structures."""
+
+    structure_norm = (structure or "").strip().lower()
+
+    if structure_norm in {"if", "conditional"}:
+        return await _execute_if_impl(
+            session_id=session_id,
+            condition=condition or "",
+            then_steps=then_steps or [],
+            else_steps=else_steps or [],
+            stop_on_failure=stop_on_failure,
+        )
+
+    if structure_norm in {"for", "foreach", "for_each"}:
+        return await _execute_for_each_impl(
+            session_id=session_id,
+            items=items or [],
+            steps=then_steps or [],
+            item_var=item_var,
+            stop_on_failure=stop_on_failure,
+            max_iterations=max_iterations,
+        )
+
+    if structure_norm in {"try", "try_except", "trycatch"}:
+        return await _execute_try_except_impl(
+            session_id=session_id,
+            try_steps=try_steps or [],
+            except_patterns=except_patterns or [],
+            except_steps=except_steps or [],
+            finally_steps=finally_steps or [],
+            rethrow=rethrow,
+        )
+
+    return {"success": False, "error": f"Unsupported flow structure '{structure}'"}
+
+
+@mcp.tool
+async def get_session_state(
+    session_id: str,
+    sections: List[str] | None = None,
+    state_type: str = "all",
+    elements_of_interest: List[str] | None = None,
+    page_source_filtered: bool = False,
+    page_source_filtering_level: str = "standard",
+    include_reduced_dom: bool = True,
+    include_dom_stream: bool = False,
+    dom_chunk_size: int = 65536,
+) -> Dict[str, Any]:
+    """Aggregate session insight into a single payload."""
+
+    sections = sections or ["summary", "page_source", "variables"]
+    requested = {s.lower() for s in sections}
+    payload: Dict[str, Any] = {
+        "success": True,
+        "session_id": session_id,
+        "sections": {},
+        "requested": sections,
+    }
+
+    if "summary" in requested:
+        summary = await _get_session_info_payload(session_id)
+        payload["sections"]["summary"] = summary
+
+    if "application_state" in requested or "state" in requested:
+        app_state = await _get_application_state_payload(
+            state_type=state_type,
+            elements_of_interest=elements_of_interest or [],
+            session_id=session_id,
+        )
+        payload["sections"]["application_state"] = app_state
+
+    if "page_source" in requested:
+        page_source = await _get_page_source_payload(
+            session_id=session_id,
+            full_source=not page_source_filtered,
+            filtered=page_source_filtered,
+            filtering_level=page_source_filtering_level,
+            include_reduced_dom=include_reduced_dom,
+        )
+        if (
+            include_dom_stream
+            and isinstance(page_source, dict)
+            and isinstance(page_source.get("page_source"), str)
+        ):
+            page_source["page_source_stream"] = _chunk_string(
+                page_source["page_source"], max(int(dom_chunk_size), 1024)
+            )
+        payload["sections"]["page_source"] = page_source
+
+    if "variables" in requested:
+        variables = await _get_context_variables_payload(session_id)
+        payload["sections"]["variables"] = variables
+
+    if "validation" in requested:
+        validation = await _get_session_validation_status_payload(session_id)
+        payload["sections"]["validation"] = validation
+
+    if "libraries" in requested:
+        libraries = await _get_loaded_libraries_payload()
+        payload["sections"]["libraries"] = libraries
+
+    if "rf_context" in requested or "context" in requested:
+        rf_context = await _diagnose_rf_context_payload(session_id)
+        payload["sections"]["rf_context"] = rf_context
+
+    return payload
+
+
+@mcp.tool
 async def execute_step(
     keyword: str,
     arguments: List[str] = None,
@@ -856,6 +1205,8 @@ async def execute_step(
     scenario_hint: str = None,
     assign_to: Union[str, List[str]] = None,
     use_context: bool | None = None,
+    mode: str = "keyword",
+    expression: str | None = None,
 ) -> Dict[str, Any]:
     """Execute a single test step using Robot Framework API.
 
@@ -883,22 +1234,43 @@ async def execute_step(
         use_context: If True, executes within full RF context (maintains variables, state across calls).
                     This enables proper variable scoping, built-in keyword functionality, and
                     library state persistence.
+        mode: 'keyword' (default) runs the provided keyword name; 'evaluate' executes a BuiltIn.Evaluate call.
+        expression: Optional expression used when mode='evaluate'. Falls back to keyword or first argument.
     """
-    if arguments is None:
-        arguments = []
+    arguments = list(arguments or [])
+    mode_norm = (mode or "keyword").strip().lower()
+    keyword_to_run = keyword
+
+    if mode_norm == "evaluate":
+        expr = expression
+        if expr is None:
+            if arguments:
+                expr = arguments[0]
+            elif keyword:
+                expr = keyword
+        if not expr:
+            return {
+                "success": False,
+                "error": "expression is required when mode='evaluate'",
+                "mode": mode_norm,
+            }
+        keyword_to_run = "Evaluate"
+        arguments = [expr]
+        if use_context is None:
+            use_context = True
 
     # Determine routing based on attach mode and default settings
     client = _get_external_client_if_configured()
     effective_use_context, mode, strict = _compute_effective_use_context(
-        use_context, client, keyword
+        use_context, client, keyword_to_run
     )
 
     # External routing path
     if client is not None and effective_use_context:
         logger.info(
-            f"ATTACH mode: routing execute_step '{keyword}' to bridge at {client.host}:{client.port}"
+            f"ATTACH mode: routing execute_step '{keyword_to_run}' to bridge at {client.host}:{client.port}"
         )
-        attach_resp = client.run_keyword(keyword, arguments, assign_to)
+        attach_resp = client.run_keyword(keyword_to_run, arguments, assign_to)
         if not attach_resp.get("success"):
             err = attach_resp.get("error", "attach call failed")
             logger.error(f"ATTACH mode error: {err}")
@@ -911,16 +1283,17 @@ async def execute_step(
         else:
             return {
                 "success": True,
-                "keyword": keyword,
+                "keyword": keyword_to_run,
                 "arguments": arguments,
                 "assign_to": assign_to,
+                "mode": mode_norm,
                 "result": attach_resp.get("result"),
                 "assigned": attach_resp.get("assigned"),
             }
 
     # Local execution path
     result = await execution_engine.execute_step(
-        keyword,
+        keyword_to_run,
         arguments,
         session_id,
         detail_level,
@@ -956,10 +1329,24 @@ async def execute_step(
 
         raise Exception(detailed_error)
 
+    result["mode"] = mode_norm
+    result.setdefault("keyword", keyword_to_run)
     return result
 
 
-@mcp.tool
+async def _get_application_state_payload(
+    state_type: str = "all",
+    elements_of_interest: List[str] | None = None,
+    session_id: str = "default",
+) -> Dict[str, Any]:
+    if elements_of_interest is None:
+        elements_of_interest = []
+    return await state_manager.get_state(
+        state_type, elements_of_interest, session_id, execution_engine
+    )
+
+
+@mcp.tool(enabled=False)
 async def get_application_state(
     state_type: str = "all",
     elements_of_interest: List[str] = None,
@@ -972,10 +1359,10 @@ async def get_application_state(
         elements_of_interest: Specific elements to focus on
         session_id: Session identifier
     """
-    if elements_of_interest is None:
-        elements_of_interest = []
-    return await state_manager.get_state(
-        state_type, elements_of_interest, session_id, execution_engine
+    return await _get_application_state_payload(
+        state_type=state_type,
+        elements_of_interest=elements_of_interest,
+        session_id=session_id,
     )
 
 
@@ -1101,31 +1488,13 @@ async def validate_scenario(
 # Note: Removed legacy disabled recommend_libraries_ tool to avoid confusion.
 
 
-@mcp.tool
-async def get_page_source(
+async def _get_page_source_payload(
     session_id: str = "default",
     full_source: bool = False,
     filtered: bool = False,
     filtering_level: str = "standard",
     include_reduced_dom: bool = True,
 ) -> Dict[str, Any]:
-    """Get page source and context for a browser session with optional DOM filtering.
-    Call this tool after opening a web page or when changes are done to the page.
-
-    Args:
-        session_id: Session identifier
-        full_source: If True, returns complete page source. If False, returns preview only.
-        filtered: If True, returns filtered page source with only automation-relevant content.
-        filtering_level: Filtering intensity when filtered=True:
-                        - 'minimal': Remove only scripts and styles
-                        - 'standard': Remove scripts, styles, metadata, SVG, embeds (default)
-                        - 'aggressive': Remove all non-interactive elements and media
-        include_reduced_dom: When True, capture Browser Library aria snapshot alongside HTML.
-
-    Returns:
-        Dict with page source, metadata, and filtering information. When filtered=True,
-        includes both original and filtered page source lengths for comparison.
-    """
     # Bridge path: try Browser.Get Page Source or SeleniumLibrary.Get Source in live debug session
     client = _get_external_client_if_configured()
     if client is not None:
@@ -1170,6 +1539,24 @@ async def get_page_source(
     )
 
 
+@mcp.tool(enabled=False)
+async def get_page_source(
+    session_id: str = "default",
+    full_source: bool = False,
+    filtered: bool = False,
+    filtering_level: str = "standard",
+    include_reduced_dom: bool = True,
+) -> Dict[str, Any]:
+    """Get page source and context for a browser session with optional DOM filtering."""
+    return await _get_page_source_payload(
+        session_id=session_id,
+        full_source=full_source,
+        filtered=filtered,
+        filtering_level=filtering_level,
+        include_reduced_dom=include_reduced_dom,
+    )
+
+
 @mcp.tool
 async def check_library_availability(libraries: List[str]) -> Dict[str, Any]:
     """Check if Robot Framework libraries are available before installation.
@@ -1202,7 +1589,10 @@ async def check_library_availability(libraries: List[str]) -> Dict[str, Any]:
         recommendations = await recommend_libraries(scenario_result["scenario"])
         availability = await check_library_availability(recommendations["recommended_libraries"])
     """
-    return execution_engine.check_library_requirements(libraries)
+    result = execution_engine.check_library_requirements(libraries)
+    if "success" not in result:
+        result["success"] = not bool(result.get("error"))
+    return result
 
 
 @mcp.tool(enabled=False)
@@ -1218,7 +1608,7 @@ async def get_library_status(library_name: str) -> Dict[str, Any]:
     return execution_engine.get_installation_status(library_name)
 
 
-@mcp.tool
+@mcp.tool(enabled=False)
 async def get_available_keywords(library_name: str = None) -> List[Dict[str, Any]]:
     """List available RF keywords with minimal metadata.
 
@@ -1237,7 +1627,7 @@ async def get_available_keywords(library_name: str = None) -> List[Dict[str, Any
     return execution_engine.get_available_keywords(library_name)
 
 
-@mcp.tool
+@mcp.tool(enabled=False)
 async def search_keywords(pattern: str) -> List[Dict[str, Any]]:
     """Search for Robot Framework keywords matching a pattern using native RF libdoc.
 
@@ -1302,7 +1692,7 @@ async def _run_steps_in_context(
     return results
 
 
-@mcp.tool
+@mcp.tool(enabled=False)
 async def evaluate_expression(
     session_id: str,
     expression: str,
@@ -1324,7 +1714,7 @@ async def evaluate_expression(
     return res
 
 
-@mcp.tool
+@mcp.tool(enabled=False)
 async def set_variables(
     session_id: str,
     variables: Dict[str, Any] | List[str],
@@ -1387,8 +1777,7 @@ async def set_variables(
     }
 
 
-@mcp.tool
-async def execute_if(
+async def _execute_if_impl(
     session_id: str,
     condition: str,
     then_steps: List[Dict[str, Any]],
@@ -1431,8 +1820,7 @@ async def execute_if(
     }
 
 
-@mcp.tool
-async def execute_for_each(
+async def _execute_for_each_impl(
     session_id: str,
     items: List[Any] | None,
     steps: List[Dict[str, Any]],
@@ -1482,8 +1870,7 @@ async def execute_for_each(
     return {"success": overall_success, "iterations": iterations, "count": count}
 
 
-@mcp.tool
-async def execute_try_except(
+async def _execute_try_except_impl(
     session_id: str,
     try_steps: List[Dict[str, Any]],
     except_patterns: List[str] | None = None,
@@ -1573,7 +1960,121 @@ async def execute_try_except(
     return result
 
 
+@mcp.tool(enabled=False)
+async def execute_if(
+    session_id: str,
+    condition: str,
+    then_steps: List[Dict[str, Any]],
+    else_steps: List[Dict[str, Any]] | None = None,
+    stop_on_failure: bool = True,
+) -> Dict[str, Any]:
+    return await _execute_if_impl(
+        session_id=session_id,
+        condition=condition,
+        then_steps=then_steps,
+        else_steps=else_steps,
+        stop_on_failure=stop_on_failure,
+    )
+
+
+@mcp.tool(enabled=False)
+async def execute_for_each(
+    session_id: str,
+    items: List[Any] | None,
+    steps: List[Dict[str, Any]],
+    item_var: str = "item",
+    stop_on_failure: bool = True,
+    max_iterations: int = 1000,
+) -> Dict[str, Any]:
+    return await _execute_for_each_impl(
+        session_id=session_id,
+        items=items,
+        steps=steps,
+        item_var=item_var,
+        stop_on_failure=stop_on_failure,
+        max_iterations=max_iterations,
+    )
+
+
+@mcp.tool(enabled=False)
+async def execute_try_except(
+    session_id: str,
+    try_steps: List[Dict[str, Any]],
+    except_patterns: List[str] | None = None,
+    except_steps: List[Dict[str, Any]] | None = None,
+    finally_steps: List[Dict[str, Any]] | None = None,
+    rethrow: bool = False,
+) -> Dict[str, Any]:
+    return await _execute_try_except_impl(
+        session_id=session_id,
+        try_steps=try_steps,
+        except_patterns=except_patterns,
+        except_steps=except_steps,
+        finally_steps=finally_steps,
+        rethrow=rethrow,
+    )
+
+
 @mcp.tool
+async def get_keyword_info(
+    mode: str = "keyword",
+    keyword_name: str | None = None,
+    library_name: str | None = None,
+    session_id: str | None = None,
+    arguments: List[str] | None = None,
+) -> Dict[str, Any]:
+    """Retrieve keyword/library documentation or parse signatures from a single entry point."""
+
+    mode_norm = (mode or "keyword").strip().lower()
+
+    if mode_norm in {"keyword", "global"}:
+        if not keyword_name:
+            return {"success": False, "error": "keyword_name is required"}
+        result = await _get_keyword_documentation_payload(keyword_name, library_name)
+        result["mode"] = "keyword"
+        return result
+
+    if mode_norm in {"library", "libdoc"}:
+        if not library_name:
+            return {"success": False, "error": "library_name is required"}
+        result = await _get_library_documentation_payload(library_name)
+        result["mode"] = "library"
+        return result
+
+    if mode_norm in {"session", "namespace"}:
+        if not session_id or not keyword_name:
+            return {
+                "success": False,
+                "error": "session_id and keyword_name are required for mode='session'",
+            }
+        result = await _get_session_keyword_documentation_payload(
+            session_id, keyword_name
+        )
+        result["mode"] = "session"
+        return result
+
+    if mode_norm in {"parse", "signature"}:
+        if not keyword_name:
+            return {"success": False, "error": "keyword_name is required"}
+        parsed = await _debug_parse_keyword_arguments_payload(
+            keyword_name=keyword_name,
+            arguments=arguments or [],
+            library_name=library_name,
+            session_id=session_id,
+        )
+        parsed["mode"] = "parse"
+        return parsed
+
+    return {"success": False, "error": f"Unsupported mode '{mode}'"}
+
+
+async def _get_keyword_documentation_payload(
+    keyword_name: str, library_name: str | None = None
+) -> Dict[str, Any]:
+    return execution_engine.get_keyword_documentation(keyword_name, library_name)
+
+
+@mcp.tool(enabled=False)
 async def get_keyword_documentation(
     keyword_name: str, library_name: str = None
 ) -> Dict[str, Any]:
@@ -1600,10 +2101,14 @@ async def get_keyword_documentation(
           - source: Source file path (libdoc only)
           - lineno: Line number in source (libdoc only)
     """
-    return execution_engine.get_keyword_documentation(keyword_name, library_name)
+    return await _get_keyword_documentation_payload(keyword_name, library_name)
 
 
-@mcp.tool
+async def _get_library_documentation_payload(library_name: str) -> Dict[str, Any]:
+    return execution_engine.get_library_documentation(library_name)
+
+
+@mcp.tool(enabled=False)
 async def get_library_documentation(library_name: str) -> Dict[str, Any]:
     """Get full documentation for a Robot Framework library using native RF libdoc.
 
@@ -1637,11 +2142,10 @@ async def get_library_documentation(library_name: str) -> Dict[str, Any]:
           - keyword_count: Total number of keywords in library
           - data_source: 'libdoc' or 'inspection' indicating data source
     """
-    return execution_engine.get_library_documentation(library_name)
+    return await _get_library_documentation_payload(library_name)
 
 
-@mcp.tool(enabled=True)
-async def debug_parse_keyword_arguments(
+async def _debug_parse_keyword_arguments_payload(
     keyword_name: str,
     arguments: List[str],
     library_name: str = None,
@@ -1685,6 +2189,21 @@ async def debug_parse_keyword_arguments(
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+@mcp.tool(enabled=False)
+async def debug_parse_keyword_arguments(
+    keyword_name: str,
+    arguments: List[str],
+    library_name: str = None,
+    session_id: str = None,
+) -> Dict[str, Any]:
+    return await _debug_parse_keyword_arguments_payload(
+        keyword_name=keyword_name,
+        arguments=arguments,
+        library_name=library_name,
+        session_id=session_id,
+    )
 
 
 # TOOL DISABLED: validate_step_before_suite
@@ -1763,23 +2282,7 @@ async def debug_parse_keyword_arguments(
 #     return result
 
 
-@mcp.tool
-async def get_session_validation_status(session_id: str = "") -> Dict[str, Any]:
-    """Get validation status of all steps in a session with intelligent session resolution.
-
-    Use this to check which steps have been validated and are ready for test suite generation.
-    Helps ensure stepwise test development by showing validation progress.
-
-    Enhanced Session Resolution:
-    - If session_id provided and valid: Uses that session
-    - If session_id empty/invalid: Automatically finds most suitable session with steps
-
-    Args:
-        session_id: Session identifier to check (auto-resolves if empty/invalid)
-
-    Returns:
-        Validation status with passed/failed step counts and readiness assessment
-    """
+async def _get_session_validation_status_payload(session_id: str = "") -> Dict[str, Any]:
     # Import session resolver here to avoid circular imports
     from robotmcp.utils.session_resolution import SessionResolver
 
@@ -1890,7 +2393,7 @@ async def set_library_search_order(
         return {"success": False, "error": str(e), "session_id": session_id}
 
 
-@mcp.tool
+@mcp.tool(enabled=False)
 async def initialize_context(
     session_id: str, libraries: List[str] = None, variables: Dict[str, Any] = None
 ) -> Dict[str, Any]:
@@ -1951,16 +2454,7 @@ async def initialize_context(
         return {"success": False, "error": str(e), "session_id": session_id}
 
 
-@mcp.tool
-async def get_context_variables(session_id: str) -> Dict[str, Any]:
-    """Get all variables from a session.
-
-    Args:
-        session_id: Session identifier
-
-    Returns:
-        Dictionary containing all session variables
-    """
+async def _get_context_variables_payload(session_id: str) -> Dict[str, Any]:
     try:
         # Helper to sanitize values: return scalars as-is; for complex objects, return their type name.
         def _sanitize(val: Any) -> Any:
@@ -2041,16 +2535,13 @@ async def get_context_variables(session_id: str) -> Dict[str, Any]:
         return {"success": False, "error": str(e), "session_id": session_id}
 
 
-@mcp.tool
-async def get_session_info(session_id: str = "default") -> Dict[str, Any]:
-    """Get comprehensive information about a session's configuration and state.
+@mcp.tool(enabled=False)
+async def get_context_variables(session_id: str) -> Dict[str, Any]:
+    """Get all variables from a session."""
+    return await _get_context_variables_payload(session_id)
 
-    Args:
-        session_id: Session identifier to get information for
 
-    Returns:
-        Dict with session configuration, library status, and execution history
-    """
+async def _get_session_info_payload(session_id: str = "default") -> Dict[str, Any]:
     try:
         session = execution_engine.session_manager.get_session(session_id)
 
@@ -2068,7 +2559,50 @@ async def get_session_info(session_id: str = "default") -> Dict[str, Any]:
         return {"success": False, "error": str(e), "session_id": session_id}
 
 
+@mcp.tool(enabled=False)
+async def get_session_info(session_id: str = "default") -> Dict[str, Any]:
+    """Get comprehensive information about a session's configuration and state."""
+    return await _get_session_info_payload(session_id)
+
+
 @mcp.tool
+async def get_locator_guidance(
+    library: str = "browser",
+    error_message: str | None = None,
+    keyword_name: str | None = None,
+) -> Dict[str, Any]:
+    """Provide locator/selector guidance for Browser/Selenium/Appium libraries."""
+
+    from robotmcp.utils.rf_native_type_converter import RobotFrameworkNativeConverter
+
+    converter = RobotFrameworkNativeConverter()
+    lib_norm = (library or "browser").strip().lower()
+
+    if lib_norm in {"browser", "playwright"}:
+        result = converter.get_browser_locator_guidance(error_message, keyword_name)
+        result["library"] = "Browser"
+        result.setdefault("success", True)
+        return result
+
+    if lib_norm in {"selenium", "seleniumlibrary"}:
+        result = converter.get_selenium_locator_guidance(error_message, keyword_name)
+        result["library"] = "SeleniumLibrary"
+        result.setdefault("success", True)
+        return result
+
+    if lib_norm in {"appium", "appiumlibrary"}:
+        result = converter.get_appium_locator_guidance(error_message, keyword_name)
+        result["library"] = "AppiumLibrary"
+        result.setdefault("success", True)
+        return result
+
+    return {
+        "success": False,
+        "error": f"Unsupported library '{library}'. Choose Browser, SeleniumLibrary, or AppiumLibrary.",
+    }
+
+
+@mcp.tool(enabled=False)
 async def get_selenium_locator_guidance(
     error_message: str = None, keyword_name: str = None
 ) -> Dict[str, Any]:
@@ -2105,7 +2639,7 @@ async def get_selenium_locator_guidance(
     return converter.get_selenium_locator_guidance(error_message, keyword_name)
 
 
-@mcp.tool
+@mcp.tool(enabled=False)
 async def get_browser_locator_guidance(
     error_message: str = None, keyword_name: str = None
 ) -> Dict[str, Any]:
@@ -2149,7 +2683,7 @@ async def get_browser_locator_guidance(
     return converter.get_browser_locator_guidance(error_message, keyword_name)
 
 
-@mcp.tool
+@mcp.tool(enabled=False)
 async def get_appium_locator_guidance(
     error_message: str = None, keyword_name: str = None
 ) -> Dict[str, Any]:
@@ -2200,26 +2734,17 @@ async def get_appium_locator_guidance(
     return converter.get_appium_locator_guidance(error_message, keyword_name)
 
 
-@mcp.tool
-async def get_loaded_libraries() -> Dict[str, Any]:
-    """Get status of all loaded Robot Framework libraries using both libdoc and inspection methods.
-
-    Returns comprehensive library status including:
-    - Native Robot Framework libdoc information (when available)
-    - Inspection-based discovery fallback
-    - Preferred data source (libdoc vs inspection)
-    - Library versions, scopes, types, and keyword counts
-
-    Returns:
-        Dict with detailed library information:
-        - preferred_source: 'libdoc' or 'inspection'
-        - libdoc_based: Native RF libdoc library information (if available)
-        - inspection_based: Inspection-based library discovery information
-    """
+async def _get_loaded_libraries_payload() -> Dict[str, Any]:
     return execution_engine.get_library_status()
 
 
-@mcp.tool
+@mcp.tool(enabled=False)
+async def get_loaded_libraries() -> Dict[str, Any]:
+    """Get status of all loaded Robot Framework libraries using both libdoc and inspection methods."""
+    return await _get_loaded_libraries_payload()
+
+
+@mcp.tool(enabled=False)
 async def run_test_suite_dry(
     session_id: str = "",
     suite_file_path: str = None,
@@ -2311,100 +2836,99 @@ async def run_test_suite_dry(
 async def run_test_suite(
     session_id: str = "",
     suite_file_path: str = None,
+    mode: str = "full",
+    validation_level: str = "standard",
+    include_warnings: bool = True,
     execution_options: Dict[str, Any] = None,
     output_level: str = "standard",
     capture_screenshots: bool = False,
 ) -> Dict[str, Any]:
-    """Execute test suite using Robot Framework normal execution.
+    """Execute or validate Robot Framework suites depending on `mode`.
 
-    RECOMMENDED WORKFLOW - SUITE EXECUTION:
-    This tool should be used AFTER validation for full test execution:
-    1. ✅ build_test_suite - Generate .robot file from session steps
-    2. ✅ run_test_suite_dry - Validate syntax and structure
-    3. ✅ run_test_suite (THIS TOOL) - Execute validated test suite
-
-    Enhanced Session Resolution:
-    - If session_id provided and valid: Uses that session's generated suite
-    - If session_id empty/invalid: Automatically finds most suitable session
-    - If suite_file_path provided: Executes specified file directly
-
-    Output Levels:
-    - minimal: Basic execution statistics only
-    - standard: Statistics + failed tests + output files (default)
-    - detailed: All information + execution details + timing
-
-    Args:
-        session_id: Session with executed steps (auto-resolves if empty/invalid)
-        suite_file_path: Direct path to .robot file (optional, overrides session)
-        execution_options: Dict with RF options (variables, tags, loglevel, etc.)
-        output_level: Response verbosity ('minimal', 'standard', 'detailed')
-        capture_screenshots: Enable screenshot capture on failures
-
-    Returns:
-        Comprehensive execution results with statistics and output files
+    mode='dry' / 'validate' performs a dry run; mode='full' executes the suite.
     """
 
     if execution_options is None:
         execution_options = {}
 
-    # Session resolution with same logic as build_test_suite
+    mode_norm = (mode or "full").strip().lower()
+
     from robotmcp.utils.session_resolution import SessionResolver
 
     session_resolver = SessionResolver(execution_engine.session_manager)
 
     if suite_file_path:
-        # Direct file execution mode
+        if mode_norm in {"dry", "validate", "validation"}:
+            logger.info(f"Running dry run validation on file: {suite_file_path}")
+            result = await execution_engine.run_suite_dry_run_from_file(
+                suite_file_path, validation_level, include_warnings
+            )
+            result["mode"] = "dry"
+            return result
+
         logger.info(f"Running suite execution on file: {suite_file_path}")
-        return await execution_engine.run_suite_execution_from_file(
+        result = await execution_engine.run_suite_execution_from_file(
             suite_file_path, execution_options, output_level, capture_screenshots
         )
+        result["mode"] = "full"
+        return result
+
+    resolution_result = session_resolver.resolve_session_with_fallback(session_id)
+
+    if not resolution_result["success"]:
+        tool_name = "run_test_suite_dry" if mode_norm in {"dry", "validate", "validation"} else "run_test_suite"
+        return {
+            "success": False,
+            "tool": tool_name,
+            "mode": mode_norm,
+            "error": "No valid session or suite file available",
+            "error_details": resolution_result["error_guidance"],
+            "guidance": [
+                "Create a session and execute some steps first",
+                "Use build_test_suite to generate a test suite",
+                "Or provide suite_file_path to validate or execute an existing file",
+            ],
+            "recommendation": "Use build_test_suite first or provide suite_file_path",
+        }
+
+    resolved_session_id = resolution_result["session_id"]
+
+    if mode_norm in {"dry", "validate", "validation"}:
+        logger.info(f"Running dry run validation for session: {resolved_session_id}")
+        result = await execution_engine.run_suite_dry_run(
+            resolved_session_id, validation_level, include_warnings
+        )
+        result["mode"] = "dry"
     else:
-        # Session-based execution mode
-        resolution_result = session_resolver.resolve_session_with_fallback(session_id)
-
-        if not resolution_result["success"]:
-            return {
-                "success": False,
-                "tool": "run_test_suite",
-                "error": "No valid session or suite file for execution",
-                "error_details": resolution_result["error_guidance"],
-                "guidance": [
-                    "Create a session and execute some steps first",
-                    "Use build_test_suite to generate a test suite",
-                    "Or provide suite_file_path to execute an existing file",
-                ],
-                "recommendation": "Use build_test_suite first or provide suite_file_path",
-            }
-
-        resolved_session_id = resolution_result["session_id"]
         logger.info(f"Running suite execution for session: {resolved_session_id}")
-
         result = await execution_engine.run_suite_execution(
             resolved_session_id, execution_options, output_level, capture_screenshots
         )
+        result["mode"] = "full"
 
-        # Add session resolution info to result
-        if resolution_result.get("fallback_used", False):
-            result["session_resolution"] = {
-                "fallback_used": True,
-                "original_session_id": session_id,
-                "resolved_session_id": resolved_session_id,
-                "message": f"Automatically used session '{resolved_session_id}' with {resolution_result['session_info']['step_count']} executed steps",
-            }
-        else:
-            result["session_resolution"] = {
-                "fallback_used": False,
-                "session_id": resolved_session_id,
-            }
+    if resolution_result.get("fallback_used", False):
+        result["session_resolution"] = {
+            "fallback_used": True,
+            "original_session_id": session_id,
+            "resolved_session_id": resolved_session_id,
+            "message": f"Automatically used session '{resolved_session_id}' with {resolution_result['session_info']['step_count']} executed steps",
+        }
+    else:
+        result["session_resolution"] = {
+            "fallback_used": False,
+            "session_id": resolved_session_id,
+        }
 
-        return result
+    return result
 
 
-@mcp.tool(
-    name="diagnose_rf_context",
-    description="Inspect RF context state for a session: libraries, search order, and variables count.",
-)
-async def diagnose_rf_context(session_id: str) -> Dict[str, Any]:
+@mcp.tool(enabled=False)
+async def get_session_validation_status(session_id: str = "") -> Dict[str, Any]:
+    """Get validation status of all steps in a session with intelligent session resolution."""
+    return await _get_session_validation_status_payload(session_id)
+
+
+async def _diagnose_rf_context_payload(session_id: str) -> Dict[str, Any]:
     """Return diagnostic information about the current RF execution context for a session.
 
     Includes: whether context exists, created_at, imported libraries, variables count,
@@ -2444,8 +2968,85 @@ async def diagnose_rf_context(session_id: str) -> Dict[str, Any]:
 
 
 @mcp.tool(
+    name="diagnose_rf_context",
+    description="Inspect RF context state for a session: libraries, search order, and variables count.",
+    enabled=False,
+)
+async def diagnose_rf_context(session_id: str) -> Dict[str, Any]:
+    return await _diagnose_rf_context_payload(session_id)
+
+
+@mcp.tool
+async def manage_attach(action: str = "status") -> Dict[str, Any]:
+    """Inspect or control attach bridge configuration."""
+
+    action_norm = (action or "status").strip().lower()
+
+    if action_norm in {"status", "info"}:
+        try:
+            client = _get_external_client_if_configured()
+            mode = os.environ.get("ROBOTMCP_ATTACH_DEFAULT", "auto").strip().lower()
+            strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {
+                "1",
+                "true",
+                "yes",
+            }
+            if client is None:
+                return {
+                    "success": True,
+                    "action": "status",
+                    "configured": False,
+                    "default_mode": mode,
+                    "strict": strict,
+                    "hint": "Set ROBOTMCP_ATTACH_HOST to enable attach mode.",
+                }
+            diag = client.diagnostics()
+            return {
+                "success": True,
+                "action": "status",
+                "configured": True,
+                "host": client.host,
+                "port": client.port,
+                "reachable": bool(diag.get("success")),
+                "diagnostics": diag.get("result"),
+                "default_mode": mode,
+                "strict": strict,
+                "hint": "execute_step(..., use_context=True) routes to the bridge when reachable.",
+            }
+        except Exception as e:
+            logger.error(f"attach status failed: {e}")
+            return {"success": False, "action": "status", "error": str(e)}
+
+    if action_norm in {"stop", "shutdown"}:
+        try:
+            client = _get_external_client_if_configured()
+            if client is None:
+                return {
+                    "success": False,
+                    "action": "stop",
+                    "error": "Attach mode not configured (ROBOTMCP_ATTACH_HOST not set)",
+                }
+            resp = client.stop()
+            return {
+                "success": bool(resp.get("success")),
+                "action": "stop",
+                "response": resp,
+            }
+        except Exception as e:
+            logger.error(f"attach stop failed: {e}")
+            return {"success": False, "action": "stop", "error": str(e)}
+
+    return {
+        "success": False,
+        "error": f"Unsupported action '{action}'",
+        "action": action,
+    }
+
+
+@mcp.tool(
     name="attach_status",
     description="Report attach-mode configuration and bridge health. Indicates whether execute_step(use_context=true) will route externally.",
+    enabled=False,
 )
 async def attach_status() -> Dict[str, Any]:
     try:
@@ -2479,6 +3080,7 @@ async def attach_status() -> Dict[str, Any]:
 @mcp.tool(
     name="attach_stop_bridge",
     description="Send a stop command to the external attach bridge (McpAttach) to exit MCP Serve in the debugged suite.",
+    enabled=False,
 )
 async def attach_stop_bridge() -> Dict[str, Any]:
     try:
@@ -2502,6 +3104,7 @@ async def attach_stop_bridge() -> Dict[str, Any]:
 @mcp.tool(
     name="import_resource",
     description="Import a Robot Framework resource file into the session RF Namespace.",
+    enabled=False,
 )
 async def import_resource(session_id: str, path: str) -> Dict[str, Any]:
     def _local_call() -> Dict[str, Any]:
@@ -2517,6 +3120,7 @@ async def import_resource(session_id: str, path: str) -> Dict[str, Any]:
 @mcp.tool(
     name="import_custom_library",
     description="Import a custom Robot Framework library (module name or file path) into the session RF Namespace.",
+    enabled=False,
 )
 async def import_custom_library(
     session_id: str,
@@ -2541,6 +3145,7 @@ async def import_custom_library(
 @mcp.tool(
     name="list_available_keywords",
     description="List available keywords from imported libraries and resources in the session RF Namespace.",
+    enabled=False,
 )
 async def list_available_keywords(session_id: str) -> Dict[str, Any]:
     def _local_call() -> Dict[str, Any]:
@@ -2561,11 +3166,7 @@ async def list_available_keywords(session_id: str) -> Dict[str, Any]:
     )
 
 
-@mcp.tool(
-    name="get_session_keyword_documentation",
-    description="Get documentation for a keyword (library or resource) available in the session RF Namespace.",
-)
-async def get_session_keyword_documentation(
+async def _get_session_keyword_documentation_payload(
     session_id: str, keyword_name: str
 ) -> Dict[str, Any]:
     def _local_call() -> Dict[str, Any]:
@@ -2593,6 +3194,17 @@ async def get_session_keyword_documentation(
     return _call_attach_tool_with_fallback(
         "get_session_keyword_documentation", _external_call, _local_call
     )
+
+
+@mcp.tool(
+    name="get_session_keyword_documentation",
+    description="Get documentation for a keyword (library or resource) available in the session RF Namespace.",
+    enabled=False,
+)
+async def get_session_keyword_documentation(
+    session_id: str, keyword_name: str
+) -> Dict[str, Any]:
+    return await _get_session_keyword_documentation_payload(session_id, keyword_name)
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:

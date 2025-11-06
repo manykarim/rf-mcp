@@ -74,7 +74,8 @@ jobs:
           fi
           echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> $GITHUB_ENV
 
-      - name: Run tests
+      - name: Run tests with coverage
+        shell: bash
         env:
           # Keep runner path enabled for RequestsLibrary in CI
           ROBOTMCP_RF_RUNNER_REQUESTS: '1'
@@ -83,7 +84,21 @@ jobs:
           # Ensure Playwright uses the correct browser path
           PLAYWRIGHT_BROWSERS_PATH: '0'
         run: |
-          uv run pytest tests/ --junitxml=results/pytest.xml
+          uv run coverage erase
+          uv run coverage run -m pytest tests/ --junitxml=results/pytest.xml
+          uv run python -c "import glob, subprocess; files = glob.glob('.coverage.*'); subprocess.run(['coverage', 'combine'], check=True) if files else print('No parallel coverage files found; skipping coverage combine.')"
+          uv run coverage report
+          uv run coverage html -d results/htmlcov
+          uv run coverage xml -o results/coverage.xml
+
+      - name: Upload coverage artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: |
+            results/htmlcov
+            results/coverage.xml
 
       - name: Test Report
         uses: dorny/test-reporter@main

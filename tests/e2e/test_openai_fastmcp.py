@@ -124,8 +124,9 @@ async def test_openai_driven_workflow(openai_client: OpenAI, openai_model: str, 
     assert isinstance(availability.data, dict)
 
     init_result = await openai_mcp_client.call_tool(
-        "initialize_context",
+        "manage_session",
         {
+            "action": "init",
             "session_id": session_id,
             "variables": {"SCENARIO": "openai"},
             "libraries": recommended_libraries,
@@ -134,20 +135,24 @@ async def test_openai_driven_workflow(openai_client: OpenAI, openai_model: str, 
     assert init_result.data.get("success") is True
 
     keywords = await openai_mcp_client.call_tool(
-        "list_available_keywords", {"session_id": session_id}
+        "find_keywords",
+        {"strategy": "session", "session_id": session_id, "query": ""},
     )
-    if isinstance(keywords.data, list):
-        assert keywords.data, "Expected keyword discovery to return entries"
+    if keywords.data.get("success"):
+        session_keywords = keywords.data.get("library_keywords", [])
+        assert session_keywords is not None
     else:
         fallback_keywords = await openai_mcp_client.call_tool(
-            "get_available_keywords", {"library_name": "BuiltIn"}
+            "find_keywords",
+            {"strategy": "catalog", "library_name": "BuiltIn", "query": ""},
         )
-        assert isinstance(fallback_keywords.data, list)
+        assert fallback_keywords.data.get("success") is True
 
     context_snapshot = await openai_mcp_client.call_tool(
-        "diagnose_rf_context", {"session_id": session_id}
+        "get_session_state",
+        {"session_id": session_id, "sections": ["rf_context"]},
     )
-    assert isinstance(context_snapshot.data, dict)
+    assert context_snapshot.data.get("success") is True
 
     execution = await openai_mcp_client.call_tool(
         "execute_step",
@@ -161,8 +166,12 @@ async def test_openai_driven_workflow(openai_client: OpenAI, openai_model: str, 
     assert execution.data.get("success") is True
 
     keyword_doc = await openai_mcp_client.call_tool(
-        "get_session_keyword_documentation",
-        {"session_id": session_id, "keyword_name": "Create List"},
+        "get_keyword_info",
+        {
+            "mode": "session",
+            "session_id": session_id,
+            "keyword_name": "Create List",
+        },
     )
     assert keyword_doc.data.get("success") is True
 

@@ -1,5 +1,6 @@
 """Keyword execution service."""
 
+import asyncio
 import logging
 import os
 import sys
@@ -741,8 +742,8 @@ class KeywordExecutor:
                 keyword_name,
             )
             if plugin_override:
-                override_result = await plugin_override(
-                    session, keyword_name, args, keyword_info
+                override_result = await asyncio.to_thread(
+                    plugin_override, session, keyword_name, args, keyword_info
                 )
                 if override_result is not None:
                     library_to_import = (
@@ -890,7 +891,8 @@ class KeywordExecutor:
                 )
 
             # Execute keyword using RF native context with session variables
-            result = self.rf_native_context.execute_keyword_with_context(
+            result = await asyncio.to_thread(
+                self.rf_native_context.execute_keyword_with_context,
                 session_id=session_id,
                 keyword_name=keyword,
                 arguments=arguments,
