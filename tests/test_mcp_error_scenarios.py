@@ -144,27 +144,31 @@ class TestMCPErrorScenarios:
         assert ("available" in result.data or "status" in result.data or "library_name" in result.data)
 
     @pytest.mark.asyncio
-    async def test_get_application_state_invalid_session(self, mcp_client):
-        """Test getting application state for invalid session."""
+    async def test_get_session_state_invalid_session(self, mcp_client):
+        """Test getting session state for invalid session."""
         result = await mcp_client.call_tool(
-            "get_application_state",
-            {"session_id": "definitely_nonexistent_session_123"}
+            "get_session_state",
+            {
+                "session_id": "definitely_nonexistent_session_123",
+                "sections": ["application_state"],
+            },
         )
-        
-        # Should handle gracefully and create session or return appropriate error
-        assert isinstance(result.data, dict)
+
+        assert result.data["success"] is True
+        app_section = result.data["sections"].get("application_state")
+        assert isinstance(app_section, dict)
 
     @pytest.mark.asyncio
     async def test_get_page_source_no_browser(self, mcp_client):
         """Test getting page source when no browser is open."""
         result = await mcp_client.call_tool(
-            "get_page_source",
-            {"session_id": "no_browser_session"}
+            "get_session_state",
+            {"session_id": "no_browser_session", "sections": ["page_source"]},
         )
-        
-        # Should handle gracefully
-        assert isinstance(result.data, dict)
-        # Either returns empty/error state or creates a session
+
+        assert result.data["success"] is True
+        page_section = result.data["sections"].get("page_source")
+        assert isinstance(page_section, dict)
 
     @pytest.mark.asyncio
     async def test_get_page_source_attach_fallback(self, monkeypatch):
@@ -197,16 +201,23 @@ class TestMCPErrorScenarios:
                 "aria_snapshot": {"success": False, "skipped": not include_reduced_dom},
             }
 
-        monkeypatch.setattr(
-            server_module.execution_engine, "get_page_source", fake_get_page_source
+        monkeypatch.setattr(server_module.execution_engine, "get_page_source", fake_get_page_source)
+
+        result = await server_module.get_session_state.fn(
+            session_id="attach_fallback_session",
+            sections=["page_source"],
+            page_source_filtered=False,
+            page_source_filtering_level="standard",
+            include_reduced_dom=True,
+            include_dom_stream=False,
+            state_type="all",
+            elements_of_interest=None,
+            dom_chunk_size=65536,
         )
 
-        result = await server_module.get_page_source.fn(
-            session_id="attach_fallback_session", full_source=True
-        )
-
-        assert result["success"] is True
-        assert result["page_source"] == "<html></html>"
+        page_section = result["sections"]["page_source"]
+        assert page_section["success"] is True
+        assert page_section["page_source"] == "<html></html>"
         assert calls == ["Get Page Source", "Get Source"]
 
     @pytest.mark.asyncio
@@ -302,7 +313,11 @@ class TestMCPErrorScenarios:
         )
 
         assert isinstance(result.data, dict)
-        assert result.data.get("success") is False
+        assert result.data.get("success") is True
+        resolution = result.data.get("session_resolution")
+        assert resolution and resolution.get("fallback_used") is True
+        assert resolution.get("original_session_id") == "nonexistent_validation_session_123"
+        assert resolution.get("resolved_session_id")
 
     @pytest.mark.asyncio
     async def test_validate_test_readiness_empty_session(self, mcp_client):
