@@ -33,28 +33,30 @@ async def test_tool_discovery_and_libdoc(mcp_client):
     await mcp_client.call_tool(
         "execute_step", {"keyword": "Log", "arguments": ["warmup"], "session_id": "kw_init"}, timeout=DEFAULT_TIMEOUT
     )
-    # get_available_keywords filtered to BuiltIn for determinism
+    # find_keywords catalog view filtered to BuiltIn for determinism
     kw = await mcp_client.call_tool(
-        "get_available_keywords", {"library_name": "BuiltIn"}, timeout=DEFAULT_TIMEOUT
+        "find_keywords",
+        {"query": "Create", "strategy": "catalog", "library_name": "BuiltIn", "limit": 5},
+        timeout=DEFAULT_TIMEOUT,
     )
-    assert isinstance(kw.data, list)
-    assert len(kw.data) >= 1
+    assert kw.data["success"] is True
+    assert len(kw.data.get("results", [])) >= 1
 
-    # get_keyword_documentation for a known keyword
+    # get_keyword_info for a known keyword
     doc = await mcp_client.call_tool(
-        "get_keyword_documentation", {"keyword_name": "Create Dictionary"}, timeout=DEFAULT_TIMEOUT
+        "get_keyword_info", {"keyword_name": "Create Dictionary"}, timeout=DEFAULT_TIMEOUT
     )
     assert isinstance(doc.data, dict)
-    assert (doc.data.get("success") is True) or ("doc" in str(doc.data).lower())
+    assert doc.data.get("success") is True
 
 
 @pytest.mark.asyncio
 async def test_search_keywords_and_recommendations(mcp_client):
     # Search for a common keyword
     search = await mcp_client.call_tool(
-        "search_keywords", {"pattern": "Log"}, timeout=DEFAULT_TIMEOUT
+        "find_keywords", {"query": "Log", "strategy": "pattern"}, timeout=DEFAULT_TIMEOUT
     )
-    assert isinstance(search.data, list)
+    assert search.data["success"] is True
 
     # Recommend libraries for a neutral scenario
     rec = await mcp_client.call_tool(
@@ -73,13 +75,18 @@ async def test_search_keywords_and_recommendations(mcp_client):
 
 @pytest.mark.asyncio
 async def test_session_tools_and_info(mcp_client):
-    # initialize_context
+    # manage_session init
     init = await mcp_client.call_tool(
-        "initialize_context",
-        {"session_id": "full_session", "variables": {"foo": "bar"}},
+        "manage_session",
+        {
+            "action": "init",
+            "session_id": "full_session",
+            "variables": {"foo": "bar"},
+            "libraries": ["BuiltIn"],
+        },
         timeout=DEFAULT_TIMEOUT,
     )
-    assert isinstance(init.data, dict)
+    assert init.data["success"] is True
 
     # Optional: set_library_search_order (skip if schema mismatch in environment)
     try:
@@ -93,11 +100,13 @@ async def test_session_tools_and_info(mcp_client):
         # Non-fatal for coverage: continue with session info checks
         pass
 
-    # get_session_info
+    # get_session_state summary
     info = await mcp_client.call_tool(
-        "get_session_info", {"session_id": "full_session"}, timeout=DEFAULT_TIMEOUT
+        "get_session_state",
+        {"session_id": "full_session", "sections": ["summary", "variables"]},
+        timeout=DEFAULT_TIMEOUT,
     )
-    assert isinstance(info.data, dict)
+    assert info.data["success"] is True
 
 
 @pytest.mark.asyncio

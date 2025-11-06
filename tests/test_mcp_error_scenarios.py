@@ -82,39 +82,36 @@ class TestMCPErrorScenarios:
         assert isinstance(result.data, dict)
 
     @pytest.mark.asyncio
-    async def test_discover_keywords_empty_action(self, mcp_client):
-        """Test discover_keywords with empty action description."""
+    async def test_find_keywords_empty_semantic_query(self, mcp_client):
+        """Test find_keywords semantic strategy with empty description."""
         result = await mcp_client.call_tool(
-            "discover_keywords",
-            {"action_description": "", "context": "web"}
+            "find_keywords",
+            {"query": "", "strategy": "semantic", "context": "web"}
         )
-        
-        # Should handle gracefully
+
         assert isinstance(result.data, dict)
 
     @pytest.mark.asyncio
-    async def test_get_keyword_documentation_nonexistent(self, mcp_client):
+    async def test_get_keyword_info_nonexistent(self, mcp_client):
         """Test getting documentation for non-existent keyword."""
         result = await mcp_client.call_tool(
-            "get_keyword_documentation",
+            "get_keyword_info",
             {"keyword_name": "NonExistentKeyword123"}
         )
-        
-        # Should return structured response indicating keyword not found
+
         assert isinstance(result.data, dict)
-        assert (result.data.get("success") is False or "error" in result.data or "not found" in str(result.data).lower())
+        assert result.data.get("success") is False
 
     @pytest.mark.asyncio
-    async def test_search_keywords_no_matches(self, mcp_client):
+    async def test_find_keywords_no_matches(self, mcp_client):
         """Test searching for keywords with pattern that matches nothing."""
         result = await mcp_client.call_tool(
-            "search_keywords",
-            {"pattern": "XyZzQqWwEeRrTtYy123456789"}
+            "find_keywords",
+            {"query": "XyZzQqWwEeRrTtYy123456789", "strategy": "pattern"}
         )
-        
-        # Should return empty list or no matches
-        assert isinstance(result.data, list)
-        assert len(result.data) == 0
+
+        assert isinstance(result.data.get("results"), list)
+        assert len(result.data["results"]) == 0
 
     @pytest.mark.asyncio
     async def test_check_library_availability_invalid_libraries(self, mcp_client):
@@ -297,16 +294,15 @@ class TestMCPErrorScenarios:
     #             "error" in result.data)
 
     @pytest.mark.asyncio
-    async def test_get_session_validation_status_nonexistent(self, mcp_client):
-        """Test getting validation status for non-existent session."""
+    async def test_run_test_suite_dry_invalid_session(self, mcp_client):
+        """Test consolidated run_test_suite for non-existent session."""
         result = await mcp_client.call_tool(
-            "get_session_validation_status",
-            {"session_id": "nonexistent_validation_session_123"}
+            "run_test_suite",
+            {"session_id": "nonexistent_validation_session_123", "mode": "dry"}
         )
-        
-        # Should handle gracefully - may return error or default response
+
         assert isinstance(result.data, dict)
-        assert ("total_steps" in result.data or "error" in result.data or "success" in result.data)
+        assert result.data.get("success") is False
 
     @pytest.mark.asyncio
     async def test_validate_test_readiness_empty_session(self, mcp_client):
@@ -341,37 +337,36 @@ class TestMCPErrorScenarios:
         assert "validation error" in str(exc_info.value).lower() or "not of type" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_get_selenium_locator_guidance_with_error(self, mcp_client):
+    async def test_get_locator_guidance_selenium(self, mcp_client):
         """Test Selenium locator guidance with specific error context."""
         result = await mcp_client.call_tool(
-            "get_selenium_locator_guidance",
+            "get_locator_guidance",
             {
+                "library": "selenium",
                 "error_message": "Element with locator 'id=nonexistent' not found",
                 "keyword_name": "Click Element"
             }
         )
-        
+
         assert isinstance(result.data, dict)
-        # Check for guidance content (may not have error_analysis field specifically)
-        assert ("locator_strategies" in result.data or "guidance" in result.data or "tips" in result.data)
+        assert result.data.get("success") is True
+        assert result.data.get("library") == "SeleniumLibrary"
 
     @pytest.mark.asyncio
-    async def test_get_browser_locator_guidance_strict_mode_error(self, mcp_client):
+    async def test_get_locator_guidance_browser_strict_mode(self, mcp_client):
         """Test Browser Library guidance with strict mode error."""
         result = await mcp_client.call_tool(
-            "get_browser_locator_guidance",
+            "get_locator_guidance",
             {
+                "library": "browser",
                 "error_message": "strict mode violation: multiple elements found",
                 "keyword_name": "Click"
             }
         )
-        
+
         assert isinstance(result.data, dict)
-        # Check for guidance content - may include strict mode info
-        assert ("locator_strategies" in result.data or 
-                "strict_mode" in str(result.data).lower() or 
-                "selector_patterns" in result.data or
-                "guidance" in result.data)
+        assert result.data.get("success") is True
+        assert result.data.get("library") == "Browser"
 
 
 class TestMCPEdgeCases:
@@ -425,31 +420,33 @@ class TestMCPEdgeCases:
         # Should be limited to reasonable number even if max is high
 
     @pytest.mark.asyncio
-    async def test_get_available_keywords_specific_library_filter(self, mcp_client):
-        """Test getting keywords with very specific library filter."""
+    async def test_find_keywords_catalog_filter(self, mcp_client):
+        """Test catalog lookup with specific library filter."""
         result = await mcp_client.call_tool(
-            "get_available_keywords",
-            {"library_name": "Collections"}  # Specific standard library
+            "find_keywords",
+            {
+                "query": "Create",
+                "strategy": "catalog",
+                "library_name": "Collections",
+                "limit": 5,
+            },
         )
-        
-        if isinstance(result.data, list) and len(result.data) > 0:
-            # Check only valid dict keywords (skip Root() objects)
-            valid_keywords = [k for k in result.data if isinstance(k, dict) and "library" in k]
-            if valid_keywords:
-                # All valid keywords should be from Collections library
-                for keyword in valid_keywords:
-                    assert keyword["library"] == "Collections"
+
+        assert result.data["success"] is True
+        for item in result.data.get("results", []) or []:
+            if isinstance(item, dict) and item.get("library"):
+                assert item["library"] == "Collections"
 
     @pytest.mark.asyncio
     async def test_search_keywords_special_characters(self, mcp_client):
         """Test keyword search with special characters."""
         result = await mcp_client.call_tool(
-            "search_keywords",
-            {"pattern": "log*"}  # Pattern with special characters
+            "find_keywords",
+            {"query": "log*", "strategy": "pattern"}
         )
-        
-        # Should handle special characters in search
-        assert isinstance(result.data, list)
+
+        assert result.data["success"] is True
+        assert isinstance(result.data.get("results"), list)
 
     @pytest.mark.asyncio
     async def test_execute_step_variable_assignment_multiple(self, mcp_client):

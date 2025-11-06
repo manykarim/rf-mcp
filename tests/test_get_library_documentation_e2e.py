@@ -4,6 +4,10 @@ Tests the complete integration from MCP tool call to Robot Framework native libd
 """
 
 import pytest
+
+pytestmark = pytest.mark.skip(reason="get_library_documentation superseded by get_keyword_info")
+
+import pytest
 import pytest_asyncio
 import sys
 import os

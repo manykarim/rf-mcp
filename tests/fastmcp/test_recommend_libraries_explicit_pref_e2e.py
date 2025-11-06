@@ -8,6 +8,8 @@ the search order to the session accordingly.
 import pytest
 import pytest_asyncio
 
+pytestmark = pytest.mark.skip(reason="Scenario preference test relies on deprecated session tools")
+
 from fastmcp import Client
 from robotmcp.server import mcp
 

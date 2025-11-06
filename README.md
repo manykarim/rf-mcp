@@ -373,45 +373,32 @@ Execute the test suite stepwise and build the final version afterwards.
 
 RobotMCP provides a comprehensive toolset organized by function. Highlights:
 
-### Core Execution
-- `analyze_scenario` - Convert natural language to structured test intent
-- `execute_step` - Execute individual Robot Framework keywords
-- `discover_keywords` - Find appropriate keywords for actions
+### Planning & Orchestration
+- `analyze_scenario` – Convert natural language to structured test intent and spawn sessions.
+- `recommend_libraries` – Suggest libraries (`mode="direct"`, `"sampling_prompt"`, or `"merge_samples"`).
+- `manage_library_plugins` – List, reload, or diagnose library plugins from a single endpoint.
 
-### State & Context Management
-- `get_application_state` - Capture current application state
-- `get_page_source` - Extract DOM with intelligent filtering
-- `get_session_info` - Session configuration and status
+### Session & Execution
+- `manage_session` – Initialize sessions, import resources/libraries, or set variables via `action`.
+- `execute_step` – Execute keywords or `mode="evaluate"` expressions with optional `assign_to`.
+- `execute_flow` – Build `if`/`for_each`/`try` control structures using RF context-first execution.
 
-### Test Suite Generation
-- `build_test_suite` - Generate Robot Framework test files
-- `run_test_suite_dry` - Validate test syntax before execution
-- `run_test_suite` - Execute complete test suites
+### Discovery & Documentation
+- `find_keywords` – Unified keyword discovery (semantic, pattern, catalog, or session scopes).
+- `get_keyword_info` – Retrieve keyword/library documentation or parse argument signatures (`mode="keyword"|"library"|"session"|"parse"`).
 
-### Library Discovery
-- `recommend_libraries` - Suggest appropriate RF libraries
-- `check_library_availability` - Verify library installation
-- `get_available_keywords` - List all available keywords
-- `search_keywords` - Find keywords by pattern
+### Observability & Diagnostics
+- `get_session_state` – Aggregate session insight (`summary`, `variables`, `page_source`, `application_state`, `validation`, `libraries`, `rf_context`).
+- `check_library_availability` – Verify availability/install guidance for specific libraries (always includes `success`).
+- `set_library_search_order` – Control keyword resolution precedence.
+- `manage_attach` – Inspect or stop the attach bridge.
 
-### RF Context & Imports
-- `import_resource` - Import a `.resource` file into the session RF Namespace
-- `import_custom_library` - Import a custom Python library (module name or file path)
-- `list_available_keywords` - List keywords from session libraries/resources (context-aware)
-- `get_session_keyword_documentation` - Get docs/signature for a session keyword
-- `diagnose_rf_context` - Inspect session RF context (libraries, variables count)
-- `attach_status` - Inspect attach-mode configuration and bridge reachability
-- `attach_stop_bridge` - Stop the active MCP bridge loop inside the debugged suite
+### Suite Lifecycle
+- `build_test_suite` – Generate Robot Framework test files from validated steps.
+- `run_test_suite` – Validate (`mode="dry"`) or execute (`mode="full"`) suites.
 
 ### Locator Guidance
-- `get_selenium_locator_guidance` - SeleniumLibrary selector help
-- `get_browser_locator_guidance` - Browser Library (Playwright) guidance
-- `get_appium_locator_guidance` - Mobile locator strategies
-
-### Advanced Features
-- `set_library_search_order` - Control keyword resolution precedence
-- `initialize_context` - Set up test sessions with variables
-- `get_session_validation_status` - Check test readiness
+- `get_locator_guidance` – Consolidated Browser/Selenium/Appium selector guidance with structured output.
 
 *For detailed tool documentation, see the [Tools Reference](#-tools-reference) section.*
 

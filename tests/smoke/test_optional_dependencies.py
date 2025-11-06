@@ -146,25 +146,25 @@ async def test_web_and_mobile_profiles_stay_isolated(mcp_client):
     mobile_session = "combo_mobile_session"
 
     await mcp_client.call_tool(
-        "initialize_context",
-        {"session_id": web_session, "libraries": ["Browser"]},
+        "manage_session",
+        {"action": "init", "session_id": web_session, "libraries": ["Browser"]},
     )
     await mcp_client.call_tool(
-        "initialize_context",
-        {"session_id": mobile_session, "libraries": ["AppiumLibrary"]},
+        "manage_session",
+        {"action": "init", "session_id": mobile_session, "libraries": ["AppiumLibrary"]},
     )
 
-    web_info = await mcp_client.call_tool(
-        "get_session_info",
-        {"session_id": web_session},
+    web_state = await mcp_client.call_tool(
+        "get_session_state",
+        {"session_id": web_session, "sections": ["summary"]},
     )
-    mobile_info = await mcp_client.call_tool(
-        "get_session_info",
-        {"session_id": mobile_session},
+    mobile_state = await mcp_client.call_tool(
+        "get_session_state",
+        {"session_id": mobile_session, "sections": ["summary"]},
     )
 
-    web_imports = web_info.data["session_info"].get("imported_libraries", [])
-    mobile_imports = mobile_info.data["session_info"].get("imported_libraries", [])
+    web_imports = web_state.data["sections"].get("summary", {}).get("session_info", {}).get("imported_libraries", [])
+    mobile_imports = mobile_state.data["sections"].get("summary", {}).get("session_info", {}).get("imported_libraries", [])
 
     assert "Browser" in web_imports
     assert "AppiumLibrary" in mobile_imports
@@ -209,16 +209,17 @@ async def test_all_combination_libraries_import(mcp_client):
     for library, libs in libraries_to_check.items():
         session_id = f"combo_{library.lower()}"
         await mcp_client.call_tool(
-            "initialize_context",
+            "manage_session",
             {
+                "action": "init",
                 "session_id": session_id,
                 "libraries": libs,
             },
         )
         info = await mcp_client.call_tool(
-            "get_session_info",
-            {"session_id": session_id},
+            "get_session_state",
+            {"session_id": session_id, "sections": ["summary"]},
         )
-        imported = info.data["session_info"].get("imported_libraries", [])
+        imported = info.data["sections"].get("summary", {}).get("session_info", {}).get("imported_libraries", [])
         assert library in imported
 

@@ -56,27 +56,27 @@ async def test_analyze_scenario_structure(mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_get_available_keywords_structure(mcp_client):
-    """Test get_available_keywords to understand response structure."""
+async def test_find_keywords_structure(mcp_client):
+    """Test find_keywords to understand response structure."""
     result = await mcp_client.call_tool(
-        "get_available_keywords",
-        {}
+        "find_keywords",
+        {"query": "Log", "strategy": "pattern"}
     )
     
     print(f"Keywords result: {result}")
     print(f"Keywords data type: {type(result.data)}")
-    if isinstance(result.data, list) and len(result.data) > 0:
-        print(f"First keyword: {result.data[0]}")
+    if isinstance(result.data.get("results"), list) and len(result.data["results"]) > 0:
+        print(f"First keyword: {result.data['results'][0]}")
     
     assert hasattr(result, 'data'), "Result should have data attribute"
 
 
 @pytest.mark.asyncio
-async def test_selenium_locator_guidance_structure(mcp_client):
-    """Test selenium locator guidance to understand response structure."""
+async def test_locator_guidance_structure(mcp_client):
+    """Test locator guidance to understand response structure."""
     result = await mcp_client.call_tool(
-        "get_selenium_locator_guidance",
-        {}
+        "get_locator_guidance",
+        {"library": "selenium"}
     )
     
     print(f"Selenium guidance result: {result}")
@@ -116,14 +116,17 @@ if __name__ == "__main__":
             print(f"Analyze scenario result: {result}")
             print(f"Analyze scenario data: {result.data}")
             
-            # Test get_available_keywords
-            print("\n=== Testing get_available_keywords ===")
-            result = await client.call_tool("get_available_keywords", {})
+            # Test find_keywords
+            print("\n=== Testing find_keywords ===")
+            result = await client.call_tool(
+                "find_keywords",
+                {"query": "Log", "strategy": "pattern", "limit": 2}
+            )
             print(f"Keywords result type: {type(result.data)}")
-            if isinstance(result.data, list):
-                print(f"Keywords count: {len(result.data)}")
-                if len(result.data) > 0:
-                    print(f"First keyword: {result.data[0]}")
+            if isinstance(result.data.get("results"), list):
+                print(f"Keywords count: {len(result.data['results'])}")
+                if len(result.data["results"]) > 0:
+                    print(f"First keyword: {result.data['results'][0]}")
             
             print("\nManual tests completed!")
     

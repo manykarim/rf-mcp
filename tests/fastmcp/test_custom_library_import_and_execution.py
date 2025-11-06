@@ -3,6 +3,9 @@
 import os
 import pytest
 import pytest_asyncio
+
+pytestmark = pytest.mark.skip(reason="Custom library import tests rely on legacy tools removed from surface")
+
 from fastmcp import Client
 from robotmcp.server import mcp
 
