@@ -477,6 +477,35 @@ class TestMCPEdgeCases:
         
         # Should handle special characters in test names
         assert isinstance(result.data, dict)
+    
+    @pytest.mark.asyncio
+    async def test_build_test_suite_escapes_hash_locators(self, mcp_client):
+        """Ensure selectors starting with '#' are escaped in generated suites."""
+        session_id = "hash_selector_session"
+
+        await mcp_client.call_tool(
+            "execute_step",
+            {
+                "keyword": "Log",
+                "arguments": ["#username"],
+                "session_id": session_id,
+            },
+        )
+
+        result = await mcp_client.call_tool(
+            "build_test_suite",
+            {
+                "test_name": "Escapes Hash Selector",
+                "session_id": session_id,
+            },
+        )
+
+        rf_text = result.data["rf_text"]
+        assert "\\#username" in rf_text
+
+        structured_steps = result.data["suite"]["test_cases"][0]["structured_steps"]
+        first_argument = structured_steps[0]["arguments"][0]
+        assert first_argument.startswith("\\#")
 
 
 # Test runner for manual execution
