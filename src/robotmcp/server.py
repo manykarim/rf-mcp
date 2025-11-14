@@ -4,8 +4,8 @@ import argparse
 import asyncio
 import logging
 import os
-from dataclasses import asdict
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 from fastmcp import FastMCP
@@ -23,10 +23,10 @@ from robotmcp.components.library_recommender import LibraryRecommender
 from robotmcp.components.nlp_processor import NaturalLanguageProcessor
 from robotmcp.components.state_manager import StateManager
 from robotmcp.components.test_builder import TestBuilder
-from robotmcp.models.session_models import PlatformType
-from robotmcp.utils.server_integration import initialize_enhanced_serialization
 from robotmcp.config import library_registry
+from robotmcp.models.session_models import PlatformType
 from robotmcp.plugins import get_library_plugin_manager
+from robotmcp.utils.server_integration import initialize_enhanced_serialization
 
 logger = logging.getLogger(__name__)
 
@@ -69,14 +69,20 @@ def _call_attach_tool_with_fallback(
 
     client = _get_external_client_if_configured()
     mode = os.environ.get("ROBOTMCP_ATTACH_DEFAULT", "auto").strip().lower()
-    strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {"1", "true", "yes"}
+    strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {
+        "1",
+        "true",
+        "yes",
+    }
 
     if client is None or mode == "off":
         return local_call()
 
     try:
         response = external_call(client)
-    except Exception as exc:  # pragma: no cover - defensive conversion to attach-style error
+    except (
+        Exception
+    ) as exc:  # pragma: no cover - defensive conversion to attach-style error
         err = str(exc)
         logger.error(
             "ATTACH tool '%s' raised exception: %s", tool_name, err, exc_info=False
@@ -99,6 +105,7 @@ def _call_attach_tool_with_fallback(
         "ATTACH unreachable for '%s'; falling back to local execution", tool_name
     )
     return local_call()
+
 
 def _frontend_dependencies_available() -> bool:
     """Check whether optional frontend dependencies are installed."""
@@ -166,7 +173,11 @@ def _log_attach_banner() -> None:
             err = diag.get("error", "not reachable yet")
             logger.info(f"Attach bridge: not reachable ({err})")
         mode = os.environ.get("ROBOTMCP_ATTACH_DEFAULT", "auto").strip().lower()
-        strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {"1", "true", "yes"}
+        strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {
+            "1",
+            "true",
+            "yes",
+        }
         logger.info(f"Attach default: {mode}{' (strict)' if strict else ''}")
     except Exception as e:  # defensive
         logger.info(f"Attach bridge: check failed ({e})")
@@ -182,7 +193,11 @@ def _compute_effective_use_context(
     - strict: True if ROBOTMCP_ATTACH_STRICT is enabled
     """
     mode = os.environ.get("ROBOTMCP_ATTACH_DEFAULT", "auto").strip().lower()
-    strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {"1", "true", "yes"}
+    strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {
+        "1",
+        "true",
+        "yes",
+    }
     effective = bool(use_context) if use_context is not None else False
     if client is not None:
         if use_context is None:
@@ -295,6 +310,42 @@ mobile_capability_service = MobileCapabilityService()
 # Initialize enhanced serialization system
 initialize_enhanced_serialization(execution_engine)
 
+# Shared guidance for automation workflows
+AUTOMATION_TOOL_GUIDE: List[tuple[str, str]] = [
+    (
+        "analyze_scenario",
+        "to understand the requirements and create/configure a session.",
+    ),
+    (
+        "recommend_libraries",
+        "to fetch targeted library suggestions for the scenario.",
+    ),
+    (
+        "execute_step",
+        "to run individual keywords in the active session (reuse the same session_id).",
+    ),
+    (
+        "get_session_state",
+        "to capture application state, DOM snapshots, screenshots, and variables when debugging.",
+    ),
+    (
+        "diagnose_rf_context",
+        "to inspect the Robot Framework namespace (libraries, variables, search order) if keywords fail.",
+    ),
+    (
+        "build_test_suite",
+        "to compile the validated steps into a reusable Robot Framework suite.",
+    ),
+    (
+        "run_test_suite_dry",
+        "to perform a staged dry run and validate the generated suite structure.",
+    ),
+    (
+        "run_test_suite",
+        "to execute the finalized suite with all required libraries loaded.",
+    ),
+]
+
 
 # Helper functions
 async def _ensure_all_session_libraries_loaded():
@@ -338,20 +389,46 @@ async def _ensure_all_session_libraries_loaded():
 @mcp.prompt
 def automate(scenario: str) -> str:
     """Uses RobotMCP to create a test suite from a scenario description"""
+    tool_lines = "\n".join(
+        f"{idx}. Use {tool} {description}"
+        for idx, (tool, description) in enumerate(AUTOMATION_TOOL_GUIDE, start=1)
+    )
     return (
         "# Task\n"
         "Use RobotMCP to create a TestSuite and execute it step wise.\n"
-        "1. Use analyze_scenario to understand the requirements and create a session.\n"
-        "2. Use recommend_libraries to get library suggestions based on the scenario.\n"
-        "3. Use execute_step to run the test steps in the created session.\n"
-        "4. Use build_test_suite to compile the test steps into a complete suite.\n"
-        "5. Use run_test_suite_dry to execute a staged dry run of the test suite.\n"
-        "6. Use run_test_suite to execute the test suite with all libraries loaded.\n"
+        f"{tool_lines}\n"
         "General hints:\n"
-        "- in case of UI testing, use get_page_source to retrieve the current state of the UI.\n"
-        "- in case of UI testing, ensure the Browser is running in non-headless mode.\n"
-        "- in case of problems with keyword calls, use get_keyword_documentation and get_library_documentation to get more information.\n"
+        "- For UI testing capture state via get_session_state (sections=['application_state','page_source','variables']).\n"
+        "- Ensure Browser or Playwright contexts run in non-headless mode when interacting with live UIs.\n"
+        "- When you need keyword or library details, use get_keyword_info (mode='library' or 'keyword') and get_library_documentation.\n"
+        "- Use manage_session (set_variables/import_library) to configure sessions between steps if needed.\n"
         "# Scenario:\n"
+        f"{scenario}\n"
+    )
+
+
+@mcp.prompt
+def learn(scenario: str) -> str:
+    """Guides a user through automation and explains the generated code/choices."""
+    return (
+        "# Role\n"
+        "Act as a friendly Robot Framework tutor. Automate the scenario with RobotMCP tools, "
+        "but after each major phase summarize what you did and why (libraries chosen, keywords executed, "
+        "variables used, etc.). Keep explanations concise and practical.\n"
+        "# Workflow\n"
+        "1. analyze_scenario – understand requirements and capture the session_id.\n"
+        "2. recommend_libraries – justify which libraries fit the scenario.\n"
+        "3. manage_session / execute_step – build the test step-by-step, reusing the same session.\n"
+        "4. get_session_state or diagnose_rf_context when you need to inspect UI/variables/libraries.\n"
+        "5. build_test_suite – convert the validated steps into a suite.\n"
+        "6. run_test_suite_dry (optional) – confirm the suite compiles.\n"
+        "7. run_test_suite – execute if appropriate.\n"
+        "# Teaching Guidance\n"
+        "- Explain why each library/keyword was selected (e.g., Browser vs SeleniumLibrary, Images vs API).\n"
+        "- Highlight any tricky locators, variables, or context setup.\n"
+        "- Encourage best practices (non-headless browser, reusable keywords, variable naming) without lecturing.\n"
+        "- Keep explanations short (2–3 sentences) and actionable.\n"
+        "# Scenario\n"
         f"{scenario}\n"
     )
 
@@ -460,9 +537,15 @@ async def diagnose_library_plugin(plugin_name: str) -> Dict[str, Any]:
             "contexts": capabilities.contexts if capabilities else [],
             "features": capabilities.features if capabilities else [],
             "technology": capabilities.technology if capabilities else [],
-            "supports_page_source": capabilities.supports_page_source if capabilities else False,
-            "supports_application_state": capabilities.supports_application_state if capabilities else False,
-            "requires_type_conversion": capabilities.requires_type_conversion if capabilities else False,
+            "supports_page_source": capabilities.supports_page_source
+            if capabilities
+            else False,
+            "supports_application_state": capabilities.supports_application_state
+            if capabilities
+            else False,
+            "requires_type_conversion": capabilities.requires_type_conversion
+            if capabilities
+            else False,
             "supports_async": capabilities.supports_async if capabilities else False,
         },
         "install_actions": install_actions,
@@ -811,6 +894,14 @@ async def analyze_scenario(
         "status": "active",
         "ready_for_execution": True,
     }
+    result["session_info"]["recommended_tools"] = [
+        {
+            "order": idx,
+            "tool": tool,
+            "description": description,
+        }
+        for idx, (tool, description) in enumerate(AUTOMATION_TOOL_GUIDE, start=1)
+    ]
 
     logger.info(
         f"Session '{session_id}' configured: type={session.session_type.value}, preference={session.explicit_library_preference}"
@@ -2282,7 +2373,9 @@ async def debug_parse_keyword_arguments(
 #     return result
 
 
-async def _get_session_validation_status_payload(session_id: str = "") -> Dict[str, Any]:
+async def _get_session_validation_status_payload(
+    session_id: str = "",
+) -> Dict[str, Any]:
     # Import session resolver here to avoid circular imports
     from robotmcp.utils.session_resolution import SessionResolver
 
@@ -2876,7 +2969,11 @@ async def run_test_suite(
     resolution_result = session_resolver.resolve_session_with_fallback(session_id)
 
     if not resolution_result["success"]:
-        tool_name = "run_test_suite_dry" if mode_norm in {"dry", "validate", "validation"} else "run_test_suite"
+        tool_name = (
+            "run_test_suite_dry"
+            if mode_norm in {"dry", "validate", "validation"}
+            else "run_test_suite"
+        )
         return {
             "success": False,
             "tool": tool_name,
@@ -3053,7 +3150,11 @@ async def attach_status() -> Dict[str, Any]:
         client = _get_external_client_if_configured()
         configured = client is not None
         mode = os.environ.get("ROBOTMCP_ATTACH_DEFAULT", "auto").strip().lower()
-        strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {"1", "true", "yes"}
+        strict = os.environ.get("ROBOTMCP_ATTACH_STRICT", "0").strip() in {
+            "1",
+            "true",
+            "yes",
+        }
         if not configured:
             return {
                 "configured": False,
@@ -3114,7 +3215,9 @@ async def import_resource(session_id: str, path: str) -> Dict[str, Any]:
     def _external_call(client: ExternalRFClient) -> Dict[str, Any]:
         return client.import_resource(path)
 
-    return _call_attach_tool_with_fallback("import_resource", _external_call, _local_call)
+    return _call_attach_tool_with_fallback(
+        "import_resource", _external_call, _local_call
+    )
 
 
 @mcp.tool(

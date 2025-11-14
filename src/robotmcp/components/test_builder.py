@@ -907,18 +907,30 @@ class TestBuilder:
 
             # Add setup
             if test_case.setup:
+                escaped_setup_args = [
+                    self._escape_robot_argument(arg)
+                    for arg in (test_case.setup.arguments or [])
+                ]
                 rf_test.setup.config(
-                    name=test_case.setup.keyword, args=test_case.setup.arguments
+                    name=test_case.setup.keyword, args=escaped_setup_args
                 )
 
             # Add steps
             for step in test_case.steps:
-                rf_test.body.create_keyword(name=step.keyword, args=step.arguments)
+                escaped_step_args = [
+                    self._escape_robot_argument(arg)
+                    for arg in (step.arguments or [])
+                ]
+                rf_test.body.create_keyword(name=step.keyword, args=escaped_step_args)
 
             # Add teardown
             if test_case.teardown:
+                escaped_teardown_args = [
+                    self._escape_robot_argument(arg)
+                    for arg in (test_case.teardown.arguments or [])
+                ]
                 rf_test.teardown.config(
-                    name=test_case.teardown.keyword, args=test_case.teardown.arguments
+                    name=test_case.teardown.keyword, args=escaped_teardown_args
                 )
 
         return rf_suite
@@ -1209,7 +1221,9 @@ class TestBuilder:
         return {
             "type": "keyword",
             "keyword": step.keyword,
-            "arguments": list(step.arguments or []),
+            "arguments": [
+                self._escape_robot_argument(arg) for arg in (step.arguments or [])
+            ],
             "assigned_variables": list(step.assigned_variables or []),
             "assignment_type": step.assignment_type,
         }
@@ -1221,42 +1235,100 @@ class TestBuilder:
             if ntype == "for_each":
                 item_var = n.get("item_var", "item")
                 items = list(n.get("items") or [])
-                out.append({"type": "control", "control": "FOR", "args": [f"${{{item_var}}}", "IN", *items]})
+                escaped_items = [
+                    self._escape_robot_argument(item) for item in items
+                ]
+                out.append({
+                    "type": "control",
+                    "control": "FOR",
+                    "args": [f"${{{item_var}}}", "IN", *escaped_items],
+                })
                 for s in n.get("body") or []:
-                    out.append({"type": "keyword", "keyword": s.get("keyword", ""), "arguments": list(s.get("arguments") or [])})
+                    out.append({
+                        "type": "keyword",
+                        "keyword": s.get("keyword", ""),
+                        "arguments": [
+                            self._escape_robot_argument(arg)
+                            for arg in (s.get("arguments") or [])
+                        ],
+                    })
                 out.append({"type": "control", "control": "END"})
             elif ntype == "if":
                 out.append({"type": "control", "control": "IF", "args": [n.get("condition", "")]})
                 for s in n.get("then") or []:
-                    out.append({"type": "keyword", "keyword": s.get("keyword", ""), "arguments": list(s.get("arguments") or [])})
+                    out.append({
+                        "type": "keyword",
+                        "keyword": s.get("keyword", ""),
+                        "arguments": [
+                            self._escape_robot_argument(arg)
+                            for arg in (s.get("arguments") or [])
+                        ],
+                    })
                 else_body = n.get("else") or []
                 if else_body:
                     out.append({"type": "control", "control": "ELSE"})
                     for s in else_body:
-                        out.append({"type": "keyword", "keyword": s.get("keyword", ""), "arguments": list(s.get("arguments") or [])})
+                        out.append({
+                            "type": "keyword",
+                            "keyword": s.get("keyword", ""),
+                            "arguments": [
+                                self._escape_robot_argument(arg)
+                                for arg in (s.get("arguments") or [])
+                            ],
+                        })
                 out.append({"type": "control", "control": "END"})
             elif ntype == "try":
                 out.append({"type": "control", "control": "TRY"})
                 for s in n.get("try") or []:
-                    out.append({"type": "keyword", "keyword": s.get("keyword", ""), "arguments": list(s.get("arguments") or [])})
+                    out.append({
+                        "type": "keyword",
+                        "keyword": s.get("keyword", ""),
+                        "arguments": [
+                            self._escape_robot_argument(arg)
+                            for arg in (s.get("arguments") or [])
+                        ],
+                    })
                 patterns = list(n.get("except_patterns") or [])
                 if n.get("except"):
                     # Use a single EXCEPT node with all patterns when sharing one handler
                     if patterns:
-                        out.append({"type": "control", "control": "EXCEPT", "args": patterns})
+                        out.append({"type": "control", "control": "EXCEPT", "args": [
+                            self._escape_robot_argument(p) for p in patterns
+                        ]})
                     else:
                         out.append({"type": "control", "control": "EXCEPT"})
                     for s in n.get("except") or []:
-                        out.append({"type": "keyword", "keyword": s.get("keyword", ""), "arguments": list(s.get("arguments") or [])})
+                        out.append({
+                            "type": "keyword",
+                            "keyword": s.get("keyword", ""),
+                            "arguments": [
+                                self._escape_robot_argument(arg)
+                                for arg in (s.get("arguments") or [])
+                            ],
+                        })
                 if n.get("finally"):
                     out.append({"type": "control", "control": "FINALLY"})
                     for s in n.get("finally") or []:
-                        out.append({"type": "keyword", "keyword": s.get("keyword", ""), "arguments": list(s.get("arguments") or [])})
+                        out.append({
+                            "type": "keyword",
+                            "keyword": s.get("keyword", ""),
+                            "arguments": [
+                                self._escape_robot_argument(arg)
+                                for arg in (s.get("arguments") or [])
+                            ],
+                        })
                 out.append({"type": "control", "control": "END"})
             else:
                 # Unknown node: best-effort as a keyword
                 if n.get("keyword"):
-                    out.append({"type": "keyword", "keyword": n.get("keyword", ""), "arguments": list(n.get("arguments") or [])})
+                    out.append({
+                        "type": "keyword",
+                        "keyword": n.get("keyword", ""),
+                        "arguments": [
+                            self._escape_robot_argument(arg)
+                            for arg in (n.get("arguments") or [])
+                        ],
+                    })
         return out
 
     def _render_flow_blocks(self, nodes: List[Dict[str, Any]], indent: str = "") -> List[str]:
