@@ -207,6 +207,35 @@ class LibraryPluginManager:
                 exc,
             )
 
+    def generate_failure_hints(
+        self,
+        library_name: Optional[str],
+        session: Any,
+        keyword_name: str,
+        arguments: List[Any],
+        error_text: str,
+    ) -> List[Dict[str, Any]]:
+        if not library_name:
+            return []
+        plugin = self._plugins.get(library_name)
+        if not plugin:
+            return []
+        try:
+            hints = plugin.generate_failure_hints(
+                session,
+                keyword_name,
+                arguments,
+                error_text,
+            )
+            return hints or []
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning(
+                "Plugin %s generate_failure_hints failed: %s",
+                library_name,
+                exc,
+            )
+            return []
+
 
 _GLOBAL_MANAGER: Optional[LibraryPluginManager] = None
 _GLOBAL_MANAGER_LOCK = threading.Lock()

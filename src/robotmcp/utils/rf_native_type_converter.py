@@ -1,7 +1,8 @@
 """Robot Framework native type conversion integration."""
 
+import inspect
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, get_type_hints
 
 from robotmcp.models.library_models import ParsedArguments
 from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
@@ -60,6 +61,8 @@ try:
     from robot.running.arguments.typeconverters import TypeConverter
     from robot.running.arguments import ArgumentSpec
     from robot.running.arguments.argumentresolver import ArgumentResolver
+    from robot.running.arguments.argumentparser import DynamicArgumentParser
+    from robot.variables import Variables
     RF_NATIVE_CONVERSION_AVAILABLE = True
 except ImportError:
     RF_NATIVE_CONVERSION_AVAILABLE = False
@@ -71,6 +74,7 @@ class RobotFrameworkNativeConverter:
     
     def __init__(self):
         self.rf_storage = get_rf_doc_storage()
+        self._typeinfo_cache: Dict[Tuple[str, str], Dict[str, TypeInfo]] = {}
     
     def _extract_requests_library_signature(self, keyword_name: str, library_name: str = None) -> Optional[List[str]]:
         """
@@ -316,29 +320,84 @@ class RobotFrameworkNativeConverter:
         return (param_name.isidentifier() and 
                 not arg_str.startswith('http') and 
                 not arg_str.count('=') > 10)  # Avoid complex expressions
+
+    def _resolve_arguments_with_argument_resolver(
+        self,
+        keyword_name: str,
+        args: List[Any],
+        library_name: Optional[str],
+        session_variables: Dict[str, Any],
+        keyword_callable: Optional[Any],
+    ) -> Tuple[List[Any], Dict[str, Any]]:
+        if not RF_NATIVE_CONVERSION_AVAILABLE:
+            raise RuntimeError("RF argument resolver unavailable")
+
+        spec = self._get_keyword_argument_spec(keyword_name, library_name)
+        if spec is None and keyword_callable is not None:
+            spec = self._build_argument_spec_from_signature(keyword_callable)
+        if spec is None:
+            raise RuntimeError("Unable to build argument specification")
+
+        resolver = ArgumentResolver(spec)
+        variables = self._build_variable_store(session_variables)
+        positional, named_pairs = resolver.resolve(list(args), variables=variables)
+        return positional, dict(named_pairs)
+
+    def _build_argument_spec_from_signature(self, keyword_callable) -> Optional[ArgumentSpec]:
+        if keyword_callable is None or not RF_NATIVE_CONVERSION_AVAILABLE:
+            return None
+        try:
+            signature = inspect.signature(keyword_callable)
+            arg_strings: List[str] = []
+            for param in signature.parameters.values():
+                if param.kind == inspect.Parameter.VAR_POSITIONAL:
+                    arg_strings.append(f"*{param.name}")
+                elif param.kind == inspect.Parameter.VAR_KEYWORD:
+                    arg_strings.append(f"**{param.name}")
+                elif param.default is inspect._empty:
+                    arg_strings.append(param.name)
+                else:
+                    default_repr = repr(param.default)
+                    arg_strings.append(f"{param.name}={default_repr}")
+            parser = DynamicArgumentParser()
+            return parser.parse(arg_strings, keyword_callable.__name__)
+        except Exception as exc:
+            logger.debug(
+                f"Failed to build ArgumentSpec from signature for {keyword_callable}: {exc}"
+            )
+            return None
+
+    def _build_variable_store(self, session_variables: Dict[str, Any]) -> Variables:
+        variables = Variables()
+        for name, value in session_variables.items():
+            formatted = name if name.startswith("${") else f"${{{name}}}"
+            variables[formatted] = value
+        return variables
     
-    def _process_object_preserving_args(self, keyword_name: str, args: List[Any]) -> List[Any]:
-        """
-        Proper solution: Handle ObjectPreservingArgument objects correctly for RF execution.
-        
-        Robot Framework's ArgumentResolver expects to receive arguments in a format that
-        allows proper separation of positional and named arguments. For named parameters
-        with object values, we need to return both the parameter name and the object value
-        in a way that RF can process.
-        """
-        from robotmcp.components.variables.variable_resolver import ObjectPreservingArgument
-        
-        processed_args = []
+    def _process_object_preserving_args(
+        self,
+        keyword_name: str,
+        args: List[Any],
+        session_variables: Optional[Dict[str, Any]] = None,
+    ) -> List[Any]:
+        """Handle ObjectPreservingArgument values by stashing them as variables."""
+        from robotmcp.components.variables.variable_resolver import (
+            ObjectPreservingArgument,
+        )
+
+        processed_args: List[Any] = []
+        preserve_store = session_variables if session_variables is not None else {}
+        preserve_count = 0
 
         for arg in args:
             if isinstance(arg, ObjectPreservingArgument):
-                # Preserve object-valued named parameter as a (name, value) tuple
-                processed_args.append((arg.param_name, arg.value))
+                unique_name = f"__mcp_preserved_{preserve_count}"
+                preserve_count += 1
+                preserve_store[unique_name] = arg.value
+                processed_args.append(f"{arg.param_name}=${{{unique_name}}}")
             elif isinstance(arg, tuple) and len(arg) == 2:
-                # Preserve named parameter tuple as-is for downstream resolver
                 processed_args.append(arg)
             else:
-                # Do NOT stringify non-strings here; keep original objects for positional parameters
                 processed_args.append(arg)
 
         return processed_args
@@ -367,14 +426,55 @@ class RobotFrameworkNativeConverter:
         Returns:
             ParsedArguments with correctly converted types
         """
-        # Handle ObjectPreservingArgument objects from variable resolution
-        processed_args = self._process_object_preserving_args(keyword_name, args)
-        return self._parse_with_rf_native_resolver(keyword_name, processed_args, library_name, session_variables)
+        temp_session_vars = dict(session_variables or {}) if session_variables else {}
+        processed_args = self._process_object_preserving_args(
+            keyword_name, args, temp_session_vars
+        )
+        keyword_callable = self._get_keyword_callable(keyword_name, library_name)
+        try:
+            positional, named = self._resolve_arguments_with_argument_resolver(
+                keyword_name,
+                processed_args,
+                library_name,
+                temp_session_vars,
+                keyword_callable,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[ARGS-FALLBACK] Using legacy parsing for %s (library=%s): %s",
+                keyword_name,
+                library_name,
+                exc,
+            )
+            return self._fallback_parse(processed_args)
+
+        result = ParsedArguments()
+        result.positional = positional
+        result.named = named
+
+        if keyword_callable is not None:
+            try:
+                result.positional, result.named = self._apply_typeinfo_conversions(
+                    keyword_name,
+                    library_name,
+                    result.positional,
+                    result.named,
+                    keyword_callable,
+                    inspect.signature(keyword_callable),
+                )
+            except Exception as exc:
+                logger.debug(
+                    f"TypeInfo conversion failed for {keyword_name}: {exc}"
+                )
+
+        return result
     
     def _parse_with_rf_native_resolver(self, keyword_name: str, args: List[Any], library_name: Optional[str] = None, session_variables: Optional[Dict[str, Any]] = None) -> ParsedArguments:
         """Use Robot Framework's native argument resolution - GENERAL SOLUTION."""
         if not RF_NATIVE_CONVERSION_AVAILABLE:
-            logger.debug(f"RF native parsing not available, using fallback for {keyword_name}")
+            logger.warning(
+                "[ARGS-FALLBACK] RF native parsing unavailable for %s", keyword_name
+            )
             return self._fallback_parse(args)
         
         # GENERAL SOLUTION: Use RF's native Variables and ArgumentResolver
@@ -413,7 +513,17 @@ class RobotFrameworkNativeConverter:
             valid_param_names = set()
             has_kwargs = False
             # Enrich with actual Python method signature when available (more reliable for decorated/dynamic keywords)
-            py_sig = self._get_python_method_signature(keyword_name, library_name)
+            keyword_callable = self._get_keyword_callable(keyword_name, library_name)
+            py_sig = None
+            if keyword_callable is not None:
+                try:
+                    import inspect
+
+                    py_sig = inspect.signature(keyword_callable)
+                except Exception:
+                    py_sig = None
+            else:
+                py_sig = None
             if py_sig is not None:
                 try:
                     from inspect import Parameter
@@ -516,14 +626,32 @@ class RobotFrameworkNativeConverter:
             result = ParsedArguments()
             result.positional = positional_args
             result.named = named_args
+
+            if keyword_callable and py_sig is not None:
+                try:
+                    (
+                        result.positional,
+                        result.named,
+                    ) = self._apply_typeinfo_conversions(
+                        keyword_name,
+                        library_name,
+                        result.positional,
+                        result.named,
+                        keyword_callable,
+                        py_sig,
+                    )
+                except ValueError as conversion_error:
+                    raise conversion_error
             
             logger.debug(f"RF NATIVE SOLUTION - {keyword_name}: positional={positional_args}, named={named_args}")
             return result
             
         except Exception as e:
-            logger.debug(f"RF native resolution failed for {keyword_name}: {e}")
-            # Fallback to original logic
-            pass
+            logger.warning(
+                "[ARGS-FALLBACK] Legacy resolver path hit for %s: %s",
+                keyword_name,
+                e,
+            )
         
         try:
             # Use Robot Framework's native LibDoc to get keyword signature
@@ -642,7 +770,11 @@ class RobotFrameworkNativeConverter:
                         logger.debug(f"Decorator-masked signature detected for {keyword_name}, using custom extraction")
                         # Fall through to signature extraction logic
         except Exception as e:
-            logger.debug(f"RF native parsing failed for {keyword_name}: {e}")
+            logger.warning(
+                "[ARGS-FALLBACK] RF native parsing failed for %s: %s",
+                keyword_name,
+                e,
+            )
         
         # Fallback to simple parsing
         return self._fallback_parse(args)
@@ -1100,6 +1232,7 @@ class RobotFrameworkNativeConverter:
         Returns:
             ParsedArguments with proper positional/named argument separation
         """
+        logger.warning("[ARGS-FALLBACK] Using simple argument parsing")
         parsed = ParsedArguments()
         
         # Build list of valid parameter names from signature
@@ -1602,42 +1735,149 @@ Handle WebView
         return None
 
     def _get_python_method_signature(self, keyword_name: str, library_name: Optional[str]):
-        """Try to fetch the underlying Python method signature for a keyword.
+        method = self._get_keyword_callable(keyword_name, library_name)
+        if method is None:
+            return None
+        try:
+            import inspect
 
-        Uses the dynamic orchestrator's library manager to locate the library instance
-        and then finds the implementing method by robot_name or derived convention.
-        """
+            return inspect.signature(method)
+        except Exception:
+            return None
+
+    def _get_keyword_callable(self, keyword_name: str, library_name: Optional[str]):
         if not library_name:
             return None
         try:
-            from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
+            from robotmcp.core.dynamic_keyword_orchestrator import (
+                get_keyword_discovery,
+            )
             import inspect
+
             orch = get_keyword_discovery()
-            # Load on demand if needed
             if library_name not in orch.library_manager.libraries:
-                orch.library_manager.load_library_on_demand(library_name, orch.keyword_discovery)
+                orch.library_manager.load_library_on_demand(
+                    library_name, orch.keyword_discovery
+                )
             lib = orch.library_manager.libraries.get(library_name)
             if not lib or not lib.instance:
                 return None
             inst = lib.instance
-            # Match by robot_name first
             for attr in dir(inst):
                 try:
                     method = getattr(inst, attr)
                 except Exception:
                     continue
-                if callable(method) and hasattr(method, 'robot_name'):
-                    try:
-                        if method.robot_name == keyword_name:
-                            return inspect.signature(method)
-                    except Exception:
-                        continue
-            # Fallback: derive method name
-            cand = keyword_name.lower().replace(' ', '_')
+                if callable(method):
+                    robot_name = getattr(method, "robot_name", None)
+                    if robot_name and robot_name == keyword_name:
+                        return method
+            cand = keyword_name.lower().replace(" ", "_")
             if hasattr(inst, cand):
                 method = getattr(inst, cand)
                 if callable(method):
-                    return inspect.signature(method)
+                    return method
         except Exception:
             return None
         return None
+
+    def _apply_typeinfo_conversions(
+        self,
+        keyword_name: str,
+        library_name: Optional[str],
+        positional_args: List[Any],
+        named_args: Dict[str, Any],
+        keyword_callable,
+        signature,
+    ) -> Tuple[List[Any], Dict[str, Any]]:
+        converters = self._get_typeinfo_map(
+            keyword_name, library_name, keyword_callable, signature
+        )
+        if not converters:
+            return positional_args, named_args
+        try:
+            bound = signature.bind_partial(*positional_args, **named_args)
+        except TypeError:
+            return positional_args, named_args
+        updated = False
+        for name, value in list(bound.arguments.items()):
+            type_info = converters.get(name)
+            if not type_info or value is None:
+                continue
+            try:
+                converted = type_info.convert(value, name=name, kind="argument")
+            except Exception as exc:
+                raise ValueError(
+                    f"Argument '{value}' cannot be converted for parameter '{name}': {exc}"
+                ) from exc
+            if converted is not value:
+                bound.arguments[name] = converted
+                updated = True
+        if not updated:
+            return positional_args, named_args
+        import inspect
+
+        new_positional: List[Any] = []
+        new_named: Dict[str, Any] = {}
+        consumed: set[str] = set()
+
+        for param in signature.parameters.values():
+            if param.name not in bound.arguments:
+                continue
+            value = bound.arguments[param.name]
+            consumed.add(param.name)
+            if param.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            ):
+                if param.name in named_args:
+                    new_named[param.name] = value
+                else:
+                    new_positional.append(value)
+            elif param.kind == inspect.Parameter.KEYWORD_ONLY:
+                new_named[param.name] = value
+            elif param.kind == inspect.Parameter.VAR_POSITIONAL:
+                new_positional.extend(list(value))
+            elif param.kind == inspect.Parameter.VAR_KEYWORD:
+                new_named.update(dict(value))
+
+        for name, value in bound.arguments.items():
+            if name in consumed:
+                continue
+            new_named[name] = value
+
+        return new_positional, new_named
+
+    def _get_typeinfo_map(
+        self,
+        keyword_name: str,
+        library_name: Optional[str],
+        keyword_callable,
+        signature,
+    ) -> Dict[str, TypeInfo]:
+        cache_key = (library_name or "__builtin__", keyword_name)
+        if cache_key in self._typeinfo_cache:
+            return self._typeinfo_cache[cache_key]
+        mapping: Dict[str, TypeInfo] = {}
+        try:
+            type_hints = get_type_hints(keyword_callable)
+        except Exception:
+            type_hints = getattr(keyword_callable, "__annotations__", {}) or {}
+        import inspect
+
+        for param in signature.parameters.values():
+            if param.kind not in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            ):
+                continue
+            hint = type_hints.get(param.name)
+            if hint in (None, inspect._empty):
+                continue
+            try:
+                mapping[param.name] = TypeInfo.from_type_hint(hint)
+            except Exception:
+                continue
+        self._typeinfo_cache[cache_key] = mapping
+        return mapping

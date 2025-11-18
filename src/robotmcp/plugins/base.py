@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .contracts import (
     InstallAction,
@@ -70,6 +70,15 @@ class StaticLibraryPlugin(LibraryPlugin):
 
     def on_session_end(self, session: "ExecutionSession") -> None:
         return None
+
+    def generate_failure_hints(
+        self,
+        session: "ExecutionSession",
+        keyword_name: str,
+        arguments: List[Any],
+        error_text: str,
+    ) -> List[Dict[str, Any]]:
+        return []
 
 
 class ManifestLibraryPlugin(StaticLibraryPlugin):
