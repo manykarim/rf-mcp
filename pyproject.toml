@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rf-mcp"
-version = "0.24.1"
+version = "0.25.0dev01"
 description = "Robot Framework MCP Server - Natural Language Test Automation Bridge"
 authors = [{name = "Many Kasiriha"}]
 license = {text = "Apache-2.0"}
@@ -44,6 +44,8 @@ all = [
     "robotframework-appiumlibrary",
     "robotframework-requests",
     "robotframework-databaselibrary",
+    "django>=4.2,<5.0",
+    "uvicorn[standard]>=0.24"
 ]
 dev = [
     "pytest>=7.0.0",
