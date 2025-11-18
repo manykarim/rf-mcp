@@ -175,6 +175,16 @@ class LibraryPlugin(Protocol):
     def on_session_end(self, session: "ExecutionSession") -> None:
         """Hook executed when a session ends."""
 
+    def generate_failure_hints(
+        self,
+        session: "ExecutionSession",
+        keyword_name: str,
+        arguments: List[Any],
+        error_text: str,
+    ) -> List[Dict[str, Any]]:
+        """Return optional hint dictionaries when this library encounters a failure."""
+        return []
+
 
 # Import guarded to avoid circular dependency during runtime import
 try:  # pragma: no cover - imported lazily for typing only

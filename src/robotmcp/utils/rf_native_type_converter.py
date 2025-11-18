@@ -1,7 +1,7 @@
 """Robot Framework native type conversion integration."""
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, get_type_hints
 
 from robotmcp.models.library_models import ParsedArguments
 from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
@@ -71,6 +71,7 @@ class RobotFrameworkNativeConverter:
     
     def __init__(self):
         self.rf_storage = get_rf_doc_storage()
+        self._typeinfo_cache: Dict[Tuple[str, str], Dict[str, TypeInfo]] = {}
     
     def _extract_requests_library_signature(self, keyword_name: str, library_name: str = None) -> Optional[List[str]]:
         """
@@ -413,7 +414,17 @@ class RobotFrameworkNativeConverter:
             valid_param_names = set()
             has_kwargs = False
             # Enrich with actual Python method signature when available (more reliable for decorated/dynamic keywords)
-            py_sig = self._get_python_method_signature(keyword_name, library_name)
+            keyword_callable = self._get_keyword_callable(keyword_name, library_name)
+            py_sig = None
+            if keyword_callable is not None:
+                try:
+                    import inspect
+
+                    py_sig = inspect.signature(keyword_callable)
+                except Exception:
+                    py_sig = None
+            else:
+                py_sig = None
             if py_sig is not None:
                 try:
                     from inspect import Parameter
@@ -516,6 +527,22 @@ class RobotFrameworkNativeConverter:
             result = ParsedArguments()
             result.positional = positional_args
             result.named = named_args
+
+            if keyword_callable and py_sig is not None:
+                try:
+                    (
+                        result.positional,
+                        result.named,
+                    ) = self._apply_typeinfo_conversions(
+                        keyword_name,
+                        library_name,
+                        result.positional,
+                        result.named,
+                        keyword_callable,
+                        py_sig,
+                    )
+                except ValueError as conversion_error:
+                    raise conversion_error
             
             logger.debug(f"RF NATIVE SOLUTION - {keyword_name}: positional={positional_args}, named={named_args}")
             return result
@@ -1602,42 +1629,149 @@ Handle WebView
         return None
 
     def _get_python_method_signature(self, keyword_name: str, library_name: Optional[str]):
-        """Try to fetch the underlying Python method signature for a keyword.
+        method = self._get_keyword_callable(keyword_name, library_name)
+        if method is None:
+            return None
+        try:
+            import inspect
 
-        Uses the dynamic orchestrator's library manager to locate the library instance
-        and then finds the implementing method by robot_name or derived convention.
-        """
+            return inspect.signature(method)
+        except Exception:
+            return None
+
+    def _get_keyword_callable(self, keyword_name: str, library_name: Optional[str]):
         if not library_name:
             return None
         try:
-            from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
+            from robotmcp.core.dynamic_keyword_orchestrator import (
+                get_keyword_discovery,
+            )
             import inspect
+
             orch = get_keyword_discovery()
-            # Load on demand if needed
             if library_name not in orch.library_manager.libraries:
-                orch.library_manager.load_library_on_demand(library_name, orch.keyword_discovery)
+                orch.library_manager.load_library_on_demand(
+                    library_name, orch.keyword_discovery
+                )
             lib = orch.library_manager.libraries.get(library_name)
             if not lib or not lib.instance:
                 return None
             inst = lib.instance
-            # Match by robot_name first
             for attr in dir(inst):
                 try:
                     method = getattr(inst, attr)
                 except Exception:
                     continue
-                if callable(method) and hasattr(method, 'robot_name'):
-                    try:
-                        if method.robot_name == keyword_name:
-                            return inspect.signature(method)
-                    except Exception:
-                        continue
-            # Fallback: derive method name
-            cand = keyword_name.lower().replace(' ', '_')
+                if callable(method):
+                    robot_name = getattr(method, "robot_name", None)
+                    if robot_name and robot_name == keyword_name:
+                        return method
+            cand = keyword_name.lower().replace(" ", "_")
             if hasattr(inst, cand):
                 method = getattr(inst, cand)
                 if callable(method):
-                    return inspect.signature(method)
+                    return method
         except Exception:
             return None
         return None
+
+    def _apply_typeinfo_conversions(
+        self,
+        keyword_name: str,
+        library_name: Optional[str],
+        positional_args: List[Any],
+        named_args: Dict[str, Any],
+        keyword_callable,
+        signature,
+    ) -> Tuple[List[Any], Dict[str, Any]]:
+        converters = self._get_typeinfo_map(
+            keyword_name, library_name, keyword_callable, signature
+        )
+        if not converters:
+            return positional_args, named_args
+        try:
+            bound = signature.bind_partial(*positional_args, **named_args)
+        except TypeError:
+            return positional_args, named_args
+        updated = False
+        for name, value in list(bound.arguments.items()):
+            type_info = converters.get(name)
+            if not type_info or value is None:
+                continue
+            try:
+                converted = type_info.convert(value, name=name, kind="argument")
+            except Exception as exc:
+                raise ValueError(
+                    f"Argument '{value}' cannot be converted for parameter '{name}': {exc}"
+                ) from exc
+            if converted is not value:
+                bound.arguments[name] = converted
+                updated = True
+        if not updated:
+            return positional_args, named_args
+        import inspect
+
+        new_positional: List[Any] = []
+        new_named: Dict[str, Any] = {}
+        consumed: set[str] = set()
+
+        for param in signature.parameters.values():
+            if param.name not in bound.arguments:
+                continue
+            value = bound.arguments[param.name]
+            consumed.add(param.name)
+            if param.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            ):
+                if param.name in named_args:
+                    new_named[param.name] = value
+                else:
+                    new_positional.append(value)
+            elif param.kind == inspect.Parameter.KEYWORD_ONLY:
+                new_named[param.name] = value
+            elif param.kind == inspect.Parameter.VAR_POSITIONAL:
+                new_positional.extend(list(value))
+            elif param.kind == inspect.Parameter.VAR_KEYWORD:
+                new_named.update(dict(value))
+
+        for name, value in bound.arguments.items():
+            if name in consumed:
+                continue
+            new_named[name] = value
+
+        return new_positional, new_named
+
+    def _get_typeinfo_map(
+        self,
+        keyword_name: str,
+        library_name: Optional[str],
+        keyword_callable,
+        signature,
+    ) -> Dict[str, TypeInfo]:
+        cache_key = (library_name or "__builtin__", keyword_name)
+        if cache_key in self._typeinfo_cache:
+            return self._typeinfo_cache[cache_key]
+        mapping: Dict[str, TypeInfo] = {}
+        try:
+            type_hints = get_type_hints(keyword_callable)
+        except Exception:
+            type_hints = getattr(keyword_callable, "__annotations__", {}) or {}
+        import inspect
+
+        for param in signature.parameters.values():
+            if param.kind not in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            ):
+                continue
+            hint = type_hints.get(param.name)
+            if hint in (None, inspect._empty):
+                continue
+            try:
+                mapping[param.name] = TypeInfo.from_type_hint(hint)
+            except Exception:
+                continue
+        self._typeinfo_cache[cache_key] = mapping
+        return mapping

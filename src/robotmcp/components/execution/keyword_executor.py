@@ -355,19 +355,32 @@ class KeywordExecutor:
             )
             step.mark_failure(str(e))
 
-            # Generate hints for the failure
+            hints: List[Dict[str, Any]] = []
+            library_name = self._get_library_for_keyword(keyword)
+            plugin_hints = self.plugin_manager.generate_failure_hints(
+                library_name,
+                session,
+                keyword,
+                list(arguments or []),
+                str(e),
+            )
+            if plugin_hints:
+                hints.extend(plugin_hints)
             try:
                 from robotmcp.utils.hints import HintContext, generate_hints
-                hctx = HintContext(
-                    session_id=session.session_id,
-                    keyword=keyword,
-                    arguments=list(arguments or []),
-                    error_text=str(e),
-                    session_search_order=getattr(session, "search_order", None),
-                )
-                hints = generate_hints(hctx)
+
+                if not hints:
+                    hctx = HintContext(
+                        session_id=session.session_id,
+                        keyword=keyword,
+                        arguments=list(arguments or []),
+                        error_text=str(e),
+                        session_search_order=getattr(session, "search_order", None),
+                    )
+                    hints = generate_hints(hctx)
             except Exception:
-                hints = []
+                if not hints:
+                    hints = []
 
             return {
                 "success": False,
@@ -1636,10 +1649,23 @@ class KeywordExecutor:
         if not result["success"]:
             base_response["error"] = result.get("error", "Unknown error")
             # Propagate hints from lower layers or generate as fallback
-            hints = result.get("hints")
+            hints = result.get("hints") or []
+            library_name = result.get("library_name") or self._get_library_for_keyword(
+                keyword
+            )
+            plugin_hints = self.plugin_manager.generate_failure_hints(
+                library_name,
+                session,
+                keyword,
+                list(arguments or []),
+                str(base_response["error"]),
+            )
+            if plugin_hints:
+                hints = list(plugin_hints) + list(hints)
             if not hints:
                 try:
                     from robotmcp.utils.hints import HintContext, generate_hints
+
                     hctx = HintContext(
                         session_id=session.session_id,
                         keyword=keyword,
