@@ -440,8 +440,11 @@ class RobotFrameworkNativeConverter:
                 keyword_callable,
             )
         except Exception as exc:
-            logger.debug(
-                f"RF argument resolver fallback for {keyword_name}: {exc}"
+            logger.warning(
+                "[ARGS-FALLBACK] Using legacy parsing for %s (library=%s): %s",
+                keyword_name,
+                library_name,
+                exc,
             )
             return self._fallback_parse(processed_args)
 
@@ -469,7 +472,9 @@ class RobotFrameworkNativeConverter:
     def _parse_with_rf_native_resolver(self, keyword_name: str, args: List[Any], library_name: Optional[str] = None, session_variables: Optional[Dict[str, Any]] = None) -> ParsedArguments:
         """Use Robot Framework's native argument resolution - GENERAL SOLUTION."""
         if not RF_NATIVE_CONVERSION_AVAILABLE:
-            logger.debug(f"RF native parsing not available, using fallback for {keyword_name}")
+            logger.warning(
+                "[ARGS-FALLBACK] RF native parsing unavailable for %s", keyword_name
+            )
             return self._fallback_parse(args)
         
         # GENERAL SOLUTION: Use RF's native Variables and ArgumentResolver
@@ -642,9 +647,11 @@ class RobotFrameworkNativeConverter:
             return result
             
         except Exception as e:
-            logger.debug(f"RF native resolution failed for {keyword_name}: {e}")
-            # Fallback to original logic
-            pass
+            logger.warning(
+                "[ARGS-FALLBACK] Legacy resolver path hit for %s: %s",
+                keyword_name,
+                e,
+            )
         
         try:
             # Use Robot Framework's native LibDoc to get keyword signature
@@ -763,7 +770,11 @@ class RobotFrameworkNativeConverter:
                         logger.debug(f"Decorator-masked signature detected for {keyword_name}, using custom extraction")
                         # Fall through to signature extraction logic
         except Exception as e:
-            logger.debug(f"RF native parsing failed for {keyword_name}: {e}")
+            logger.warning(
+                "[ARGS-FALLBACK] RF native parsing failed for %s: %s",
+                keyword_name,
+                e,
+            )
         
         # Fallback to simple parsing
         return self._fallback_parse(args)
@@ -1221,6 +1232,7 @@ class RobotFrameworkNativeConverter:
         Returns:
             ParsedArguments with proper positional/named argument separation
         """
+        logger.warning("[ARGS-FALLBACK] Using simple argument parsing")
         parsed = ParsedArguments()
         
         # Build list of valid parameter names from signature
