@@ -58,6 +58,27 @@ Execute the test suite stepwise and build the final version afterwards.
 
 **That's it!** RobotMCP will guide the AI through the entire testing workflow.
 
+### 🤖 Run MCP Prompts Inside Robot Framework
+Import the new `robotmcp.prompt.McpPromptLibrary` to let an LLM dispatch MCP tools directly inside your running test:
+
+```
+*** Settings ***
+Library    robotmcp.prompt.McpPromptLibrary    default_prompt=automate
+
+*** Test Cases ***
+Drive Scenario With Prompt
+    ${result}=    Prompt    ${SCENARIO_TEXT}    session_id=${TEST NAME}
+    Log    Final assistant answer: ${result}
+
+Chat With MCP
+    ${response}=    Chat    Open https://www.saucedemo.com and add two items
+    Log    Agent summary: ${response}
+```
+
+The library automatically loads a local `.env` (using `python-dotenv`) and reads `OPENAI_API_KEY`, `OPENAI_MODEL`, plus optional `OPENAI_BASE_URL`/`ROBOTMCP_PROMPT_*` overrides before executing the prompt or chat flow. Every MCP tool is exposed to the agent, so it can analyze scenarios, recommend/import libraries, manage sessions, and retry `execute_step` calls exactly as it would through an MCP client. If a Browser library session is already active in the suite, the agent receives an advisory message instructing it to reuse that context (and to use Browser keywords instead of Selenium-only ones). All keyword executions happen inside the active Robot session (`use_context=True`) and appear in the same log/output tree as the rest of the suite.
+
+When the library detects that attach mode isn’t available it automatically sets `ROBOTMCP_ATTACH_DEFAULT=off` for the duration of the prompt/chat run, so you won’t see repeated “ATTACH unreachable” warnings during normal Robot executions.
+
 ---
 
 ## 🚀 Key Features

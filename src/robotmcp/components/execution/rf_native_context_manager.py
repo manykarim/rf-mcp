@@ -36,6 +36,11 @@ from robotmcp.utils.rf_variables_compatibility import (
 )
 
 
+class KeywordExecutionFailed(Exception):
+    """Raised when a keyword is found and executed, but fails."""
+    pass
+
+
 class RobotFrameworkNativeContextManager:
     """
     Manages Robot Framework execution context using native RF APIs.
@@ -47,9 +52,18 @@ class RobotFrameworkNativeContextManager:
     def __init__(self):
         self._session_contexts = {}  # session_id -> context info
         self._active_context = None
-        
+
         if not RF_NATIVE_AVAILABLE:
             logger.warning("RF native context manager initialized without RF components")
+
+    @staticmethod
+    def _running_inside_robot() -> bool:
+        try:
+            from robot.output import logger as rf_logger
+
+            return bool(getattr(rf_logger.LOGGER, "_output_file", None))
+        except Exception:
+            return False
     
     def create_context_for_session(self, session_id: str, libraries: List[str] = None) -> Dict[str, Any]:
         """
@@ -255,37 +269,40 @@ class RobotFrameworkNativeContextManager:
                             logger.warning(f"Fallback import also failed for {lib_name}: {fallback_error}")
                             logger.warning(f"Fallback error type: {type(fallback_error).__name__}")
 
-            # Apply RF search order and initialize suite/test scopes in Namespace and Context
-            try:
-                if imported_libraries:
-                    namespace.set_search_order(imported_libraries)
-                    logger.info(f"Set RF Namespace search order: {imported_libraries}")
-                # Initialize variable and library scopes for suite and test
-                namespace.start_suite()
-                namespace.start_test()
-                # Also start a real running+result test in ExecutionContext for StatusReporter/BuiltIn
+            if not self._running_inside_robot():
                 try:
-                    from robot.running.model import TestCase as RunTest
-                    from robot.result.model import TestCase as ResTest
-                    run_test = RunTest(name=f"MCP_Test_{session_id}")
-                    res_test = ResTest(name=f"MCP_Test_{session_id}")
-                    ctx.start_test(run_test, res_test)
-                    logger.info("Started ExecutionContext test for session")
+                    if imported_libraries:
+                        namespace.set_search_order(imported_libraries)
+                        logger.info(f"Set RF Namespace search order: {imported_libraries}")
+                    namespace.start_suite()
+                    namespace.start_test()
+                    try:
+                        from robot.running.model import TestCase as RunTest
+                        from robot.result.model import TestCase as ResTest
+
+                        run_test = RunTest(name=f"MCP_Test_{session_id}")
+                        res_test = ResTest(name=f"MCP_Test_{session_id}")
+                        ctx.start_test(run_test, res_test)
+                        logger.info("Started ExecutionContext test for session")
+                    except Exception as e:
+                        logger.debug(f"Could not start ExecutionContext test: {e}")
+                    logger.info("Initialized Namespace + Context suite/test scopes for session context")
                 except Exception as e:
-                    logger.debug(f"Could not start ExecutionContext test: {e}")
-                logger.info("Initialized Namespace + Context suite/test scopes for session context")
-            except Exception as e:
-                logger.debug(f"Namespace initialization failed: {e}")
+                    logger.debug(f"Namespace initialization failed: {e}")
 
             # Store context info
             # Prepare result model holders (for future RF runner/BuiltIn status reporting integration)
-            try:
-                from robot.result.model import TestSuite as ResultSuite, TestCase as ResultTest
-                result_suite = ResultSuite(name=suite.name)
-                result_test = ResultTest(name=f"MCP_Test_{session_id}")
-            except Exception:
-                result_suite = None
-                result_test = None
+            result_suite = None
+            result_test = None
+            if not self._running_inside_robot():
+                try:
+                    from robot.result.model import TestSuite as ResultSuite, TestCase as ResultTest
+
+                    result_suite = ResultSuite(name=suite.name)
+                    result_test = ResultTest(name=f"MCP_Test_{session_id}")
+                except Exception:
+                    result_suite = None
+                    result_test = None
 
             self._session_contexts[session_id] = {
                 "context": ctx,
@@ -362,8 +379,10 @@ class RobotFrameworkNativeContextManager:
 
             logger.info(f"Executing {keyword_name} in RF native context for session {session_id}")
 
+            running_inside_robot = self._running_inside_robot()
+
             # Ensure the RF context is healthy after any prior suite execution.
-            # Rebuild missing output/result parent as needed to avoid NoneType.is_logged errors.
+            # Rebuild missing output/result parent as needed when not running under Robot.
             try:
                 from robot.conf import RobotSettings
                 from robot.output import Output
@@ -375,7 +394,10 @@ class RobotFrameworkNativeContextManager:
                 active_ctx = _CTX.current or ctx
 
                 # Ensure output is available and has is_logged
-                needs_output = not getattr(active_ctx, 'output', None) or not hasattr(getattr(active_ctx, 'output', None), 'message')
+                needs_output = (
+                    not running_inside_robot
+                    and (not getattr(active_ctx, 'output', None) or not hasattr(getattr(active_ctx, 'output', None), 'message'))
+                )
                 if needs_output:
                     temp_output_dir = tempfile.mkdtemp(prefix="rf_mcp_")
                     settings = RobotSettings(outputdir=temp_output_dir, output=None)
@@ -393,7 +415,7 @@ class RobotFrameworkNativeContextManager:
 
                 # Ensure global LOGGER has an output file registered
                 try:
-                    if getattr(rf_logger.LOGGER, "_output_file", None) is None:
+                    if not running_inside_robot and getattr(rf_logger.LOGGER, "_output_file", None) is None:
                         temp_output_dir = variables.get("${OUTPUTDIR}")
                         if not temp_output_dir:
                             temp_output_dir = tempfile.mkdtemp(prefix="rf_mcp_")
@@ -415,14 +437,15 @@ class RobotFrameworkNativeContextManager:
                     pass
 
                 # Ensure a parent result test exists for StatusReporter
-                try:
-                    from robot.result.model import TestCase as ResultTest
-                    parent_test = context_info.get("result_test")
-                    if parent_test is None:
-                        parent_test = ResultTest(name=f"MCP_Test_{session_id}")
-                        context_info["result_test"] = parent_test
-                except Exception:
-                    pass
+                if not running_inside_robot:
+                    try:
+                        from robot.result.model import TestCase as ResultTest
+                        parent_test = context_info.get("result_test")
+                        if parent_test is None:
+                            parent_test = ResultTest(name=f"MCP_Test_{session_id}")
+                            context_info["result_test"] = parent_test
+                    except Exception:
+                        pass
             except Exception:
                 # Best-effort self-heal; continue
                 pass
@@ -475,6 +498,44 @@ class RobotFrameworkNativeContextManager:
         keyword execution instead of run_keyword.
         """
         try:
+            # Prioritize standard RF execution when inside a test run to ensure
+            # that keywords appear in the log.html and listeners are notified.
+            if self._running_inside_robot():
+                try:
+                    from robot.libraries.BuiltIn import BuiltIn
+                    logger.info(f"Executing via BuiltIn.run_keyword: {keyword_name}")
+                    
+                    # Execute the keyword directly.
+                    # This ensures it appears in the log as a first-class keyword.
+                    # If it fails, it raises ExecutionFailed (or similar), which we catch below.
+                    try:
+                        result = BuiltIn().run_keyword(keyword_name, *arguments)
+                        return result
+                    except Exception as e:
+                        # Check if it's a Robot Framework execution failure
+                        # We need to catch it to prevent the Agent from crashing,
+                        # but we also want to allow the Agent to retry.
+                        # The failure is already logged by RF.
+                        
+                        # If we want to "hide" the failure from the final log (as requested),
+                        # it's difficult in real-time. However, by NOT using 'Run Keyword And Ignore Error',
+                        # we at least avoid the wrapper.
+                        
+                        # We raise KeywordExecutionFailed to signal the Agent that the step failed
+                        # but was attempted.
+                        error_msg = str(e)
+                        if hasattr(e, 'message'):
+                            error_msg = e.message
+                        
+                        raise KeywordExecutionFailed(error_msg)
+                except Exception as e:
+                    # If it was the KeywordExecutionFailed we just raised, re-raise it
+                    if isinstance(e, KeywordExecutionFailed):
+                         raise
+
+                    logger.debug(f"BuiltIn.run_keyword failed, falling back to manual resolution: {e}")
+                    # Fall through to existing manual resolution logic
+            
             # Use RF's native keyword resolution through the namespace
             # This is the most generic approach that works with any library
             
@@ -651,6 +712,14 @@ class RobotFrameworkNativeContextManager:
                     "variables": current_vars,
                     "assigned_variables": assigned_vars,
                 }
+            except KeywordExecutionFailed as e:
+                # The keyword ran and failed. Do not try fallbacks.
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "keyword": keyword_name,
+                    "arguments": arguments
+                }
             except Exception:
                 pass
             # Evaluate expression normalization: support ${var} and bare variable names
@@ -759,17 +828,18 @@ class RobotFrameworkNativeContextManager:
                     args=tuple(pos_args),
                     assign=tuple(assign_to) if isinstance(assign_to, list) else (() if not assign_to else (assign_to,)),
                 )
-                try:
-                    ctx_info = self._session_contexts.get(session_id)
-                    parent_test = ctx_info.get("result_test") if ctx_info else None
-                    if parent_test is None:
-                        # Self-heal: create a minimal ResultTest to satisfy StatusReporter
-                        from robot.result.model import TestCase as ResultTest
-                        parent_test = ResultTest(name=f"MCP_Test_{session_id}")
-                        ctx_info["result_test"] = parent_test
-                    res_kw.parent = parent_test
-                except Exception:
-                    pass
+                if not self._running_inside_robot():
+                    try:
+                        ctx_info = self._session_contexts.get(session_id)
+                        parent_test = ctx_info.get("result_test") if ctx_info else None
+                        if parent_test is None:
+                            from robot.result.model import TestCase as ResultTest
+
+                            parent_test = ResultTest(name=f"MCP_Test_{session_id}")
+                            ctx_info["result_test"] = parent_test
+                        res_kw.parent = parent_test
+                    except Exception:
+                        pass
                 result = runner.run(data_kw, res_kw, ctx)
             except Exception as runner_error:
                 logger.error(
@@ -787,17 +857,19 @@ class RobotFrameworkNativeContextManager:
                         pass
                     try:
                         # Force context.test to a valid result test
-                        try:
-                            ctx_info = self._session_contexts.get(session_id)
-                            from robot.result.model import TestCase as ResultTest
-                            if ctx_info:
-                                parent_test = ctx_info.get("result_test")
-                                if parent_test is None:
-                                    parent_test = ResultTest(name=f"MCP_Test_{session_id}")
-                                    ctx_info["result_test"] = parent_test
-                                ctx.test = parent_test
-                        except Exception:
-                            pass
+                        if not self._running_inside_robot():
+                            try:
+                                ctx_info = self._session_contexts.get(session_id)
+                                from robot.result.model import TestCase as ResultTest
+
+                                if ctx_info:
+                                    parent_test = ctx_info.get("result_test")
+                                    if parent_test is None:
+                                        parent_test = ResultTest(name=f"MCP_Test_{session_id}")
+                                        ctx_info["result_test"] = parent_test
+                                    ctx.test = parent_test
+                            except Exception:
+                                pass
                         # Apply the same Windows path normalization for BuiltIn fallback
                         norm_args = [_normalize_arg(a) for a in list(arguments)]
                         result = BuiltIn().run_keyword(keyword_name, *norm_args)
@@ -1143,11 +1215,9 @@ class RobotFrameworkNativeContextManager:
             return {"success": False, "error": str(e), "session_id": session_id}
 
 
-# Global instance for use throughout the application
 _rf_native_context_manager = None
 
-def get_rf_native_context_manager() -> RobotFrameworkNativeContextManager:
-    """Get the global RF native context manager instance."""
+def get_rf_native_context_manager():
     global _rf_native_context_manager
     if _rf_native_context_manager is None:
         _rf_native_context_manager = RobotFrameworkNativeContextManager()

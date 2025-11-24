@@ -13,6 +13,7 @@ import json
 import io
 import sys
 from contextlib import redirect_stdout, redirect_stderr
+from asyncio.subprocess import PIPE
 
 try:
     from robot import run_cli, rebot_cli
@@ -227,28 +228,14 @@ class SuiteExecutionService:
             stdout_capture = io.StringIO()
             stderr_capture = io.StringIO()
             
-            # Execute Robot Framework dry run in executor to avoid blocking
-            def run_robot_dry():
-                with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                    try:
-                        # Use run_cli which properly handles command line arguments
-                        return run_cli(rf_options, exit=False)
-                    except SystemExit as e:
-                        return e.code if hasattr(e, 'code') else (e.args[0] if e.args else 1)
-                    except Exception as e:
-                        logger.error(f"Robot Framework dry run error: {e}")
-                        return 252  # Invalid test data
-            
-            # Run in thread to avoid blocking
-            loop = asyncio.get_event_loop()
-            return_code = await asyncio.wait_for(
-                loop.run_in_executor(None, run_robot_dry),
-                timeout=self.dry_run_timeout
+            rf_options.append("--dryrun")
+            logger.debug(f"Executing dry run with options: {rf_options}")
+
+            return_code, stdout_content, stderr_content = await self._run_robot_process(
+                rf_options, self.dry_run_timeout
             )
             
             execution_time = (datetime.now() - start_time).total_seconds()
-            stdout_content = stdout_capture.getvalue()
-            stderr_content = stderr_capture.getvalue()
             
             logger.debug(f"Dry run completed in {execution_time:.2f}s with return code {return_code}")
             
@@ -313,32 +300,13 @@ class SuiteExecutionService:
             
             logger.debug(f"Executing normal run with options: {rf_options}")
             
-            # Capture stdout and stderr
-            stdout_capture = io.StringIO()
-            stderr_capture = io.StringIO()
-            
-            # Execute Robot Framework in executor to avoid blocking
-            def run_robot_normal():
-                with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                    try:
-                        # Use run_cli which properly handles command line arguments
-                        return run_cli(rf_options, exit=False)
-                    except SystemExit as e:
-                        return e.code if hasattr(e, 'code') else (e.args[0] if e.args else 1)
-                    except Exception as e:
-                        logger.error(f"Robot Framework execution error: {e}")
-                        return 255  # Unexpected internal error
-            
-            # Run in thread to avoid blocking
-            loop = asyncio.get_event_loop()
-            return_code = await asyncio.wait_for(
-                loop.run_in_executor(None, run_robot_normal),
-                timeout=self.execution_timeout
+            logger.debug(f"Executing normal run with options: {rf_options}")
+
+            return_code, stdout_content, stderr_content = await self._run_robot_process(
+                rf_options, self.execution_timeout
             )
             
             execution_time = (datetime.now() - start_time).total_seconds()
-            stdout_content = stdout_capture.getvalue()
-            stderr_content = stderr_capture.getvalue()
             
             logger.debug(f"Normal execution completed in {execution_time:.2f}s with return code {return_code}")
             
@@ -351,6 +319,23 @@ class SuiteExecutionService:
         except Exception as e:
             logger.error(f"Error executing normal run: {e}")
             raise
+    
+    async def _run_robot_process(self, rf_options: List[str], timeout: int) -> Tuple[int, str, str]:
+        cmd = [sys.executable, "-m", "robot", *rf_options]
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=PIPE,
+            stderr=PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.communicate()
+            raise
+        stdout_text = stdout.decode("utf-8", errors="replace")
+        stderr_text = stderr.decode("utf-8", errors="replace")
+        return process.returncode, stdout_text, stderr_text
     
     def _validate_suite_syntax(self, suite_content: str) -> Dict[str, Any]:
         """Validate suite syntax using Robot Framework parsing API."""
