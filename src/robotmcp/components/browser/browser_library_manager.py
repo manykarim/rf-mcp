@@ -243,6 +243,18 @@ class BrowserLibraryManager:
         else:
             return "none"
 
+    @staticmethod
+    def normalize_library_name(name: Optional[str]) -> Optional[str]:
+        """Map a library/preference name to a logical type ('browser' or 'selenium')."""
+        if not name:
+            return None
+        n = str(name).lower()
+        if "selenium" in n:
+            return "selenium"
+        if "browser" in n or "playwright" in n:
+            return "browser"
+        return None
+
     def set_active_library(self, session: ExecutionSession, library_type: str) -> bool:
         """
         Set the active library for a session.
@@ -254,6 +266,15 @@ class BrowserLibraryManager:
         Returns:
             bool: True if successfully set, False otherwise
         """
+        pref_type = self.normalize_library_name(
+            getattr(session, "explicit_library_preference", None)
+        )
+        if pref_type and pref_type != library_type:
+            logger.debug(
+                f"Skipping activation of '{library_type}' because explicit preference is '{pref_type}'"
+            )
+            return False
+
         if library_type == "browser" and self.browser_lib:
             session.browser_state.active_library = "browser"
             # Only import if not already present to avoid overwriting session configuration

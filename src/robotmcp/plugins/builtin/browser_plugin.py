@@ -10,6 +10,7 @@ from robotmcp.plugins.contracts import (
     LibraryCapabilities,
     LibraryMetadata,
     LibraryStateProvider,
+    KeywordOverrideHandler,
 )
 
 logger = logging.getLogger(__name__)
@@ -163,6 +164,82 @@ class BrowserLibraryPlugin(StaticLibraryPlugin):
             "get url": "Browser",
             "get title": "Browser",
         }
+
+    def get_keyword_overrides(self) -> Dict[str, KeywordOverrideHandler]:  # type: ignore[override]
+        return {
+            "open browser": self._override_open_browser,
+        }
+
+    async def _override_open_browser(
+        self,
+        session: "ExecutionSession",
+        keyword_name: str,
+        arguments: list[str],
+        keyword_info: Optional[Any] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Prevent Browser Library from using the Selenium-style 'Open Browser' keyword.
+
+        For Browser (Playwright) sessions we translate 'Open Browser' into:
+          1) New Browser  (optional browser name)
+          2) New Context
+          3) New Page     (optional URL)
+
+        If the session explicitly prefers SeleniumLibrary, we skip the override so
+        Selenium can handle Open Browser normally.
+        """
+        try:
+            # Honor explicit selenium preference
+            pref = (getattr(session, "explicit_library_preference", "") or "").lower()
+            if pref.startswith("selenium"):
+                return None
+
+            # Honor active selenium state
+            active = getattr(session, "browser_state", None)
+            if active and getattr(active, "active_library", None) == "selenium":
+                return None
+
+            # Only act when Browser is intended/active
+            if active and getattr(active, "active_library", None) not in (None, "browser"):
+                return None
+
+            # Extract URL and optional browser name
+            target_url = arguments[0] if arguments else None
+            browser_name = arguments[1] if len(arguments) > 1 else None
+
+            # Build translated steps, skipping already-open handles
+            steps: list[tuple[str, list[str]]] = []
+            if not (active and getattr(active, "browser_id", None)):
+                steps.append(("New Browser", [browser_name] if browser_name else []))
+            if not (active and getattr(active, "context_id", None)):
+                steps.append(("New Context", []))
+            steps.append(("New Page", [target_url] if target_url else []))
+
+            from robotmcp.server import execution_engine  # lazy import to avoid cycles
+
+            for kw, args in steps:
+                res = await execution_engine.execute_step(
+                    kw,
+                    args,
+                    session_id=session.session_id,
+                    detail_level="minimal",
+                    use_context=True,
+                )
+                if not res.get("success"):
+                    return {
+                        "success": False,
+                        "error": f"'Open Browser' is not supported for Browser library. "
+                        f"Tried {kw} instead and failed: {res.get('error') or res}",
+                    }
+
+            return {
+                "success": True,
+                "output": "Translated Open Browser into Browser.New Browser/New Context/New Page",
+                "variables": {},
+            }
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Open Browser override failed: %s", exc)
+            return None
 
 
 try:  # pragma: no cover

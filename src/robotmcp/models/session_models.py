@@ -116,6 +116,8 @@ class ExecutionSession:
     # Structure: list of dict nodes with keys depending on 'type' (e.g., 'if', 'for_each', 'try')
     flow_blocks: List[Dict[str, Any]] = field(default_factory=list)
     variables: Dict[str, Any] = field(default_factory=dict)
+    # Track provenance for variables (e.g., builtin/static/runtime)
+    variable_sources: Dict[str, str] = field(default_factory=dict)
     imported_libraries: List[str] = field(default_factory=list)
     current_browser: Optional[str] = None
     browser_state: BrowserState = field(default_factory=BrowserState)
@@ -168,9 +170,10 @@ class ExecutionSession:
         """Get the currently active browser automation library."""
         return self.browser_state.active_library
 
-    def set_variable(self, name: str, value: Any) -> None:
-        """Set a session variable."""
+    def set_variable(self, name: str, value: Any, source: str = "runtime") -> None:
+        """Set a session variable with provenance tracking."""
         self.variables[name] = value
+        self.variable_sources[name] = source
         self.update_activity()
 
     def get_variable(self, name: str, default: Any = None) -> Any:

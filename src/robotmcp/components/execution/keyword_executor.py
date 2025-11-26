@@ -755,8 +755,11 @@ class KeywordExecutor:
                 keyword_name,
             )
             if plugin_override:
-                override_result = await asyncio.to_thread(
-                    plugin_override, session, keyword_name, args, keyword_info
+                override_call = plugin_override(session, keyword_name, args, keyword_info)
+                override_result = (
+                    await override_call
+                    if asyncio.iscoroutine(override_call)
+                    else await asyncio.to_thread(lambda: override_call)
                 )
                 if override_result is not None:
                     library_to_import = (
@@ -810,11 +813,15 @@ class KeywordExecutor:
 
             elif web_automation_lib:
                 # Session has a specific web automation library imported - use it
+                pref_type = browser_library_manager.normalize_library_name(
+                    getattr(session, "explicit_library_preference", None)
+                )
                 if web_automation_lib == "Browser" and (
                     not current_active or current_active == "auto"
                 ):
-                    browser_library_manager.set_active_library(session, "browser")
-                    logger.debug("Using session's web automation library: Browser")
+                    if pref_type in (None, "browser"):
+                        browser_library_manager.set_active_library(session, "browser")
+                        logger.debug("Using session's web automation library: Browser")
                 elif web_automation_lib == "SeleniumLibrary" and (
                     not current_active or current_active == "auto"
                 ):
@@ -917,7 +924,8 @@ class KeywordExecutor:
 
             # Update session variables from RF native context
             if result.get("success") and "variables" in result:
-                session.variables.update(result["variables"])
+                for var_name, var_val in result["variables"].items():
+                    session.set_variable(var_name, var_val, source="runtime")
                 logger.debug(
                     f"Updated session variables from RF native context: {len(result['variables'])} variables"
                 )
@@ -929,16 +937,25 @@ class KeywordExecutor:
                         detect_library_type_from_keyword,
                     )
 
-                    detected = detect_library_type_from_keyword(keyword)
-                    lib_type = None
-                    if detected in ("browser", "selenium"):
-                        lib_type = detected
+                    # Always honor explicit preference first to avoid cross-importing other browser families
+                    pref_type = browser_library_manager.normalize_library_name(
+                        getattr(session, "explicit_library_preference", None)
+                    )
+
+                    lib_type = pref_type if pref_type else None
+
+                    if not lib_type:
+                        detected = detect_library_type_from_keyword(keyword)
+                        if detected in ("browser", "selenium"):
+                            lib_type = detected
+
                     if not lib_type and "." in keyword:
                         prefix = keyword.split(".", 1)[0].strip().lower()
                         if prefix == "browser":
                             lib_type = "browser"
                         elif prefix in ("seleniumlibrary", "selenium"):
                             lib_type = "selenium"
+
                     if not lib_type or lib_type == "auto":
                         keyword_lower = keyword.strip().lower()
                         browser_aliases = {
@@ -965,7 +982,9 @@ class KeywordExecutor:
                             "get location",
                         }
                         if session.browser_state.active_library == "browser" or keyword_lower in browser_aliases:
-                            lib_type = "browser"
+                            # Only accept browser if no explicit selenium preference
+                            if pref_type != "selenium":
+                                lib_type = "browser"
                         elif session.browser_state.active_library == "selenium" or keyword_lower in selenium_aliases:
                             lib_type = "selenium"
 

@@ -12,8 +12,8 @@ from datetime import datetime
 import json
 import io
 import sys
+import re
 from contextlib import redirect_stdout, redirect_stderr
-from asyncio.subprocess import PIPE
 
 try:
     from robot import run_cli, rebot_cli
@@ -39,11 +39,23 @@ class SuiteExecutionService:
         self.temp_dir = self._setup_temp_directory()
         self.active_executions = {}  # Track active executions for cleanup
         
-        # Execution timeouts
-        self.dry_run_timeout = getattr(config, 'DRY_RUN_TIMEOUT', 30)
-        self.execution_timeout = getattr(config, 'EXECUTION_TIMEOUT', 300)
+        # Execution timeouts (defaults tuned for fast feedback; overridable via config or env)
+        self.dry_run_timeout = int(
+            os.getenv("ROBOTMCP_DRY_RUN_TIMEOUT", getattr(config, "DRY_RUN_TIMEOUT", 5))
+        )
+        self.execution_timeout = int(
+            os.getenv(
+                "ROBOTMCP_EXECUTION_TIMEOUT", getattr(config, "EXECUTION_TIMEOUT", 30)
+            )
+        )
         
-        logger.info(f"SuiteExecutionService initialized with temp dir: {self.temp_dir}")
+        logger.info(
+            "SuiteExecutionService initialized with temp dir: %s (dry_timeout=%ss, exec_timeout=%ss, force_sync=%s)",
+            self.temp_dir,
+            self.dry_run_timeout,
+            self.execution_timeout,
+            os.getenv("ROBOTMCP_FORCE_SYNC_ROBOT", "0"),
+        )
     
     def _setup_temp_directory(self) -> str:
         """Setup temporary directory for suite execution."""
@@ -76,13 +88,14 @@ class SuiteExecutionService:
             options = {}
         
         execution_id = f"dry_{session_id}_{uuid.uuid4().hex[:8]}"
+        syslog_path: Optional[str] = None
         
         try:
             # Create temporary suite file
             suite_file = await self._create_temp_suite_file(suite_content, execution_id)
             
             # Execute Robot Framework dry run
-            return_code, stdout, stderr = await self._execute_rf_dry_run(suite_file, options)
+            return_code, stdout, stderr, syslog_path = await self._execute_rf_dry_run(suite_file, options, execution_id)
             
             # Parse results
             validation_results = self._parse_dry_run_output(stdout, stderr, return_code, options)
@@ -93,11 +106,28 @@ class SuiteExecutionService:
                 "session_id": session_id,
                 "tool": "run_test_suite_dry",
                 "execution_time": validation_results.get("execution_time", 0),
-                "suite_file_generated": os.path.basename(suite_file)
+                "suite_file_generated": os.path.basename(suite_file),
+                "syslog_path": syslog_path,
+                "syslog_tail": self._collect_syslog_tail(execution_id),
             })
             
             return validation_results
             
+        except asyncio.TimeoutError as e:
+            partial_stdout = e.args[1] if len(e.args) >= 2 else ""
+            partial_stderr = e.args[2] if len(e.args) >= 3 else ""
+            syslog_tail = e.args[3] if len(e.args) >= 4 else self._collect_syslog_tail(execution_id)
+            return {
+                "success": False,
+                "tool": "run_test_suite_dry",
+                "session_id": session_id,
+                "error": str(e),
+                "error_type": "execution_timeout",
+                "partial_stdout": partial_stdout[-4000:],
+                "partial_stderr": partial_stderr[-4000:],
+                "syslog_path": self._syslog_path_for_execution(execution_id),
+                "syslog_tail": syslog_tail[-4000:],
+            }
         except Exception as e:
             logger.error(f"Error in dry run execution for session {session_id}: {e}")
             return {
@@ -109,7 +139,7 @@ class SuiteExecutionService:
             }
         finally:
             await self._cleanup_execution(execution_id)
-    
+
     async def execute_normal(
         self,
         suite_content: str,
@@ -131,13 +161,16 @@ class SuiteExecutionService:
             options = {}
         
         execution_id = f"normal_{session_id}_{uuid.uuid4().hex[:8]}"
+        suite_file: Optional[str] = None
+        output_dir: Optional[str] = None
+        syslog_path: Optional[str] = None
         
         try:
             # Create temporary suite file
             suite_file = await self._create_temp_suite_file(suite_content, execution_id)
             
             # Execute Robot Framework normally
-            return_code, stdout, stderr, output_dir = await self._execute_rf_normal(suite_file, options)
+            return_code, stdout, stderr, output_dir, syslog_path = await self._execute_rf_normal(suite_file, options, execution_id, session_id)
             
             # Parse execution results
             execution_results = await self._parse_execution_results(output_dir, return_code, stdout, stderr, options)
@@ -147,11 +180,31 @@ class SuiteExecutionService:
                 "execution_id": execution_id,
                 "session_id": session_id,
                 "tool": "run_test_suite",
-                "suite_file_generated": os.path.basename(suite_file)
+                "suite_file_generated": os.path.basename(suite_file),
+                "syslog_path": syslog_path,
+                "syslog_tail": self._collect_syslog_tail(execution_id),
             })
             
             return execution_results
             
+        except asyncio.TimeoutError as e:
+            # Surface partial stdout/stderr to callers for diagnostics
+            partial_stdout = e.args[1] if len(e.args) >= 2 else ""
+            partial_stderr = e.args[2] if len(e.args) >= 3 else ""
+            syslog_tail = e.args[3] if len(e.args) >= 4 else self._collect_syslog_tail(execution_id)
+            return {
+                "success": False,
+                "tool": "run_test_suite",
+                "session_id": session_id,
+                "error": str(e),
+                "error_type": "execution_timeout",
+                "partial_stdout": partial_stdout[-4000:],
+                "partial_stderr": partial_stderr[-4000:],
+                "syslog_path": self._syslog_path_for_execution(execution_id),
+                "syslog_tail": syslog_tail[-4000:],
+                "suite_file": suite_file,
+                "output_dir": output_dir,
+            }
         except Exception as e:
             logger.error(f"Error in normal execution for session {session_id}: {e}")
             return {
@@ -187,11 +240,13 @@ class SuiteExecutionService:
             logger.error(f"Failed to create temporary suite file: {e}")
             raise
     
-    async def _execute_rf_dry_run(self, suite_file: str, options: Dict) -> Tuple[int, str, str]:
+    async def _execute_rf_dry_run(self, suite_file: str, options: Dict, execution_id: str) -> Tuple[int, str, str, str]:
         """Execute Robot Framework dry run using native API."""
         if not ROBOT_AVAILABLE:
             raise Exception("Robot Framework not available for dry run execution")
-        
+
+        suite_file = self._normalize_path(self._maybe_rewrite_browser_import(suite_file))
+
         try:
             start_time = datetime.now()
             
@@ -227,34 +282,50 @@ class SuiteExecutionService:
             # Capture stdout and stderr
             stdout_capture = io.StringIO()
             stderr_capture = io.StringIO()
-            
-            rf_options.append("--dryrun")
-            logger.debug(f"Executing dry run with options: {rf_options}")
 
-            return_code, stdout_content, stderr_content = await self._run_robot_process(
-                rf_options, self.dry_run_timeout
+            timeout = options.get("timeout", self.dry_run_timeout)
+            syslog_path = self._syslog_path_for_execution(execution_id)
+            return_code, stdout_content, stderr_content, syslog_path = await self._run_robot_process(
+                rf_options, timeout, execution_id, syslog_path=syslog_path
             )
             
             execution_time = (datetime.now() - start_time).total_seconds()
             
             logger.debug(f"Dry run completed in {execution_time:.2f}s with return code {return_code}")
             
-            return return_code, stdout_content, stderr_content
+            return return_code, stdout_content, stderr_content, syslog_path
             
-        except asyncio.TimeoutError:
-            logger.error(f"Dry run execution timed out after {self.dry_run_timeout}s")
-            raise Exception(f"Dry run execution timed out after {self.dry_run_timeout}s")
+        except asyncio.TimeoutError as exc:
+            timeout = options.get("timeout", self.dry_run_timeout)
+            partial_stdout = exc.args[1] if len(exc.args) >= 2 else ""
+            partial_stderr = exc.args[2] if len(exc.args) >= 3 else ""
+            syslog_tail = self._collect_syslog_tail(execution_id)
+            logger.error(
+                "Dry run execution timed out after %ss\n--- stdout (partial) ---\n%s\n--- stderr (partial) ---\n%s\n--- syslog tail ---\n%s",
+                timeout,
+                partial_stdout[-4000:],
+                partial_stderr[-4000:],
+                syslog_tail,
+            )
+            raise asyncio.TimeoutError(
+                f"Dry run execution timed out after {timeout}s",
+                partial_stdout,
+                partial_stderr,
+                syslog_tail,
+            )
         
         except Exception as e:
             logger.error(f"Error executing dry run: {e}")
             raise
     
-    async def _execute_rf_normal(self, suite_file: str, options: Dict) -> Tuple[int, str, str, str]:
+    async def _execute_rf_normal(self, suite_file: str, options: Dict, execution_id: str, session_id: str) -> Tuple[int, str, str, str, str]:
         """Execute Robot Framework normal run using native API."""
         if not ROBOT_AVAILABLE:
             raise Exception("Robot Framework not available for normal execution")
-        
-        execution_id = os.path.basename(suite_file).replace("suite_", "").replace(".robot", "")
+
+        suite_file = self._normalize_path(self._maybe_rewrite_browser_import(suite_file))
+
+        output_dir: Optional[str] = None
         output_dir = os.path.join(self.temp_dir, f"output_{execution_id}")
         os.makedirs(output_dir, exist_ok=True)
         
@@ -299,43 +370,151 @@ class SuiteExecutionService:
             rf_options.append(suite_file)
             
             logger.debug(f"Executing normal run with options: {rf_options}")
-            
-            logger.debug(f"Executing normal run with options: {rf_options}")
 
-            return_code, stdout_content, stderr_content = await self._run_robot_process(
-                rf_options, self.execution_timeout
+            timeout = options.get("timeout", self.execution_timeout)
+            syslog_path = self._syslog_path_for_execution(execution_id)
+            return_code, stdout_content, stderr_content, syslog_path = await self._run_robot_process(
+                rf_options, timeout, execution_id, syslog_path=syslog_path
             )
             
             execution_time = (datetime.now() - start_time).total_seconds()
             
             logger.debug(f"Normal execution completed in {execution_time:.2f}s with return code {return_code}")
             
-            return return_code, stdout_content, stderr_content, output_dir
+            return return_code, stdout_content, stderr_content, output_dir, syslog_path
             
-        except asyncio.TimeoutError:
-            logger.error(f"Normal execution timed out after {self.execution_timeout}s")
-            raise Exception(f"Normal execution timed out after {self.execution_timeout}s")
+        except asyncio.TimeoutError as exc:
+            timeout = options.get("timeout", self.execution_timeout)
+            partial_stdout = exc.args[1] if len(exc.args) >= 2 else ""
+            partial_stderr = exc.args[2] if len(exc.args) >= 3 else ""
+            syslog_tail = self._collect_syslog_tail(execution_id)
+            logger.error(
+                "Normal execution timed out after %ss\n--- stdout (partial) ---\n%s\n--- stderr (partial) ---\n%s\n--- syslog tail ---\n%s",
+                timeout,
+                partial_stdout[-4000:],
+                partial_stderr[-4000:],
+                syslog_tail,
+            )
+            raise asyncio.TimeoutError(
+                f"Normal execution timed out after {timeout}s",
+                partial_stdout,
+                partial_stderr,
+                syslog_tail,
+            )
         
         except Exception as e:
             logger.error(f"Error executing normal run: {e}")
             raise
     
-    async def _run_robot_process(self, rf_options: List[str], timeout: int) -> Tuple[int, str, str]:
-        cmd = [sys.executable, "-m", "robot", *rf_options]
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=PIPE,
-            stderr=PIPE,
-        )
+    async def _run_robot_process(self, rf_options: List[str], timeout: int, execution_id: str, syslog_path: str | None = None) -> Tuple[int, str, str, str]:
+        """
+        Execute Robot Framework via run_cli in a worker thread with a timeout.
+        This single path is used on all OSes for simplicity and reliability.
+        """
+        env = os.environ.copy()
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        if not syslog_path:
+            syslog_path = os.path.join(self.temp_dir, f"robot_syslog_{execution_id}.log")
+        env["ROBOT_SYSLOG_FILE"] = syslog_path
+
+        def run_robot() -> Tuple[int, str, str]:
+            from robot import run_cli
+
+            buf_out = io.StringIO()
+            buf_err = io.StringIO()
+            old_env = os.environ.copy()
+            try:
+                os.environ.update(env)
+                with redirect_stdout(buf_out), redirect_stderr(buf_err):
+                    rc = run_cli(rf_options, exit=False)
+            finally:
+                os.environ.clear()
+                os.environ.update(old_env)
+            return rc, buf_out.getvalue(), buf_err.getvalue()
+
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
+            rc, out, err = await asyncio.wait_for(asyncio.to_thread(run_robot), timeout)
+            return rc, out, err, syslog_path
         except asyncio.TimeoutError:
-            process.kill()
-            await process.communicate()
-            raise
-        stdout_text = stdout.decode("utf-8", errors="replace")
-        stderr_text = stderr.decode("utf-8", errors="replace")
-        return process.returncode, stdout_text, stderr_text
+            raise asyncio.TimeoutError(
+                f"Robot run timed out after {timeout}s. Partial stdout/stderr captured.",
+                "",
+                "",
+            )
+
+    def _syslog_path_for_execution(self, execution_id: str) -> str:
+        return os.path.join(self.temp_dir, f"robot_syslog_{execution_id}.log")
+
+    def _collect_syslog_tail(self, execution_id: str, limit: int = 4000) -> str:
+        path = self._syslog_path_for_execution(execution_id)
+        if not os.path.exists(path):
+            return ""
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                data = f.read()
+            return data[-limit:]
+        except Exception:
+            return ""
+
+    def _maybe_rewrite_browser_import(self, suite_file: str) -> str:
+        """
+        For suites that import Browser without disabling pause_on_failure,
+        rewrite the import line to add 'pause_on_failure=False' (and keep headless setting untouched).
+        This prevents Playwright's interactive pause that can hang executions and trigger timeouts.
+        """
+        try:
+            with open(suite_file, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except Exception:
+            return suite_file
+
+        modified = False
+        new_lines = []
+        for line in lines:
+            stripped = line.lstrip()
+            if stripped.lower().startswith("library") and "Browser" in stripped:
+                if "pause_on_failure" not in stripped.lower():
+                    # Preserve existing spacing but append option
+                    line = line.rstrip("\n") + "    pause_on_failure=False\n"
+                    modified = True
+            new_lines.append(line)
+
+        if not modified:
+            return suite_file
+
+        try:
+            # Keep rewritten file in the same directory so that relative resource/library
+            # imports continue to resolve as they did in the original suite.
+            temp_path = os.path.join(
+                os.path.dirname(suite_file), f"rewritten_{os.path.basename(suite_file)}"
+            )
+            with open(temp_path, "w", encoding="utf-8") as f:
+                f.writelines(new_lines)
+            return temp_path
+        except Exception:
+            return suite_file
+
+    # ----------------------------
+    # Path utilities
+    # ----------------------------
+    def _normalize_path(self, path: str) -> str:
+        """
+        Normalize suite file paths across platforms.
+
+        - On POSIX/WSL, translate Windows-style 'C:\\foo\\bar.robot' to '/mnt/c/foo/bar.robot'.
+        - Otherwise, return path unchanged.
+        """
+        try:
+            # Accept both raw "C:\\foo" and "C:/foo" style inputs
+            if os.name == "posix" and re.match(r"^[A-Za-z]:[\\/]", path):
+                drive = path[0].lower()
+                rest = path[2:].lstrip("\\/")
+                rest = rest.replace("\\", "/")
+                translated = f"/mnt/{drive}/{rest}"
+                return os.path.normpath(translated)
+        except Exception:
+            pass
+        return path
     
     def _validate_suite_syntax(self, suite_content: str) -> Dict[str, Any]:
         """Validate suite syntax using Robot Framework parsing API."""
@@ -457,8 +636,11 @@ class SuiteExecutionService:
         # Parse suite information from output
         suite_info = self._extract_suite_info(stdout, stderr)
         
+        # Treat warning-only or empty-suite dry runs as successful validations
+        success_flag = validation_status != "failed"
+
         result = {
-            "success": return_code == 0,
+            "success": success_flag,
             "validation_status": validation_status,
             "suite_info": suite_info,
             "validation_results": {

@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol
+from typing import Any, Callable, Dict, List, Protocol
 
 from fastmcp import Client
 from fastmcp.client import FastMCPTransport
@@ -63,7 +63,8 @@ class PromptRunner:
     def __init__(
         self,
         *,
-        llm_client_factory: Callable[[PromptRuntimeConfig], LlmClientProtocol] | None = None,
+        llm_client_factory: Callable[[PromptRuntimeConfig], LlmClientProtocol]
+        | None = None,
         client_builder: Callable[[], Client] | None = None,
     ) -> None:
         self._llm_client_factory = llm_client_factory or self._default_llm_factory
@@ -225,11 +226,15 @@ class PromptRunner:
 
             for call in llm_response.tool_calls:
                 args = dict(call.arguments or {})
-                self._inject_defaults(call.name, args, session_id, scenario, scenario_hint_used)
+                self._inject_defaults(
+                    call.name, args, session_id, scenario, scenario_hint_used
+                )
                 if call.name == "execute_step" and not scenario_hint_used:
                     scenario_hint_used = True
 
-                logger.info("MCP prompt executing tool %s with args %s", call.name, args)
+                logger.info(
+                    "MCP prompt executing tool %s with args %s", call.name, args
+                )
                 tool_result = await client.call_tool_mcp(call.name, args)
                 response_text = _render_tool_result(tool_result)
                 success = not getattr(tool_result, "isError", False)

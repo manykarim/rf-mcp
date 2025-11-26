@@ -58,6 +58,7 @@ class GeneratedTestSuite:
     teardown: Optional[TestCaseStep] = None
     imports: List[str] = None
     resources: List[str] = None
+    variables: Dict[str, Any] = None
     # Optional: preserved high-level flow blocks recorded during execution
     flow_blocks: List[Dict[str, Any]] | None = None
 
@@ -370,12 +371,18 @@ class TestBuilder:
             mgr = get_rf_native_context_manager()
             lst = mgr.list_available_keywords(session_id)
             if lst.get("success"):
+                executed = set(
+                    (lst.get("executed_keywords") or [])
+                )  # optional field; ignore if absent
                 for item in lst.get("library_keywords", []) or []:
                     # Map lowercased keyword name to library
                     name = str(item.get("name", "")).lower()
                     lib = item.get("library")
                     if name and lib:
                         keyword_to_lib[name] = lib
+                        # Track only libraries that were actually executed (prunes unused)
+                        if name in executed and lib != "BuiltIn":
+                            all_imports.add(lib)
         except Exception:
             pass
 
@@ -434,6 +441,46 @@ class TestBuilder:
         except Exception:
             flow_blocks = None
 
+        # Collect session variables to place into *** Variables *** (static, pre-set)
+        variables_block: Dict[str, Any] = {}
+        try:
+            session_obj = self.execution_engine.session_manager.get_session(session_id)
+            if session_obj and getattr(session_obj, "variables", None):
+                variables_block = self._extract_static_variables(session_obj)
+        except Exception:
+            variables_block = {}
+
+        # Remove Set Test Variable steps that duplicate static variables
+        def _is_duplicate_set(step: TestCaseStep) -> bool:
+            if not step or step.keyword.lower() != "set test variable":
+                return False
+            if not step.arguments:
+                return False
+            target = step.arguments[0]
+            target_norm = str(target)
+            if target_norm.startswith("${") and target_norm.endswith("}"):
+                target_norm = target_norm[2:-1]
+            return target_norm in {k.strip("${}") for k in variables_block.keys()}
+
+        for tc in test_cases:
+            tc.steps = [s for s in tc.steps if not _is_duplicate_set(s)]
+
+        # Prune Browser/Selenium dual import when only one is actually used
+        browser_used = any(
+            (s.keyword or "").startswith("Browser.") for tc in test_cases for s in tc.steps
+        )
+        selenium_used = any(
+            (s.keyword or "").startswith("SeleniumLibrary.")
+            or (s.keyword or "").lower().startswith("open browser")
+            for tc in test_cases
+            for s in tc.steps
+        )
+        if "Browser" in all_imports and "SeleniumLibrary" in all_imports:
+            if selenium_used and not browser_used:
+                all_imports.discard("Browser")
+            elif browser_used and not selenium_used:
+                all_imports.discard("SeleniumLibrary")
+
         return GeneratedTestSuite(
             name=f"Generated_Suite_{session_id}",
             test_cases=test_cases,
@@ -441,8 +488,67 @@ class TestBuilder:
             tags=common_tags,
             imports=list(all_imports),
             resources=resources,
+            variables=variables_block or None,
             flow_blocks=flow_blocks,
         )
+
+    def _extract_static_variables(self, session_obj) -> Dict[str, Any]:
+        """Return only user-provided static variables suitable for *** Variables ***."""
+        if not session_obj or not getattr(session_obj, "variables", None):
+            return {}
+
+        static_vars: Dict[str, Any] = {}
+
+        # Known RF built-ins or synthetic keys we must never emit
+        builtin_names = {
+            "true",
+            "false",
+            "none",
+            "null",
+            "empty",
+            "space",
+            "curdir",
+            "execdir",
+            "temdir",
+            "tempdir",
+            "output",
+            "outputdir",
+            "logfile",
+            "rfdir",
+            "/",
+            ":",
+            "\\",
+            "1",
+            "0",
+            "-1",
+        }
+
+        def _norm(name: str) -> str:
+            n = name.strip()
+            if n.startswith("${") and n.endswith("}"):
+                n = n[2:-1]
+            return n.strip()
+
+        def _is_serializable(val: Any) -> bool:
+            return isinstance(val, (str, int, float, bool))
+
+        for raw_name, value in session_obj.variables.items():
+            name = _norm(str(raw_name))
+            source = session_obj.variable_sources.get(raw_name) or session_obj.variable_sources.get(
+                f"${{{name}}}", ""
+            )
+            if source != "static":
+                continue
+            if name.lower() in builtin_names:
+                continue
+            if not _is_serializable(value):
+                continue
+            # Avoid very large blobs such as page sources
+            if name.lower() in {"page_source", "page", "input_element"}:
+                continue
+            static_vars[f"${{{name}}}"] = value
+
+        return static_vars
 
     async def _optimize_step(
         self,
@@ -973,6 +1079,18 @@ class TestBuilder:
             lines.append(f"Test Tags       {'    '.join(suite.tags)}")
 
         lines.append("")
+
+        # Variables
+        if suite.variables:
+            lines.append("*** Variables ***")
+            for name, value in suite.variables.items():
+                # Ensure variable is rendered as ${NAME}
+                var_name = name
+                if isinstance(var_name, str):
+                    if not var_name.startswith("${"):
+                        var_name = f"${{{var_name}}}"
+                lines.append(f"{var_name}    {value}")
+            lines.append("")
 
         # Test cases
         lines.append("*** Test Cases ***")

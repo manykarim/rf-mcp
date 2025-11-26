@@ -641,6 +641,7 @@ async def recommend_libraries(
     max_recommendations: int = 5,
     check_availability: bool = True,
     apply_search_order: bool = True,
+    auto_import: bool | None = None,
     mode: str = "direct",
     samples: List[Dict[str, Any]] | None = None,
     k: int | None = None,
@@ -699,6 +700,7 @@ async def recommend_libraries(
         "context": context,
         "recommended_libraries": recommended_names,
         "recommendations": recommendations,
+        "auto_import": bool(auto_import) if auto_import is not None else False,
     }
 
     availability_info = None
@@ -736,11 +738,13 @@ async def recommend_libraries(
             result["recommendations"] = recommendations
             result["recommended_libraries"] = recommended_names
 
-        for lib in recommended_names:
-            try:
-                session.import_library(lib, force=True)
-            except Exception as e:
-                logger.debug(f"Could not import {lib} into session {session_id}: {e}")
+        auto = bool(auto_import)
+        if auto:
+            for lib in recommended_names:
+                try:
+                    session.import_library(lib, force=True)
+                except Exception as e:
+                    logger.debug(f"Could not import {lib} into session {session_id}: {e}")
 
         available_set = set(
             (availability_info.get("available_libraries") or [])
@@ -758,6 +762,8 @@ async def recommend_libraries(
             if entry.get("is_builtin"):
                 continue
             if availability_info and name not in available_set:
+                continue
+            if not auto:
                 continue
             try:
                 import_result = rf_mgr.import_library_for_session(
@@ -1020,6 +1026,7 @@ async def manage_session(
     args: List[str] | None = None,
     alias: str | None = None,
     scope: str = "test",
+    auto_import: bool | None = None,
 ) -> Dict[str, Any]:
     """Consolidated session management (initialize, import, set variables)."""
 
@@ -1029,6 +1036,7 @@ async def manage_session(
     if action_norm in {"init", "initialize", "bootstrap"}:
         loaded: List[str] = []
         problems: List[Dict[str, Any]] = []
+        explicit_pref = None
 
         if libraries:
             for library in libraries:
@@ -1036,6 +1044,8 @@ async def manage_session(
                     session.import_library(library)
                     session.loaded_libraries.add(library)
                     loaded.append(library)
+                    if library == "SeleniumLibrary":
+                        explicit_pref = "SeleniumLibrary"
                 except Exception as lib_error:
                     problems.append({"library": library, "error": str(lib_error)})
 
@@ -1051,7 +1061,7 @@ async def manage_session(
                         iterable.append((name, value))
             for name, value in iterable:
                 key = name if name.startswith("${") else f"${{{name}}}"
-                session.set_variable(key, value)
+                session.set_variable(key, value, source="static")
                 set_vars.append(name)
 
         return {
@@ -1062,6 +1072,7 @@ async def manage_session(
             "variables_set": set_vars,
             "import_issues": problems,
             "note": "Context mode is managed via session namespace; use execute_step(use_context=True) when needed.",
+            "auto_import": bool(auto_import) if auto_import is not None else False,
         }
 
     if action_norm in {"import_resource", "resource"}:
@@ -1098,6 +1109,18 @@ async def manage_session(
             "import_custom_library", _external_call, _local_call
         )
         result.update({"action": "import_library", "session_id": session_id})
+
+        # If SeleniumLibrary was explicitly imported, prefer it and de-duplicate Browser
+        try:
+            if result.get("success") and library_name == "SeleniumLibrary":
+                sess = execution_engine.session_manager.get_or_create_session(session_id)
+                sess.explicit_library_preference = "SeleniumLibrary"
+                current_order = list(sess.get_search_order() or [])
+                # Move SeleniumLibrary to front and drop Browser if present
+                new_order = ["SeleniumLibrary"] + [lib for lib in current_order if lib not in ["SeleniumLibrary", "Browser"]]
+                sess.set_library_search_order(new_order)
+        except Exception:
+            pass
         return result
 
     if action_norm in {"set_variables", "variables"}:
@@ -1226,7 +1249,30 @@ async def get_session_state(
     include_dom_stream: bool = False,
     dom_chunk_size: int = 65536,
 ) -> Dict[str, Any]:
-    """Aggregate session insight into a single payload."""
+    """
+    Capture the live UI state (DOM + snapshots) for the current session.
+
+    WHEN TO CALL (critical):
+    - Immediately after any UI‑affecting keyword (Open/New Page/Context, Go To, Click, Fill/Press Keys, Wait For …).
+    - Before choosing the next locator: fetch the fresh DOM/ARIA tree instead of guessing.
+    - When a keyword fails: request ["application_state","page_source","variables"] to debug the state and variables.
+
+    Recommended pattern:
+      1) execute_step(... use_context=True ...) that changes the page
+      2) get_session_state(session_id, sections=["application_state","page_source","variables"], include_reduced_dom=True)
+      3) Use the returned DOM/ARIA/variables to select robust locators for the next execute_step.
+
+    Args:
+        session_id: Session to inspect (required).
+        sections: e.g. ["application_state","page_source","variables"].
+                  Include "application_state" to get DOM + ARIA snapshot metadata.
+        page_source_filtered: True to reduce payload size; adjust filtering_level ("standard"/"aggressive").
+        include_reduced_dom: True to include condensed ARIA/semantic tree (best for locator planning).
+        include_dom_stream: True to stream large DOMs in chunks; dom_chunk_size controls chunk length.
+
+    Returns:
+        Dict with requested sections plus metadata (url, title, element counts, variables).
+    """
 
     sections = sections or ["summary", "page_source", "variables"]
     requested = {s.lower() for s in sections}
@@ -1859,6 +1905,12 @@ async def set_variables(
             use_context=True,
         )
         results[name] = bool(res.get("success"))
+        try:
+            sess = execution_engine.session_manager.get_session(session_id)
+            if sess:
+                sess.set_variable(f"${{{name}}}", value, source="static")
+        except Exception:
+            pass
 
     return {
         "success": all(results.values()),
@@ -2527,7 +2579,7 @@ async def initialize_context(
                     var_name = f"${{{name}}}"
                 else:
                     var_name = name
-                session.set_variable(var_name, value)
+                session.set_variable(var_name, value, source="static")
                 logger.info(
                     f"Set variable {var_name} = {value} in session {session_id}"
                 )
@@ -2660,11 +2712,28 @@ async def get_session_info(session_id: str = "default") -> Dict[str, Any]:
 
 @mcp.tool
 async def get_locator_guidance(
-    library: str = "browser",
+    library: str,
+    keyword_name: str,
     error_message: str | None = None,
-    keyword_name: str | None = None,
 ) -> Dict[str, Any]:
-    """Provide locator/selector guidance for Browser/Selenium/Appium libraries."""
+    """
+    Provide locator/selector guidance for locator-using keywords only.
+
+    Use this when:
+    - The failure is locator-related (element not found, timeout waiting for locator, strict mode violation, wrong selector).
+    - The keyword consumes a locator (e.g., Click Element, Input Text, Get Element Count, Wait For Elements State).
+
+    Do NOT use this when:
+    - Keyword ambiguity or missing keyword (e.g., “Multiple keywords with name …”, “No keyword with name …”).
+    - Missing library/import issues or argument errors.
+    - Non-locator asserts (e.g., Should Be Equal As Integers).
+
+    Required args:
+    - library: one of Browser/Playwright, SeleniumLibrary, or AppiumLibrary.
+    - keyword_name: the locator-consuming keyword name.
+    Optional:
+    - error_message: the locator-related error text (helps tailor guidance).
+    """
 
     from robotmcp.utils.rf_native_type_converter import RobotFrameworkNativeConverter
 

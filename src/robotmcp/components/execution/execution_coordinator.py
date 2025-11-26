@@ -210,6 +210,23 @@ class ExecutionCoordinator:
         try:
             # Get the session's library search order
             search_order = getattr(session, "search_order", [])
+            pref_type = self.browser_library_manager.normalize_library_name(
+                getattr(session, "explicit_library_preference", None)
+            )
+            if pref_type == "selenium":
+                search_order = [
+                    lib
+                    for lib in search_order
+                    if self.browser_library_manager.normalize_library_name(lib)
+                    != "browser"
+                ]
+            elif pref_type == "browser":
+                search_order = [
+                    lib
+                    for lib in search_order
+                    if self.browser_library_manager.normalize_library_name(lib)
+                    != "selenium"
+                ]
             if not search_order:
                 # Fallback to a reasonable default for API sessions
                 if session.session_type.value == "api_testing":
@@ -684,6 +701,19 @@ class ExecutionCoordinator:
             Structured validation results
         """
         try:
+            # Normalize cross-platform paths (e.g., Windows path on WSL)
+            suite_file_path = self.suite_execution_service._normalize_path(
+                suite_file_path
+            )
+
+            if not os.path.exists(suite_file_path):
+                return {
+                    "success": False,
+                    "tool": "run_test_suite_dry",
+                    "suite_file_path": suite_file_path,
+                    "error": f"Suite file not found: {suite_file_path}",
+                    "error_type": "file_not_found",
+                }
             # Read suite content from file
             with open(suite_file_path, "r", encoding="utf-8") as f:
                 suite_content = f.read()
@@ -833,6 +863,18 @@ class ExecutionCoordinator:
         try:
             if execution_options is None:
                 execution_options = {}
+
+            suite_file_path = self.suite_execution_service._normalize_path(
+                suite_file_path
+            )
+            if not os.path.exists(suite_file_path):
+                return {
+                    "success": False,
+                    "error": f"Suite file not found: {suite_file_path}",
+                    "error_type": "file_not_found",
+                    "tool": "run_test_suite",
+                    "suite_file_path": suite_file_path,
+                }
 
             # Read suite content from file
             with open(suite_file_path, "r", encoding="utf-8") as f:
