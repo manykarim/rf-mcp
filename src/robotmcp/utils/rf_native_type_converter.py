@@ -66,6 +66,13 @@ try:
     RF_NATIVE_CONVERSION_AVAILABLE = True
 except ImportError:
     RF_NATIVE_CONVERSION_AVAILABLE = False
+    # Define fallback types for type hints when RF native conversion is not available
+    ArgumentSpec = Any  # type: ignore
+    Variables = Any  # type: ignore
+    TypeInfo = Any  # type: ignore
+    TypeConverter = Any  # type: ignore
+    ArgumentResolver = Any  # type: ignore
+    DynamicArgumentParser = Any  # type: ignore
     logger.warning("Robot Framework native type conversion not available")
 
 
@@ -343,7 +350,7 @@ class RobotFrameworkNativeConverter:
         positional, named_pairs = resolver.resolve(list(args), variables=variables)
         return positional, dict(named_pairs)
 
-    def _build_argument_spec_from_signature(self, keyword_callable) -> Optional[ArgumentSpec]:
+    def _build_argument_spec_from_signature(self, keyword_callable) -> Optional["ArgumentSpec"]:
         if keyword_callable is None or not RF_NATIVE_CONVERSION_AVAILABLE:
             return None
         try:
@@ -367,7 +374,7 @@ class RobotFrameworkNativeConverter:
             )
             return None
 
-    def _build_variable_store(self, session_variables: Dict[str, Any]) -> Variables:
+    def _build_variable_store(self, session_variables: Dict[str, Any]) -> "Variables":
         variables = Variables()
         for name, value in session_variables.items():
             formatted = name if name.startswith("${") else f"${{{name}}}"
@@ -804,7 +811,7 @@ class RobotFrameworkNativeConverter:
             logger.debug(f"Failed to get LibDoc info for {keyword_name}: {e}")
             return None
     
-    def _create_argument_spec(self, signature_args: List[str]) -> ArgumentSpec:
+    def _create_argument_spec(self, signature_args: List[str]) -> "ArgumentSpec":
         """
         Create Robot Framework ArgumentSpec from LibDoc signature.
         
