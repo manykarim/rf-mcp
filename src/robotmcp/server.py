@@ -1226,7 +1226,34 @@ async def get_session_state(
     include_dom_stream: bool = False,
     dom_chunk_size: int = 65536,
 ) -> Dict[str, Any]:
-    """Aggregate session insight into a single payload."""
+    """Retrieve aggregated session state for debugging and visibility.
+
+    Primary uses:
+        - UI inspection: DOM tree/page source/ARIA snapshots for Browser/Selenium/Appium sessions.
+        - Variable inspection: current RF variables, assigned values, and context search order.
+        - Validation/health checks: validation summaries, library lists, and attach/bridge status.
+        - Application insight: application_state (dom/api/database) when provided by plugins.
+
+    Args:
+        session_id: Active session identifier to inspect.
+        sections: Specific data blocks to include (e.g., summary, page_source, variables, application_state).
+        state_type: Type of application state to fetch when requesting application_state (dom|api|database|all).
+        elements_of_interest: Targeted element identifiers passed to application state collectors.
+        page_source_filtered: When True, returns sanitized/filtered DOM text instead of the full source.
+        page_source_filtering_level: Filtering aggressiveness for DOM output (standard|aggressive).
+        include_reduced_dom: Whether to include lightweight semantic DOM (ARIA snapshots) for quick inspection.
+        include_dom_stream: Chunk large page_source payloads into page_source_stream entries for easier transport.
+        dom_chunk_size: Maximum size of each DOM chunk when streaming is enabled (minimum 1024 bytes).
+
+    Returns:
+        Dict[str, Any]: Payload with:
+            - success: bool indicating retrieval success.
+            - session_id: resolved session id.
+            - sections: list of sections included.
+            - data: per-section content (e.g., variables, page_source/ARIA snapshots, validation, libraries,
+              application_state).
+            - error: present only on failure, with guidance if available.
+    """
 
     sections = sections or ["summary", "page_source", "variables"]
     requested = {s.lower() for s in sections}
