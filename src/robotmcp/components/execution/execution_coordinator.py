@@ -5,12 +5,9 @@ import os
 from typing import Any, Dict, List, Optional, Union
 
 from robotmcp.components.browser import BrowserLibraryManager
-from robotmcp.components.execution import (
-    KeywordExecutor,
-    LocatorConverter,
-    PageSourceService,
-    SessionManager,
-)
+from robotmcp.components.execution.keyword_executor import KeywordExecutor
+from robotmcp.components.execution.page_source_service import PageSourceService
+from robotmcp.components.execution.session_manager import SessionManager
 from robotmcp.components.execution.suite_execution_service import SuiteExecutionService
 from robotmcp.models.config_models import ExecutionConfig
 from robotmcp.models.session_models import ExecutionSession
@@ -40,7 +37,6 @@ class ExecutionCoordinator:
         self.browser_library_manager = BrowserLibraryManager(self.config)
         self.page_source_service = PageSourceService(self.config)
         self.keyword_executor = KeywordExecutor(self.config, self.override_registry)
-        self.locator_converter = LocatorConverter(self.config)
         self.suite_execution_service = SuiteExecutionService(self.config)
 
         # Initialize additional components for backward compatibility
@@ -403,13 +399,23 @@ class ExecutionCoordinator:
 
     def convert_locator(self, locator: str, target_library: str) -> str:
         """Convert locator format for a specific library."""
-        return self.locator_converter.convert_locator_for_library(
-            locator, target_library
-        )
+        plugin_normalizer = self.plugin_manager.get_locator_normalizer(target_library)
+        if plugin_normalizer:
+            try:
+                return plugin_normalizer(locator)
+            except Exception:
+                pass
+        return locator
 
     def validate_locator(self, locator: str, library_type: str) -> Dict[str, bool]:
         """Validate locator syntax for a specific library."""
-        return self.locator_converter.validate_locator(locator, library_type)
+        plugin_validator = self.plugin_manager.get_locator_validator(library_type)
+        if plugin_validator:
+            try:
+                return plugin_validator(locator)
+            except Exception:
+                pass
+        return {"valid": bool(locator.strip()), "warnings": [] if locator.strip() else ["Empty locator"]}
 
     def filter_page_source(self, html: str, filtering_level: str = "standard") -> str:
         """Filter HTML page source to keep only automation-relevant content."""
@@ -438,7 +444,6 @@ class ExecutionCoordinator:
             self.browser_library_manager.config = self.config
             self.page_source_service.config = self.config
             self.keyword_executor.config = self.config
-            self.locator_converter.config = self.config
 
             logger.info(f"Configuration updated: {list(config_updates.keys())}")
 
@@ -471,14 +476,7 @@ class ExecutionCoordinator:
 
                 # Then apply library-specific conversion if needed
                 if active_library:
-                    converted_arg = self.locator_converter.convert_locator_for_library(
-                        processed_arg, active_library.capitalize()
-                    )
-                    if converted_arg != processed_arg:
-                        logger.debug(
-                            f"Converted locator '{processed_arg}' -> '{converted_arg}' for {active_library}"
-                        )
-                    converted_args.append(converted_arg)
+                    converted_args.append(self.convert_locator(processed_arg, active_library))
                 else:
                     converted_args.append(processed_arg)
             else:
@@ -557,7 +555,7 @@ class ExecutionCoordinator:
                 "active_session_ids": self.session_manager.get_all_session_ids(),
             },
             "browser_libraries": self.browser_library_manager.get_status(),
-            "locator_conversions": self.locator_converter.get_conversion_stats(),
+            "locator_conversions": {},
             "configuration": {
                 "locator_conversion_enabled": self.config.ENABLE_LOCATOR_CONVERSION,
                 "preferred_web_library": self.config.PREFERRED_WEB_LIBRARY,
@@ -1567,9 +1565,7 @@ class ExecutionCoordinator:
 
     def _convert_locator_for_library(self, locator: str, target_library: str) -> str:
         """Backward compatibility method for TestBuilder."""
-        return self.locator_converter.convert_locator_for_library(
-            locator, target_library
-        )
+        return self.convert_locator(locator, target_library)
 
     # ============================================
     # CONTEXT MANAGER

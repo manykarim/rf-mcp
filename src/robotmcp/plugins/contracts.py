@@ -160,6 +160,12 @@ class LibraryPlugin(Protocol):
     def get_keyword_overrides(self) -> Optional[Dict[str, KeywordOverrideHandler]]:
         """Return async override handlers for specific keywords."""
 
+    def get_locator_normalizer(self) -> Optional[Callable[[str], str]]:
+        """Optional locator normalizer for this library."""
+
+    def get_locator_validator(self) -> Optional[Callable[[str], Dict[str, Any]]]:
+        """Optional locator validator for this library."""
+
     def before_keyword_execution(
         self,
         session: "ExecutionSession",

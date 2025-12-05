@@ -76,7 +76,7 @@ async def test_locator_guidance_structure(mcp_client):
     """Test locator guidance to understand response structure."""
     result = await mcp_client.call_tool(
         "get_locator_guidance",
-        {"library": "selenium"}
+        {"library": "selenium", "keyword_name": "Click Element"}
     )
     
     print(f"Selenium guidance result: {result}")

@@ -11,6 +11,7 @@ from robotmcp.plugins.contracts import (
     LibraryMetadata,
     LibraryStateProvider,
     KeywordOverrideHandler,
+    Callable,
 )
 
 logger = logging.getLogger(__name__)
@@ -160,6 +161,7 @@ class BrowserLibraryPlugin(StaticLibraryPlugin):
             "new browser": "Browser",
             "new page": "Browser",
             "close browser": "Browser",
+            "open browser": "Browser",
             "get page source": "Browser",
             "get url": "Browser",
             "get title": "Browser",
@@ -170,6 +172,21 @@ class BrowserLibraryPlugin(StaticLibraryPlugin):
             "open browser": self._override_open_browser,
         }
 
+    def get_locator_normalizer(self):
+        def normalize(locator: str) -> str:
+            # Browser defaults to CSS; preserve explicit prefixes, pass through
+            return locator
+
+        return normalize
+
+    def get_locator_validator(self):
+        def validate(locator: str) -> Dict[str, Any]:
+            # Minimal validation: non-empty string
+            ok = isinstance(locator, str) and bool(locator.strip())
+            return {"valid": ok, "warnings": [] if ok else ["Empty locator"]}
+
+        return validate
+
     async def _override_open_browser(
         self,
         session: "ExecutionSession",
@@ -178,15 +195,8 @@ class BrowserLibraryPlugin(StaticLibraryPlugin):
         keyword_info: Optional[Any] = None,
     ) -> Optional[Dict[str, Any]]:
         """
-        Prevent Browser Library from using the Selenium-style 'Open Browser' keyword.
-
-        For Browser (Playwright) sessions we translate 'Open Browser' into:
-          1) New Browser  (optional browser name)
-          2) New Context
-          3) New Page     (optional URL)
-
-        If the session explicitly prefers SeleniumLibrary, we skip the override so
-        Selenium can handle Open Browser normally.
+        Reject Browser's use of Selenium-style 'Open Browser' and guide users to
+        'New Browser' + 'New Page' to avoid Playwright debug pauses.
         """
         try:
             # Honor explicit selenium preference
@@ -199,43 +209,13 @@ class BrowserLibraryPlugin(StaticLibraryPlugin):
             if active and getattr(active, "active_library", None) == "selenium":
                 return None
 
-            # Only act when Browser is intended/active
-            if active and getattr(active, "active_library", None) not in (None, "browser"):
-                return None
-
-            # Extract URL and optional browser name
-            target_url = arguments[0] if arguments else None
-            browser_name = arguments[1] if len(arguments) > 1 else None
-
-            # Build translated steps, skipping already-open handles
-            steps: list[tuple[str, list[str]]] = []
-            if not (active and getattr(active, "browser_id", None)):
-                steps.append(("New Browser", [browser_name] if browser_name else []))
-            if not (active and getattr(active, "context_id", None)):
-                steps.append(("New Context", []))
-            steps.append(("New Page", [target_url] if target_url else []))
-
-            from robotmcp.server import execution_engine  # lazy import to avoid cycles
-
-            for kw, args in steps:
-                res = await execution_engine.execute_step(
-                    kw,
-                    args,
-                    session_id=session.session_id,
-                    detail_level="minimal",
-                    use_context=True,
-                )
-                if not res.get("success"):
-                    return {
-                        "success": False,
-                        "error": f"'Open Browser' is not supported for Browser library. "
-                        f"Tried {kw} instead and failed: {res.get('error') or res}",
-                    }
-
             return {
-                "success": True,
-                "output": "Translated Open Browser into Browser.New Browser/New Context/New Page",
-                "variables": {},
+                "success": False,
+                "error": "'Open Browser' is not supported for Browser library (it pauses on failure).",
+                "guidance": [
+                    "Use 'New Browser' to start Playwright.",
+                    "Then use 'New Context' (optional) and 'New Page' with the target URL.",
+                ],
             }
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("Open Browser override failed: %s", exc)

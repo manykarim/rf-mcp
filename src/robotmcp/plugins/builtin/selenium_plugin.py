@@ -100,7 +100,47 @@ class SeleniumLibraryPlugin(StaticLibraryPlugin):
         return {
             "seleniumlibrary.get source": "SeleniumLibrary",
             "get source": "SeleniumLibrary",
+            "input password": "SeleniumLibrary",
+            "input text": "SeleniumLibrary",
+            "open browser": "SeleniumLibrary",
         }
+
+    def get_keyword_overrides(self) -> Dict[str, "KeywordOverrideHandler"]:  # type: ignore[override]
+        # Allow plugins to hook special keywords without core hard-coding.
+        from robotmcp.plugins.contracts import KeywordOverrideHandler
+
+        async def _input_password_override(
+            session: "ExecutionSession",
+            keyword_name: str,
+            arguments: list[str],
+            keyword_info: Optional[Any] = None,
+        ) -> Optional[Dict[str, Any]]:
+            """
+            Execute SeleniumLibrary.input_password when the keyword is resolved here.
+            """
+            try:
+                lib = session.import_library("SeleniumLibrary", force=True)
+                if hasattr(lib, "input_password"):
+                    return {"success": True, "result": lib.input_password(*arguments)}
+            except Exception:
+                return None
+            return None
+
+        return {"input password": _input_password_override}
+
+    def get_locator_normalizer(self):
+        def normalize(locator: str) -> str:
+            # SeleniumLibrary accepts many forms; preserve if strategy prefix present.
+            return locator
+
+        return normalize
+
+    def get_locator_validator(self):
+        def validate(locator: str) -> Dict[str, Any]:
+            ok = isinstance(locator, str) and bool(locator.strip())
+            return {"valid": ok, "warnings": [] if ok else ["Empty locator"]}
+
+        return validate
 
 
 try:  # pragma: no cover

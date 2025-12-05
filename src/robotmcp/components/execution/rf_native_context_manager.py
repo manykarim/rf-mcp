@@ -623,15 +623,6 @@ class RobotFrameworkNativeContextManager:
 
             # Try to resolve the keyword using RF's namespace
             try:
-                # Debug: Check available libraries and keywords
-                if hasattr(namespace, "libraries"):
-                    lib_names = (
-                        list(namespace.libraries.keys())
-                        if hasattr(namespace.libraries, "keys")
-                        else ["(unknown format)"]
-                    )
-                    logger.info(f"Available libraries in RF namespace: {lib_names}")
-
                 keyword = namespace.get_keyword(keyword_name)
                 if keyword:
                     logger.info(
@@ -653,48 +644,6 @@ class RobotFrameworkNativeContextManager:
 
             except Exception as e:
                 logger.debug(f"Namespace resolution failed for {keyword_name}: {e}")
-
-            # HYBRID APPROACH: For Input Password specifically, use library manager instance with RF context
-            if keyword_name.lower() == "input password":
-                logger.info(
-                    "Using hybrid approach for Input Password with RF context support"
-                )
-                try:
-                    from robotmcp.core.dynamic_keyword_orchestrator import (
-                        get_keyword_discovery,
-                    )
-
-                    orchestrator = get_keyword_discovery()
-                    if "SeleniumLibrary" in orchestrator.library_manager.libraries:
-                        lib_instance = orchestrator.library_manager.libraries[
-                            "SeleniumLibrary"
-                        ]
-
-                        # Check if Input Password method exists directly
-                        if hasattr(lib_instance, "input_password"):
-                            logger.info(
-                                "Found input_password method in SeleniumLibrary instance"
-                            )
-
-                            # Execute with RF context available for BuiltIn calls
-                            # The key is that we already have RF context set up, so BuiltIn calls should work
-                            return lib_instance.input_password(*arguments)
-                        else:
-                            logger.warning(
-                                "input_password method not found in SeleniumLibrary instance"
-                            )
-                            # List available methods for debugging
-                            methods = [
-                                attr
-                                for attr in dir(lib_instance)
-                                if not attr.startswith("_")
-                                and callable(getattr(lib_instance, attr))
-                            ]
-                            logger.info(
-                                f"Available methods in SeleniumLibrary: {methods[:10]}..."
-                            )  # Show first 10 methods
-                except Exception as e:
-                    logger.warning(f"Hybrid approach failed for Input Password: {e}")
 
             # Fallback: Manual library search
             from robot.running import EXECUTION_CONTEXTS

@@ -93,6 +93,21 @@ class KeywordExecutor:
         """
 
         try:
+            # Global guard: block Browser's Open Browser
+            if keyword.lower() == "open browser":
+                browser_override = self.plugin_manager.get_keyword_override(
+                    "Browser", "Open Browser"
+                )
+                if browser_override:
+                    override_call = browser_override(session, keyword, arguments, None)
+                    override_result = (
+                        await override_call
+                        if asyncio.iscoroutine(override_call)
+                        else await asyncio.to_thread(lambda: override_call)
+                    )
+                    if override_result is not None:
+                        return override_result
+
             # PHASE 1.2: Pre-execution Library Registration
             # Ensure required library is registered before keyword execution
             self._ensure_library_registration(keyword, session)
@@ -744,30 +759,55 @@ class KeywordExecutor:
                         f"Post-loading global discovery: '{keyword_name}' → {keyword_info.library if keyword_info else None}"
                     )
 
-            if keyword_info and keyword_info.library == "Browser":
-                logger.info(
-                    f"Browser Library keyword detected: {keyword_name} - forcing regular execution mode"
-                )
-
             library_from_map = self._get_library_for_keyword(keyword_name)
-            plugin_override = self.plugin_manager.get_keyword_override(
-                keyword_info.library if keyword_info else library_from_map,
-                keyword_name,
-            )
-            if plugin_override:
+
+            # Hard guard for Browser: block Selenium-style Open Browser that pauses Playwright
+            if keyword_name.lower() == "open browser":
+                active_lib = session.get_active_library() if hasattr(session, "get_active_library") else None
+                loaded_libs = getattr(session, "loaded_libraries", []) or []
+                has_browser_loaded = any(
+                    isinstance(lib, str) and lib.lower() == "browser"
+                    for lib in loaded_libs
+                )
+                if (
+                    (library_from_map and library_from_map.lower() == "browser")
+                    or (active_lib and active_lib.lower() == "browser")
+                    or has_browser_loaded
+                ):
+                    return {
+                        "success": False,
+                        "error": "'Open Browser' is not supported for Browser library (debug pause).",
+                        "guidance": [
+                            "Use 'New Browser' to start Playwright.",
+                            "Then 'New Context' (optional) and 'New Page' with the URL.",
+                        ],
+                    }
+
+            async def _try_plugin_override(lib_name: Optional[str]):
+                if not lib_name:
+                    return None
+                plugin_override = self.plugin_manager.get_keyword_override(
+                    lib_name,
+                    keyword_name,
+                )
+                if not plugin_override:
+                    return None
                 override_call = plugin_override(session, keyword_name, args, keyword_info)
                 override_result = (
                     await override_call
                     if asyncio.iscoroutine(override_call)
                     else await asyncio.to_thread(lambda: override_call)
                 )
-                if override_result is not None:
-                    library_to_import = (
-                        keyword_info.library if keyword_info else library_from_map
-                    )
-                    if library_to_import:
-                        session.import_library(library_to_import, force=True)
-                    return override_result
+                if override_result is not None and lib_name:
+                    session.import_library(lib_name, force=True)
+                return override_result
+
+            override_result = await _try_plugin_override(library_from_map)
+            if override_result is None and keyword_info and keyword_info.library:
+                override_result = await _try_plugin_override(keyword_info.library)
+
+            if override_result is not None:
+                return override_result
 
             if self.override_registry and keyword_info:
                 override_handler = self.override_registry.get_override(

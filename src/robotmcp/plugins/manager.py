@@ -36,6 +36,8 @@ class LibraryPluginManager:
         self._sources: Dict[str, str] = {}
         self._keyword_map: Dict[str, str] = {}
         self._keyword_overrides: Dict[tuple[str, str], KeywordOverrideHandler] = {}
+        self._locator_normalizers: Dict[str, Callable[[str], str]] = {}
+        self._locator_validators: Dict[str, Callable[[str], Dict[str, Any]]] = {}
 
     # ------------------------------------------------------------------
     # Registration
@@ -95,6 +97,27 @@ class LibraryPluginManager:
                     if not keyword or handler is None:
                         continue
                     self._keyword_overrides[(metadata.name, keyword.lower())] = handler
+
+            locator_normalizer = None
+            locator_validator = None
+            try:
+                locator_normalizer = plugin.get_locator_normalizer()
+            except Exception:
+                locator_normalizer = None
+            try:
+                locator_validator = plugin.get_locator_validator()
+            except Exception:
+                locator_validator = None
+
+            if locator_normalizer:
+                self._locator_normalizers[metadata.name] = locator_normalizer
+            else:
+                self._locator_normalizers.pop(metadata.name, None)
+
+            if locator_validator:
+                self._locator_validators[metadata.name] = locator_validator
+            else:
+                self._locator_validators.pop(metadata.name, None)
 
             logger.debug("Registered library plugin '%s' from %s", metadata.name, source)
 
@@ -179,6 +202,16 @@ class LibraryPluginManager:
         if not library_name:
             return None
         return self._keyword_overrides.get((library_name, keyword.lower()))
+
+    def get_locator_normalizer(self, library_name: Optional[str]):
+        if not library_name:
+            return None
+        return self._locator_normalizers.get(library_name)
+
+    def get_locator_validator(self, library_name: Optional[str]):
+        if not library_name:
+            return None
+        return self._locator_validators.get(library_name)
 
     def run_before_keyword_execution(
         self,

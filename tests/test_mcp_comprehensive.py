@@ -224,7 +224,7 @@ async def test_run_test_suite_dry_and_full(mcp_client, session_id):
 @pytest.mark.asyncio
 async def test_get_locator_guidance(mcp_client):
     guidance = await mcp_client.call_tool(
-        "get_locator_guidance", {"library": "browser"}
+        "get_locator_guidance", {"library": "browser", "keyword_name": "Click"}
     )
     assert guidance.data["success"] is True
     assert guidance.data["library"] == "Browser"

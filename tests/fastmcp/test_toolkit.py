@@ -277,14 +277,14 @@ async def test_manage_attach_status(mcp_client):
 async def test_get_locator_guidance(mcp_client):
     selenium = await mcp_client.call_tool(
         "get_locator_guidance",
-        {"library": "selenium", "error_message": "Element not found"},
+        {"library": "selenium", "keyword_name": "Click Element", "error_message": "Element not found"},
     )
     assert selenium.data["success"] is True
     assert selenium.data["library"] == "SeleniumLibrary"
 
     browser = await mcp_client.call_tool(
         "get_locator_guidance",
-        {"library": "browser"},
+        {"library": "browser", "keyword_name": "Click"},
     )
     assert browser.data["success"] is True
 
@@ -329,7 +329,7 @@ async def test_manage_attach_stop(monkeypatch, mcp_client):
 async def test_get_locator_guidance_unknown_library(mcp_client):
     result = await mcp_client.call_tool(
         "get_locator_guidance",
-        {"library": "not_a_real_library"},
+        {"library": "not_a_real_library", "keyword_name": "Click Element"},
     )
     assert result.data["success"] is False
     assert "Unsupported library" in result.data["error"]
