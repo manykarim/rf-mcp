@@ -1,51 +1,41 @@
-from robotmcp.components.execution.locator_converter import LocatorConverter
-from robotmcp.models.config_models import ExecutionConfig
+import pytest
+
+from robotmcp.plugins.manager import LibraryPluginManager
+from robotmcp.plugins.builtin.browser_plugin import BrowserLibraryPlugin
+from robotmcp.plugins.builtin.selenium_plugin import SeleniumLibraryPlugin
 
 
-def _converter_with_conversion_enabled() -> LocatorConverter:
-    config = ExecutionConfig()
-    config.ENABLE_LOCATOR_CONVERSION = True
-    return LocatorConverter(config=config)
+@pytest.fixture
+def plugin_manager():
+    mgr = LibraryPluginManager()
+    mgr.register_plugin(BrowserLibraryPlugin(), source="test")
+    mgr.register_plugin(SeleniumLibraryPlugin(), source="test")
+    return mgr
 
 
-def test_add_explicit_strategy_prefix_for_suite_text():
-    converter = LocatorConverter()
-    locator = "Log In Now"
-    result = converter.add_explicit_strategy_prefix(
-        locator, for_test_suite=True, target_library="Browser"
-    )
-    assert result == "text=Log In Now"
+def test_browser_locator_normalizer_passthrough(plugin_manager):
+    norm = plugin_manager.get_locator_normalizer("Browser")
+    assert norm is not None
+    locator = "css=.login >> text=Docs"
+    assert norm(locator) == locator
 
 
-def test_add_explicit_strategy_prefix_preserves_existing():
-    converter = LocatorConverter()
-    locator = "css=.login-button"
-    assert converter.add_explicit_strategy_prefix(locator, for_test_suite=True) == locator
+def test_selenium_locator_normalizer_passthrough(plugin_manager):
+    norm = plugin_manager.get_locator_normalizer("SeleniumLibrary")
+    assert norm is not None
+    locator = "xpath=//div[@id='main']"
+    assert norm(locator) == locator
 
 
-def test_convert_locator_for_selenium_css():
-    converter = _converter_with_conversion_enabled()
-    locator = ".login-button"
-    assert converter.convert_locator_for_library(locator, "SeleniumLibrary") == "css=.login-button"
+def test_basic_validator_non_empty(plugin_manager):
+    validate = plugin_manager.get_locator_validator("Browser")
+    result = validate("css=#id") if validate else {}
+    assert result.get("valid") is True
+    assert result.get("warnings") == []
 
 
-def test_convert_locator_for_selenium_text_selector():
-    converter = _converter_with_conversion_enabled()
-    locator = "text=Submit the Form"
-    converted = converter.convert_locator_for_library(locator, "SeleniumLibrary")
-    assert converted.startswith("xpath=")
-    assert 'Submit the Form' in converted
-
-
-def test_convert_locator_for_browser_preserves_prefix():
-    converter = _converter_with_conversion_enabled()
-    locator = "css=.nav >> text=Docs"
-    assert converter.convert_locator_for_library(locator, "Browser") == locator
-
-
-def test_convert_jquery_selector_to_css(monkeypatch):
-    converter = _converter_with_conversion_enabled()
-    jquery = "#menu li:first a:contains('Docs')"
-    converted = converter._convert_jquery_to_css(jquery)
-    assert ":first-child" in converted
-    assert "[title*=\"Docs\"]" in converted or "[alt*=\"Docs\"]" in converted
+def test_basic_validator_empty_locator(plugin_manager):
+    validate = plugin_manager.get_locator_validator("SeleniumLibrary")
+    result = validate("") if validate else {}
+    assert result.get("valid") is False
+    assert "Empty locator" in result.get("warnings", [])
