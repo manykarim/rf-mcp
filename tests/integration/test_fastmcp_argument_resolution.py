@@ -7,6 +7,7 @@ These tests avoid external network or browser dependencies and validate:
 """
 
 import os
+from pathlib import Path
 import pytest
 import pytest_asyncio
 from fastmcp import Client
@@ -109,15 +110,21 @@ async def test_collections_set_to_dictionary_named_object_arg(mcp_client):
 async def test_xml_library_get_element_count_with_prefix(mcp_client):
     """Use XML.Get Element Count with a file path and XPath; should load XML library automatically."""
     session_id = "xml_prefix_session"
-    xml_path = os.path.join(os.path.dirname(__file__), "..", "..", "test_data", "books_authors.xml")
-    xml_path = os.path.abspath(xml_path)
+    xml_path = (
+        Path(__file__)
+        .parent
+        .joinpath("..", "..", "test_data", "books_authors.xml")
+        .resolve()
+    )
+    # Use forward slashes to avoid Windows escape/drive issues when passed through RF args
+    xml_arg = xml_path.as_posix()
 
     # Some XML keywords accept source path + xpath. Use explicit library prefix to force loading.
     res = await mcp_client.call_tool(
         "execute_step",
         {
             "keyword": "XML.Get Element Count",
-            "arguments": [xml_path, ".//book"],
+            "arguments": [xml_arg, ".//book"],
             "session_id": session_id,
             "assign_to": "count",
             "raise_on_failure": True,
