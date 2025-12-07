@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 
 from robotmcp.plugins.base import StaticLibraryPlugin
 from robotmcp.plugins.contracts import (
+    KeywordOverrideHandler,
     LibraryCapabilities,
     LibraryMetadata,
     LibraryStateProvider,
@@ -159,10 +160,63 @@ class BrowserLibraryPlugin(StaticLibraryPlugin):
             "new browser": "Browser",
             "new page": "Browser",
             "close browser": "Browser",
+            "open browser": "Browser",
             "get page source": "Browser",
             "get url": "Browser",
             "get title": "Browser",
         }
+
+    def get_keyword_overrides(self) -> Dict[str, KeywordOverrideHandler]:  # type: ignore[override]
+        return {"open browser": self._override_open_browser}
+
+    def get_locator_normalizer(self):
+        def normalize(locator: str) -> str:
+            return locator
+
+        return normalize
+
+    def get_locator_validator(self):
+        def validate(locator: str) -> Dict[str, Any]:
+            ok = isinstance(locator, str) and bool(locator.strip())
+            return {"valid": ok, "warnings": [] if ok else ["Empty locator"]}
+
+        return validate
+
+    async def _override_open_browser(
+        self,
+        session: "ExecutionSession",
+        keyword_name: str,
+        arguments: list[str],
+        keyword_info: Optional[Any] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Reject Browser's 'Open Browser' to avoid Playwright debug/pause mode."""
+        try:
+            pref = (getattr(session, "explicit_library_preference", "") or "").lower()
+            if pref.startswith("selenium"):
+                return None
+
+            active = getattr(session, "browser_state", None)
+            if active and getattr(active, "active_library", None) == "selenium":
+                return None
+
+            return {
+                "success": False,
+                "error": "'Open Browser' is not supported for Browser library (debug/pause mode).",
+                "guidance": [
+                    "Use 'New Browser' to start Playwright.",
+                    "Then 'New Context' (optional) and 'New Page' with the target URL.",
+                    "Example: New Browser    chromium    headless=False -> New Context    viewport={'width':1280,'height':720} -> New Page    https://demoshop.makrocode.de/",
+                ],
+            }
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Open Browser override failed: %s", exc)
+            return None
+
+
+try:  # pragma: no cover
+    from robotmcp.models.session_models import ExecutionSession  # noqa: F401
+except Exception:  # pragma: no cover
+    ExecutionSession = object  # type: ignore
 
 
 try:  # pragma: no cover

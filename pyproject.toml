@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rf-mcp"
-version = "0.25.0dev01"
+version = "0.25.0"
 description = "Robot Framework MCP Server - Natural Language Test Automation Bridge"
 authors = [{name = "Many Kasiriha"}]
 license = {text = "Apache-2.0"}
@@ -12,7 +12,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "fastmcp>=2.0.0",
-    "robotframework>=6.0",
+    "robotframework>=7.0",
     "pydantic>=2.0.0",
     "beautifulsoup4>=4.11.0",
     "lxml>=4.9.0",

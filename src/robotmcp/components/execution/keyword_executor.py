@@ -119,6 +119,33 @@ class KeywordExecutor:
             # Mark step as running
             step.status = "running"
 
+            # Early guard: block Browser's Open Browser to avoid Playwright pause
+            library_from_map = self._get_library_for_keyword(keyword)
+            pref = (getattr(session, "explicit_library_preference", "") or "").lower()
+            # If Selenium is explicitly preferred, force map to Selenium for overlapping keywords
+            if keyword.lower() == "open browser" and pref.startswith("selenium"):
+                library_from_map = "SeleniumLibrary"
+
+            if keyword.lower() == "open browser":
+                if pref.startswith("selenium"):
+                    logger.debug(
+                        "Skipping Browser Open Browser guard because SeleniumLibrary is preferred"
+                    )
+                else:
+                    active_lib = session.get_active_library() if hasattr(session, "get_active_library") else None
+                    if (library_from_map and library_from_map.lower() == "browser") or (
+                        active_lib and active_lib.lower() == "browser"
+                    ):
+                        return {
+                            "success": False,
+                            "error": "'Open Browser' is not supported for Browser library (debug/pause mode).",
+                            "guidance": [
+                                "Use 'New Browser' to start Playwright.",
+                                "Then 'New Context' (optional) and 'New Page' with the target URL.",
+                                "Example: New Browser    chromium    headless=False -> New Context    viewport={'width':1280,'height':720} -> New Page    https://demoshop.makrocode.de/",
+                            ],
+                        }
+
             # Check if we should use context mode
             # Enable context mode for keywords that require RF execution context
             context_required_keywords = [
@@ -507,6 +534,23 @@ class KeywordExecutor:
         try:
             # Determine library from keyword
             library_name = self._get_library_for_keyword(keyword)
+
+            # Honor explicit preference for overlapping keywords
+            pref = (getattr(session, "explicit_library_preference", "") or "").lower()
+            if keyword.lower() == "open browser":
+                if pref.startswith("selenium"):
+                    library_name = "SeleniumLibrary"
+                elif pref.startswith("browser"):
+                    library_name = "Browser"
+
+            # If the scenario explicitly prefers Selenium, avoid registering Browser for
+            # overlapping keywords like 'Open Browser' so SeleniumLibrary stays in control.
+            if library_name and library_name.lower() == "browser" and pref.startswith("selenium"):
+                logger.debug(
+                    "Skipping Browser registration for keyword '%s' due to Selenium preference",
+                    keyword,
+                )
+                return
 
             if library_name:
                 # Get the library manager from keyword discovery

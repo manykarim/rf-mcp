@@ -652,6 +652,7 @@ async def recommend_libraries(
     samples: List[Dict[str, Any]] | None = None,
     k: int | None = None,
     available_libraries: List[Dict[str, Any]] | None = None,
+    include_keywords: bool = True,
 ) -> Dict[str, Any]:
     """Recommend libraries for a scenario or generate/merge sampling prompts.
 
@@ -666,6 +667,7 @@ async def recommend_libraries(
         samples: Sampled recommendations to merge when mode="merge_samples".
         k: Number of samples to request when mode="sampling_prompt" (defaults to 4).
         available_libraries: Optional pre-fetched library metadata to use instead of registry defaults.
+        include_keywords: When True, include a compact keyword list (names only) for the top recommendation.
 
     Returns:
         Dict[str, Any]: Recommendation payload:
@@ -719,13 +721,54 @@ async def recommend_libraries(
         r.get("library_name") for r in recommendations if r.get("library_name")
     ]
 
+    def _attach_keywords(recs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not recs:
+            return recs
+        # Only enrich the top recommendation to keep payload small
+        target = recs[0]
+        lib_name = target.get("library_name")
+        if not lib_name:
+            return recs
+
+        from robotmcp.plugins.manager import get_library_plugin_manager
+        from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
+
+        keywords: List[str] = []
+        source = "none"
+
+        # Try plugin hints first
+        mgr = get_library_plugin_manager()
+        hints = mgr.get_hints(lib_name)
+        if hints and hints.standard_keywords:
+            keywords = list(hints.standard_keywords)
+            source = "plugin_hints"
+        else:
+            # Fallback to libdoc cache (full keyword list to avoid truncation)
+            try:
+                storage = get_rf_doc_storage()
+                kw_docs = storage.get_keywords_by_library(lib_name) or []
+                keywords = [kw.name for kw in kw_docs]
+                if keywords:
+                    source = "libdoc_cache"
+            except Exception:
+                keywords = []
+                source = "none"
+
+        if keywords:
+            target["keywords"] = keywords
+            target["keyword_source"] = source
+            target[
+                "keyword_hint"
+            ] = "Call get_keyword_info for keyword arguments and documentation."
+        return recs
+
     result: Dict[str, Any] = {
         "success": True,
         "mode": "direct",
         "scenario": scenario,
         "context": context,
         "recommended_libraries": recommended_names,
-        "recommendations": recommendations,
+        "recommendations": _attach_keywords(recommendations) if include_keywords else recommendations,
     }
 
     availability_info = None
