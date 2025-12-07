@@ -567,11 +567,18 @@ async def diagnose_library_plugin(plugin_name: str) -> Dict[str, Any]:
 async def manage_library_plugins(
     action: str = "list", plugin_name: str | None = None
 ) -> Dict[str, Any]:
-    """Consolidated plugin management entry point.
+    """Inspect or reload library plugins.
 
     Args:
-        action: 'list', 'reload', or 'diagnose'.
-        plugin_name: Required when using action='diagnose'.
+        action: One of "list", "reload", or "diagnose".
+        plugin_name: Plugin name when action="diagnose".
+
+    Returns:
+        Dict[str, Any]: Plugin metadata depending on action:
+            - success: bool
+            - action: echo of the requested action
+            - plugins/plugin/reload_result: action-specific data
+            - error: present on failure
     """
 
     action_norm = (action or "list").strip().lower()
@@ -646,7 +653,27 @@ async def recommend_libraries(
     k: int | None = None,
     available_libraries: List[Dict[str, Any]] | None = None,
 ) -> Dict[str, Any]:
-    """Recommend libraries, generate sampling prompts, or merge sampled payloads."""
+    """Recommend libraries for a scenario or generate/merge sampling prompts.
+
+    Args:
+        scenario: Natural-language description of the task to automate.
+        context: Context such as "web", "mobile", or "api". Defaults to "web".
+        session_id: Optional session id to align recommendations with an existing session.
+        max_recommendations: Maximum libraries to return (direct mode).
+        check_availability: When True, checks installability/presence of suggested libs.
+        apply_search_order: When True, applies recommended order to the session.
+        mode: "direct", "sampling_prompt", or "merge_samples".
+        samples: Sampled recommendations to merge when mode="merge_samples".
+        k: Number of samples to request when mode="sampling_prompt" (defaults to 4).
+        available_libraries: Optional pre-fetched library metadata to use instead of registry defaults.
+
+    Returns:
+        Dict[str, Any]: Recommendation payload:
+            - success: bool
+            - recommendations or sampling_prompt or merged result (depending on mode)
+            - session_id: echoed/preserved when provided
+            - error/guidance: present on failure
+    """
 
     mode_norm = (mode or "direct").strip().lower()
     if mode_norm in {"sampling", "sampling_prompt"}:
@@ -819,35 +846,23 @@ async def recommend_libraries(
 async def analyze_scenario(
     scenario: str, context: str = "web", session_id: str = None
 ) -> Dict[str, Any]:
-    """Process natural language test description into structured test intent.
+    """Analyze a natural-language scenario into structured intent and create a session.
 
-    CRITICAL: This tool ALWAYS creates a session for your test execution.
-    Use the returned session_id in ALL subsequent tool calls (execute_step, build_test_suite, etc.)
-
-    RECOMMENDED WORKFLOW - STEP 1 OF 4:
-    This tool should be used as the FIRST step in the Robot Framework automation workflow:
-    1. ✅ analyze_scenario (THIS TOOL) - Creates session and understands requirements
-    2. ➡️ recommend_libraries - Get targeted library suggestions
-    3. ➡️ execute_step - Execute steps using the SAME session_id
-    4. ➡️ build_test_suite - Build suite using the SAME session_id
-
-    Using this order prevents unnecessary library checks and pip installations by ensuring
-    you only verify libraries that are actually relevant to the user's scenario.
-
-    NEW FEATURE: Automatic Session Creation
-    - If session_id not provided: Creates new unique session ID
-    - If session_id provided: Uses existing session or creates new one
-    - Session is auto-configured based on scenario analysis and explicit library preferences
-    - Returns session_id that MUST be used in all subsequent calls
+    Use this first, then reuse the returned session_id for recommend_libraries, execute_step,
+    and build_test_suite. The session is auto-configured based on scenario/context.
 
     Args:
-        scenario: Human language scenario description
-        context: Optional context about the application (web, mobile, API, etc.)
-        session_id: Optional session ID to create and auto-configure for this scenario
+        scenario: Human-language description of the task to automate.
+        context: Application context (e.g., "web", "mobile", "api"); defaults to "web".
+        session_id: Optional existing session id to reuse; if omitted, a new one is created.
 
     Returns:
-        Structured test intent with session_info containing session_id for subsequent calls.
-        Session is automatically configured with optimal library choices for the scenario.
+        Dict[str, Any]: Structured intent and session metadata:
+            - success: bool
+            - session_id: created/resolved id (reuse for subsequent tools)
+            - session_info: auto-configured libraries, search order, next-step guidance
+            - intent/requirements/risk: parsed scenario details
+            - error/guidance: present on failure
     """
     # Analyze the scenario first
     result = await nlp_processor.analyze_scenario(scenario, context)
@@ -922,7 +937,25 @@ async def find_keywords(
     current_state: Dict[str, Any] | None = None,
     limit: int | None = None,
 ) -> Dict[str, Any]:
-    """Unified keyword discovery across semantic, pattern, catalog, and session scopes."""
+    """Discover Robot Framework keywords using multiple strategies.
+
+    Args:
+        query: Search text or intent description.
+        strategy: One of "semantic", "pattern", "catalog", or "session". Defaults to "semantic".
+        context: Scenario context (e.g., "web", "mobile", "api") used by semantic discovery.
+        session_id: Required for strategy="session" to search the live RF namespace.
+        library_name: Optional library filter for catalog search.
+        current_state: Optional state payload to improve semantic matching.
+        limit: Optional maximum number of results to return.
+
+    Returns:
+        Dict[str, Any]: Discovery result:
+            - success: bool
+            - strategy: strategy used
+            - query: original query
+            - result/results: strategy-specific payload
+            - error: present on failure
+    """
 
     strategy_norm = (strategy or "semantic").strip().lower()
     current_state = current_state or {}
@@ -1021,7 +1054,26 @@ async def manage_session(
     alias: str | None = None,
     scope: str = "test",
 ) -> Dict[str, Any]:
-    """Consolidated session management (initialize, import, set variables)."""
+    """Manage a session: initialize, import libraries/resources, set variables.
+
+    Args:
+        action: One of "init", "import_library", "import_resource", "set_variables".
+        session_id: Session to create or update.
+        libraries: Libraries to import when action is "init".
+        variables: Variables to set (dict or Robot-style list) when action is "set_variables".
+        resource_path: Resource file to import when action is "import_resource".
+        library_name: Library to import when action is "import_library".
+        args: Optional library/resource arguments.
+        alias: Optional library alias.
+        scope: Library scope when importing (default "test").
+
+    Returns:
+        Dict[str, Any]: Action-specific result with:
+            - success: bool
+            - session_id: echoed session id
+            - details per action (loaded libraries, set variables, etc.)
+            - error/guidance: present on failure
+    """
 
     action_norm = (action or "").strip().lower()
     session = execution_engine.session_manager.get_or_create_session(session_id)
@@ -1178,7 +1230,31 @@ async def execute_flow(
     finally_steps: List[Dict[str, Any]] | None = None,
     rethrow: bool = False,
 ) -> Dict[str, Any]:
-    """Unified flow control wrapper over if/for/try structures."""
+    """Execute structured flow (if/for/try) within a session.
+
+    Args:
+        structure: Flow type ("if", "for", "try").
+        session_id: Session id to run the flow in.
+        condition: Expression for if/conditional flows.
+        then_steps: Steps for the main branch (if/loop body/try block).
+        else_steps: Steps for the else branch (if).
+        items: Items to iterate when structure="for".
+        item_var: Variable name to bind each item in for-each loops.
+        stop_on_failure: Whether to stop loop/branch execution on first failure.
+        max_iterations: Maximum iterations for for-each loops.
+        try_steps: Steps for the try block (when structure="try").
+        except_patterns: Error patterns to match for except handling.
+        except_steps: Steps for the except block.
+        finally_steps: Steps for the finally block.
+        rethrow: Whether to rethrow after except/finally.
+
+    Returns:
+        Dict[str, Any]: Flow execution result:
+            - success: bool
+            - structure: flow type executed
+            - session_id: echoed id
+            - per-branch results/errors
+    """
 
     structure_norm = (structure or "").strip().lower()
 
@@ -1326,34 +1402,26 @@ async def execute_step(
     mode: str = "keyword",
     expression: str | None = None,
 ) -> Dict[str, Any]:
-    """Execute a single test step using Robot Framework API.
-
-    STEPWISE TEST DEVELOPMENT GUIDANCE:
-    - ALWAYS execute and verify each keyword individually BEFORE building test suites
-    - Test each step to confirm it works as expected
-    - Only add verified keywords to .robot files
-    - Use this method to validate arguments and behavior step-by-step
-    - Build incrementally: execute_step() → verify → add to suite
+    """Execute a single Robot Framework keyword (or Evaluate) within a session.
 
     Args:
-        keyword: Robot Framework keyword name
-        arguments: Arguments for the keyword (supports both positional and named: ["arg1", "param=value"])
-        session_id: Session identifier for maintaining context
-        raise_on_failure: If True, raises exception for failed steps (proper MCP failure reporting).
-                         If False, returns failure details in response (for debugging/analysis).
-        detail_level: Level of detail in response ('minimal', 'standard', 'full').
-                     'minimal' reduces response size for AI agents by ~80-90%.
-        scenario_hint: Optional scenario text for intelligent library auto-configuration.
-                      When provided on first call, automatically configures the session
-                      based on detected scenario type and explicit library preferences.
-        assign_to: Variable name(s) to assign the keyword's return value to.
-                  Single string for single assignment: "result" creates ${result}
-                  List of strings for multi-assignment: ["first", "rest"] creates ${first}, ${rest}
-        use_context: If True, executes within full RF context (maintains variables, state across calls).
-                    This enables proper variable scoping, built-in keyword functionality, and
-                    library state persistence.
-        mode: 'keyword' (default) runs the provided keyword name; 'evaluate' executes a BuiltIn.Evaluate call.
-        expression: Optional expression used when mode='evaluate'. Falls back to keyword or first argument.
+        keyword: Keyword name (Library.Keyword supported).
+        arguments: Keyword arguments; positional and named (`name=value`) supported.
+        session_id: Session to execute in; resolves default if omitted.
+        raise_on_failure: If True, raise on failure; otherwise return error in payload.
+        detail_level: Response verbosity: "minimal" | "standard" | "full".
+        scenario_hint: Optional scenario text to auto-configure libraries on first call.
+        assign_to: Variable name(s) to assign the result to (string or list).
+        use_context: Whether to run inside RF native context; defaults via config/attach.
+        mode: "keyword" (default) or "evaluate" (runs BuiltIn.Evaluate).
+        expression: Expression for mode="evaluate"; falls back to keyword/first argument.
+
+    Returns:
+        Dict[str, Any]: Execution result:
+            - success: bool
+            - result/output: keyword return value or stringified output
+            - assigned_variables / session_variables: when applicable
+            - error/guidance: present on failure
     """
     arguments = list(arguments or [])
     mode_norm = (mode or "keyword").strip().lower()
@@ -1514,28 +1582,23 @@ async def build_test_suite(
     documentation: str = "",
     remove_library_prefixes: bool = True,
 ) -> Dict[str, Any]:
-    """Generate Robot Framework test suite from successful steps with intelligent session resolution.
-
-    IMPORTANT: Only use AFTER validating all steps individually with execute_step().
-    This tool generates .robot files from previously executed and verified steps.
-    Do NOT write test suites before confirming each keyword works correctly.
-
-    Enhanced Session Resolution:
-    - If session_id provided and valid: Uses that session
-    - If session_id empty/invalid: Automatically finds most suitable session with steps
-    - Provides clear guidance on session issues and recovery options
-
-    Recommended workflow:
-    1. Use analyze_scenario() to create configured session
-    2. Use execute_step() to test each keyword with the SAME session_id
-    3. Use build_test_suite() with the SAME session_id to create .robot files
+    """Generate a Robot Framework test suite from previously executed steps.
 
     Args:
-        test_name: Name for the test case
-        session_id: Session with executed steps (auto-resolves if empty/invalid)
-        tags: Test tags
-        documentation: Test documentation
-        remove_library_prefixes: Remove library prefixes from keywords (default: True)
+        test_name: Name for the generated test case.
+        session_id: Session containing executed steps; auto-resolves if empty/invalid.
+        tags: Optional test tags.
+        documentation: Optional test case documentation.
+        remove_library_prefixes: Whether to strip library prefixes from keywords.
+
+    Returns:
+        Dict[str, Any]: Suite generation result:
+            - success: bool
+            - session_id: resolved id
+            - suite: structured suite metadata
+            - rf_text: generated .robot content
+            - statistics/optimization_applied: summary of generated steps
+            - error/guidance: present on failure
     """
     if tags is None:
         tags = []
@@ -1677,35 +1740,19 @@ async def get_page_source(
 
 @mcp.tool
 async def check_library_availability(libraries: List[str]) -> Dict[str, Any]:
-    """Check if Robot Framework libraries are available before installation.
+    """Verify that specified Robot Framework libraries can be imported/installed.
 
-    RECOMMENDED WORKFLOW - STEP 3 OF 3:
-    This tool should be used as the THIRD step in the Robot Framework automation workflow:
-    1. ✅ analyze_scenario - Understand what the user wants to accomplish
-    2. ✅ recommend_libraries - Get targeted library suggestions for the scenario
-    3. ✅ check_library_availability (THIS TOOL) - Verify only the recommended libraries
-
-    CRITICAL: Do NOT call this tool first! It may return empty results if called before
-    the Robot Framework environment is initialized, leading to unnecessary pip installations.
-
-    PREFERRED INPUT: Use the library recommendations from recommend_libraries as the
-    'libraries' parameter to avoid checking irrelevant libraries.
-
-    FALLBACK INITIALIZATION: If you must call this tool without the recommended workflow,
-    first call 'get_available_keywords' or 'execute_step' to initialize library discovery,
-    then re-run this check.
+    Recommended as step 3 after analyze_scenario and recommend_libraries; use the recommended
+    names to avoid unnecessary checks.
 
     Args:
-        libraries: List of library names to check (preferably from recommend_libraries output)
+        libraries: Library names to verify (preferably from recommend_libraries output).
 
     Returns:
-        Dict with availability status, installation suggestions, and workflow guidance.
-        Includes smart hints if called in wrong order or without initialization.
-
-    Example workflow:
-        scenario_result = await analyze_scenario("I want to test a web form")
-        recommendations = await recommend_libraries(scenario_result["scenario"])
-        availability = await check_library_availability(recommendations["recommended_libraries"])
+        Dict[str, Any]: Availability report:
+            - success: bool
+            - results: per-library availability/install guidance
+            - error/guidance: present on failure
     """
     result = execution_engine.check_library_requirements(libraries)
     if "success" not in result:
@@ -2141,7 +2188,21 @@ async def get_keyword_info(
     session_id: str | None = None,
     arguments: List[str] | None = None,
 ) -> Dict[str, Any]:
-    """Retrieve keyword/library documentation or parse signatures from a single entry point."""
+    """Retrieve keyword or library documentation, or parse signatures.
+
+    Args:
+        mode: One of "keyword" (default), "library", "session", or "parse".
+        keyword_name: Keyword to document (required for modes "keyword"/"session"/"parse").
+        library_name: Library to document (required for mode "library"; optional for keyword mode).
+        session_id: Session id when mode="session" to fetch overrides from the live namespace.
+        arguments: Optional arguments to parse when mode="parse".
+
+    Returns:
+        Dict[str, Any]: Documentation or parse payload:
+            - success: bool
+            - mode: resolved mode
+            - doc/signature data or error on failure
+    """
 
     mode_norm = (mode or "keyword").strip().lower()
 
@@ -2469,25 +2530,18 @@ async def validate_test_readiness(session_id: str = "default") -> Dict[str, Any]
 async def set_library_search_order(
     libraries: List[str], session_id: str = "default"
 ) -> Dict[str, Any]:
-    """Set explicit library search order for keyword resolution (like RF Set Library Search Order).
-
-    This tool implements Robot Framework's Set Library Search Order concept, allowing explicit
-    control over which library's keywords take precedence when multiple libraries have the
-    same keyword name.
+    """Set explicit library search order for keyword resolution.
 
     Args:
-        libraries: List of library names in priority order (highest priority first)
-        session_id: Session identifier to configure
+        libraries: Library names in priority order (highest first).
+        session_id: Session to apply the search order to.
 
     Returns:
-        Dict with success status, applied search order, and any warnings about invalid libraries
-
-    Example:
-        # Prioritize SeleniumLibrary over Browser Library for web automation
-        await set_library_search_order(["SeleniumLibrary", "BuiltIn", "Collections"], "web_session")
-
-        # Prioritize RequestsLibrary for API testing
-        await set_library_search_order(["RequestsLibrary", "BuiltIn", "String"], "api_session")
+        Dict[str, Any]: Result payload:
+            - success: bool
+            - session_id: echoed id
+            - old_search_order/new_search_order: before/after lists
+            - warnings: any invalid or missing libraries
     """
     try:
         # Get or create session
@@ -2691,7 +2745,20 @@ async def get_locator_guidance(
     error_message: str | None = None,
     keyword_name: str | None = None,
 ) -> Dict[str, Any]:
-    """Provide locator/selector guidance for Browser/Selenium/Appium libraries."""
+    """Provide locator/selector guidance for Browser, SeleniumLibrary, or AppiumLibrary.
+
+    Args:
+        library: Target library ("Browser", "SeleniumLibrary", or "AppiumLibrary"). Case-insensitive.
+        error_message: Optional error text to tailor guidance (e.g., from a failed keyword).
+        keyword_name: Optional keyword name for context-specific hints.
+
+    Returns:
+        Dict[str, Any]: Guidance payload:
+            - success: bool
+            - library: resolved library name
+            - tips/warnings/examples: library-specific suggestions
+            - error: present when library is unsupported
+    """
 
     from robotmcp.utils.rf_native_type_converter import RobotFrameworkNativeConverter
 
@@ -2963,9 +3030,26 @@ async def run_test_suite(
     output_level: str = "standard",
     capture_screenshots: bool = False,
 ) -> Dict[str, Any]:
-    """Execute or validate Robot Framework suites depending on `mode`.
+    """Validate or execute a Robot Framework suite.
 
-    mode='dry' / 'validate' performs a dry run; mode='full' executes the suite.
+    Args:
+        session_id: Session containing steps to build/execute; optional if suite_file_path is given.
+        suite_file_path: Path to an existing .robot file to validate/execute.
+        mode: "dry"/"validate" for dry run; "full" to execute. Defaults to "full".
+        validation_level: Dry-run validation depth ("minimal", "standard", "strict"). Default "standard".
+        include_warnings: Whether to include warnings in validation output.
+        execution_options: RF execution options (variables, tags, loglevel, timeout, etc.).
+        output_level: Response verbosity ("minimal", "standard", "detailed").
+        capture_screenshots: Enable screenshot capture on failures (if supported).
+
+    Returns:
+        Dict[str, Any]: Suite result:
+            - success: bool
+            - mode: "dry" or "full"
+            - statistics/execution_details/output_files when executed
+            - validation_results when dry run
+            - session_resolution: info when fallback session resolution is used
+            - error/guidance: present on failure
     """
 
     if execution_options is None:
@@ -3102,7 +3186,18 @@ async def diagnose_rf_context(session_id: str) -> Dict[str, Any]:
 
 @mcp.tool
 async def manage_attach(action: str = "status") -> Dict[str, Any]:
-    """Inspect or control attach bridge configuration."""
+    """Inspect or control attach bridge configuration.
+
+    Args:
+        action: "status" (default) or "stop".
+
+    Returns:
+        Dict[str, Any]: Attach status payload:
+            - success: bool
+            - action: echoed action
+            - configured/reachable/default_mode/strict: attach configuration fields
+            - diagnostics/hint/error: context-specific fields
+    """
 
     action_norm = (action or "status").strip().lower()
 
