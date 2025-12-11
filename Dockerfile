@@ -1,0 +1,54 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    UV_PYTHON_DOWNLOADS=never \
+    PATH="/root/.local/bin:$PATH"
+
+WORKDIR /app
+
+RUN apt-get update && \
+    apt-get install -y build-essential ca-certificates \
+        fonts-liberation \
+        libasound2 \
+        libatk1.0-0 \
+        libcairo-gobject2 \
+        libcairo2 \
+        libdbus-1-3 \
+        libdrm2 \
+        libgbm1 \
+        libglib2.0-0 \
+        libgtk-3-0 \
+        libnss3 \
+        libnspr4 \
+        libpango-1.0-0 \
+        libpangocairo-1.0-0 \
+        libx11-6 \
+        libxcomposite1 \
+        libxcursor1 \
+        libxdamage1 \
+        libxext6 \
+        libxfixes3 \
+        libxi6 \
+        libxrandr2 \
+        libxrender1 \
+        libxss1 \
+        libxtst6 \
+        wget \
+        xdg-utils \
+        nodejs \
+        npm \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir uv
+
+COPY pyproject.toml uv.lock README.md /app/
+
+COPY src /app/src
+
+RUN uv lock && \
+    uv sync --all-extras --no-dev && \
+    uv run -- rfbrowser init
+
+ENTRYPOINT ["uv", "run", "--no-sync", "robotmcp"]

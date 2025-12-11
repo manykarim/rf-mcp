@@ -200,6 +200,8 @@ To disable the dashboard for a given run, either omit the flag or pass `--withou
 
 ### VS Code (GitHub Code)
 
+**Using UV**
+
 ```json
 {
   "servers": {
@@ -227,9 +229,24 @@ To disable the dashboard for a given run, either omit the flag or pass `--withou
 **Hint:** 
 If you set up a virtual environment, make sure to also use the python executable from that venv to start the server.
 
+**Using Docker**
+
+```json
+{
+  "servers": {
+    "robotmcp": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "robotmcp"]
+    }
+  }
+}
+```
+
 ### Claude Desktop
 
 **Location:** `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
+
+**Using UV**
 
 ```json
 {
@@ -237,6 +254,19 @@ If you set up a virtual environment, make sure to also use the python executable
     "robotmcp": {
       "command": "python",
       "args": ["-m", "robotmcp.server"]
+    }
+  }
+}
+```
+
+**Using Docker**
+
+```json
+{
+  "servers": {
+    "robotmcp": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "robotmcp"]
     }
   }
 }
@@ -252,6 +282,8 @@ RobotMCP ships with `robotmcp.attach.McpAttach`, a lightweight Robot Framework l
 ### MCP Server Setup
 
 Example configuration with passed environment variables for Debug Bridge
+
+#### Using UV
 
 ```json
 {
@@ -270,6 +302,23 @@ Example configuration with passed environment variables for Debug Bridge
   }
 }
 ```
+
+#### Using Docker
+
+{
+  "servers": {
+    "RobotMCP": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "robotmcp"],
+       "env": {
+        "ROBOTMCP_ATTACH_HOST": "127.0.0.1",
+        "ROBOTMCP_ATTACH_PORT": "7317",
+        "ROBOTMCP_ATTACH_TOKEN": "change-me",
+        "ROBOTMCP_ATTACH_DEFAULT": "auto"
+      }
+    }
+  }
+}
 
 ### Robot Framework setup
 
