@@ -268,6 +268,29 @@ uv run robotmcp.server --transport http --host 127.0.0.1 --port 8000
 uv run robotmcp.server --transport stdio
 ```
 
+### Other CLI arguments
+
+#### Transport & Network
+
+- `--transport {stdio|http|sse}` – Communication protocol (default: `stdio`). Use `http` or `sse` for remote connections.
+- `--host <address>` – Bind address for HTTP/SSE transports (default: `127.0.0.1`).
+- `--port <port>` – Port for HTTP/SSE transports (default: `8000`).
+- `--path <path>` – URL path for HTTP/SSE endpoints (default: `/mcp`). Customize the endpoint path to avoid conflicts or fit your URL structure (e.g., `--path /api/mcp/`).
+
+#### Frontend Dashboard
+
+- `--with-frontend` – Enable the optional Django-based frontend dashboard.
+- `--without-frontend` – Disable the frontend, even if environment variables enable it.
+- `--frontend-host <address>` – Frontend server address (default: `127.0.0.1`).
+- `--frontend-port <port>` – Frontend server port (default: `8001`).
+- `--frontend-base-path <path>` – URL base path for frontend (default: `/`).
+- `--frontend-debug` – Enable Django debug mode for development.
+- `--frontend-no-debug` – Disable Django debug mode.
+
+#### Logging
+
+- `--log-level {DEBUG|INFO|WARNING|ERROR}` – Server logging level (default: `INFO`).
+
 ## 🪝 Debug Attach Bridge
 
 RobotMCP ships with `robotmcp.attach.McpAttach`, a lightweight Robot Framework library that exposes the live `ExecutionContext` over a localhost HTTP bridge. When you debug a suite from VS Code (RobotCode) or another IDE, the bridge lets RobotMCP reuse the in-process variables, imports, and keyword search order instead of creating a separate context.
