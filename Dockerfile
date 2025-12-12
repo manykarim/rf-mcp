@@ -50,6 +50,8 @@ COPY --chown=appuser:appuser --chmod=755 pyproject.toml uv.lock README.md /app/
 
 COPY --chown=appuser:appuser --chmod=755 src /app/src
 
+RUN chown -R appuser:appuser /app
+
 USER appuser
 
 ENV PATH="/home/appuser/.local/bin:$PATH"
