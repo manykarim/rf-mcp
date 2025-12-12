@@ -212,6 +212,8 @@ To disable the dashboard for a given run, either omit the flag or pass `--withou
 
 **STDIO** with `uv`
 
+**Using UV**
+
 ```json
 {
   "servers": {
@@ -238,7 +240,27 @@ To disable the dashboard for a given run, either omit the flag or pass `--withou
 }
 ```
 
-**HTTP**
+**Hint:** 
+If you set up a virtual environment, make sure to also use the python executable from that venv to start the server.
+
+**Using Docker**
+
+```json
+{
+  "servers": {
+    "robotmcp": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "robotmcp"]
+    }
+  }
+}
+```
+
+### Claude Desktop
+
+**Location:** `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
+
+**Using UV**
 
 ```json
 {
@@ -251,45 +273,21 @@ To disable the dashboard for a given run, either omit the flag or pass `--withou
 }
 ```
 
-**Hint:**
-If you set up a virtual environment, make sure to also use the python executable from that venv to start the server.
+**Using Docker**
 
-### Different Transport Modes
-
-RobotMCP supports multiple transport modes:
-
-- **STDIO** (default): Communicate via standard input/output streams.
-- **HTTP**: Start the server with `--transport http` and connect via HTTP.
-- **SSE**: Start the server with `--transport sse` and connect via Server-Sent Events.
-
-```bash
-uv run robotmcp.server --transport http --host 127.0.0.1 --port 8000
-
-uv run robotmcp.server --transport stdio
+```json
+{
+  "servers": {
+    "robotmcp": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "robotmcp"]
+    }
+  }
+}
 ```
 
-### Other CLI arguments
-
-#### Transport & Network
-
-- `--transport {stdio|http|sse}` – Communication protocol (default: `stdio`). Use `http` or `sse` for remote connections.
-- `--host <address>` – Bind address for HTTP/SSE transports (default: `127.0.0.1`).
-- `--port <port>` – Port for HTTP/SSE transports (default: `8000`).
-- `--path <path>` – URL path for HTTP/SSE endpoints (default: `/mcp`). Customize the endpoint path to avoid conflicts or fit your URL structure (e.g., `--path /api/mcp/`).
-
-#### Frontend Dashboard
-
-- `--with-frontend` – Enable the optional Django-based frontend dashboard.
-- `--without-frontend` – Disable the frontend, even if environment variables enable it.
-- `--frontend-host <address>` – Frontend server address (default: `127.0.0.1`).
-- `--frontend-port <port>` – Frontend server port (default: `8001`).
-- `--frontend-base-path <path>` – URL base path for frontend (default: `/`).
-- `--frontend-debug` – Enable Django debug mode for development.
-- `--frontend-no-debug` – Disable Django debug mode.
-
-#### Logging
-
-- `--log-level {DEBUG|INFO|WARNING|ERROR}` – Server logging level (default: `INFO`).
+### Other AI Agents
+RobotMCP works with any MCP-compatible AI agent. Use the stdio configuration above.
 
 ## 🪝 Debug Attach Bridge
 
@@ -298,6 +296,8 @@ RobotMCP ships with `robotmcp.attach.McpAttach`, a lightweight Robot Framework l
 ### MCP Server Setup
 
 Example configuration with passed environment variables for Debug Bridge
+
+#### Using UV
 
 ```json
 {
@@ -316,6 +316,23 @@ Example configuration with passed environment variables for Debug Bridge
   }
 }
 ```
+
+#### Using Docker
+
+{
+  "servers": {
+    "RobotMCP": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "robotmcp"],
+       "env": {
+        "ROBOTMCP_ATTACH_HOST": "127.0.0.1",
+        "ROBOTMCP_ATTACH_PORT": "7317",
+        "ROBOTMCP_ATTACH_TOKEN": "change-me",
+        "ROBOTMCP_ATTACH_DEFAULT": "auto"
+      }
+    }
+  }
+}
 
 ### Robot Framework setup
 
