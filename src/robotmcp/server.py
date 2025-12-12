@@ -757,9 +757,9 @@ async def recommend_libraries(
         if keywords:
             target["keywords"] = keywords
             target["keyword_source"] = source
-            target[
-                "keyword_hint"
-            ] = "Call get_keyword_info for keyword arguments and documentation."
+            target["keyword_hint"] = (
+                "Call get_keyword_info for keyword arguments and documentation."
+            )
         return recs
 
     result: Dict[str, Any] = {
@@ -768,7 +768,9 @@ async def recommend_libraries(
         "scenario": scenario,
         "context": context,
         "recommended_libraries": recommended_names,
-        "recommendations": _attach_keywords(recommendations) if include_keywords else recommendations,
+        "recommendations": _attach_keywords(recommendations)
+        if include_keywords
+        else recommendations,
     }
 
     availability_info = None
@@ -3523,6 +3525,33 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         const=False,
         help="Disable Django debug mode for the frontend.",
     )
+    parser.add_argument(
+        "--transport",
+        dest="transport",
+        choices=["stdio", "http", "sse"],
+        help="Transport to use for the MCP server (default: stdio).",
+    )
+    parser.add_argument(
+        "--host",
+        dest="host",
+        help="Host/interface for HTTP transport (default 127.0.0.1).",
+    )
+    parser.add_argument(
+        "--port",
+        dest="port",
+        type=int,
+        help="Port for HTTP transport (default 8000).",
+    )
+    parser.add_argument(
+        "--path",
+        dest="path",
+        help="Path for HTTP/streamable endpoints (default '/').",
+    )
+    parser.add_argument(
+        "--log-level",
+        dest="log_level",
+        help="Log level for the MCP server (e.g., INFO, DEBUG).",
+    )
     return parser
 
 
@@ -3573,7 +3602,26 @@ def main(argv: List[str] | None = None) -> None:
         logger.info("Starting RobotMCP without frontend")
 
     try:
-        mcp.run()
+        run_kwargs = {}
+
+        # Default to stdio when no transport is provided to remain backward compatible
+        transport = args.transport or "stdio"
+        run_kwargs["transport"] = transport
+
+        # log_level is accepted by both stdio and http
+        if args.log_level:
+            run_kwargs["log_level"] = args.log_level
+
+        # Only pass host/port/path when using HTTP/SSE transports
+        if transport != "stdio":
+            if args.host:
+                run_kwargs["host"] = args.host
+            if args.port:
+                run_kwargs["port"] = args.port
+            if args.path:
+                run_kwargs["path"] = args.path
+
+        mcp.run(**run_kwargs)
     except KeyboardInterrupt:
         logger.info("RobotMCP interrupted by user")
     finally:
