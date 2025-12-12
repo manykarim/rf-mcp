@@ -46,9 +46,9 @@ RUN groupadd -r appuser && useradd -r -g appuser -u 1000 -m -s /bin/bash appuser
 
 WORKDIR /app
 
-COPY --chown=appuser:appuser pyproject.toml uv.lock README.md /app/
+COPY --chown=appuser:appuser --chmod=755 pyproject.toml uv.lock README.md /app/
 
-COPY --chown=appuser:appuser src /app/src
+COPY --chown=appuser:appuser --chmod=755 src /app/src
 
 USER appuser
 
