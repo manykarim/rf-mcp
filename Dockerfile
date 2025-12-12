@@ -4,10 +4,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
-    UV_PYTHON_DOWNLOADS=never \
-    PATH="/root/.local/bin:$PATH"
-
-WORKDIR /app
+    UV_PYTHON_DOWNLOADS=never
 
 RUN apt-get update && \
     apt-get install -y build-essential ca-certificates \
@@ -43,9 +40,21 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir uv
 
-COPY pyproject.toml uv.lock README.md /app/
+RUN npx --yes playwright install-deps
 
-COPY src /app/src
+RUN groupadd -r appuser && useradd -r -g appuser -u 1000 -m -s /bin/bash appuser
+
+WORKDIR /app
+
+COPY --chown=appuser:appuser --chmod=755 pyproject.toml uv.lock README.md /app/
+
+COPY --chown=appuser:appuser --chmod=755 src /app/src
+
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+ENV PATH="/home/appuser/.local/bin:$PATH"
 
 RUN uv lock && \
     uv sync --all-extras --no-dev && \
