@@ -2,11 +2,13 @@ name: Docker Publish
 
 on:
   push:
+    branches:
+      - main     # Build and push 'main' tag on push to main branch
     tags:
       - 'v*.*.*' # Trigger on version tag pushes (e.g., v0.7.1)
   pull_request:
     branches:
-      - main     # Trigger on PRs targeting main branch
+      - main     # Build (but don't push) on PRs targeting main branch
   workflow_dispatch: {} # Allow manual triggering from the Actions tab
 
 env:
