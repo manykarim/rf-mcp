@@ -60,7 +60,7 @@ jobs:
             # For manual workflow runs, use branch name with 'manual' suffix
             type=raw,value={{branch}}-manual,enable=${{ github.event_name == 'workflow_dispatch' }}
             # Allow manual runs on main to opt-in to 'latest'
-            type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_latest == 'true' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_latest }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3.6.0
@@ -126,7 +126,7 @@ jobs:
             # For manual workflow runs, use branch name with 'manual' suffix
             type=raw,value={{branch}}-manual,enable=${{ github.event_name == 'workflow_dispatch' }}
             # Allow manual runs on main to opt-in to 'latest'
-            type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_latest == 'true' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_latest }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3.6.0
