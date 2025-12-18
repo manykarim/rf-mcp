@@ -159,6 +159,81 @@ uv sync --all-extras --dev
 pip install -e .
 ```
 
+### Method 4: Docker Installation
+
+RobotMCP provides pre-built Docker images for both headless and VNC-enabled environments.
+
+#### Headless Image (Recommended for CI/CD)
+
+```bash
+# Pull from GitHub Container Registry
+docker pull ghcr.io/manykarim/rf-mcp:latest
+
+# Run with HTTP transport and frontend
+docker run -p 8000:8000 -p 8001:8001 ghcr.io/manykarim/rf-mcp:latest
+
+# Or run interactively with STDIO
+docker run -it --rm ghcr.io/manykarim/rf-mcp:latest uv run robotmcp
+```
+
+**Included browsers:** Chromium, Firefox ESR, Playwright browsers (Chromium, Firefox, WebKit)
+
+#### VNC Image (For Visual Debugging)
+
+The VNC image includes a full X11 desktop accessible via VNC or noVNC web interface:
+
+```bash
+# Pull VNC image
+docker pull ghcr.io/manykarim/rf-mcp-vnc:latest
+
+# Run with all ports exposed
+docker run -p 8000:8000 -p 8001:8001 -p 5900:5900 -p 6080:6080 ghcr.io/manykarim/rf-mcp-vnc:latest
+```
+
+**Access points:**
+| Port | Service |
+|------|---------|
+| 8000 | MCP HTTP transport |
+| 8001 | Frontend dashboard |
+| 5900 | VNC (use any VNC client) |
+| 6080 | noVNC web interface (http://localhost:6080/vnc.html) |
+
+#### Building Docker Images Locally
+
+```bash
+# Build headless image
+docker build -f docker/Dockerfile -t robotmcp .
+
+# Build VNC image
+docker build -f docker/Dockerfile.vnc -t robotmcp-vnc .
+```
+
+#### Using Docker with VS Code MCP
+
+**STDIO mode:**
+```json
+{
+  "servers": {
+    "robotmcp": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "ghcr.io/manykarim/rf-mcp:latest", "uv", "run", "robotmcp"]
+    }
+  }
+}
+```
+
+**HTTP mode (start container first, then connect):**
+```json
+{
+  "servers": {
+    "robotmcp": {
+      "type": "http",
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}
+```
+
 ### Playwright/Browsers for UI Tests
 
 - Browser Library: run `rfbrowser init` (downloads Playwright and browsers)
@@ -240,7 +315,7 @@ To disable the dashboard for a given run, either omit the flag or pass `--withou
 }
 ```
 
-**Hint:** 
+**Hint:**
 If you set up a virtual environment, make sure to also use the python executable from that venv to start the server.
 
 **Using Docker**
@@ -250,17 +325,13 @@ If you set up a virtual environment, make sure to also use the python executable
   "servers": {
     "robotmcp": {
       "command": "docker",
-      "args": ["run", "-i", "--rm", "robotmcp"]
+      "args": ["run", "-i", "--rm", "ghcr.io/manykarim/rf-mcp:latest", "uv", "run", "robotmcp"]
     }
   }
 }
 ```
 
-### Claude Desktop
-
-**Location:** `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
-
-**Using UV**
+**HTTP mode**
 
 ```json
 {
@@ -273,20 +344,8 @@ If you set up a virtual environment, make sure to also use the python executable
 }
 ```
 
-**Using Docker**
-
-```json
-{
-  "servers": {
-    "robotmcp": {
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "robotmcp"]
-    }
-  }
-}
-```
-
 ### Other AI Agents
+
 RobotMCP works with any MCP-compatible AI agent. Use the stdio configuration above.
 
 ## 🪝 Debug Attach Bridge
@@ -319,12 +378,13 @@ Example configuration with passed environment variables for Debug Bridge
 
 #### Using Docker
 
+```json
 {
   "servers": {
     "RobotMCP": {
       "command": "docker",
-      "args": ["run", "-i", "--rm", "robotmcp"],
-       "env": {
+      "args": ["run", "-i", "--rm", "ghcr.io/manykarim/rf-mcp:latest", "uv", "run", "robotmcp"],
+      "env": {
         "ROBOTMCP_ATTACH_HOST": "127.0.0.1",
         "ROBOTMCP_ATTACH_PORT": "7317",
         "ROBOTMCP_ATTACH_TOKEN": "change-me",
@@ -333,6 +393,7 @@ Example configuration with passed environment variables for Debug Bridge
     }
   }
 }
+```
 
 ### Robot Framework setup
 
