@@ -4,7 +4,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
-    UV_PYTHON_DOWNLOADS=never
+    UV_PYTHON_DOWNLOADS=never \
+    # Display settings for X11
+    DISPLAY=:99 \
+    DISPLAY_WIDTH=1920 \
+    DISPLAY_HEIGHT=1080 \
+    DISPLAY_DEPTH=24 \
+    # VNC settings
+    VNC_PORT=5900 \
+    NOVNC_PORT=6080
 
 RUN apt-get update && \
     apt-get install -y build-essential ca-certificates \
@@ -40,19 +48,23 @@ RUN apt-get update && \
     xdg-utils \
     nodejs \
     npm \
+    # X11 and VNC packages
+    xvfb \
+    x11vnc \
+    fluxbox \
+    xterm \
+    dbus-x11 \
+    # noVNC and websockify
+    novnc \
+    websockify \
+    # Supervisor to manage multiple processes
+    supervisor \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir uv
 
-# Install Chrome
-RUN curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
-    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
-    && apt-get update \
-    && apt-get install -y google-chrome-stable \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Firefox
+# Install Chromium and Firefox (works on both amd64 and arm64)
 RUN apt-get update \
-    && apt-get install -y firefox-esr \
+    && apt-get install -y chromium firefox-esr \
     && rm -rf /var/lib/apt/lists/*
 
 # Selenium Manager (included in Selenium 4.6+) will automatically download chromedriver/geckodriver
@@ -69,6 +81,16 @@ COPY --chown=appuser:appuser --chmod=755 src /app/src
 
 RUN chown -R appuser:appuser /app
 
+# Create supervisor configuration directory
+RUN mkdir -p /etc/supervisor/conf.d
+
+# Copy supervisor configuration
+COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# Create log directory for supervisor
+RUN mkdir -p /var/log/supervisor && chown -R appuser:appuser /var/log/supervisor
+
+# Setup for appuser
 USER appuser
 
 ENV PATH="/home/appuser/.local/bin:$PATH"
@@ -77,7 +99,15 @@ RUN uv lock && \
     uv sync --all-extras --no-dev && \
     uv run -- rfbrowser init
 
-# Expose ports for HTTP transport (8000) and Frontend dashboard (8001)
-EXPOSE 8000 8001
+# Switch back to root for supervisor
+USER root
 
-ENTRYPOINT ["uv", "run", "--no-sync", "robotmcp", "--transport", "http", "--host", "0.0.0.0", "--port", "8000", "--with-frontend", "--frontend-host", "0.0.0.0", "--frontend-port", "8001"]
+# Expose ports:
+# 8000 - MCP HTTP transport
+# 8001 - MCP Frontend dashboard  
+# 5900 - VNC
+# 6080 - noVNC web interface
+EXPOSE 8000 8001 5900 6080
+
+# Start supervisor which manages all services
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
