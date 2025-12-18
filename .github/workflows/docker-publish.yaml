@@ -9,7 +9,12 @@ on:
   pull_request:
     branches:
       - main     # Build (but don't push) on PRs targeting main branch
-  workflow_dispatch: {} # Allow manual triggering from the Actions tab
+  workflow_dispatch:
+    inputs:
+      publish_latest:
+        description: "Push the 'latest' tag for manual runs on main?"
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
@@ -54,6 +59,8 @@ jobs:
             type=ref,event=pr
             # For manual workflow runs, use branch name with 'manual' suffix
             type=raw,value={{branch}}-manual,enable=${{ github.event_name == 'workflow_dispatch' }}
+            # Allow manual runs on main to opt-in to 'latest'
+            type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_latest == 'true' }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3.6.0
@@ -118,6 +125,8 @@ jobs:
             type=ref,event=pr
             # For manual workflow runs, use branch name with 'manual' suffix
             type=raw,value={{branch}}-manual,enable=${{ github.event_name == 'workflow_dispatch' }}
+            # Allow manual runs on main to opt-in to 'latest'
+            type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_latest == 'true' }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3.6.0
