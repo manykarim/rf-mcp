@@ -61,6 +61,21 @@ class ExternalRFClient:
     def import_resource(self, path: str) -> Dict[str, Any]:
         return self._post("/import_resource", {"path": path})
 
+    def import_variables(self, variable_file_path: str, args: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Import variables from a file via the attach bridge.
+        
+        Args:
+            variable_file_path: Path to variable file (.py, .yaml, .json)
+            args: Optional arguments for Python variable files
+            
+        Returns:
+            Dict with success status and variable loading results
+        """
+        return self._post("/import_variables", {
+            "variable_file_path": variable_file_path, 
+            "args": list(args or [])
+        })
+
     def list_keywords(self) -> Dict[str, Any]:
         return self._post("/list_keywords", {})
 

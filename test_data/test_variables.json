@@ -1,0 +1,22 @@
+{
+  "JSON_SCALAR": "json_value",
+  "JSON_NUMBER": 456,
+  "JSON_BOOLEAN": false,
+  "JSON_LIST": [
+    "json_item1",
+    "json_item2",
+    789
+  ],
+  "JSON_DICT": {
+    "settings": {
+      "theme": "dark",
+      "language": "en"
+    },
+    "features": [
+      "feature1",
+      "feature2"
+    ]
+  },
+  "JSON_NULL": null,
+  "JSON_EMPTY": ""
+}

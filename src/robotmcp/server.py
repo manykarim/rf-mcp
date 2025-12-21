@@ -1098,19 +1098,21 @@ async def manage_session(
     args: List[str] | None = None,
     alias: str | None = None,
     scope: str = "test",
+    variable_file_path: str | None = None,
 ) -> Dict[str, Any]:
     """Manage a session: initialize, import libraries/resources, set variables.
 
     Args:
-        action: One of "init", "import_library", "import_resource", "set_variables".
+        action: One of "init", "import_library", "import_resource", "set_variables", "import_variables".
         session_id: Session to create or update.
         libraries: Libraries to import when action is "init".
         variables: Variables to set (dict or Robot-style list) when action is "set_variables".
         resource_path: Resource file to import when action is "import_resource".
         library_name: Library to import when action is "import_library".
-        args: Optional library/resource arguments.
+        args: Optional library/resource/variable file arguments.
         alias: Optional library alias.
         scope: Library scope when importing (default "test").
+        variable_file_path: Variable file to import when action is "import_variables".
 
     Returns:
         Dict[str, Any]: Action-specific result with:
@@ -1165,6 +1167,16 @@ async def manage_session(
         if not resource_path:
             return {"success": False, "error": "resource_path is required"}
 
+        def _store_session_variables(session, variables_map: Dict[str, Any]) -> List[str]:
+            loaded: List[str] = []
+            for name, value in variables_map.items():
+                base = name[2:-1] if name.startswith("${") and name.endswith("}") else name
+                decorated = f"${{{base}}}"
+                session.variables[base] = value
+                session.variables[decorated] = value
+                loaded.append(base)
+            return loaded
+
         def _local_call() -> Dict[str, Any]:
             mgr = get_rf_native_context_manager()
             return mgr.import_resource_for_session(session_id, resource_path)
@@ -1175,6 +1187,24 @@ async def manage_session(
         result = _call_attach_tool_with_fallback(
             "import_resource", _external_call, _local_call
         )
+        # Sync returned variables (local mode only) into the ExecutionSession store
+        try:
+            session = execution_engine.session_manager.get_or_create_session(session_id)
+            variables_map = result.get("variables_map") or {}
+            if variables_map:
+                _store_session_variables(session, variables_map)
+            for vf in result.get("variable_files", []) or []:
+                key = (vf.get("path"), tuple(vf.get("args") or ()))
+                existing = {
+                    (item.get("path"), tuple(item.get("args") or ()))
+                    for item in session.loaded_variable_files
+                }
+                if key not in existing:
+                    session.loaded_variable_files.append(vf)
+        except Exception:
+            # Best-effort sync; do not fail the import if syncing fails
+            pass
+
         result.update({"action": "import_resource", "session_id": session_id})
         return result
 
@@ -1248,6 +1278,61 @@ async def manage_session(
             "set": list(results.keys()),
             "scope": scope,
         }
+
+    if action_norm in {"import_variables", "load_variables"}:
+        if not variable_file_path:
+            return {"success": False, "error": "variable_file_path is required"}
+
+        def _local_call() -> Dict[str, Any]:
+            mgr = get_rf_native_context_manager()
+            return mgr.import_variables_for_session(session_id, variable_file_path, args or [])
+
+        def _external_call(client: ExternalRFClient) -> Dict[str, Any]:
+            return client.import_variables(variable_file_path, args or [])
+
+        result = _call_attach_tool_with_fallback(
+            "import_variables", _external_call, _local_call
+        )
+        
+        # Sync returned variables (local mode only) into the ExecutionSession store
+        try:
+            session = execution_engine.session_manager.get_or_create_session(session_id)
+            variables_map = result.get("variables_map") or {}
+            if variables_map:
+                for name, value in variables_map.items():
+                    # Store variables in session with proper normalization
+                    base = name[2:-1] if name.startswith("${") and name.endswith("}") else name
+                    decorated = f"${{{base}}}"
+                    session.variables[base] = value
+                    session.variables[decorated] = value
+                    
+            # Track variable file metadata in session
+            variable_file_record = {
+                "path": variable_file_path,
+                "args": args or [],
+                "variables_loaded": list(variables_map.keys()) if variables_map else []
+            }
+            
+            if not hasattr(session, 'loaded_variable_files'):
+                session.loaded_variable_files = []
+                
+            # Check if already imported (by path and args combination) 
+            existing_key = (variable_file_path, tuple(args or []))
+            existing_keys = {
+                (item.get("path"), tuple(item.get("args", [])))
+                for item in session.loaded_variable_files
+            }
+            
+            if existing_key not in existing_keys:
+                session.loaded_variable_files.append(variable_file_record)
+                
+        except Exception as sync_error:
+            # Best-effort sync; do not fail the import if syncing fails
+            logger.warning(f"Failed to sync variable file metadata to session: {sync_error}")
+            pass
+
+        result.update({"action": "import_variables", "session_id": session_id})
+        return result
 
     return {"success": False, "error": f"Unsupported action '{action}'"}
 
