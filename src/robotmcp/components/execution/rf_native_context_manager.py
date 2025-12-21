@@ -1145,40 +1145,54 @@ class RobotFrameworkNativeContextManager:
             return {"success": False, "error": str(e), "session_id": session_id}
 
     def import_variables_for_session(
-        self, 
-        session_id: str, 
-        variable_file_path: str, 
+        self,
+        session_id: str,
+        variable_file_path: str,
         args: List[str] = None
     ) -> Dict[str, Any]:
         """
         Import variables from a file into the session using RF's native APIs.
-        
+
         Supports .py, .yaml/.yml, and .json variable files with Robot Framework's
         native behavior including:
         - Python static variables and get_variables() functions
         - YAML/JSON structured data
         - Arguments for Python variable files
         - RF's native path resolution and error handling
-        
+
         Args:
             session_id: Target session for variable import
             variable_file_path: Path to variable file (.py, .yaml/.yml, .json)
             args: Optional arguments for Python variable files with get_variables()
-        
+
         Returns:
             Dict with success status, loaded variables, and metadata
         """
         if args is None:
             args = []
-            
+
         try:
             if session_id not in self._session_contexts:
                 create_result = self.create_context_for_session(session_id)
                 if not create_result.get("success"):
                     return create_result
-            
+
             namespace = self._session_contexts[session_id]["namespace"]
             variables_obj = self._session_contexts[session_id]["variables"]
+
+            # Normalize path for cross-platform compatibility (especially Windows)
+            # Convert backslashes to forward slashes to avoid escape sequence issues
+            from pathlib import Path
+            normalized_path = variable_file_path
+            try:
+                p = Path(variable_file_path)
+                if not p.is_absolute():
+                    p = (Path.cwd() / p).resolve()
+                # Use forward slashes for RF compatibility on all platforms
+                normalized_path = p.as_posix()
+            except Exception:
+                # If path normalization fails, use original path
+                pass
             
             # Capture variables before import to detect what was added
             before_vars = self._snapshot_variables_with_decoration(variables_obj)
@@ -1187,17 +1201,17 @@ class RobotFrameworkNativeContextManager:
             # This handles all file types (.py, .yaml, .json) and RF's path resolution
             # Use overwrite=True to ensure variables from file overwrite existing ones
             try:
-                namespace.import_variables(variable_file_path, args, overwrite=True)
+                namespace.import_variables(normalized_path, args, overwrite=True)
             except Exception as import_error:
                 # Provide descriptive error message as requested
                 error_msg = f"Failed to import variable file '{variable_file_path}'"
                 if args:
                     error_msg += f" with arguments {args}"
                 error_msg += f": {str(import_error)}"
-                
+
                 logger.error(error_msg)
                 return {
-                    "success": False, 
+                    "success": False,
                     "error": error_msg,
                     "session_id": session_id,
                     "variable_file": variable_file_path,
@@ -1230,7 +1244,7 @@ class RobotFrameworkNativeContextManager:
             # it means the file was already imported in a different session (global RF context).
             # In this case, we should still return the variables that are now available.
             if is_first_import_for_session and len(loaded_vars) == 0:
-                logger.info(f"File '{variable_file_path}' was imported in a different session, "
+                logger.info(f"File '{normalized_path}' was imported in a different session, "
                            f"including all relevant variables for session {session_id}")
                 # Get all non-builtin variables from after_vars
                 # Since this is cross-session import, the file's variables are already in the shared
@@ -1272,8 +1286,8 @@ class RobotFrameworkNativeContextManager:
 
             if is_first_import_for_session:
                 session_var_files.append(var_file_record)
-            
-            logger.info(f"Successfully imported variable file '{variable_file_path}' "
+
+            logger.info(f"Successfully imported variable file '{normalized_path}' "
                        f"for session {session_id}, loaded {len(loaded_vars)} variables")
             
             return {
