@@ -137,6 +137,8 @@ class ExecutionSession:
     libraries_loaded: bool = (
         False  # Track if session libraries have been loaded into library manager
     )
+    # Track variable files imported through resources (path + args)
+    loaded_variable_files: List[Dict[str, Any]] = field(default_factory=list)
 
     # Mobile-specific fields
     platform_type: PlatformType = (

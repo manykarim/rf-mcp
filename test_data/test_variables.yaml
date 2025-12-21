@@ -1,0 +1,32 @@
+# YAML variable file for testing
+YAML_SCALAR: "yaml_value"
+YAML_NUMBER: 123
+YAML_BOOLEAN: true
+
+# Lists in YAML
+YAML_LIST:
+  - "first_item"
+  - "second_item"
+  - 42
+  - false
+
+# Nested dictionaries
+YAML_DICT:
+  database:
+    host: "localhost"
+    port: 5432
+    name: "testdb"
+  api:
+    version: "v1"
+    endpoints:
+      - "/users"
+      - "/orders"
+      - "/products"
+    
+# Special values
+YAML_NULL: null
+YAML_EMPTY_STRING: ""
+YAML_MULTILINE: |
+  This is a
+  multiline string
+  with line breaks

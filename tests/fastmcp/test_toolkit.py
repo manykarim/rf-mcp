@@ -73,6 +73,51 @@ async def test_manage_session_import_resource(tmp_path, mcp_client):
 
 
 @pytest.mark.asyncio
+async def test_import_resource_loads_variable_files(tmp_path, mcp_client):
+    # Create variable file and resource that imports it
+    var_file = tmp_path / "vars.py"
+    var_file.write_text("FOO='bar'\nNUMBER=42\n")
+
+    resource = tmp_path / "with_vars.resource"
+    resource.write_text(
+        textwrap.dedent(
+            """*** Settings ***\nVariables    vars.py\n\n*** Keywords ***\nReturn Foo\n    [Return]    ${FOO}\n"""
+        )
+    )
+
+    session_id = "varfile_session"
+    await mcp_client.call_tool(
+        "manage_session",
+        {"action": "init", "session_id": session_id},
+    )
+
+    result = await mcp_client.call_tool(
+        "manage_session",
+        {
+            "action": "import_resource",
+            "session_id": session_id,
+            "resource_path": str(resource),
+        },
+    )
+
+    assert result.data["success"] is True
+    assert "variables_loaded" in result.data
+    assert "FOO" in result.data["variables_loaded"]
+
+    # Validate variables surfaced through session state API
+    state = await mcp_client.call_tool(
+        "get_session_state",
+        {"session_id": session_id, "sections": ["variables"]},
+    )
+
+    assert state.data["success"] is True
+    vars_section = state.data["sections"].get("variables", {})
+    vars_payload = vars_section.get("variables", {})
+    value = vars_payload.get("FOO", vars_payload.get("${FOO}"))
+    assert value == "bar"
+
+
+@pytest.mark.asyncio
 async def test_find_keywords_strategies(mcp_client):
     semantic = await mcp_client.call_tool(
         "find_keywords",

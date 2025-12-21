@@ -2,7 +2,7 @@
 
 import logging
 import uuid
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Tuple
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -975,6 +975,76 @@ class RobotFrameworkNativeContextManager:
             "contexts": contexts
         }
 
+    # --- Variable sync helpers ---
+
+    def _snapshot_variables(self, variables: Variables) -> Dict[str, Any]:
+        """Best-effort snapshot of RF Variables without decoration."""
+        try:
+            return dict(variables.as_dict(decoration=False))
+        except Exception:
+            try:
+                # Fallback to VariableStore data
+                return dict(getattr(variables, "store").data)
+            except Exception:
+                return {}
+
+    def _snapshot_variables_with_decoration(self, variables: Variables) -> Dict[str, Any]:
+        """Snapshot of RF Variables with ${} decoration preserved."""
+        try:
+            return dict(variables.as_dict(decoration=True))
+        except Exception:
+            try:
+                # Fallback: get raw data and add decoration manually
+                raw_vars = dict(getattr(variables, "store").data)
+                decorated_vars = {}
+                for name, value in raw_vars.items():
+                    # Add decoration if not present
+                    if not name.startswith('${'):
+                        decorated_name = f"${{{name}}}"
+                    else:
+                        decorated_name = name
+                    decorated_vars[decorated_name] = value
+                return decorated_vars
+            except Exception:
+                return {}
+
+    def _normalize_session_keys(self, name: str) -> Tuple[str, str]:
+        """Return bare and decorated variants of a variable name."""
+        base = name
+        if base.startswith("${") and base.endswith("}"):
+            base = base[2:-1]
+        decorated = f"${{{base}}}"
+        return base, decorated
+
+    def _record_imported_variable_files(self, namespace) -> List[Dict[str, Any]]:
+        """Return imported variable file metadata from the namespace."""
+        imported = getattr(namespace, "_imported_variable_files", None)
+        if not imported:
+            return []
+
+        results: List[Dict[str, Any]] = []
+        try:
+            iterable = imported.values() if hasattr(imported, "values") else imported
+        except Exception:
+            return []
+
+        for item in iterable or []:
+            if not item:
+                continue
+            try:
+                if isinstance(item, tuple) and len(item) >= 1:
+                    path, *rest = item
+                    args = rest[0] if rest else []
+                else:
+                    path = getattr(item, "name", None) or getattr(item, "path", None)
+                    args = getattr(item, "args", []) if hasattr(item, "args") else []
+                if path:
+                    results.append({"path": path, "args": list(args) if args else []})
+            except Exception:
+                continue
+
+        return results
+
     # --- New: Resource and custom library management + discovery ---
 
     def import_resource_for_session(self, session_id: str, resource_path: str) -> Dict[str, Any]:
@@ -984,19 +1054,53 @@ class RobotFrameworkNativeContextManager:
                 create = self.create_context_for_session(session_id)
                 if not create.get("success"):
                     return create
+
             namespace = self._session_contexts[session_id]["namespace"]
+            variables_obj = getattr(namespace, "variables", None)
+
+            # Snapshot variables before import to compute diff later
+            before_snapshot: Dict[str, Any] = (
+                self._snapshot_variables(variables_obj) if variables_obj else {}
+            )
+
             from pathlib import Path
+
             # Resolve relative and platform-specific paths robustly and pass POSIX-style to RF
             p = Path(resource_path)
             if not p.is_absolute():
                 p = (Path.cwd() / p).resolve()
             path_str = p.as_posix()
+
             namespace.import_resource(path_str)
+
+            # Track imported resources on the context
             ctx_info = self._session_contexts[session_id]
             resources = ctx_info.setdefault("resources", [])
             if resource_path not in resources:
                 resources.append(resource_path)
-            return {"success": True, "session_id": session_id, "resource": resource_path}
+
+            # Diff and sync variable file outputs back into session storage
+            loaded_variables: Dict[str, Any] = {}
+            if variables_obj is not None:
+                after_snapshot = self._snapshot_variables(variables_obj)
+                diff = {
+                    k: v
+                    for k, v in after_snapshot.items()
+                    if k not in before_snapshot or before_snapshot[k] != v
+                }
+                loaded_variables = diff
+
+            # Persist variable file metadata for observability/idempotence
+            variable_files = self._record_imported_variable_files(namespace)
+
+            return {
+                "success": True,
+                "session_id": session_id,
+                "resource": resource_path,
+                "variables_loaded": list(loaded_variables.keys()),
+                "variable_files": variable_files,
+                "variables_map": loaded_variables,
+            }
         except Exception as e:
             logger.error(f"Failed to import resource '{resource_path}': {e}")
             return {"success": False, "error": str(e), "session_id": session_id}
@@ -1039,6 +1143,160 @@ class RobotFrameworkNativeContextManager:
         except Exception as e:
             logger.error(f"Failed to import library '{library_name_or_path}': {e}")
             return {"success": False, "error": str(e), "session_id": session_id}
+
+    def import_variables_for_session(
+        self, 
+        session_id: str, 
+        variable_file_path: str, 
+        args: List[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Import variables from a file into the session using RF's native APIs.
+        
+        Supports .py, .yaml/.yml, and .json variable files with Robot Framework's
+        native behavior including:
+        - Python static variables and get_variables() functions
+        - YAML/JSON structured data
+        - Arguments for Python variable files
+        - RF's native path resolution and error handling
+        
+        Args:
+            session_id: Target session for variable import
+            variable_file_path: Path to variable file (.py, .yaml/.yml, .json)
+            args: Optional arguments for Python variable files with get_variables()
+        
+        Returns:
+            Dict with success status, loaded variables, and metadata
+        """
+        if args is None:
+            args = []
+            
+        try:
+            if session_id not in self._session_contexts:
+                create_result = self.create_context_for_session(session_id)
+                if not create_result.get("success"):
+                    return create_result
+            
+            namespace = self._session_contexts[session_id]["namespace"]
+            variables_obj = self._session_contexts[session_id]["variables"]
+            
+            # Capture variables before import to detect what was added
+            before_vars = self._snapshot_variables_with_decoration(variables_obj)
+
+            # Use Robot Framework's native variable import through namespace
+            # This handles all file types (.py, .yaml, .json) and RF's path resolution
+            # Use overwrite=True to ensure variables from file overwrite existing ones
+            try:
+                namespace.import_variables(variable_file_path, args, overwrite=True)
+            except Exception as import_error:
+                # Provide descriptive error message as requested
+                error_msg = f"Failed to import variable file '{variable_file_path}'"
+                if args:
+                    error_msg += f" with arguments {args}"
+                error_msg += f": {str(import_error)}"
+                
+                logger.error(error_msg)
+                return {
+                    "success": False, 
+                    "error": error_msg,
+                    "session_id": session_id,
+                    "variable_file": variable_file_path,
+                    "args": args
+                }
+            
+            # Capture variables after import to get diff
+            after_vars = self._snapshot_variables_with_decoration(variables_obj)
+            loaded_vars = {
+                k: v for k, v in after_vars.items()
+                if k not in before_vars or before_vars[k] != v
+            }
+            
+            # Record variable file metadata for tracking (similar to resource import)
+            variable_files = self._record_imported_variable_files(namespace)
+            
+            # Update session metadata to track imported variable files
+            ctx_info = self._session_contexts[session_id]
+            session_var_files = ctx_info.setdefault("imported_variable_files", [])
+
+            # Check if this file was already imported in THIS session (not globally)
+            existing_key = (variable_file_path, tuple(args))
+            existing_keys = {
+                (item.get("path"), tuple(item.get("args", [])))
+                for item in session_var_files
+            }
+            is_first_import_for_session = existing_key not in existing_keys
+
+            # If this is the first import of this file in this session, but loaded_vars is empty,
+            # it means the file was already imported in a different session (global RF context).
+            # In this case, we should still return the variables that are now available.
+            if is_first_import_for_session and len(loaded_vars) == 0:
+                logger.info(f"File '{variable_file_path}' was imported in a different session, "
+                           f"including all relevant variables for session {session_id}")
+                # Get all non-builtin variables from after_vars
+                # Since this is cross-session import, the file's variables are already in the shared
+                # context, so we just need to return them for this session's first import
+                builtin_prefixes = ('${/', '${\\', '${:}', '${TEMPDIR}', '${EXECDIR}',
+                                   '${CURDIR}', '${SPACE}', '${EMPTY}', '${TRUE}',
+                                   '${FALSE}', '${NULL}', '${NONE}', '${0}', '${1}', '${-1}',
+                                   '${OUTPUTDIR}', '${LOGFILE}', '${OUTPUT}', '${OUTPUT_FILE}',
+                                   '${LOG_FILE}', '${REPORT_FILE}', '${DEBUG_FILE}',
+                                   '${LOG_LEVEL}', '${PREV_TEST}', '${SUITE_NAME}')
+                # For cross-session imports, include all non-builtin variables
+                # Don't filter by before_vars since they're shared across sessions
+                loaded_vars = {
+                    k: v for k, v in after_vars.items()
+                    if not any(k.upper().startswith(prefix.upper()) for prefix in builtin_prefixes)
+                }
+
+            # Extract variable names without ${} decoration for the variables_loaded list
+            variable_names_loaded = []
+            for var_name in loaded_vars.keys():
+                if var_name.startswith('${') and var_name.endswith('}'):
+                    # Strip ${} decoration for the list
+                    variable_names_loaded.append(var_name[2:-1])
+                elif var_name.startswith('@{') and var_name.endswith('}'):
+                    # List variable
+                    variable_names_loaded.append(var_name)
+                elif var_name.startswith('&{') and var_name.endswith('}'):
+                    # Dict variable
+                    variable_names_loaded.append(var_name)
+                else:
+                    variable_names_loaded.append(var_name)
+
+            # Add this import to session tracking if not already present
+            var_file_record = {
+                "path": variable_file_path,
+                "args": args,
+                "variables_loaded": variable_names_loaded
+            }
+
+            if is_first_import_for_session:
+                session_var_files.append(var_file_record)
+            
+            logger.info(f"Successfully imported variable file '{variable_file_path}' "
+                       f"for session {session_id}, loaded {len(loaded_vars)} variables")
+            
+            return {
+                "success": True,
+                "session_id": session_id,
+                "variable_file": variable_file_path,
+                "args": args,
+                "variables_loaded": variable_names_loaded,
+                "variables_map": loaded_vars,
+                "variable_files": variable_files,
+                "total_variables_in_session": len(after_vars)
+            }
+            
+        except Exception as e:
+            error_msg = f"Failed to import variable file '{variable_file_path}': {str(e)}"
+            logger.error(error_msg)
+            return {
+                "success": False, 
+                "error": error_msg,
+                "session_id": session_id,
+                "variable_file": variable_file_path,
+                "args": args or []
+            }
 
     def list_available_keywords(self, session_id: str) -> Dict[str, Any]:
         """List available keyword names from imported libraries and resources in this session."""
