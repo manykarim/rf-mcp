@@ -1,0 +1,39 @@
+id: xml_books_authors
+name: XML Books and Authors Test
+description: |
+  Create and test XML parsing with Robot Framework.
+  Tests XML library usage and assertion capabilities.
+context: generic
+prompt: |
+  Create an example .xml file for Books and Authors.
+
+  Use RobotMCP to create a TestSuite that parses the XML file, checks several nodes and attributes and do assertions.
+  Execute it stepwise and afterwards create a final test suite
+expected_tools:
+  - tool_name: analyze_scenario
+    min_calls: 1
+    max_calls: 1
+  - tool_name: recommend_libraries
+    min_calls: 0
+    max_calls: 2
+  - tool_name: manage_session
+    min_calls: 1
+    max_calls: 3
+  - tool_name: execute_step
+    min_calls: 3
+    max_calls: 15
+  - tool_name: build_test_suite
+    min_calls: 1
+    max_calls: 1
+expected_outcome: |
+  Successfully creates and executes an XML test suite that:
+  1. Parses an XML file with books and authors
+  2. Validates XML structure and nodes
+  3. Checks attributes and values
+  4. Performs assertions on XML content
+min_tool_hit_rate: 0.8
+tags:
+  - xml
+  - parsing
+  - generic
+  - data-driven

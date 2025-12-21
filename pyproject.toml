@@ -43,6 +43,7 @@ dev = [
     "pre-commit>=2.20.0",
     "python-dotenv>=1.0.1",
     "openai>=1.51.0",
+    "pydantic-ai>=0.0.14",
     "coverage[toml]>=7.6.0",
     "invoke>=2.2.0",
 ]
@@ -88,6 +89,7 @@ dev = [
     "pytest-asyncio>=1.1.0",
     "pytest-playwright>=0.7.1",
     "openai>=1.51.0",
+    "pydantic-ai>=0.0.14",
     "python-dotenv>=1.0.1",
     "coverage[toml]>=7.6.0",
     "invoke>=2.2.0",

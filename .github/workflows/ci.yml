@@ -118,6 +118,93 @@ jobs:
           name: dist-${{ matrix.os }}-py${{ matrix.python-version }}
           path: dist/*
 
+  e2e-tests:
+    name: E2E AI Agent Tests
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+      USE_REAL_LLM: 'false'  # Use TestModel by default, set to 'true' for weekly runs
+      PLAYWRIGHT_BROWSERS_PATH: '0'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: 'latest'
+
+      - name: Setup Python 3.12 (via uv)
+        run: uv python install 3.12
+
+      - name: Show uv and Python versions
+        run: |
+          uv --version
+          uv run python --version
+
+      - name: Install dependencies (dev)
+        run: uv sync --all-extras --group dev
+
+      - name: Initialize Browser Library (rfbrowser)
+        run: uv run rfbrowser init
+        continue-on-error: true
+
+      - name: Install Playwright browsers
+        run: |
+          uv run playwright install --with-deps chromium firefox
+          uv run python -m playwright install --with-deps chromium firefox || true
+
+      - name: Install Chrome and Firefox for Selenium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser firefox
+
+      - name: Configure OpenAI Model with Fallback
+        shell: bash
+        run: |
+          OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
+          if [ -z "$OPENAI_MODEL_VALUE" ] || [ "$OPENAI_MODEL_VALUE" = "gpt-5-mini" ]; then
+            echo "⚠️ Invalid or missing OPENAI_MODEL, using fallback: gpt-4o-mini"
+            OPENAI_MODEL_VALUE="gpt-4o-mini"
+          else
+            echo "✅ Using OPENAI_MODEL: $OPENAI_MODEL_VALUE"
+          fi
+          echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> $GITHUB_ENV
+
+      - name: Create metrics directories
+        run: |
+          mkdir -p tests/e2e/metrics
+          mkdir -p tests/e2e/metrics/autonomous
+          mkdir -p tests/e2e/metrics/comparisons
+
+      - name: Run E2E tests (TestModel - no LLM calls)
+        run: |
+          uv run pytest tests/e2e/test_agent_tool_discovery.py -v --junitxml=results/e2e-pytest.xml
+
+      - name: Run E2E autonomous agent tests (TestModel)
+        run: |
+          uv run pytest tests/e2e/test_autonomous_agents.py::test_agent_with_test_model -v
+          uv run pytest tests/e2e/test_autonomous_agents.py::test_agent_tool_registration -v
+        continue-on-error: true
+
+      - name: Upload E2E metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-metrics
+          path: |
+            tests/e2e/metrics/**/*.json
+
+      - name: Test Report
+        uses: dorny/test-reporter@main
+        if: success() || failure()
+        with:
+          name: E2E Tests
+          path: results/e2e-pytest.xml
+          reporter: java-junit
+
   optional-matrix:
     name: Optional Dependency Matrix
     runs-on: ubuntu-latest
