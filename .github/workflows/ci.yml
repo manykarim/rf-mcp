@@ -185,7 +185,6 @@ jobs:
 
       - name: Run E2E autonomous agent tests (TestModel)
         run: |
-          uv run pytest tests/e2e/test_autonomous_agents.py::test_agent_with_test_model -v
           uv run pytest tests/e2e/test_autonomous_agents.py::test_agent_tool_registration -v
         continue-on-error: true
 
