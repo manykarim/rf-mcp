@@ -988,6 +988,64 @@ class RobotFrameworkNativeContextManager:
             except Exception:
                 return {}
 
+    def _filter_serializable_value(self, value: Any) -> Any:
+        """
+        Helper to filter individual values for JSON serializability.
+
+        Recursively processes values to ensure they can be serialized by
+        Pydantic/FastMCP, converting or rejecting RF internal objects.
+
+        Args:
+            value: The value to filter/convert
+
+        Returns:
+            Serializable version of the value
+
+        Raises:
+            ValueError: If value cannot be made serializable
+        """
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        elif isinstance(value, (list, tuple)):
+            return [self._filter_serializable_value(item) for item in value]
+        elif isinstance(value, dict):
+            return {k: self._filter_serializable_value(v) for k, v in value.items()}
+        else:
+            # Try string conversion for non-basic types (e.g., RF internal objects)
+            str_value = str(value)
+            # Only accept if it's not a Python repr (doesn't start with '<')
+            if not str_value.startswith('<'):
+                return str_value
+            raise ValueError(f"Non-serializable type: {type(value)}")
+
+    def _filter_serializable_variables(self, variables: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Filter variables dict to include only JSON-serializable values.
+
+        Converts or excludes Robot Framework internal objects that cannot be
+        serialized by Pydantic/FastMCP (e.g., ScalarVariableResolver, other
+        RF internal resolver/setter objects).
+
+        This is critical for MCP tool responses that must be JSON-serializable.
+
+        Args:
+            variables: Raw variables dict from RF Variables object
+
+        Returns:
+            Dict with only serializable values (str, int, float, bool, list, dict, None)
+        """
+        serializable = {}
+
+        for key, value in variables.items():
+            try:
+                serializable[key] = self._filter_serializable_value(value)
+            except (ValueError, Exception) as e:
+                # Skip non-serializable variables with debug logging
+                logger.debug(f"Skipping non-serializable variable {key}: {type(value).__name__} - {e}")
+                continue
+
+        return serializable
+
     def _snapshot_variables_with_decoration(self, variables: Variables) -> Dict[str, Any]:
         """Snapshot of RF Variables with ${} decoration preserved."""
         try:
@@ -1093,13 +1151,17 @@ class RobotFrameworkNativeContextManager:
             # Persist variable file metadata for observability/idempotence
             variable_files = self._record_imported_variable_files(namespace)
 
+            # Filter out non-serializable RF internal objects before returning
+            # This prevents FastMCP serialization errors (e.g., ScalarVariableResolver)
+            serializable_variables = self._filter_serializable_variables(loaded_variables)
+
             return {
                 "success": True,
                 "session_id": session_id,
                 "resource": resource_path,
                 "variables_loaded": list(loaded_variables.keys()),
                 "variable_files": variable_files,
-                "variables_map": loaded_variables,
+                "variables_map": serializable_variables,
             }
         except Exception as e:
             logger.error(f"Failed to import resource '{resource_path}': {e}")
@@ -1289,14 +1351,18 @@ class RobotFrameworkNativeContextManager:
 
             logger.info(f"Successfully imported variable file '{normalized_path}' "
                        f"for session {session_id}, loaded {len(loaded_vars)} variables")
-            
+
+            # Filter out non-serializable RF internal objects before returning
+            # This prevents FastMCP serialization errors (e.g., ScalarVariableResolver)
+            serializable_variables = self._filter_serializable_variables(loaded_vars)
+
             return {
                 "success": True,
                 "session_id": session_id,
                 "variable_file": variable_file_path,
                 "args": args,
                 "variables_loaded": variable_names_loaded,
-                "variables_map": loaded_vars,
+                "variables_map": serializable_variables,
                 "variable_files": variable_files,
                 "total_variables_in_session": len(after_vars)
             }
