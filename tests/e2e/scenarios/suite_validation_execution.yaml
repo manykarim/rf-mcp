@@ -1,0 +1,47 @@
+id: suite_validation_execution
+name: Test Suite Validation and Execution
+description: |
+  Test validating and executing generated Robot Framework test suites.
+  Uses run_test_suite with both dry and full modes.
+context: generic
+prompt: |
+  Create, validate, and execute a test suite:
+
+  1. Create a simple test with 3 steps:
+     - Log "Starting test"
+     - Create List with items: apple, banana, cherry
+     - Verify list length is 3 using Get Length
+  2. Build the test suite with name "Simple Validation Test"
+  3. Validate the generated suite using dry run mode (run_test_suite with mode="dry")
+  4. If validation passes, consider executing the suite (run_test_suite with mode="full")
+  5. Verify the execution or validation was successful
+
+  Use run_test_suite for validation and optional execution.
+
+expected_tools:
+  - tool_name: analyze_scenario
+    min_calls: 1
+    max_calls: 1
+  - tool_name: execute_step
+    min_calls: 3
+    max_calls: 8
+  - tool_name: build_test_suite
+    min_calls: 1
+    max_calls: 1
+  - tool_name: run_test_suite
+    min_calls: 1
+    max_calls: 2
+
+expected_outcome: |
+  Successfully:
+  1. Creates a test suite with multiple steps
+  2. Validates the suite using dry run mode
+  3. Optionally executes the validated suite
+  4. Verifies execution or validation results
+
+min_tool_hit_rate: 0.70
+tags:
+  - suite-validation
+  - dry-run
+  - suite-execution
+  - run_test_suite

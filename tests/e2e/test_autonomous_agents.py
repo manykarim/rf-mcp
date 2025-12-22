@@ -218,6 +218,12 @@ async def test_agent_tool_registration(mcp_client, metrics_collector):
             "manage_session",
             "recommend_libraries",
             "get_session_state",
+            "check_library_availability",
+            "execute_flow",
+            "find_keywords",
+            "get_keyword_info",
+            "run_test_suite",
+            "set_library_search_order",
         ]
 
         for expected_tool in expected_tools:

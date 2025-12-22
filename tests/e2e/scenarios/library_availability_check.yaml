@@ -1,0 +1,45 @@
+id: library_availability_check
+name: Library Availability Checking
+description: |
+  Test checking if Robot Framework libraries are installed and available.
+  Uses check_library_availability tool.
+context: generic
+prompt: |
+  Check library availability before using them:
+
+  1. Check if BuiltIn library is available (should always be available)
+  2. Check if SeleniumLibrary is available
+  3. Check if Collections library is available (should be available)
+  4. Check if a non-existent library "FakeLibrary123" is available (should not be available)
+  5. Based on availability results, create a test that uses BuiltIn.Log keyword
+  6. Log "Library availability check completed"
+  7. Build the final test suite
+
+  Use check_library_availability to validate libraries before importing.
+
+expected_tools:
+  - tool_name: analyze_scenario
+    min_calls: 1
+    max_calls: 1
+  - tool_name: check_library_availability
+    min_calls: 2
+    max_calls: 5
+  - tool_name: execute_step
+    min_calls: 1
+    max_calls: 5
+  - tool_name: build_test_suite
+    min_calls: 1
+    max_calls: 1
+
+expected_outcome: |
+  Successfully:
+  1. Checks if libraries are installed
+  2. Gets availability status for each library
+  3. Makes decisions based on availability
+  4. Only uses available libraries in tests
+
+min_tool_hit_rate: 0.70
+tags:
+  - library-availability
+  - check_library_availability
+  - pre-validation

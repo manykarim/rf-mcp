@@ -298,6 +298,183 @@ Extract the session_id from analyze_scenario and use it in all subsequent calls.
             result = await self.call_mcp_tool("get_session_state", tool_args)
             return result.data if hasattr(result, "data") else result
 
+        @agent.tool
+        async def check_library_availability(
+            ctx: RunContext[MCPToolContext], library_name: str
+        ) -> Dict[str, Any]:
+            """Check if a Robot Framework library is installed and available.
+
+            Args:
+                ctx: Run context
+                library_name: Name of the library to check
+
+            Returns:
+                Library availability status
+            """
+            result = await self.call_mcp_tool(
+                "check_library_availability", {"library_name": library_name}
+            )
+            return result.data if hasattr(result, "data") else result
+
+        @agent.tool
+        async def execute_flow(
+            ctx: RunContext[MCPToolContext],
+            structure: str,
+            session_id: Optional[str] = None,
+            condition: Optional[str] = None,
+            then_steps: Optional[List[Dict[str, Any]]] = None,
+            else_steps: Optional[List[Dict[str, Any]]] = None,
+            items: Optional[List[Any]] = None,
+            item_var: str = "item",
+        ) -> Dict[str, Any]:
+            """Execute structured flow (IF/FOR) within a session.
+
+            Args:
+                ctx: Run context
+                structure: Flow type ("if" or "for")
+                session_id: Session ID (uses context session if not provided)
+                condition: Expression for if flows
+                then_steps: Steps for the main branch or loop body
+                else_steps: Steps for else branch (if flows only)
+                items: Items to iterate (for flows only)
+                item_var: Variable name for loop items
+
+            Returns:
+                Flow execution result
+            """
+            sid = session_id or ctx.deps.session_id
+            tool_args = {
+                "structure": structure,
+                "session_id": sid,
+            }
+            if condition:
+                tool_args["condition"] = condition
+            if then_steps:
+                tool_args["then_steps"] = then_steps
+            if else_steps:
+                tool_args["else_steps"] = else_steps
+            if items:
+                tool_args["items"] = items
+            if item_var:
+                tool_args["item_var"] = item_var
+
+            result = await self.call_mcp_tool("execute_flow", tool_args)
+            return result.data if hasattr(result, "data") else result
+
+        @agent.tool
+        async def find_keywords(
+            ctx: RunContext[MCPToolContext],
+            query: str,
+            strategy: str = "semantic",
+            session_id: Optional[str] = None,
+            limit: Optional[int] = None,
+        ) -> Dict[str, Any]:
+            """Discover Robot Framework keywords using multiple strategies.
+
+            Args:
+                ctx: Run context
+                query: Search text or intent description
+                strategy: One of "semantic", "pattern", "catalog", or "session"
+                session_id: Required for strategy="session"
+                limit: Optional maximum number of results
+
+            Returns:
+                Discovery result with matched keywords
+            """
+            tool_args = {
+                "query": query,
+                "strategy": strategy,
+            }
+            if session_id or (strategy == "session" and ctx.deps.session_id):
+                tool_args["session_id"] = session_id or ctx.deps.session_id
+            if limit:
+                tool_args["limit"] = limit
+
+            result = await self.call_mcp_tool("find_keywords", tool_args)
+            return result.data if hasattr(result, "data") else result
+
+        @agent.tool
+        async def get_keyword_info(
+            ctx: RunContext[MCPToolContext],
+            keyword_name: str,
+            mode: str = "signature",
+            library_name: Optional[str] = None,
+        ) -> Dict[str, Any]:
+            """Get detailed information about a Robot Framework keyword.
+
+            Args:
+                ctx: Run context
+                keyword_name: Name of the keyword
+                mode: Info mode ("signature", "docs", or "full")
+                library_name: Optional library name filter
+
+            Returns:
+                Keyword information (signature, documentation, arguments)
+            """
+            tool_args = {
+                "keyword_name": keyword_name,
+                "mode": mode,
+            }
+            if library_name:
+                tool_args["library_name"] = library_name
+
+            result = await self.call_mcp_tool("get_keyword_info", tool_args)
+            return result.data if hasattr(result, "data") else result
+
+        @agent.tool
+        async def run_test_suite(
+            ctx: RunContext[MCPToolContext],
+            session_id: Optional[str] = None,
+            suite_file_path: Optional[str] = None,
+            mode: str = "full",
+        ) -> Dict[str, Any]:
+            """Validate or execute a Robot Framework suite.
+
+            Args:
+                ctx: Run context
+                session_id: Session ID (uses context session if not provided)
+                suite_file_path: Path to .robot file
+                mode: "dry" for validation, "full" for execution
+
+            Returns:
+                Suite execution or validation result
+            """
+            sid = session_id or ctx.deps.session_id
+            tool_args = {"mode": mode}
+            if sid:
+                tool_args["session_id"] = sid
+            if suite_file_path:
+                tool_args["suite_file_path"] = suite_file_path
+
+            result = await self.call_mcp_tool("run_test_suite", tool_args)
+            return result.data if hasattr(result, "data") else result
+
+        @agent.tool
+        async def set_library_search_order(
+            ctx: RunContext[MCPToolContext],
+            library_names: List[str],
+            session_id: Optional[str] = None,
+        ) -> Dict[str, Any]:
+            """Set library search order for keyword resolution.
+
+            Args:
+                ctx: Run context
+                library_names: List of library names in precedence order
+                session_id: Session ID (uses context session if not provided)
+
+            Returns:
+                Search order update result
+            """
+            sid = session_id or ctx.deps.session_id
+            tool_args = {
+                "library_names": library_names,
+            }
+            if sid:
+                tool_args["session_id"] = sid
+
+            result = await self.call_mcp_tool("set_library_search_order", tool_args)
+            return result.data if hasattr(result, "data") else result
+
     async def run_agent_with_scenario(
         self, agent: Agent, prompt: str
     ) -> tuple[str, List[Dict[str, Any]]]:

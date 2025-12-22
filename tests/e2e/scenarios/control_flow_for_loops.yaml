@@ -1,0 +1,47 @@
+id: control_flow_for_loops
+name: Control Flow - FOR Loops
+description: |
+  Test FOR loop execution with execute_flow tool.
+  Validates iterating over lists and performing steps for each item.
+context: generic
+prompt: |
+  Create a test that demonstrates FOR loop usage:
+
+  1. Create a list variable with 5 fruits: apple, banana, cherry, date, elderberry
+  2. Use a FOR loop to iterate through the fruits
+  3. For each fruit, log the name and check if its length is greater than 5
+  4. Count how many fruits have names longer than 5 characters
+  5. Assert that at least 2 fruits have names longer than 5 characters
+
+  Use execute_flow for the FOR loop implementation.
+  Build the final test suite afterwards.
+
+expected_tools:
+  - tool_name: analyze_scenario
+    min_calls: 1
+    max_calls: 1
+  - tool_name: manage_session
+    min_calls: 1
+    max_calls: 3
+  - tool_name: execute_flow
+    min_calls: 1
+    max_calls: 2
+  - tool_name: execute_step
+    min_calls: 3
+    max_calls: 10
+  - tool_name: build_test_suite
+    min_calls: 1
+    max_calls: 1
+
+expected_outcome: |
+  Successfully creates a test with FOR loop that:
+  1. Iterates through a list of items
+  2. Executes steps for each item
+  3. Performs conditional checks within the loop
+  4. Validates final results
+
+min_tool_hit_rate: 0.75
+tags:
+  - control-flow
+  - for-loop
+  - execute_flow

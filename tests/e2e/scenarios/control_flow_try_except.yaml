@@ -1,0 +1,48 @@
+id: control_flow_try_except
+name: Control Flow - TRY/EXCEPT/FINALLY
+description: |
+  Test TRY/EXCEPT/FINALLY error handling with execute_flow tool.
+  Validates exception handling and cleanup operations.
+context: generic
+prompt: |
+  Create a test that demonstrates TRY/EXCEPT/FINALLY usage:
+
+  1. Use TRY/EXCEPT to handle potential errors
+     - TRY block: Attempt to divide 10 by 0 (should fail)
+     - EXCEPT: Catch the error and log "Error caught successfully"
+     - FINALLY: Log "Cleanup completed"
+  2. Verify the error was handled gracefully
+  3. Build the final test suite
+
+  Use execute_flow with structure="try" for error handling.
+
+expected_tools:
+  - tool_name: analyze_scenario
+    min_calls: 1
+    max_calls: 1
+  - tool_name: manage_session
+    min_calls: 1
+    max_calls: 2
+  - tool_name: execute_flow
+    min_calls: 1
+    max_calls: 2
+  - tool_name: execute_step
+    min_calls: 0
+    max_calls: 5
+  - tool_name: build_test_suite
+    min_calls: 1
+    max_calls: 1
+
+expected_outcome: |
+  Successfully:
+  1. Executes TRY block with potential failure
+  2. Catches errors in EXCEPT block
+  3. Executes FINALLY block for cleanup
+  4. Verifies error handling works correctly
+
+min_tool_hit_rate: 0.75
+tags:
+  - control-flow
+  - try-except
+  - error-handling
+  - execute_flow
