@@ -4,7 +4,7 @@ import os
 import pytest
 import pytest_asyncio
 from typing import Optional, Dict, Any
-from fastmcp import Client
+from fastmcp import Client, FastMCP
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.models.test import TestModel
@@ -13,68 +13,14 @@ import robotmcp.server
 from tests.e2e.metrics_collector import MetricsCollector
 
 
-class MCPClientWithTracking:
-    """MCP client wrapper that tracks tool calls for metrics."""
+@pytest_asyncio.fixture
+async def mcp_server() -> FastMCP:
+    """Provide the FastMCP server instance for testing.
 
-    def __init__(self, client: Client, metrics_collector: MetricsCollector):
-        """Initialize the tracking client.
-
-        Args:
-            client: FastMCP client instance
-            metrics_collector: Metrics collector to record tool calls
-        """
-        self._client = client
-        self._metrics = metrics_collector
-
-    async def call_tool(
-        self, tool_name: str, arguments: Optional[Dict[str, Any]] = None
-    ) -> Any:
-        """Call a tool and record metrics.
-
-        Args:
-            tool_name: Name of the tool to call
-            arguments: Tool arguments
-
-        Returns:
-            Tool call result
-        """
-        args = arguments or {}
-        success = False
-        result = None
-        error = None
-
-        try:
-            result = await self._client.call_tool(tool_name, args)
-            success = True
-            self._metrics.record_tool_call(
-                tool_name=tool_name,
-                arguments=args,
-                success=success,
-                result=result.data if hasattr(result, "data") else result,
-            )
-        except Exception as e:
-            error = str(e)
-            self._metrics.record_tool_call(
-                tool_name=tool_name,
-                arguments=args,
-                success=success,
-                error=error,
-            )
-            raise
-
-        return result
-
-    async def list_tools(self):
-        """List available tools."""
-        return await self._client.list_tools()
-
-    async def __aenter__(self):
-        """Async context manager entry."""
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Async context manager exit."""
-        pass
+    Returns:
+        The robotmcp FastMCP server instance
+    """
+    return robotmcp.server.mcp
 
 
 @pytest_asyncio.fixture
@@ -89,21 +35,6 @@ async def mcp_client():
 async def metrics_collector():
     """Create a metrics collector."""
     return MetricsCollector()
-
-
-@pytest_asyncio.fixture
-async def mcp_client_with_tracking(mcp_client, metrics_collector):
-    """Create an MCP client with tool call tracking.
-
-    Args:
-        mcp_client: Base MCP client
-        metrics_collector: Metrics collector
-
-    Yields:
-        MCPClientWithTracking instance
-    """
-    tracking_client = MCPClientWithTracking(mcp_client, metrics_collector)
-    yield tracking_client
 
 
 @pytest_asyncio.fixture

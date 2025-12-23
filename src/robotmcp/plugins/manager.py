@@ -236,6 +236,71 @@ class LibraryPluginManager:
             )
             return []
 
+    def validate_keyword_for_session(
+        self,
+        session_library: Optional[str],
+        session: Any,
+        keyword_name: str,
+        keyword_source_library: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Validate keyword compatibility with session library.
+
+        Delegates to the session library's plugin to check if the keyword
+        from another library can be used.
+
+        Returns None if valid, or error dict if incompatible.
+        """
+        if not session_library:
+            return None
+
+        plugin = self._plugins.get(session_library)
+        if not plugin:
+            return None
+
+        try:
+            return plugin.validate_keyword_for_session(
+                session, keyword_name, keyword_source_library
+            )
+        except Exception as exc:
+            logger.debug(
+                "Plugin %s validate_keyword_for_session failed: %s",
+                session_library,
+                exc,
+            )
+            return None
+
+    def get_incompatible_libraries(self, library_name: str) -> List[str]:
+        """Get list of libraries incompatible with the given library."""
+        plugin = self._plugins.get(library_name)
+        if not plugin:
+            return []
+
+        try:
+            return plugin.get_incompatible_libraries()
+        except Exception as exc:
+            logger.debug(
+                "Plugin %s get_incompatible_libraries failed: %s",
+                library_name,
+                exc,
+            )
+            return []
+
+    def get_keyword_alternatives(self, library_name: str) -> Dict[str, Dict[str, Any]]:
+        """Get keyword alternatives mapping for the given library."""
+        plugin = self._plugins.get(library_name)
+        if not plugin:
+            return {}
+
+        try:
+            return plugin.get_keyword_alternatives()
+        except Exception as exc:
+            logger.debug(
+                "Plugin %s get_keyword_alternatives failed: %s",
+                library_name,
+                exc,
+            )
+            return {}
+
 
 _GLOBAL_MANAGER: Optional[LibraryPluginManager] = None
 _GLOBAL_MANAGER_LOCK = threading.Lock()

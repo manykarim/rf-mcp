@@ -8,9 +8,9 @@ from typing import Dict, Any
 
 from tests.e2e.models import Scenario, ScenarioResult
 from tests.e2e.fixtures import (
+    mcp_server,
     mcp_client,
     metrics_collector,
-    mcp_client_with_tracking,
     pydantic_agent,
 )
 from tests.e2e.metrics_collector import MetricsCollector
@@ -46,6 +46,7 @@ class TestAgentToolDiscovery:
     @pytest.mark.asyncio
     async def test_mcp_tools_discoverable(self, mcp_client):
         """Test that MCP tools are properly discoverable."""
+        # Get tools from MCP client
         tools = await mcp_client.list_tools()
         enabled_tools = [t for t in tools if not hasattr(t, "enabled") or t.enabled != False]
 
@@ -65,12 +66,12 @@ class TestAgentToolDiscovery:
             assert tool_name in tool_names, f"Critical tool '{tool_name}' not found in available tools"
 
     @pytest.mark.asyncio
-    async def test_tool_call_tracking(self, mcp_client_with_tracking, metrics_collector):
+    async def test_tool_call_tracking(self, mcp_client, metrics_collector):
         """Test that tool calls are properly tracked."""
         metrics_collector.start_recording()
 
         # Make a test tool call
-        result = await mcp_client_with_tracking.call_tool(
+        result = await mcp_client.call_tool(
             "analyze_scenario",
             {
                 "scenario": "Test login functionality",
@@ -94,7 +95,7 @@ class TestAgentToolDiscovery:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("scenario_file", get_all_scenarios(), ids=lambda p: p.stem)
     async def test_scenario_execution(
-        self, scenario_file: Path, mcp_client_with_tracking, metrics_collector
+        self, scenario_file: Path, mcp_client, metrics_collector
     ):
         """Test execution of a scenario and validate tool usage.
 
@@ -102,7 +103,7 @@ class TestAgentToolDiscovery:
 
         Args:
             scenario_file: Path to the scenario YAML file
-            mcp_client_with_tracking: MCP client with tool call tracking
+            mcp_client: MCP client with tool call tracking
             metrics_collector: Metrics collector for tracking tool calls
         """
         # Load scenario
@@ -121,7 +122,7 @@ class TestAgentToolDiscovery:
 
         # Simulate analyze_scenario call
         try:
-            result = await mcp_client_with_tracking.call_tool(
+            result = await mcp_client.call_tool(
                 "analyze_scenario",
                 {
                     "scenario": scenario.prompt,
@@ -137,7 +138,7 @@ class TestAgentToolDiscovery:
         if scenario.context == "web":
             try:
                 # Simulate opening browser
-                await mcp_client_with_tracking.call_tool(
+                await mcp_client.call_tool(
                     "execute_step",
                     {
                         "keyword": "New Browser",

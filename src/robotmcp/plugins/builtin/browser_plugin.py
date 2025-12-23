@@ -113,6 +113,60 @@ class BrowserStateProvider(LibraryStateProvider):
 class BrowserLibraryPlugin(StaticLibraryPlugin):
     """Builtin Browser plugin with custom state provider and capabilities."""
 
+    # Mapping of SeleniumLibrary keywords to Browser Library alternatives
+    KEYWORD_ALTERNATIVES = {
+        "open browser": {
+            "alternative": "New Browser + New Page",
+            "example": "New Browser    browser=firefox    headless=${False}\nNew Page    https://example.com",
+            "explanation": "Browser Library uses Playwright which requires separate browser and page creation",
+        },
+        "close browser": {
+            "alternative": "Close Browser",
+            "example": "Close Browser",
+            "explanation": "Same keyword name, but use with Browser Library context",
+        },
+        "close all browsers": {
+            "alternative": "Close Browser    ALL",
+            "example": "Close Browser    ALL",
+            "explanation": "Use Close Browser with ALL parameter",
+        },
+        "go to": {
+            "alternative": "Go To",
+            "example": "Go To    https://example.com",
+            "explanation": "Same keyword available in Browser Library",
+        },
+        "get source": {
+            "alternative": "Get Page Source",
+            "example": "Get Page Source",
+            "explanation": "Use Get Page Source for Browser Library",
+        },
+        "input text": {
+            "alternative": "Fill Text",
+            "example": "Fill Text    css=input#username    myuser",
+            "explanation": "Browser Library uses Fill Text instead of Input Text",
+        },
+        "click element": {
+            "alternative": "Click",
+            "example": "Click    css=button#submit",
+            "explanation": "Browser Library uses shorter Click keyword",
+        },
+        "click button": {
+            "alternative": "Click",
+            "example": "Click    css=button#submit",
+            "explanation": "Browser Library uses generic Click for all elements",
+        },
+        "wait until element is visible": {
+            "alternative": "Wait For Elements State",
+            "example": "Wait For Elements State    css=.element    visible    timeout=10s",
+            "explanation": "Browser Library uses Wait For Elements State with state parameter",
+        },
+        "wait until page contains element": {
+            "alternative": "Wait For Elements State",
+            "example": "Wait For Elements State    css=.element    attached    timeout=10s",
+            "explanation": "Use 'attached' state to wait for element presence",
+        },
+    }
+
     def __init__(self) -> None:
         metadata = LibraryMetadata(
             name="Browser",
@@ -182,6 +236,72 @@ class BrowserLibraryPlugin(StaticLibraryPlugin):
 
         return validate
 
+    def get_incompatible_libraries(self) -> list[str]:
+        """Browser Library is incompatible with SeleniumLibrary."""
+        return ["SeleniumLibrary"]
+
+    def get_keyword_alternatives(self) -> Dict[str, Dict[str, Any]]:
+        """Return keyword alternatives for SeleniumLibrary keywords."""
+        return self.KEYWORD_ALTERNATIVES
+
+    def validate_keyword_for_session(
+        self,
+        session: "ExecutionSession",
+        keyword_name: str,
+        keyword_source_library: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Validate if a keyword is compatible with Browser Library session.
+
+        Returns error with alternative if keyword is from SeleniumLibrary.
+        """
+        try:
+            # Check if this session prefers Browser Library
+            pref = (getattr(session, "explicit_library_preference", "") or "").lower()
+            if not pref or pref != "browser":
+                return None  # Not a Browser Library session
+
+            # Check if keyword is from SeleniumLibrary
+            if keyword_source_library and keyword_source_library.lower() == "seleniumlibrary":
+                keyword_lower = keyword_name.lower()
+                alternative_info = self.KEYWORD_ALTERNATIVES.get(keyword_lower, {})
+
+                error_msg = (
+                    f"Keyword '{keyword_name}' is from SeleniumLibrary, "
+                    f"but this session uses Browser Library (Playwright).\n\n"
+                )
+
+                if alternative_info:
+                    error_msg += f"💡 Use '{alternative_info['alternative']}' instead:\n"
+                    error_msg += f"   {alternative_info['explanation']}\n\n"
+                    error_msg += f"Example:\n   {alternative_info['example']}\n\n"
+                else:
+                    error_msg += "💡 Find the Browser Library equivalent using:\n"
+                    error_msg += f"   find_keywords('{keyword_name}', strategy='catalog', session_id='...')\n\n"
+
+                error_msg += (
+                    "📚 Browser Library uses Playwright which has different keyword names.\n"
+                    "   Use find_keywords to discover available keywords."
+                )
+
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "keyword": keyword_name,
+                    "keyword_library": keyword_source_library,
+                    "session_library": "Browser",
+                    "alternative": alternative_info.get("alternative"),
+                    "example": alternative_info.get("example"),
+                    "hints": [{
+                        "title": "Library Mismatch",
+                        "message": f"Use Browser Library keywords instead of SeleniumLibrary"
+                    }]
+                }
+
+            return None
+        except Exception as exc:
+            logger.debug("Keyword validation failed: %s", exc)
+            return None
+
     async def _override_open_browser(
         self,
         session: "ExecutionSession",
@@ -189,7 +309,7 @@ class BrowserLibraryPlugin(StaticLibraryPlugin):
         arguments: list[str],
         keyword_info: Optional[Any] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Reject Browser's 'Open Browser' to avoid Playwright debug/pause mode."""
+        """Reject 'Open Browser' and suggest Browser Library alternatives."""
         try:
             pref = (getattr(session, "explicit_library_preference", "") or "").lower()
             if pref.startswith("selenium"):
@@ -199,14 +319,43 @@ class BrowserLibraryPlugin(StaticLibraryPlugin):
             if active and getattr(active, "active_library", None) == "selenium":
                 return None
 
+            # Get the alternative info
+            alt_info = self.KEYWORD_ALTERNATIVES.get("open browser", {})
+
+            error_msg = (
+                "'Open Browser' is a SeleniumLibrary keyword and cannot be used with Browser Library.\n\n"
+                f"💡 Use '{alt_info.get('alternative', 'New Browser + New Page')}' instead:\n"
+                f"   {alt_info.get('explanation', 'Browser Library requires separate browser and page creation')}\n\n"
+                "Example:\n"
+            )
+
+            # Parse arguments to create helpful example
+            url = arguments[0] if arguments else "https://example.com"
+            browser = arguments[1] if len(arguments) > 1 else "chromium"
+
+            error_msg += f"   New Browser    browser={browser}    headless=${{False}}\n"
+            error_msg += f"   New Page       {url}\n\n"
+            error_msg += (
+                "📚 Browser Library uses Playwright which provides modern, fast browser automation.\n"
+                "   The 'New Browser' keyword starts the browser, 'New Page' opens a URL."
+            )
+
             return {
                 "success": False,
-                "error": "'Open Browser' is not supported for Browser library (debug/pause mode).",
+                "error": error_msg,
+                "keyword": keyword_name,
+                "session_library": "Browser",
+                "alternative": "New Browser + New Page",
                 "guidance": [
-                    "Use 'New Browser' to start Playwright.",
-                    "Then 'New Context' (optional) and 'New Page' with the target URL.",
-                    "Example: New Browser    chromium    headless=False -> New Context    viewport={'width':1280,'height':720} -> New Page    https://demoshop.makrocode.de/",
+                    "Use 'New Browser' to start Playwright browser instance.",
+                    "Use 'New Page' to navigate to your target URL.",
+                    f"Example: New Browser    browser={browser}    headless=${{False}}",
+                    f"Then: New Page    {url}",
                 ],
+                "hints": [{
+                    "title": "Use Browser Library Keywords",
+                    "message": "Replace 'Open Browser' with 'New Browser' + 'New Page'"
+                }]
             }
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("Open Browser override failed: %s", exc)

@@ -6,7 +6,7 @@ import pytest_asyncio
 from pathlib import Path
 
 from tests.e2e.models import Scenario
-from tests.e2e.fixtures import mcp_client, metrics_collector
+from tests.e2e.fixtures import mcp_server, metrics_collector
 from tests.e2e.agent_integration import MCPAgentIntegration
 from tests.e2e.test_agent_tool_discovery import load_scenario, get_all_scenarios
 
@@ -31,9 +31,9 @@ def get_model_name() -> str:
     not should_use_real_llm(),
     reason="Requires USE_REAL_LLM=true and OPENAI_API_KEY to be set",
 )
-async def test_autonomous_agent_basic_workflow(mcp_client, metrics_collector):
+async def test_autonomous_agent_basic_workflow(mcp_server, metrics_collector):
     """Test autonomous agent with basic workflow."""
-    integration = MCPAgentIntegration(mcp_client, metrics_collector)
+    integration = MCPAgentIntegration(mcp_server, metrics_collector)
 
     # Create agent with real LLM
     model_name = get_model_name()
@@ -86,13 +86,13 @@ Use the MCP tools to accomplish this task."""
 )
 @pytest.mark.parametrize("scenario_file", get_all_scenarios(), ids=lambda p: p.stem)
 async def test_autonomous_agent_with_scenario(
-    scenario_file: Path, mcp_client, metrics_collector
+    scenario_file: Path, mcp_server, metrics_collector
 ):
     """Test autonomous agent with realistic scenarios.
 
     Args:
         scenario_file: Path to scenario YAML file
-        mcp_client: MCP client fixture
+        mcp_server: MCP server fixture
         metrics_collector: Metrics collector fixture
     """
     # Load scenario
@@ -102,7 +102,7 @@ async def test_autonomous_agent_with_scenario(
     if scenario.context == "web" and not os.getenv("DISPLAY"):
         pytest.skip("Web scenarios require display server in headless environments")
 
-    integration = MCPAgentIntegration(mcp_client, metrics_collector)
+    integration = MCPAgentIntegration(mcp_server, metrics_collector)
 
     # Create agent with real LLM
     model_name = get_model_name()
@@ -157,7 +157,7 @@ async def test_autonomous_agent_with_scenario(
 
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="TestModel generates invalid tool calls that break MCP client session, causing teardown errors in CI")
-async def test_agent_with_test_model(mcp_client, metrics_collector):
+async def test_agent_with_test_model(mcp_server, metrics_collector):
     """Test agent integration with TestModel (no LLM calls).
 
     SKIPPED: TestModel generates dummy data for tool calls which often includes
@@ -166,7 +166,7 @@ async def test_agent_with_test_model(mcp_client, metrics_collector):
 
     This test is useful for local development but not suitable for CI.
     """
-    integration = MCPAgentIntegration(mcp_client, metrics_collector)
+    integration = MCPAgentIntegration(mcp_server, metrics_collector)
 
     # Create agent with TestModel
     agent = integration.create_agent_with_mcp_tools(use_test_model=True)
@@ -197,9 +197,9 @@ async def test_agent_with_test_model(mcp_client, metrics_collector):
 
 
 @pytest.mark.asyncio
-async def test_agent_tool_registration(mcp_client, metrics_collector):
+async def test_agent_tool_registration(mcp_server, metrics_collector):
     """Test that tools are properly registered with the agent."""
-    integration = MCPAgentIntegration(mcp_client, metrics_collector)
+    integration = MCPAgentIntegration(mcp_server, metrics_collector)
 
     # Create agent
     agent = integration.create_agent_with_mcp_tools(use_test_model=True)
@@ -237,9 +237,9 @@ async def test_agent_tool_registration(mcp_client, metrics_collector):
     not should_use_real_llm(),
     reason="Requires USE_REAL_LLM=true and OPENAI_API_KEY to be set",
 )
-async def test_agent_session_persistence(mcp_client, metrics_collector):
+async def test_agent_session_persistence(mcp_server, metrics_collector):
     """Test that agent maintains session_id across tool calls."""
-    integration = MCPAgentIntegration(mcp_client, metrics_collector)
+    integration = MCPAgentIntegration(mcp_server, metrics_collector)
 
     model_name = get_model_name()
     agent = integration.create_agent_with_mcp_tools(
