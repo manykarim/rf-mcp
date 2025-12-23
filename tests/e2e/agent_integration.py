@@ -101,7 +101,7 @@ Extract the session_id from analyze_scenario and use it in all subsequent calls.
 
         return agent
 
-    def _create_metrics_wrapped_toolset(self, max_retries: int = 3) -> FastMCPToolset:
+    def _create_metrics_wrapped_toolset(self, max_retries: int = 5) -> FastMCPToolset:
         """Create a FastMCPToolset with metrics collection wrapper.
 
         This wraps the FastMCPToolset to collect metrics on tool calls
