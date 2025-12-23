@@ -1047,7 +1047,13 @@ class RobotFrameworkNativeContextManager:
         return serializable
 
     def _snapshot_variables_with_decoration(self, variables: Variables) -> Dict[str, Any]:
-        """Snapshot of RF Variables with ${} decoration preserved."""
+        """Snapshot of RF Variables with proper decoration (${}, @{}, &{}) preserved.
+
+        Handles Robot Framework's variable naming conventions:
+        - LIST__name in Python files becomes @{name} (list variable)
+        - DICT__name in Python files becomes &{name} (dict variable)
+        - Regular names become ${name} (scalar variable)
+        """
         try:
             return dict(variables.as_dict(decoration=True))
         except Exception:
@@ -1056,15 +1062,49 @@ class RobotFrameworkNativeContextManager:
                 raw_vars = dict(getattr(variables, "store").data)
                 decorated_vars = {}
                 for name, value in raw_vars.items():
-                    # Add decoration if not present
-                    if not name.startswith('${'):
-                        decorated_name = f"${{{name}}}"
-                    else:
-                        decorated_name = name
+                    decorated_name = self._add_variable_decoration(name, value)
                     decorated_vars[decorated_name] = value
                 return decorated_vars
             except Exception:
                 return {}
+
+    def _add_variable_decoration(self, name: str, value: Any) -> str:
+        """Add proper RF variable decoration based on name prefix and value type.
+
+        Robot Framework uses special prefixes in Python variable files:
+        - LIST__varname -> @{varname} (list variable)
+        - DICT__varname -> &{varname} (dict variable)
+        - Regular names -> ${varname} (scalar variable)
+
+        Args:
+            name: Variable name (may have LIST__ or DICT__ prefix)
+            value: Variable value (used to infer type if no prefix)
+
+        Returns:
+            Properly decorated variable name
+        """
+        # Already decorated - return as-is
+        if name.startswith('${') or name.startswith('@{') or name.startswith('&{'):
+            return name
+
+        # Handle LIST__ prefix (RF convention for list variables in Python files)
+        if name.startswith('LIST__'):
+            bare_name = name[6:]  # Remove 'LIST__' prefix
+            return f"@{{{bare_name}}}"
+
+        # Handle DICT__ prefix (RF convention for dict variables in Python files)
+        if name.startswith('DICT__'):
+            bare_name = name[6:]  # Remove 'DICT__' prefix
+            return f"&{{{bare_name}}}"
+
+        # Infer type from value if no prefix
+        if isinstance(value, (list, tuple)):
+            return f"@{{{name}}}"
+        elif isinstance(value, dict):
+            return f"&{{{name}}}"
+        else:
+            # Default: scalar variable
+            return f"${{{name}}}"
 
     def _normalize_session_keys(self, name: str) -> Tuple[str, str]:
         """Return bare and decorated variants of a variable name."""

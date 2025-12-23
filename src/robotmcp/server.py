@@ -1730,7 +1730,7 @@ async def execute_step(
     raise_on_failure: bool = True,
     detail_level: str = "minimal",
     scenario_hint: str = None,
-    assign_to: Union[str, List[str]] = None,
+    assign_to: Optional[Union[str, List[str]]] = None,
     use_context: bool | None = None,
     mode: str = "keyword",
     expression: str | None = None,
@@ -1782,6 +1782,28 @@ async def execute_step(
             )
     """
     arguments = list(arguments or [])
+
+    # Auto-coerce non-string arguments to strings to prevent validation errors
+    # Models sometimes pass boolean True instead of "True", or integers instead of strings
+    coerced_arguments = []
+    for arg in arguments:
+        if isinstance(arg, str):
+            coerced_arguments.append(arg)
+        elif arg is None:
+            # Skip None arguments - they're likely optional params the model shouldn't have included
+            continue
+        elif isinstance(arg, bool):
+            # Convert boolean to RF-style string (Python bool to string)
+            coerced_arguments.append(str(arg))
+        else:
+            # Convert other types (int, float, etc.) to string
+            coerced_arguments.append(str(arg))
+    arguments = coerced_arguments
+
+    # Handle assign_to=None explicitly passed by models
+    if assign_to is None:
+        assign_to = None  # Explicitly set to None (no-op, but clarifies intent)
+
     mode_norm = (mode or "keyword").strip().lower()
     keyword_to_run = keyword
 
