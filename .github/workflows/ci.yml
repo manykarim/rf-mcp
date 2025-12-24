@@ -66,9 +66,9 @@ jobs:
         shell: bash
         run: |
           OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
-          if [ -z "$OPENAI_MODEL_VALUE" ] || [ "$OPENAI_MODEL_VALUE" = "gpt-5-mini" ]; then
-            echo "⚠️ Invalid or missing OPENAI_MODEL, using fallback: gpt-4o-mini"
-            OPENAI_MODEL_VALUE="gpt-4o-mini"
+          if [ -z "$OPENAI_MODEL_VALUE" ]; then
+            echo "⚠️ Missing OPENAI_MODEL, using fallback: gpt-5-mini"
+            OPENAI_MODEL_VALUE="gpt-5-mini"
           else
             echo "✅ Using OPENAI_MODEL: $OPENAI_MODEL_VALUE"
           fi
@@ -165,9 +165,9 @@ jobs:
         shell: bash
         run: |
           OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
-          if [ -z "$OPENAI_MODEL_VALUE" ] || [ "$OPENAI_MODEL_VALUE" = "gpt-5-mini" ]; then
-            echo "⚠️ Invalid or missing OPENAI_MODEL, using fallback: gpt-4o-mini"
-            OPENAI_MODEL_VALUE="gpt-4o-mini"
+          if [ -z "$OPENAI_MODEL_VALUE" ]; then
+            echo "⚠️ Missing OPENAI_MODEL, using fallback: gpt-5-mini"
+            OPENAI_MODEL_VALUE="gpt-5-mini"
           else
             echo "✅ Using OPENAI_MODEL: $OPENAI_MODEL_VALUE"
           fi
@@ -258,8 +258,8 @@ jobs:
         shell: bash
         run: |
           OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
-          if [ -z "$OPENAI_MODEL_VALUE" ] || [ "$OPENAI_MODEL_VALUE" = "gpt-5-mini" ]; then
-            OPENAI_MODEL_VALUE="gpt-4o-mini"
+          if [ -z "$OPENAI_MODEL_VALUE" ]; then
+            OPENAI_MODEL_VALUE="gpt-5-mini"
           fi
           echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> $GITHUB_ENV
 
