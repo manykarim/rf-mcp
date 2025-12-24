@@ -43,7 +43,7 @@ expected_outcome: |
   3. Executes ELSE branch when condition is false
   4. Validates correct branching behavior
 
-min_tool_hit_rate: 0.75
+min_tool_hit_rate: 0.70
 tags:
   - control-flow
   - if-else

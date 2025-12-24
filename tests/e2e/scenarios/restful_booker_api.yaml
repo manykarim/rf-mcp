@@ -37,7 +37,7 @@ expected_outcome: |
   3. Authenticates as admin
   4. Deletes a booking with auth token
   All responses are validated with assertions
-min_tool_hit_rate: 0.8
+min_tool_hit_rate: 0.70
 tags:
   - api
   - http

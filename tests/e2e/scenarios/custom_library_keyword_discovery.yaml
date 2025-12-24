@@ -46,7 +46,7 @@ expected_outcome: |
   4. Executes custom keywords with correct parameters
   5. Validates return values and state changes
 
-min_tool_hit_rate: 0.70
+min_tool_hit_rate: 0.85
 tags:
   - custom-libraries
   - python-keywords

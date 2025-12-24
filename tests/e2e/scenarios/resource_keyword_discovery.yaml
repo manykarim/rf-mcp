@@ -45,7 +45,7 @@ expected_outcome: |
   4. Executes user keywords with correct arguments
   5. Validates keyword results
 
-min_tool_hit_rate: 0.70
+min_tool_hit_rate: 0.85
 tags:
   - resource-files
   - user-keywords

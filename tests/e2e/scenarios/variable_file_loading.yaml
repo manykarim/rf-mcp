@@ -41,7 +41,7 @@ expected_outcome: |
   4. Verifies variable values are correctly imported
   5. Accesses nested dictionary values
 
-min_tool_hit_rate: 0.75
+min_tool_hit_rate: 0.85
 tags:
   - variable-files
   - python-variables

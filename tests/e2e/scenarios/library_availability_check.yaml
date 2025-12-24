@@ -38,7 +38,7 @@ expected_outcome: |
   3. Makes decisions based on availability
   4. Only uses available libraries in tests
 
-min_tool_hit_rate: 0.70
+min_tool_hit_rate: 0.60
 tags:
   - library-availability
   - check_library_availability

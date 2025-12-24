@@ -39,7 +39,7 @@ expected_outcome: |
   3. Optionally executes the validated suite
   4. Verifies execution or validation results
 
-min_tool_hit_rate: 0.70
+min_tool_hit_rate: 0.85
 tags:
   - suite-validation
   - dry-run

@@ -34,7 +34,7 @@ expected_outcome: |
   4. Marks todos as completed
   5. Verifies the updated count
   6. Closes the browser
-min_tool_hit_rate: 0.8
+min_tool_hit_rate: 0.85
 tags:
   - web
   - browser

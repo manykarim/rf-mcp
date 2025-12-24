@@ -38,7 +38,7 @@ expected_outcome: |
   3. Accesses arguments-dependent values
   4. Validates conditional variable loading
 
-min_tool_hit_rate: 0.75
+min_tool_hit_rate: 0.85
 tags:
   - variable-files
   - dynamic-variables
