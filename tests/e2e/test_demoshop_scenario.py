@@ -20,7 +20,7 @@ def get_model_name() -> str:
     Reads OPENAI_MODEL environment variable at call time (not import time)
     to ensure environment changes are picked up.
     """
-    model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    model = os.environ.get("OPENAI_MODEL", "gpt-5-mini")
     return model
 
 

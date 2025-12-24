@@ -50,7 +50,7 @@ async def pydantic_agent():
 
     if use_real_llm:
         # Use real OpenAI model
-        model = OpenAIModel("gpt-4o-mini")
+        model = OpenAIModel("gpt-5-mini")
     else:
         # Use TestModel for fast, deterministic testing
         model = TestModel()

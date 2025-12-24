@@ -58,7 +58,7 @@ class MCPAgentIntegration:
 
     def create_agent_with_mcp_tools(
         self,
-        model_name: str = "gpt-4o-mini",
+        model_name: str = "gpt-5-mini",
         use_test_model: bool = False,
         system_prompt: Optional[str] = None,
     ) -> Agent:
@@ -201,7 +201,7 @@ Extract the session_id from analyze_scenario and use it in all subsequent calls.
 async def create_agent_from_mcp_server(
     mcp_server: FastMCP,
     metrics_collector: MetricsCollector,
-    model_name: str = "gpt-4o-mini",
+    model_name: str = "gpt-5-mini",
     use_test_model: bool = False,
     system_prompt: Optional[str] = None,
 ) -> Agent:

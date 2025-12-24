@@ -25,7 +25,7 @@ def get_comparison_models() -> list[str]:
         return [m.strip() for m in models_str.split(",")]
 
     # Default to comparing a few fast models
-    return ["gpt-4o-mini", "gpt-3.5-turbo"]
+    return ["gpt-5-mini", "gpt-3.5-turbo"]
 
 
 @pytest.mark.asyncio
@@ -203,15 +203,15 @@ async def test_comparison_report_generation(mcp_client):
         scenario_id="mock_scenario",
         scenario_name="Mock Scenario",
         timestamp="2025-01-01T00:00:00",
-        models_tested=["gpt-4o-mini", "gpt-3.5-turbo"],
-        results={"gpt-4o-mini": result1, "gpt-3.5-turbo": result2},
+        models_tested=["gpt-5-nano", "gpt-3.5-turbo"],
+        results={"gpt-5-nano": result1, "gpt-3.5-turbo": result2},
         comparison_metrics={
             "total_models": 2,
             "successful_models": 2,
             "average_tool_hit_rate": 0.7,
             "average_tool_calls": 4.5,
             "average_execution_time": 9.35,
-            "best_model_by_hit_rate": {"model": "gpt-4o-mini", "hit_rate": 0.8},
+            "best_model_by_hit_rate": {"model": "gpt-5-nano", "hit_rate": 0.8},
             "best_model_by_speed": {"model": "gpt-3.5-turbo", "time": 8.2},
             "model_rankings": {},
         },
@@ -223,9 +223,9 @@ async def test_comparison_report_generation(mcp_client):
     # Verify report contains key information
     assert "MODEL COMPARISON REPORT" in report
     assert "Mock Scenario" in report
-    assert "gpt-4o-mini" in report
+    assert "gpt-5-nano" in report
     assert "gpt-3.5-turbo" in report
-    assert "80.00%" in report  # Hit rate for gpt-4o-mini
+    assert "80.00%" in report  # Hit rate for gpt-5-nano
     assert "60.00%" in report  # Hit rate for gpt-3.5-turbo
     assert "Best Tool Hit Rate" in report
     assert "Fastest Execution" in report

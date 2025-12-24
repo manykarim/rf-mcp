@@ -23,7 +23,7 @@ def get_model_name() -> str:
     Returns:
         Model name from environment or default
     """
-    return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    return os.getenv("OPENAI_MODEL", "gpt-5-mini")
 
 
 @pytest.mark.asyncio
