@@ -1,0 +1,49 @@
+id: variable_file_loading
+name: Variable File Loading (Multi-format)
+description: |
+  Test loading variables from Python, YAML, and JSON variable files.
+  Validates that variables are correctly imported and accessible.
+context: generic
+prompt: |
+  Test variable file loading from multiple formats:
+
+  1. Load static variables from test_data/static_variables.py
+  2. Verify SCALAR_VAR, NUMBER_VAR, MY_LIST, and MY_DICT are available
+  3. Log the value of ${SCALAR_VAR} (should be "test_value")
+  4. Log the value of ${NUMBER_VAR} (should be 42)
+  5. Verify @{MY_LIST} contains 3 items using Get Length
+  6. Load YAML variables from test_data/test_variables.yaml
+  7. Verify YAML_SCALAR is available
+  8. Log the nested dictionary value ${YAML_DICT}[database][host] (should be "localhost")
+  9. Build the final test suite
+
+  Use manage_session with action="import_variables" for loading variable files.
+
+expected_tools:
+  - tool_name: analyze_scenario
+    min_calls: 1
+    max_calls: 1
+  - tool_name: manage_session
+    min_calls: 2
+    max_calls: 4
+  - tool_name: execute_step
+    min_calls: 5
+    max_calls: 15
+  - tool_name: build_test_suite
+    min_calls: 1
+    max_calls: 1
+
+expected_outcome: |
+  Successfully:
+  1. Loads Python variable files (static)
+  2. Loads YAML variable files
+  3. Accesses scalar, list, and dictionary variables
+  4. Verifies variable values are correctly imported
+  5. Accesses nested dictionary values
+
+min_tool_hit_rate: 0.75
+tags:
+  - variable-files
+  - python-variables
+  - yaml-variables
+  - import-variables

@@ -15,7 +15,9 @@ def pytest_configure(config: pytest.Config) -> None:
     """Register custom markers used for optional dependency suites."""
     env_path = Path(__file__).resolve().parent.parent / ".env"
     if env_path.exists():
-        load_dotenv(env_path, override=True)
+        # Use override=False so command-line env vars take precedence
+        # This allows: OPENAI_MODEL=gpt-5 pytest ... to work correctly
+        load_dotenv(env_path, override=False)
 
     config.addinivalue_line(
         "markers",

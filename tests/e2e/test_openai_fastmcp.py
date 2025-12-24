@@ -22,7 +22,7 @@ def openai_model() -> str:
     key = os.getenv("OPENAI_API_KEY", "").strip()
     if key in _PLACEHOLDER_VALUES:
         pytest.skip("OPENAI_API_KEY not configured for OpenAI-driven tests")
-    return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    return os.getenv("OPENAI_MODEL", "gpt-5-mini")
 
 
 @pytest.fixture(scope="session")

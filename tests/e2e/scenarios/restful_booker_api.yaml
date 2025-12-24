@@ -1,0 +1,45 @@
+id: restful_booker_api
+name: Restful Booker API Test
+description: |
+  Create a test suite for the Restful Booker API.
+  Tests HTTP request handling, authentication, and API operations.
+context: api
+prompt: |
+  Use RobotMCP to write a test suite and execute it step wise.
+  Read https://restful-booker.herokuapp.com/apidoc/index.html for information about webservice
+
+  - Read a booking and assert the response and its values
+  - Create a new booking and assert the response and its values
+  - Authenticate as admin and assert the response and its values
+  - Delete a booking while authenticated
+
+  Execute the test suite stepwise and build the final version afterwards.
+expected_tools:
+  - tool_name: analyze_scenario
+    min_calls: 1
+    max_calls: 1
+  - tool_name: recommend_libraries
+    min_calls: 0
+    max_calls: 2
+  - tool_name: manage_session
+    min_calls: 1
+    max_calls: 3
+  - tool_name: execute_step
+    min_calls: 4
+    max_calls: 20
+  - tool_name: build_test_suite
+    min_calls: 1
+    max_calls: 1
+expected_outcome: |
+  Successfully creates and executes an API test suite that:
+  1. Reads an existing booking
+  2. Creates a new booking
+  3. Authenticates as admin
+  4. Deletes a booking with auth token
+  All responses are validated with assertions
+min_tool_hit_rate: 0.8
+tags:
+  - api
+  - http
+  - restful-booker
+  - authentication

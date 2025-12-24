@@ -1,0 +1,170 @@
+name: E2E with Real LLM
+
+on:
+  schedule:
+    # Run every Sunday at 00:00 UTC
+    - cron: '0 0 * * 0'
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  e2e-real-llm:
+    name: E2E Tests with Real LLM
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+      USE_REAL_LLM: 'true'
+      PLAYWRIGHT_BROWSERS_PATH: '0'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: 'latest'
+
+      - name: Setup Python 3.12 (via uv)
+        run: uv python install 3.12
+
+      - name: Show uv and Python versions
+        run: |
+          uv --version
+          uv run python --version
+
+      - name: Install dependencies (dev)
+        run: uv sync --all-extras --group dev
+
+      - name: Initialize Browser Library (rfbrowser)
+        run: uv run rfbrowser init
+        continue-on-error: true
+
+      - name: Install Playwright browsers
+        run: |
+          uv run playwright install --with-deps chromium firefox
+          uv run python -m playwright install --with-deps chromium firefox || true
+
+      - name: Install Chrome and Firefox for Selenium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser firefox
+
+      - name: Configure OpenAI Model with Fallback
+        shell: bash
+        run: |
+          OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
+          if [ -z "$OPENAI_MODEL_VALUE" ]; then
+            echo "⚠️ Missing OPENAI_MODEL, using fallback: gpt-5-mini"
+            OPENAI_MODEL_VALUE="gpt-5-mini"
+          else
+            echo "✅ Using OPENAI_MODEL: $OPENAI_MODEL_VALUE"
+          fi
+          echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> $GITHUB_ENV
+
+      - name: Create metrics directories
+        run: |
+          mkdir -p tests/e2e/metrics
+          mkdir -p tests/e2e/metrics/autonomous
+          mkdir -p tests/e2e/metrics/comparisons
+
+      - name: Run E2E autonomous agent tests (Real LLM)
+        env:
+          USE_REAL_LLM: 'true'
+        run: |
+          uv run pytest tests/e2e/test_autonomous_agents.py -v --junitxml=results/e2e-autonomous-pytest.xml
+        continue-on-error: true
+
+      - name: Upload E2E metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-metrics-real-llm
+          path: |
+            tests/e2e/metrics/**/*.json
+
+      - name: Test Report
+        uses: dorny/test-reporter@main
+        if: success() || failure()
+        with:
+          name: E2E Autonomous Tests (Real LLM)
+          path: results/e2e-autonomous-pytest.xml
+          reporter: java-junit
+
+  model-comparison:
+    name: Model Comparison Tests
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+      RUN_MODEL_COMPARISON: 'true'
+      COMPARISON_MODELS: 'gpt-5-mini,gpt-5-nano'  # Compare fast models by default
+      PLAYWRIGHT_BROWSERS_PATH: '0'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: 'latest'
+
+      - name: Setup Python 3.12 (via uv)
+        run: uv python install 3.12
+
+      - name: Install dependencies (dev)
+        run: uv sync --all-extras --group dev
+
+      - name: Initialize Browser Library (rfbrowser)
+        run: uv run rfbrowser init
+        continue-on-error: true
+
+      - name: Install Playwright browsers
+        run: |
+          uv run playwright install --with-deps chromium firefox
+          uv run python -m playwright install --with-deps chromium firefox || true
+
+      - name: Install Chrome and Firefox for Selenium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser firefox
+
+      - name: Configure OpenAI Model with Fallback
+        shell: bash
+        run: |
+          OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
+          if [ -z "$OPENAI_MODEL_VALUE" ]; then
+            OPENAI_MODEL_VALUE="gpt-5-mini"
+          fi
+          echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> $GITHUB_ENV
+
+      - name: Create metrics directories
+        run: |
+          mkdir -p tests/e2e/metrics
+          mkdir -p tests/e2e/metrics/autonomous
+          mkdir -p tests/e2e/metrics/comparisons
+
+      - name: Run Model Comparison Tests
+        env:
+          RUN_MODEL_COMPARISON: 'true'
+          COMPARISON_MODELS: 'gpt-5-mini,gpt-5-nano'
+        run: |
+          uv run pytest tests/e2e/test_model_comparison.py -v --junitxml=results/model-comparison-pytest.xml
+        continue-on-error: true
+
+      - name: Upload comparison results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-comparison-results
+          path: |
+            tests/e2e/metrics/comparisons/**/*.json
+
+      - name: Test Report
+        uses: dorny/test-reporter@main
+        if: success() || failure()
+        with:
+          name: Model Comparison Tests
+          path: results/model-comparison-pytest.xml
+          reporter: java-junit

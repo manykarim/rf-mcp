@@ -1,0 +1,47 @@
+id: library_search_order
+name: Library Search Order Management
+description: |
+  Test managing keyword resolution precedence when multiple libraries
+  have keywords with the same name.
+context: generic
+prompt: |
+  Test library search order management:
+
+  1. Create a session for generic testing
+  2. Use set_library_search_order to prioritize BuiltIn library
+  3. Log "Testing library search order"
+  4. Optionally change search order to test different precedence
+  5. Verify that library search order can be managed
+  6. Build the final test suite
+
+  Use set_library_search_order tool to manage keyword precedence.
+
+expected_tools:
+  - tool_name: analyze_scenario
+    min_calls: 1
+    max_calls: 1
+  - tool_name: manage_session
+    min_calls: 1
+    max_calls: 2
+  - tool_name: set_library_search_order
+    min_calls: 1
+    max_calls: 2
+  - tool_name: execute_step
+    min_calls: 1
+    max_calls: 5
+  - tool_name: build_test_suite
+    min_calls: 1
+    max_calls: 1
+
+expected_outcome: |
+  Successfully:
+  1. Sets library search order
+  2. Verifies keyword resolution follows precedence
+  3. Changes search order dynamically
+  4. Validates keyword source changes
+
+min_tool_hit_rate: 0.70
+tags:
+  - library-search-order
+  - keyword-precedence
+  - set_library_search_order
