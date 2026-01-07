@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import timedelta
+from typing import List, Tuple
 
 import pytest
 import pytest_asyncio
@@ -13,6 +15,8 @@ from fastmcp.client import FastMCPTransport
 from openai import BadRequestError, OpenAI
 
 from robotmcp.server import mcp
+
+logger = logging.getLogger(__name__)
 
 _PLACEHOLDER_VALUES = {"", "changeme", "placeholder"}
 
@@ -57,40 +61,111 @@ def _extract_text_from_openai_response(response) -> str:
     return ""
 
 
-@pytest.mark.asyncio
-async def test_openai_driven_workflow(openai_client: OpenAI, openai_model: str, openai_mcp_client: Client):
-    """Use OpenAI to craft a scenario and exercise the primary MCP tooling workflow."""
+def _get_scenario_prompts() -> List[Tuple[str, str]]:
+    """Return a list of (system_prompt, user_prompt) tuples to try.
 
-    seed_prompt = (
-        "Create a concise Robot Framework scenario focused on data processing. "
-        "Use only BuiltIn and Collections library keywords. Return strict JSON with keys "
-        "'scenario' (string) and 'context' (string)."
-    )
+    Multiple prompts are provided to handle cases where certain prompts
+    may trigger content filtering or produce empty responses.
+    """
+    return [
+        # Primary prompt - detailed instruction
+        (
+            "You design high-quality Robot Framework automation plans.",
+            "Create a concise Robot Framework scenario focused on data processing. "
+            "Use only BuiltIn and Collections library keywords. Return strict JSON with keys "
+            "'scenario' (string) and 'context' (string).",
+        ),
+        # Fallback 1 - simpler instruction
+        (
+            "You are a helpful assistant that returns JSON.",
+            "Generate a simple test scenario that creates a list and logs it. "
+            'Return JSON: {"scenario": "your scenario description", "context": "process"}',
+        ),
+        # Fallback 2 - most minimal
+        (
+            "Return only valid JSON.",
+            '{"scenario": "Create a list with items A and B, then log the list", "context": "process"}',
+        ),
+    ]
 
+
+def _try_openai_completion(
+    client: OpenAI, model: str, system_prompt: str, user_prompt: str
+) -> str:
+    """Try to get a completion from OpenAI with the given prompts.
+
+    Args:
+        client: OpenAI client
+        model: Model name to use
+        system_prompt: System message content
+        user_prompt: User message content
+
+    Returns:
+        Extracted text from response, or empty string if failed
+    """
     request_kwargs = {
-        "model": openai_model,
+        "model": model,
         "messages": [
-            {"role": "system", "content": "You design high-quality Robot Framework automation plans."},
-            {"role": "user", "content": seed_prompt},
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
         ],
     }
 
     try:
-        completion = openai_client.chat.completions.create(
+        completion = client.chat.completions.create(
             **request_kwargs,
-            max_completion_tokens=300,
+            max_completion_tokens=500,
         )
     except (BadRequestError, TypeError) as error:
         message = str(error)
         if "max_completion_tokens" not in message and "max_tokens" not in message:
             raise
-        completion = openai_client.chat.completions.create(
+        completion = client.chat.completions.create(
             **request_kwargs,
-            max_tokens=300,
+            max_tokens=500,
         )
 
-    scenario_payload = _extract_text_from_openai_response(completion).strip()
-    assert scenario_payload, "OpenAI response should not be empty"
+    text = _extract_text_from_openai_response(completion).strip()
+
+    if not text:
+        # Log diagnostic info for debugging
+        finish_reason = None
+        if hasattr(completion, "choices") and completion.choices:
+            finish_reason = getattr(completion.choices[0], "finish_reason", None)
+        logger.warning(
+            "Empty OpenAI response. Model: %s, Finish reason: %s",
+            model,
+            finish_reason,
+        )
+
+    return text
+
+
+@pytest.mark.asyncio
+async def test_openai_driven_workflow(openai_client: OpenAI, openai_model: str, openai_mcp_client: Client):
+    """Use OpenAI to craft a scenario and exercise the primary MCP tooling workflow.
+
+    This test tries multiple prompts to handle cases where certain prompts
+    may trigger content filtering or produce empty responses.
+    """
+    # Try multiple prompts until we get a valid response
+    scenario_payload = None
+    prompts = _get_scenario_prompts()
+
+    for i, (system_prompt, user_prompt) in enumerate(prompts):
+        scenario_payload = _try_openai_completion(
+            openai_client, openai_model, system_prompt, user_prompt
+        )
+        if scenario_payload:
+            logger.info("Got valid response on attempt %d/%d", i + 1, len(prompts))
+            break
+        logger.warning("Empty response on attempt %d/%d, trying next prompt", i + 1, len(prompts))
+
+    if not scenario_payload:
+        pytest.fail(
+            f"OpenAI returned empty responses for all {len(prompts)} prompt variations. "
+            f"Model: {openai_model}. This indicates a persistent API issue or content filtering."
+        )
 
     try:
         parsed = json.loads(scenario_payload)

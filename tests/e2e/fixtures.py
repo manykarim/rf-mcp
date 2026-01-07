@@ -11,6 +11,7 @@ from pydantic_ai.models.test import TestModel
 
 import robotmcp.server
 from tests.e2e.metrics_collector import MetricsCollector
+from tests.e2e.tracked_client import TrackedMCPClient
 
 
 @pytest_asyncio.fixture
@@ -23,18 +24,45 @@ async def mcp_server() -> FastMCP:
     return robotmcp.server.mcp
 
 
+@pytest.fixture
+def metrics_collector():
+    """Create a metrics collector.
+
+    This fixture is function-scoped and provides a fresh MetricsCollector
+    for each test. It's defined before mcp_client so it can be injected.
+    """
+    return MetricsCollector()
+
+
 @pytest_asyncio.fixture
-async def mcp_client():
-    """Create an MCP client for testing."""
+async def mcp_client(metrics_collector):
+    """Create an MCP client with automatic metrics tracking.
+
+    This client wraps the FastMCP Client with TrackedMCPClient, which
+    automatically records all tool calls to the metrics_collector.
+
+    Args:
+        metrics_collector: Injected MetricsCollector fixture
+
+    Yields:
+        TrackedMCPClient instance that auto-records tool calls
+    """
+    mcp = robotmcp.server.mcp
+    async with Client(mcp) as raw_client:
+        tracked = TrackedMCPClient(raw_client, metrics_collector)
+        yield tracked
+
+
+@pytest_asyncio.fixture
+async def raw_mcp_client():
+    """Create a raw MCP client without metrics tracking.
+
+    Use this fixture when you need direct access to the MCP client
+    without automatic metrics collection.
+    """
     mcp = robotmcp.server.mcp
     async with Client(mcp) as client:
         yield client
-
-
-@pytest_asyncio.fixture
-async def metrics_collector():
-    """Create a metrics collector."""
-    return MetricsCollector()
 
 
 @pytest_asyncio.fixture

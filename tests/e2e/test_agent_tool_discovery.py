@@ -1,4 +1,13 @@
-"""E2E tests for AI agent tool discovery and usage."""
+"""E2E tests for AI agent tool discovery and usage.
+
+These tests validate that:
+1. MCP tools are properly discoverable by agents
+2. Tool calls are automatically tracked via TrackedMCPClient
+3. Scenario execution produces valid metrics
+
+The mcp_client fixture provides a TrackedMCPClient that automatically
+records all tool calls to the metrics_collector fixture.
+"""
 
 import pytest
 import pytest_asyncio
@@ -67,7 +76,11 @@ class TestAgentToolDiscovery:
 
     @pytest.mark.asyncio
     async def test_tool_call_tracking(self, mcp_client, metrics_collector):
-        """Test that tool calls are properly tracked."""
+        """Test that tool calls are automatically tracked via TrackedMCPClient.
+
+        The mcp_client fixture provides a TrackedMCPClient that automatically
+        records all call_tool invocations to the metrics_collector.
+        """
         metrics_collector.start_recording()
 
         # Make a test tool call
@@ -100,11 +113,12 @@ class TestAgentToolDiscovery:
         """Test execution of a scenario and validate tool usage.
 
         This test is parameterized to run for all scenario files in the scenarios directory.
+        Tool calls are automatically tracked via TrackedMCPClient.
 
         Args:
             scenario_file: Path to the scenario YAML file
-            mcp_client: MCP client with tool call tracking
-            metrics_collector: Metrics collector for tracking tool calls
+            mcp_client: TrackedMCPClient that auto-records tool calls
+            metrics_collector: MetricsCollector receiving auto-recorded calls
         """
         # Load scenario
         scenario = load_scenario(scenario_file)
