@@ -124,7 +124,7 @@ jobs:
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
-      USE_REAL_LLM: 'false'  # Use TestModel by default, set to 'true' for weekly runs
+      USE_REAL_LLM: 'true'  # Enable real LLM testing with OpenAI API
       PLAYWRIGHT_BROWSERS_PATH: '0'
 
     steps:
@@ -179,14 +179,14 @@ jobs:
           mkdir -p tests/e2e/metrics/autonomous
           mkdir -p tests/e2e/metrics/comparisons
 
-      - name: Run E2E tests (TestModel - no LLM calls)
+      - name: Run E2E tool discovery tests
         run: |
-          uv run pytest tests/e2e/test_agent_tool_discovery.py -v --junitxml=results/e2e-pytest.xml
+          uv run pytest tests/e2e/test_agent_tool_discovery.py -v --junitxml=results/e2e-tool-discovery.xml
 
-      - name: Run E2E autonomous agent tests (TestModel)
+      - name: Run E2E autonomous agent tests (Real LLM)
         run: |
-          uv run pytest tests/e2e/test_autonomous_agents.py::test_agent_tool_registration -v
-        continue-on-error: true
+          uv run pytest tests/e2e/test_autonomous_agents.py -v --junitxml=results/e2e-autonomous-agents.xml
+        timeout-minutes: 45
 
       - name: Upload E2E metrics
         if: always()
@@ -201,7 +201,7 @@ jobs:
         if: success() || failure()
         with:
           name: E2E Tests
-          path: results/e2e-pytest.xml
+          path: results/e2e-*.xml
           reporter: java-junit
 
   optional-matrix:
