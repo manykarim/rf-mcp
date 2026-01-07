@@ -5,7 +5,7 @@ import pytest
 import pytest_asyncio
 from pathlib import Path
 
-from tests.e2e.fixtures import mcp_client
+from tests.e2e.fixtures import mcp_client, metrics_collector
 from tests.e2e.model_comparison import ModelComparator
 from tests.e2e.test_agent_tool_discovery import load_scenario
 
