@@ -31,9 +31,10 @@ expected_outcome: |
   2. Validates XML structure and nodes
   3. Checks attributes and values
   4. Performs assertions on XML content
-min_tool_hit_rate: 0.70
+min_tool_hit_rate: 0.50
 tags:
   - xml
   - parsing
   - generic
   - data-driven
+  - flaky

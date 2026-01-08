@@ -8,6 +8,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.toolsets.fastmcp import FastMCPToolset
+from pydantic_ai.usage import UsageLimits
 from fastmcp import FastMCP
 
 from tests.e2e.metrics_collector import MetricsCollector
@@ -87,7 +88,17 @@ When given a test scenario:
 3. Use build_test_suite to generate the final test suite
 
 Always use the appropriate MCP tools to accomplish testing tasks.
-Extract the session_id from analyze_scenario and use it in all subsequent calls."""
+Extract the session_id from analyze_scenario and use it in all subsequent calls.
+
+IMPORTANT: Common Robot Framework keywords are in these libraries:
+- BuiltIn: Create List, Log, Should Be Equal, Should Contain, Set Variable, Length Should Be, etc.
+- Collections: Sort List, Append To List, Get From List, List Should Contain Value, etc.
+- String: Convert To String, Split String, Replace String, etc.
+- XML: Parse XML, Get Element, Get Element Text, Get Element Attribute, Elements Should Match, etc.
+- OperatingSystem: Create File, File Should Exist, Get File, etc.
+
+When using keywords, call them WITHOUT library prefix (e.g., 'Create List' not 'BuiltIn.Create List' or 'Collections.Create List').
+The 'Create List' keyword is in BuiltIn, NOT in Collections."""
 
         # Create toolset with metrics wrapping
         toolset = self._create_metrics_wrapped_toolset()
@@ -188,8 +199,11 @@ Extract the session_id from analyze_scenario and use it in all subsequent calls.
             session_id=None
         )
 
-        # Run the agent
-        result = await agent.run(prompt, deps=context)
+        # Run the agent with increased request limit for complex scenarios
+        # Default pydantic-ai limit is 50, but complex scenarios with error recovery
+        # may need more iterations
+        usage_limits = UsageLimits(request_limit=100)
+        result = await agent.run(prompt, deps=context, usage_limits=usage_limits)
 
         # Extract output and messages
         output = result.data if hasattr(result, 'data') else str(result)
