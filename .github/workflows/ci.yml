@@ -156,10 +156,10 @@ jobs:
           uv run playwright install --with-deps chromium firefox
           uv run python -m playwright install --with-deps chromium firefox || true
 
-      - name: Install Chrome and Firefox for Selenium
+      - name: Install Chrome, Firefox, and Xvfb for browser tests
         run: |
           sudo apt-get update
-          sudo apt-get install -y chromium-browser firefox
+          sudo apt-get install -y chromium-browser firefox xvfb
 
       - name: Configure OpenAI Model with Fallback
         shell: bash
@@ -184,7 +184,13 @@ jobs:
           uv run pytest tests/e2e/test_agent_tool_discovery.py -v --junitxml=results/e2e-tool-discovery.xml
 
       - name: Run E2E autonomous agent tests (Real LLM)
+        env:
+          DISPLAY: ':99'
         run: |
+          # Start Xvfb for browser tests
+          Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 2
+          # Run tests with display support
           uv run pytest tests/e2e/test_autonomous_agents.py -v --junitxml=results/e2e-autonomous-agents.xml
         timeout-minutes: 45
 
