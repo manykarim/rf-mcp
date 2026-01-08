@@ -90,6 +90,7 @@ dev = [
     "pytest>=8.4.1",
     "pytest-asyncio>=1.1.0",
     "pytest-playwright>=0.7.1",
+    "pytest-rerunfailures>=14.0",
     "openai>=1.51.0",
     "pydantic-ai>=1.37.0",
     "python-dotenv>=1.0.1",

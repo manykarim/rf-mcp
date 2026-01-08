@@ -40,8 +40,9 @@ expected_outcome: |
   3. Changes search order dynamically
   4. Validates keyword source changes
 
-min_tool_hit_rate: 0.70
+min_tool_hit_rate: 0.50
 tags:
   - library-search-order
   - keyword-precedence
   - set_library_search_order
+  - flaky

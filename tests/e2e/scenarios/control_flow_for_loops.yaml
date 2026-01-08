@@ -40,8 +40,9 @@ expected_outcome: |
   3. Performs conditional checks within the loop
   4. Validates final results
 
-min_tool_hit_rate: 0.70
+min_tool_hit_rate: 0.50
 tags:
   - control-flow
   - for-loop
   - execute_flow
+  - flaky

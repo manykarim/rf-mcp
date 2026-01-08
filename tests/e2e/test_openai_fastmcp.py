@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from datetime import timedelta
 from typing import List, Tuple
 
@@ -12,7 +13,7 @@ import pytest
 import pytest_asyncio
 from fastmcp import Client
 from fastmcp.client import FastMCPTransport
-from openai import BadRequestError, OpenAI
+from openai import BadRequestError, OpenAI, APIError
 
 from robotmcp.server import mcp
 
@@ -89,10 +90,10 @@ def _get_scenario_prompts() -> List[Tuple[str, str]]:
     ]
 
 
-def _try_openai_completion(
+def _try_openai_completion_once(
     client: OpenAI, model: str, system_prompt: str, user_prompt: str
 ) -> str:
-    """Try to get a completion from OpenAI with the given prompts.
+    """Try to get a single completion from OpenAI with the given prompts.
 
     Args:
         client: OpenAI client
@@ -111,19 +112,47 @@ def _try_openai_completion(
         ],
     }
 
+    completion = None
+
+    # Try max_completion_tokens first (newer models like gpt-5-mini)
     try:
         completion = client.chat.completions.create(
             **request_kwargs,
             max_completion_tokens=500,
         )
-    except (BadRequestError, TypeError) as error:
-        message = str(error)
-        if "max_completion_tokens" not in message and "max_tokens" not in message:
+    except BadRequestError as error:
+        message = str(error).lower()
+        # If max_completion_tokens is not supported, try max_tokens
+        if "max_completion_tokens" in message or "unsupported parameter" in message:
+            logger.info("Model %s doesn't support max_completion_tokens, trying max_tokens", model)
+            try:
+                completion = client.chat.completions.create(
+                    **request_kwargs,
+                    max_tokens=500,
+                )
+            except BadRequestError as fallback_error:
+                # If max_tokens also fails, try without any token limit
+                fallback_message = str(fallback_error).lower()
+                if "max_tokens" in fallback_message or "unsupported parameter" in fallback_message:
+                    logger.info("Model %s doesn't support max_tokens either, trying without limit", model)
+                    completion = client.chat.completions.create(**request_kwargs)
+                else:
+                    raise
+        else:
             raise
-        completion = client.chat.completions.create(
-            **request_kwargs,
-            max_tokens=500,
-        )
+    except TypeError as error:
+        # Handle older SDK versions that might not support max_completion_tokens
+        message = str(error)
+        if "max_completion_tokens" in message:
+            completion = client.chat.completions.create(
+                **request_kwargs,
+                max_tokens=500,
+            )
+        else:
+            raise
+
+    if completion is None:
+        return ""
 
     text = _extract_text_from_openai_response(completion).strip()
 
@@ -139,6 +168,51 @@ def _try_openai_completion(
         )
 
     return text
+
+
+def _try_openai_completion(
+    client: OpenAI, model: str, system_prompt: str, user_prompt: str,
+    max_retries: int = 3
+) -> str:
+    """Try to get a completion from OpenAI with retry logic for empty responses.
+
+    Args:
+        client: OpenAI client
+        model: Model name to use
+        system_prompt: System message content
+        user_prompt: User message content
+        max_retries: Maximum number of retry attempts for empty responses
+
+    Returns:
+        Extracted text from response, or empty string if all retries exhausted
+    """
+    for attempt in range(max_retries):
+        try:
+            text = _try_openai_completion_once(client, model, system_prompt, user_prompt)
+            if text:
+                return text
+
+            # Wait before retry with exponential backoff
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # 1s, 2s, 4s
+                logger.warning(
+                    "Empty response from OpenAI, retrying in %ds (attempt %d/%d)",
+                    wait_time, attempt + 1, max_retries
+                )
+                time.sleep(wait_time)
+        except APIError as e:
+            # Retry on transient API errors
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt
+                logger.warning(
+                    "OpenAI API error: %s, retrying in %ds (attempt %d/%d)",
+                    str(e), wait_time, attempt + 1, max_retries
+                )
+                time.sleep(wait_time)
+            else:
+                raise
+
+    return ""  # All retries exhausted
 
 
 @pytest.mark.asyncio

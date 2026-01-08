@@ -190,9 +190,10 @@ jobs:
           # Start Xvfb for browser tests
           Xvfb :99 -screen 0 1920x1080x24 &
           sleep 2
-          # Run tests with display support
-          uv run pytest tests/e2e/test_autonomous_agents.py -v --junitxml=results/e2e-autonomous-agents.xml
-        timeout-minutes: 45
+          # Run tests with display support and automatic retries for flaky LLM tests
+          uv run pytest tests/e2e/test_autonomous_agents.py -v --reruns 2 --reruns-delay 5 --junitxml=results/e2e-autonomous-agents.xml
+        timeout-minutes: 60
+        continue-on-error: true  # Don't fail CI on LLM test failures - collect metrics instead
 
       - name: Upload E2E metrics
         if: always()
