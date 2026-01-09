@@ -75,6 +75,28 @@ class TestBuilder:
             "generate_variables": True,
         }
 
+    def _convert_to_evaluation_namespace_syntax(self, expression: str) -> str:
+        """Convert ${var} syntax to $var syntax for Robot Framework evaluation namespace.
+
+        In Robot Framework's evaluation namespace (used by Evaluate keyword, IF conditions,
+        and other Python evaluation contexts), variables should use $var syntax instead of
+        ${var}. The ${var} syntax causes string substitution BEFORE evaluation, while $var
+        provides direct access to the actual Python object in the evaluation namespace.
+
+        Reference: https://robotframework.org/robotframework/latest/RobotFrameworkUserGuide.html#evaluation-namespaces
+
+        Args:
+            expression: Expression that may contain ${var} syntax
+
+        Returns:
+            Expression with ${var} converted to $var
+        """
+        if not expression:
+            return expression
+        # Convert ${var.suffix} to $var.suffix
+        # The regex handles nested variables by being non-greedy within braces
+        return re.sub(r"\$\{([A-Za-z_]\w*)([^}]*)\}", r"$\1\2", expression)
+
     async def build_suite(
         self,
         session_id: str = "default",
@@ -1059,13 +1081,12 @@ class TestBuilder:
         if step.arguments:
             processed_args = list(step.arguments)
             # Normalize Evaluate expressions to use $var syntax (Robot Framework requirement)
+            # Reference: https://robotframework.org/robotframework/latest/RobotFrameworkUserGuide.html#evaluation-namespaces
             try:
                 if (step.keyword or "").strip().lower() == "evaluate" and processed_args:
-                    import re
                     expr = str(processed_args[0])
                     # Convert ${var.suffix} -> $var.suffix inside the expression
-                    expr = re.sub(r"\$\{([A-Za-z_]\w*)([^}]*)\}", r"$\1\2", expr)
-                    processed_args[0] = expr
+                    processed_args[0] = self._convert_to_evaluation_namespace_syntax(expr)
             except Exception:
                 pass
             if (
@@ -1254,7 +1275,9 @@ class TestBuilder:
                     })
                 out.append({"type": "control", "control": "END"})
             elif ntype == "if":
-                out.append({"type": "control", "control": "IF", "args": [n.get("condition", "")]})
+                # Convert ${var} to $var for IF conditions (evaluation namespace syntax)
+                cond = self._convert_to_evaluation_namespace_syntax(n.get("condition", ""))
+                out.append({"type": "control", "control": "IF", "args": [cond]})
                 for s in n.get("then") or []:
                     out.append({
                         "type": "keyword",
@@ -1347,6 +1370,8 @@ class TestBuilder:
                 lines.append(f"{indent}END")
             elif ntype == "if":
                 cond = n.get("condition", "")
+                # Convert ${var} to $var for IF conditions (evaluation namespace syntax)
+                cond = self._convert_to_evaluation_namespace_syntax(cond)
                 lines.append(f"{indent}IF    {cond}")
                 then_body = n.get("then") or []
                 lines.extend(self._render_flow_body(then_body, indent + "    "))
@@ -1381,7 +1406,10 @@ class TestBuilder:
         out: List[str] = []
         for s in steps or []:
             kw = s.get("keyword", "")
-            args = s.get("arguments", []) or []
+            args = list(s.get("arguments", []) or [])
+            # Convert Evaluate expressions to use $var syntax (evaluation namespace)
+            if kw.strip().lower() == "evaluate" and args:
+                args[0] = self._convert_to_evaluation_namespace_syntax(str(args[0]))
             line = f"{indent}{self._remove_library_prefix(kw)}"
             if args:
                 esc = [self._escape_robot_argument(a) for a in args]
