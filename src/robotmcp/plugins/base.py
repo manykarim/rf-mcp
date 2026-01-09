@@ -80,6 +80,23 @@ class StaticLibraryPlugin(LibraryPlugin):
     ) -> List[Dict[str, Any]]:
         return []
 
+    def validate_keyword_for_session(
+        self,
+        session: "ExecutionSession",
+        keyword_name: str,
+        keyword_source_library: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Default implementation - no validation."""
+        return None
+
+    def get_incompatible_libraries(self) -> List[str]:
+        """Default implementation - no incompatibilities."""
+        return []
+
+    def get_keyword_alternatives(self) -> Dict[str, Dict[str, Any]]:
+        """Default implementation - no alternatives."""
+        return {}
+
 
 class ManifestLibraryPlugin(StaticLibraryPlugin):
     """Plugin constructed from manifest metadata."""

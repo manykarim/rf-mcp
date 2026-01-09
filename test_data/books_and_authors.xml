@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<library>
+    <book id="1">
+        <title>Robot Framework Guide</title>
+        <author id="a1">Jane Doe</author>
+        <year>2021</year>
+        <genre>Testing</genre>
+    </book>
+    <book id="2">
+        <title>Python Automation</title>
+        <author id="a2">John Smith</author>
+        <year>2020</year>
+        <genre>Programming</genre>
+    </book>
+    <author id="a1">
+        <name>Jane Doe</name>
+        <nationality>USA</nationality>
+    </author>
+    <author id="a2">
+        <name>John Smith</name>
+        <nationality>UK</nationality>
+    </author>
+</library>

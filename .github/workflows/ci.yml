@@ -66,9 +66,9 @@ jobs:
         shell: bash
         run: |
           OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
-          if [ -z "$OPENAI_MODEL_VALUE" ] || [ "$OPENAI_MODEL_VALUE" = "gpt-5-mini" ]; then
-            echo "⚠️ Invalid or missing OPENAI_MODEL, using fallback: gpt-4o-mini"
-            OPENAI_MODEL_VALUE="gpt-4o-mini"
+          if [ -z "$OPENAI_MODEL_VALUE" ]; then
+            echo "⚠️ Missing OPENAI_MODEL, using fallback: gpt-5-mini"
+            OPENAI_MODEL_VALUE="gpt-5-mini"
           else
             echo "✅ Using OPENAI_MODEL: $OPENAI_MODEL_VALUE"
           fi
@@ -117,6 +117,99 @@ jobs:
         with:
           name: dist-${{ matrix.os }}-py${{ matrix.python-version }}
           path: dist/*
+
+  e2e-tests:
+    name: E2E AI Agent Tests
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+      USE_REAL_LLM: 'true'  # Enable real LLM testing with OpenAI API
+      PLAYWRIGHT_BROWSERS_PATH: '0'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: 'latest'
+
+      - name: Setup Python 3.12 (via uv)
+        run: uv python install 3.12
+
+      - name: Show uv and Python versions
+        run: |
+          uv --version
+          uv run python --version
+
+      - name: Install dependencies (dev)
+        run: uv sync --all-extras --group dev
+
+      - name: Initialize Browser Library (rfbrowser)
+        run: uv run rfbrowser init
+        continue-on-error: true
+
+      - name: Install Playwright browsers
+        run: |
+          uv run playwright install --with-deps chromium firefox
+          uv run python -m playwright install --with-deps chromium firefox || true
+
+      - name: Install Chrome, Firefox, and Xvfb for browser tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser firefox xvfb
+
+      - name: Configure OpenAI Model with Fallback
+        shell: bash
+        run: |
+          OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
+          if [ -z "$OPENAI_MODEL_VALUE" ]; then
+            echo "⚠️ Missing OPENAI_MODEL, using fallback: gpt-5-mini"
+            OPENAI_MODEL_VALUE="gpt-5-mini"
+          else
+            echo "✅ Using OPENAI_MODEL: $OPENAI_MODEL_VALUE"
+          fi
+          echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> $GITHUB_ENV
+
+      - name: Create metrics directories
+        run: |
+          mkdir -p tests/e2e/metrics
+          mkdir -p tests/e2e/metrics/autonomous
+          mkdir -p tests/e2e/metrics/comparisons
+
+      - name: Run E2E tool discovery tests
+        run: |
+          uv run pytest tests/e2e/test_agent_tool_discovery.py -v --junitxml=results/e2e-tool-discovery.xml
+
+      - name: Run E2E autonomous agent tests (Real LLM)
+        env:
+          DISPLAY: ':99'
+        run: |
+          # Start Xvfb for browser tests
+          Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 2
+          # Run tests with display support and automatic retries for flaky LLM tests
+          uv run pytest tests/e2e/test_autonomous_agents.py -v --reruns 2 --reruns-delay 5 --junitxml=results/e2e-autonomous-agents.xml
+        timeout-minutes: 60
+        continue-on-error: true  # Don't fail CI on LLM test failures - collect metrics instead
+
+      - name: Upload E2E metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-metrics
+          path: |
+            tests/e2e/metrics/**/*.json
+
+      - name: Test Report
+        uses: dorny/test-reporter@main
+        if: success() || failure()
+        with:
+          name: E2E Tests
+          path: results/e2e-*.xml
+          reporter: java-junit
 
   optional-matrix:
     name: Optional Dependency Matrix
@@ -172,8 +265,8 @@ jobs:
         shell: bash
         run: |
           OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
-          if [ -z "$OPENAI_MODEL_VALUE" ] || [ "$OPENAI_MODEL_VALUE" = "gpt-5-mini" ]; then
-            OPENAI_MODEL_VALUE="gpt-4o-mini"
+          if [ -z "$OPENAI_MODEL_VALUE" ]; then
+            OPENAI_MODEL_VALUE="gpt-5-mini"
           fi
           echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> $GITHUB_ENV
 

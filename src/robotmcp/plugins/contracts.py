@@ -185,6 +185,50 @@ class LibraryPlugin(Protocol):
         """Return optional hint dictionaries when this library encounters a failure."""
         return []
 
+    def validate_keyword_for_session(
+        self,
+        session: "ExecutionSession",
+        keyword_name: str,
+        keyword_source_library: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Validate if a keyword from another library can be used in this session.
+
+        This is called before keyword execution to check library compatibility.
+        Returns None if the keyword is valid, or a dict with error/guidance if invalid.
+
+        Args:
+            session: The current execution session
+            keyword_name: The keyword being called
+            keyword_source_library: The library the keyword comes from (if known)
+
+        Returns:
+            None if valid, or dict with:
+            - error: Error message explaining the incompatibility
+            - alternative: Suggested alternative keyword
+            - example: Example usage of the alternative
+            - guidance: List of guidance strings
+        """
+        return None
+
+    def get_incompatible_libraries(self) -> List[str]:
+        """Return list of library names that are incompatible with this library.
+
+        Used for keyword filtering and validation. Keywords from incompatible
+        libraries should not be shown or used when this library is active.
+        """
+        return []
+
+    def get_keyword_alternatives(self) -> Dict[str, Dict[str, Any]]:
+        """Return mapping of incompatible keywords to their alternatives.
+
+        Keys are lowercase keyword names from incompatible libraries.
+        Values are dicts with:
+        - alternative: The keyword name to use instead
+        - example: Example usage
+        - explanation: Why the alternative is needed
+        """
+        return {}
+
 
 # Import guarded to avoid circular dependency during runtime import
 try:  # pragma: no cover - imported lazily for typing only

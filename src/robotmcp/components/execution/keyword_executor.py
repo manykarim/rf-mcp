@@ -119,32 +119,8 @@ class KeywordExecutor:
             # Mark step as running
             step.status = "running"
 
-            # Early guard: block Browser's Open Browser to avoid Playwright pause
-            library_from_map = self._get_library_for_keyword(keyword)
-            pref = (getattr(session, "explicit_library_preference", "") or "").lower()
-            # If Selenium is explicitly preferred, force map to Selenium for overlapping keywords
-            if keyword.lower() == "open browser" and pref.startswith("selenium"):
-                library_from_map = "SeleniumLibrary"
-
-            if keyword.lower() == "open browser":
-                if pref.startswith("selenium"):
-                    logger.debug(
-                        "Skipping Browser Open Browser guard because SeleniumLibrary is preferred"
-                    )
-                else:
-                    active_lib = session.get_active_library() if hasattr(session, "get_active_library") else None
-                    if (library_from_map and library_from_map.lower() == "browser") or (
-                        active_lib and active_lib.lower() == "browser"
-                    ):
-                        return {
-                            "success": False,
-                            "error": "'Open Browser' is not supported for Browser library (debug/pause mode).",
-                            "guidance": [
-                                "Use 'New Browser' to start Playwright.",
-                                "Then 'New Context' (optional) and 'New Page' with the target URL.",
-                                "Example: New Browser    chromium    headless=False -> New Context    viewport={'width':1280,'height':720} -> New Page    https://demoshop.makrocode.de/",
-                            ],
-                        }
+            # NOTE: Library keyword validation is handled by plugin overrides in _execute_keyword_internal
+            # The BrowserLibraryPlugin._override_open_browser handles "Open Browser" rejection with detailed guidance
 
             # Check if we should use context mode
             # Enable context mode for keywords that require RF execution context
@@ -903,6 +879,27 @@ class KeywordExecutor:
         """
         try:
             session_id = session.session_id
+
+            # Check for plugin keyword overrides BEFORE execution
+            # This allows plugins to intercept and reject incompatible keywords
+            library_from_map = self._get_library_for_keyword(keyword)
+            plugin_override = self.plugin_manager.get_keyword_override(
+                library_from_map, keyword
+            )
+            if plugin_override:
+                try:
+                    # Call the plugin override (it's an async function)
+                    override_result = await plugin_override(
+                        session, keyword, arguments, None
+                    )
+                    if override_result is not None:
+                        # Plugin returned a result - use it (may be an error)
+                        logger.info(
+                            f"Plugin override handled keyword '{keyword}': success={override_result.get('success', False)}"
+                        )
+                        return override_result
+                except Exception as e:
+                    logger.debug(f"Plugin override for '{keyword}' failed: {e}")
 
             logger.info(
                 f"RF NATIVE CONTEXT: Executing {keyword} with native RF context for session {session_id}"

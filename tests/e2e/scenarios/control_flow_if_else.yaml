@@ -1,0 +1,52 @@
+id: control_flow_if_else
+name: Control Flow - IF/ELSE
+description: |
+  Test IF/ELSE execution with execute_flow tool.
+  Validates conditional branching based on variable values.
+context: generic
+prompt: |
+  Create a test that demonstrates IF/ELSE usage:
+
+  1. Set a variable AGE to 25
+  2. Use IF/ELSE to check if AGE >= 18
+     - IF TRUE: Log "Adult - can vote"
+     - ELSE: Log "Minor - cannot vote"
+  3. Set TEMPERATURE to 15
+  4. Use IF/ELSE to check if TEMPERATURE > 20
+     - IF TRUE: Log "Warm weather"
+     - ELSE: Log "Cold weather - wear jacket"
+
+  Use execute_flow for IF/ELSE implementation.
+  Build the final test suite afterwards.
+
+expected_tools:
+  - tool_name: analyze_scenario
+    min_calls: 1
+    max_calls: 1
+  - tool_name: manage_session
+    min_calls: 1
+    max_calls: 3
+  - tool_name: execute_flow
+    min_calls: 2
+    max_calls: 3
+  - tool_name: execute_step
+    min_calls: 2
+    max_calls: 8
+  - tool_name: build_test_suite
+    min_calls: 1
+    max_calls: 1
+
+expected_outcome: |
+  Successfully creates a test with IF/ELSE that:
+  1. Evaluates conditional expressions
+  2. Executes THEN branch when condition is true
+  3. Executes ELSE branch when condition is false
+  4. Validates correct branching behavior
+
+min_tool_hit_rate: 0.50
+tags:
+  - control-flow
+  - if-else
+  - conditional
+  - execute_flow
+  - flaky

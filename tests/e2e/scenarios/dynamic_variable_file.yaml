@@ -1,0 +1,46 @@
+id: dynamic_variable_file
+name: Dynamic Variable File with Arguments
+description: |
+  Test loading dynamic Python variable files that accept arguments.
+  Validates environment-specific variable loading.
+context: generic
+prompt: |
+  Test dynamic variable file loading:
+
+  1. Load test_data/dynamic_variables.py with arguments ["dev", "dev_key_123"]
+  2. Verify ENVIRONMENT variable is "dev"
+  3. Verify API_KEY is "dev_key_123"
+  4. Verify BASE_URL is "http://localhost:8080"
+  5. Log the endpoints list @{ENDPOINTS}
+  6. Verify CONFIG dict has env="dev" and debug=True using Should Be Equal
+  7. Build the final test suite
+
+  Use manage_session with action="import_variables" and args parameter.
+
+expected_tools:
+  - tool_name: analyze_scenario
+    min_calls: 1
+    max_calls: 1
+  - tool_name: manage_session
+    min_calls: 1
+    max_calls: 2
+  - tool_name: execute_step
+    min_calls: 5
+    max_calls: 12
+  - tool_name: build_test_suite
+    min_calls: 1
+    max_calls: 1
+
+expected_outcome: |
+  Successfully:
+  1. Loads dynamic Python variable file with arguments
+  2. Verifies environment-specific variables are set
+  3. Accesses arguments-dependent values
+  4. Validates conditional variable loading
+
+min_tool_hit_rate: 0.85
+tags:
+  - variable-files
+  - dynamic-variables
+  - environment-variables
+  - import-variables

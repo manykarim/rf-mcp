@@ -988,8 +988,72 @@ class RobotFrameworkNativeContextManager:
             except Exception:
                 return {}
 
+    def _filter_serializable_value(self, value: Any) -> Any:
+        """
+        Helper to filter individual values for JSON serializability.
+
+        Recursively processes values to ensure they can be serialized by
+        Pydantic/FastMCP, converting or rejecting RF internal objects.
+
+        Args:
+            value: The value to filter/convert
+
+        Returns:
+            Serializable version of the value
+
+        Raises:
+            ValueError: If value cannot be made serializable
+        """
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        elif isinstance(value, (list, tuple)):
+            return [self._filter_serializable_value(item) for item in value]
+        elif isinstance(value, dict):
+            return {k: self._filter_serializable_value(v) for k, v in value.items()}
+        else:
+            # Try string conversion for non-basic types (e.g., RF internal objects)
+            str_value = str(value)
+            # Only accept if it's not a Python repr (doesn't start with '<')
+            if not str_value.startswith('<'):
+                return str_value
+            raise ValueError(f"Non-serializable type: {type(value)}")
+
+    def _filter_serializable_variables(self, variables: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Filter variables dict to include only JSON-serializable values.
+
+        Converts or excludes Robot Framework internal objects that cannot be
+        serialized by Pydantic/FastMCP (e.g., ScalarVariableResolver, other
+        RF internal resolver/setter objects).
+
+        This is critical for MCP tool responses that must be JSON-serializable.
+
+        Args:
+            variables: Raw variables dict from RF Variables object
+
+        Returns:
+            Dict with only serializable values (str, int, float, bool, list, dict, None)
+        """
+        serializable = {}
+
+        for key, value in variables.items():
+            try:
+                serializable[key] = self._filter_serializable_value(value)
+            except (ValueError, Exception) as e:
+                # Skip non-serializable variables with debug logging
+                logger.debug(f"Skipping non-serializable variable {key}: {type(value).__name__} - {e}")
+                continue
+
+        return serializable
+
     def _snapshot_variables_with_decoration(self, variables: Variables) -> Dict[str, Any]:
-        """Snapshot of RF Variables with ${} decoration preserved."""
+        """Snapshot of RF Variables with proper decoration (${}, @{}, &{}) preserved.
+
+        Handles Robot Framework's variable naming conventions:
+        - LIST__name in Python files becomes @{name} (list variable)
+        - DICT__name in Python files becomes &{name} (dict variable)
+        - Regular names become ${name} (scalar variable)
+        """
         try:
             return dict(variables.as_dict(decoration=True))
         except Exception:
@@ -998,15 +1062,49 @@ class RobotFrameworkNativeContextManager:
                 raw_vars = dict(getattr(variables, "store").data)
                 decorated_vars = {}
                 for name, value in raw_vars.items():
-                    # Add decoration if not present
-                    if not name.startswith('${'):
-                        decorated_name = f"${{{name}}}"
-                    else:
-                        decorated_name = name
+                    decorated_name = self._add_variable_decoration(name, value)
                     decorated_vars[decorated_name] = value
                 return decorated_vars
             except Exception:
                 return {}
+
+    def _add_variable_decoration(self, name: str, value: Any) -> str:
+        """Add proper RF variable decoration based on name prefix and value type.
+
+        Robot Framework uses special prefixes in Python variable files:
+        - LIST__varname -> @{varname} (list variable)
+        - DICT__varname -> &{varname} (dict variable)
+        - Regular names -> ${varname} (scalar variable)
+
+        Args:
+            name: Variable name (may have LIST__ or DICT__ prefix)
+            value: Variable value (used to infer type if no prefix)
+
+        Returns:
+            Properly decorated variable name
+        """
+        # Already decorated - return as-is
+        if name.startswith('${') or name.startswith('@{') or name.startswith('&{'):
+            return name
+
+        # Handle LIST__ prefix (RF convention for list variables in Python files)
+        if name.startswith('LIST__'):
+            bare_name = name[6:]  # Remove 'LIST__' prefix
+            return f"@{{{bare_name}}}"
+
+        # Handle DICT__ prefix (RF convention for dict variables in Python files)
+        if name.startswith('DICT__'):
+            bare_name = name[6:]  # Remove 'DICT__' prefix
+            return f"&{{{bare_name}}}"
+
+        # Infer type from value if no prefix
+        if isinstance(value, (list, tuple)):
+            return f"@{{{name}}}"
+        elif isinstance(value, dict):
+            return f"&{{{name}}}"
+        else:
+            # Default: scalar variable
+            return f"${{{name}}}"
 
     def _normalize_session_keys(self, name: str) -> Tuple[str, str]:
         """Return bare and decorated variants of a variable name."""
@@ -1093,13 +1191,17 @@ class RobotFrameworkNativeContextManager:
             # Persist variable file metadata for observability/idempotence
             variable_files = self._record_imported_variable_files(namespace)
 
+            # Filter out non-serializable RF internal objects before returning
+            # This prevents FastMCP serialization errors (e.g., ScalarVariableResolver)
+            serializable_variables = self._filter_serializable_variables(loaded_variables)
+
             return {
                 "success": True,
                 "session_id": session_id,
                 "resource": resource_path,
                 "variables_loaded": list(loaded_variables.keys()),
                 "variable_files": variable_files,
-                "variables_map": loaded_variables,
+                "variables_map": serializable_variables,
             }
         except Exception as e:
             logger.error(f"Failed to import resource '{resource_path}': {e}")
@@ -1289,14 +1391,18 @@ class RobotFrameworkNativeContextManager:
 
             logger.info(f"Successfully imported variable file '{normalized_path}' "
                        f"for session {session_id}, loaded {len(loaded_vars)} variables")
-            
+
+            # Filter out non-serializable RF internal objects before returning
+            # This prevents FastMCP serialization errors (e.g., ScalarVariableResolver)
+            serializable_variables = self._filter_serializable_variables(loaded_vars)
+
             return {
                 "success": True,
                 "session_id": session_id,
                 "variable_file": variable_file_path,
                 "args": args,
                 "variables_loaded": variable_names_loaded,
-                "variables_map": loaded_vars,
+                "variables_map": serializable_variables,
                 "variable_files": variable_files,
                 "total_variables_in_session": len(after_vars)
             }

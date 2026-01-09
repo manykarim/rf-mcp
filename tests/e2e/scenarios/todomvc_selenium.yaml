@@ -1,0 +1,46 @@
+id: todomvc_selenium_basic
+name: TodoMVC Selenium Library Test
+description: |
+  Create a test suite for TodoMVC application using explicit Selenium Library.
+  Tests library selection and preference handling.
+context: web
+prompt: |
+  Create a new session and use RobotMCP to write a test suite and execute it step wise.
+  Use Selenium Library.
+  Please use headlesschrome or headlessfirefox as browser (Open Browser with headlesschrome).
+
+  - Open https://todomvc.com/examples/react/dist/
+  - Enter several Todos
+  - Assert number of ToDos
+  - Mark ToDos as Done
+  - Assert Number of ToDos
+  - Close Browser
+
+  Execute step by step and build final test suite afterwards
+expected_tools:
+  - tool_name: analyze_scenario
+    min_calls: 1
+    max_calls: 1
+  - tool_name: manage_session
+    min_calls: 1
+    max_calls: 3
+  - tool_name: execute_step
+    min_calls: 5
+    max_calls: 20
+  - tool_name: build_test_suite
+    min_calls: 1
+    max_calls: 1
+expected_outcome: |
+  Successfully creates and executes a test suite using Selenium Library that:
+  1. Opens the TodoMVC application
+  2. Adds multiple todo items
+  3. Verifies the count of todos
+  4. Marks todos as completed
+  5. Verifies the updated count
+  6. Closes the browser
+min_tool_hit_rate: 0.60
+tags:
+  - web
+  - selenium
+  - todomvc
+  - library-preference

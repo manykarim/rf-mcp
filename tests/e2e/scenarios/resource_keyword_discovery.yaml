@@ -1,0 +1,54 @@
+id: resource_keyword_discovery
+name: Resource File and User Keyword Discovery
+description: |
+  Test importing Robot Framework resource files and discovering user keywords.
+  Validates that keyword documentation is used to find appropriate keywords.
+context: generic
+prompt: |
+  Use the resource file at test_data/resources/sample.resource which contains user keywords.
+
+  1. Import the resource file test_data/resources/sample.resource
+  2. Use find_keywords to discover available keywords from the imported resource
+  3. Get detailed information about "Hello Message" keyword using get_keyword_info
+  4. Execute the "Hello Message" keyword with argument "TestUser"
+  5. Execute the "Add Numbers" keyword with arguments 5 and 7
+  6. Verify the result is 12
+  7. Build the final test suite
+
+  Use find_keywords with strategy="session" to discover keywords from the imported resource.
+
+expected_tools:
+  - tool_name: analyze_scenario
+    min_calls: 1
+    max_calls: 1
+  - tool_name: manage_session
+    min_calls: 1
+    max_calls: 3
+  - tool_name: find_keywords
+    min_calls: 1
+    max_calls: 2
+  - tool_name: get_keyword_info
+    min_calls: 1
+    max_calls: 2
+  - tool_name: execute_step
+    min_calls: 3
+    max_calls: 10
+  - tool_name: build_test_suite
+    min_calls: 1
+    max_calls: 1
+
+expected_outcome: |
+  Successfully:
+  1. Imports a Robot Framework resource file
+  2. Discovers user keywords from the resource using find_keywords
+  3. Gets keyword documentation using get_keyword_info
+  4. Executes user keywords with correct arguments
+  5. Validates keyword results
+
+min_tool_hit_rate: 0.85
+tags:
+  - resource-files
+  - user-keywords
+  - keyword-discovery
+  - find_keywords
+  - get_keyword_info

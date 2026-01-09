@@ -656,6 +656,14 @@ async def recommend_libraries(
 ) -> Dict[str, Any]:
     """Recommend libraries for a scenario or generate/merge sampling prompts.
 
+    WHEN TO USE THIS TOOL:
+    - IMMEDIATELY after analyze_scenario, before execute_step
+    - When you encounter "No keyword with name" errors
+    - To discover which libraries provide needed functionality
+
+    This tool analyzes scenario text and suggests relevant libraries, saving you from
+    guessing which libraries to import.
+
     Args:
         scenario: Natural-language description of the task to automate.
         context: Context such as "web", "mobile", or "api". Defaults to "web".
@@ -675,6 +683,15 @@ async def recommend_libraries(
             - recommendations or sampling_prompt or merged result (depending on mode)
             - session_id: echoed/preserved when provided
             - error/guidance: present on failure
+
+    Examples:
+        After analyzing web scenario:
+            recommend_libraries(
+                scenario="Test login form with username and password",
+                context="web",
+                session_id="web_test"
+            )
+            # Returns: ["Browser", "SeleniumLibrary"] with usage guidance
     """
 
     mode_norm = (mode or "direct").strip().lower()
@@ -893,8 +910,15 @@ async def analyze_scenario(
 ) -> Dict[str, Any]:
     """Analyze a natural-language scenario into structured intent and create a session.
 
-    Use this first, then reuse the returned session_id for recommend_libraries, execute_step,
-    and build_test_suite. The session is auto-configured based on scenario/context.
+    WORKFLOW: This should be your FIRST tool call for any test scenario.
+
+    What this tool does:
+    1. Creates a new session with unique session_id (or reuses provided one)
+    2. Analyzes scenario to detect context (web/api/mobile/desktop)
+    3. Auto-configures libraries based on scenario text
+    4. Returns session_id for use in ALL subsequent tool calls
+
+    CRITICAL: Save the session_id from the response and use it in all other tool calls.
 
     Args:
         scenario: Human-language description of the task to automate.
@@ -908,6 +932,20 @@ async def analyze_scenario(
             - session_info: auto-configured libraries, search order, next-step guidance
             - intent/requirements/risk: parsed scenario details
             - error/guidance: present on failure
+
+    Examples:
+        analyze_scenario(
+            scenario="Test REST API endpoint /users with GET request",
+            context="api"
+        )
+        # Returns: {"session_id": "auto_generated_id", "recommended_libraries": ["RequestsLibrary"], ...}
+
+        # Use session_id in ALL subsequent calls:
+        execute_step(
+            keyword="Create Session",
+            arguments=["api", "https://api.example.com"],
+            session_id="auto_generated_id"  # Use the returned session_id
+        )
     """
     # Analyze the scenario first
     result = await nlp_processor.analyze_scenario(scenario, context)
@@ -972,6 +1010,72 @@ async def analyze_scenario(
     return result
 
 
+def _filter_keywords_by_session_library(
+    keywords: List[Dict[str, Any]],
+    session_id: str | None,
+    session_library_preference: str | None,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
+    """Filter keywords to only include those compatible with session library preference.
+
+    Uses plugin system to determine incompatible libraries and keyword alternatives.
+
+    Args:
+        keywords: List of keyword dicts with 'name' and 'library' fields
+        session_id: Session ID for logging
+        session_library_preference: Explicit library preference (e.g., "Browser", "SeleniumLibrary")
+
+    Returns:
+        Tuple of (filtered_keywords, excluded_keywords_with_alternatives)
+    """
+    if not session_library_preference or not keywords:
+        return keywords, []
+
+    # Get incompatible libraries from plugin
+    plugin_manager = get_library_plugin_manager()
+    excluded_libraries = set(plugin_manager.get_incompatible_libraries(session_library_preference))
+
+    if not excluded_libraries:
+        return keywords, []
+
+    # Get keyword alternatives from plugin for helpful messages
+    keyword_alternatives = plugin_manager.get_keyword_alternatives(session_library_preference)
+
+    filtered_keywords = []
+    excluded_with_alternatives = []
+
+    for kw in keywords:
+        kw_library = kw.get("library", "")
+        kw_name = kw.get("name", "")
+
+        if kw_library in excluded_libraries:
+            # This keyword is from an incompatible library
+            kw_lower = kw_name.lower()
+            alt_info = keyword_alternatives.get(kw_lower, {})
+
+            excluded_info = {
+                "keyword": kw_name,
+                "incompatible_library": kw_library,
+                "session_library": session_library_preference,
+                "reason": f"Keyword '{kw_name}' is from {kw_library}, but session uses {session_library_preference}"
+            }
+
+            if alt_info:
+                excluded_info["alternative"] = alt_info.get("alternative")
+                excluded_info["example"] = alt_info.get("example")
+
+            excluded_with_alternatives.append(excluded_info)
+        else:
+            filtered_keywords.append(kw)
+
+    if excluded_with_alternatives:
+        logger.info(
+            f"Session {session_id}: Filtered out {len(excluded_with_alternatives)} "
+            f"keywords from incompatible libraries: {list(excluded_libraries)}"
+        )
+
+    return filtered_keywords, excluded_with_alternatives
+
+
 @mcp.tool
 async def find_keywords(
     query: str,
@@ -984,9 +1088,20 @@ async def find_keywords(
 ) -> Dict[str, Any]:
     """Discover Robot Framework keywords using multiple strategies.
 
+    WHEN TO USE THIS TOOL:
+    - ALWAYS before calling execute_step with an unfamiliar keyword
+    - When you're unsure of exact keyword name or spelling
+    - To discover what keywords are available in imported libraries
+    - When error says "No keyword with name 'X' found"
+
     Args:
         query: Search text or intent description.
-        strategy: One of "semantic", "pattern", "catalog", or "session". Defaults to "semantic".
+               Examples: "click a button", "validate json", "get*request"
+        strategy: Discovery approach:
+                  - "semantic": Natural language search (best for exploring)
+                  - "pattern": Glob/regex matching (best when you know partial name)
+                  - "catalog": List all available keywords
+                  - "session": List keywords from session's loaded libraries
         context: Scenario context (e.g., "web", "mobile", "api") used by semantic discovery.
         session_id: Required for strategy="session" to search the live RF namespace.
         library_name: Optional library filter for catalog search.
@@ -1000,6 +1115,23 @@ async def find_keywords(
             - query: original query
             - result/results: strategy-specific payload
             - error: present on failure
+
+    Examples:
+        Discover button-clicking keywords:
+            find_keywords(
+                query="click a button",
+                strategy="semantic",
+                session_id="web_session"
+            )
+            # Returns: ["Click", "Click Button", "Click Element", ...]
+
+        Find keywords matching pattern:
+            find_keywords(
+                query="Get*",
+                strategy="pattern",
+                session_id="api_session"
+            )
+            # Returns: ["GET", "Get Request", "Get Element", ...]
     """
 
     strategy_norm = (strategy or "semantic").strip().lower()
@@ -1011,28 +1143,71 @@ async def find_keywords(
         except (TypeError, ValueError):
             limit_value = None
 
+    # Get session library preference for filtering
+    session_library_preference = None
+    if session_id:
+        session = execution_engine.session_manager.get_session(session_id)
+        if session:
+            session_library_preference = getattr(session, "explicit_library_preference", None)
+
     if strategy_norm in {"semantic", "intent"}:
         discovery = await keyword_matcher.discover_keywords(
             query, context, current_state
         )
-        return {
+
+        # Apply library filtering if session has preference
+        excluded = []
+        if session_library_preference and discovery.get("matches"):
+            # Convert semantic matches to format expected by filter function
+            matches_for_filter = [
+                {"name": m.get("keyword_name"), "library": m.get("library"), **m}
+                for m in discovery.get("matches", [])
+            ]
+            filtered_matches, excluded = _filter_keywords_by_session_library(
+                matches_for_filter, session_id, session_library_preference
+            )
+            # Convert back to original format
+            discovery["matches"] = [
+                {k: v for k, v in m.items() if k not in ("name",)}
+                for m in filtered_matches
+            ]
+            discovery["filtered_count"] = len(excluded)
+
+        result = {
             "success": bool(discovery.get("success", True)),
             "strategy": "semantic",
             "query": query,
             "result": discovery,
         }
+        if excluded:
+            result["excluded_keywords"] = excluded
+            result["session_library"] = session_library_preference
+        return result
 
     if strategy_norm in {"pattern", "search"}:
         await _ensure_all_session_libraries_loaded()
         matches = execution_engine.search_keywords(query)
+
+        # Apply library filtering if session has preference
+        excluded = []
+        if session_library_preference:
+            matches, excluded = _filter_keywords_by_session_library(
+                matches, session_id, session_library_preference
+            )
+
         if limit_value is not None:
             matches = matches[:limit_value]
-        return {
+
+        result = {
             "success": True,
             "strategy": "pattern",
             "query": query,
             "results": matches,
         }
+        if excluded:
+            result["excluded_keywords"] = excluded
+            result["session_library"] = session_library_preference
+        return result
 
     if strategy_norm in {"catalog", "library"}:
         await _ensure_all_session_libraries_loaded()
@@ -1045,15 +1220,28 @@ async def find_keywords(
                 if lowered in (item.get("name") or "").lower()
                 or lowered in (item.get("library") or "").lower()
             ]
+
+        # Apply library filtering if session has preference
+        excluded = []
+        if session_library_preference:
+            catalog, excluded = _filter_keywords_by_session_library(
+                catalog, session_id, session_library_preference
+            )
+
         if limit_value is not None:
             catalog = catalog[:limit_value]
-        return {
+
+        result = {
             "success": True,
             "strategy": "catalog",
             "query": query,
             "library": library_name,
             "results": catalog,
         }
+        if excluded:
+            result["excluded_keywords"] = excluded
+            result["session_library"] = session_library_preference
+        return result
 
     if strategy_norm in {"session", "namespace"}:
         if not session_id:
@@ -1109,7 +1297,13 @@ async def manage_session(
         variables: Variables to set (dict or Robot-style list) when action is "set_variables".
         resource_path: Resource file to import when action is "import_resource".
         library_name: Library to import when action is "import_library".
-        args: Optional library/resource/variable file arguments.
+        args: Arguments for library/resource/variable file initialization.
+              REQUIRED when:
+              - Variable file has get_variables(arg1, arg2, ...) function
+              - Library constructor requires arguments
+              - Resource file needs parameterization
+              Example: For dynamic_variables.py with get_variables(env, api_key),
+                       pass args=["dev", "dev_key_123"] to load dev environment
         alias: Optional library alias.
         scope: Library scope when importing (default "test").
         variable_file_path: Variable file to import when action is "import_variables".
@@ -1120,6 +1314,15 @@ async def manage_session(
             - session_id: echoed session id
             - details per action (loaded libraries, set variables, etc.)
             - error/guidance: present on failure
+
+    Examples:
+        Load variable file with arguments:
+            manage_session(
+                action="import_variables",
+                session_id="test_session",
+                variable_file_path="config/variables.py",
+                args=["production", "secret_key"]  # Passed to get_variables(env, key)
+            )
     """
 
     action_norm = (action or "").strip().lower()
@@ -1527,21 +1730,30 @@ async def execute_step(
     raise_on_failure: bool = True,
     detail_level: str = "minimal",
     scenario_hint: str = None,
-    assign_to: Union[str, List[str]] = None,
+    assign_to: Optional[Union[str, List[str]]] = None,
     use_context: bool | None = None,
     mode: str = "keyword",
     expression: str | None = None,
 ) -> Dict[str, Any]:
     """Execute a single Robot Framework keyword (or Evaluate) within a session.
 
+    IMPORTANT: Do NOT invent or guess keyword names. Use find_keywords or get_keyword_info
+               to discover available keywords first. Common mistakes:
+               - Using "Press Button" (doesn't exist - use "Click" or "Click Button")
+               - Using "Verify" (doesn't exist - use "Should Be Equal" or similar)
+               - Using "Validate Json" (doesn't exist - use library-specific validation)
+
     Args:
         keyword: Keyword name (Library.Keyword supported).
+                 Use find_keywords to discover correct keyword names before calling.
         arguments: Keyword arguments; positional and named (`name=value`) supported.
         session_id: Session to execute in; resolves default if omitted.
         raise_on_failure: If True, raise on failure; otherwise return error in payload.
         detail_level: Response verbosity: "minimal" | "standard" | "full".
         scenario_hint: Optional scenario text to auto-configure libraries on first call.
         assign_to: Variable name(s) to assign the result to (string or list).
+                   CRITICAL: Use this to capture results for later steps.
+                   Example: assign_to="response" captures ${response} variable
         use_context: Whether to run inside RF native context; defaults via config/attach.
         mode: "keyword" (default) or "evaluate" (runs BuiltIn.Evaluate).
         expression: Expression for mode="evaluate"; falls back to keyword/first argument.
@@ -1552,8 +1764,46 @@ async def execute_step(
             - result/output: keyword return value or stringified output
             - assigned_variables / session_variables: when applicable
             - error/guidance: present on failure
+
+    Examples:
+        Execute with variable assignment:
+            execute_step(
+                keyword="GET",
+                arguments=["https://api.example.com/users"],
+                assign_to="api_response",  # Stores result in ${api_response}
+                session_id="api_session"
+            )
+
+        Use captured variable:
+            execute_step(
+                keyword="Should Be Equal",
+                arguments=["${api_response.status_code}", "200"],
+                session_id="api_session"
+            )
     """
     arguments = list(arguments or [])
+
+    # Auto-coerce non-string arguments to strings to prevent validation errors
+    # Models sometimes pass boolean True instead of "True", or integers instead of strings
+    coerced_arguments = []
+    for arg in arguments:
+        if isinstance(arg, str):
+            coerced_arguments.append(arg)
+        elif arg is None:
+            # Skip None arguments - they're likely optional params the model shouldn't have included
+            continue
+        elif isinstance(arg, bool):
+            # Convert boolean to RF-style string (Python bool to string)
+            coerced_arguments.append(str(arg))
+        else:
+            # Convert other types (int, float, etc.) to string
+            coerced_arguments.append(str(arg))
+    arguments = coerced_arguments
+
+    # Handle assign_to=None explicitly passed by models
+    if assign_to is None:
+        assign_to = None  # Explicitly set to None (no-op, but clarifies intent)
+
     mode_norm = (mode or "keyword").strip().lower()
     keyword_to_run = keyword
 
@@ -1606,6 +1856,30 @@ async def execute_step(
                 "result": attach_resp.get("result"),
                 "assigned": attach_resp.get("assigned"),
             }
+
+    # Validate keyword matches session library preference using plugin system
+    session = execution_engine.session_manager.get_or_create_session(session_id)
+    session_library_preference = getattr(session, "explicit_library_preference", None)
+
+    if session_library_preference and keyword_to_run != "Evaluate":
+        try:
+            # Try to find the keyword's source library
+            plugin_manager = get_library_plugin_manager()
+            keyword_source_library = plugin_manager.get_library_for_keyword(keyword_to_run.lower())
+
+            # If we found a source library, validate compatibility using plugin
+            if keyword_source_library:
+                validation_result = plugin_manager.validate_keyword_for_session(
+                    session_library_preference,
+                    session,
+                    keyword_to_run,
+                    keyword_source_library,
+                )
+                if validation_result:
+                    # Plugin returned an error - return it directly
+                    return validation_result
+        except Exception as e:
+            logger.debug(f"Could not validate keyword library via plugin: {e}")
 
     # Local execution path
     result = await execution_engine.execute_step(
