@@ -70,6 +70,8 @@ RUN apt-get update \
 # Selenium Manager (included in Selenium 4.6+) will automatically download chromedriver/geckodriver
 
 RUN npx --yes playwright install-deps
+# Need to run this command too to install driver 
+RUN npx --yes playwright install 
 
 RUN groupadd -r appuser && useradd -r -g appuser -u 1000 -m -s /bin/bash appuser
 
