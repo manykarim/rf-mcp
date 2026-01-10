@@ -773,6 +773,11 @@ class TestBuilder:
                 if library and library != "BuiltIn":
                     all_imports.add(library)
 
+        # Resolve conflicting web automation libraries
+        # If both Browser and SeleniumLibrary are detected, determine which one to use
+        # based on library-specific keywords
+        all_imports = self._resolve_web_library_conflict(all_imports, test_cases)
+
         # Validate library exclusion rules for test suite generation
         # Only validate if we don't have a session with execution history
         if not self._session_has_execution_history(session_id):
@@ -1165,6 +1170,80 @@ class TestBuilder:
                 return "SeleniumLibrary"
 
         return None
+
+    def _resolve_web_library_conflict(
+        self, imports: set, test_cases: List[GeneratedTestCase]
+    ) -> set:
+        """Resolve conflicts between Browser and SeleniumLibrary.
+
+        When both libraries are detected (due to ambiguous keywords like Click, Get Text),
+        this method determines which library to keep based on library-specific keywords.
+
+        Args:
+            imports: Set of detected library names
+            test_cases: List of test cases to analyze for library-specific keywords
+
+        Returns:
+            Updated imports set with conflicting library removed
+        """
+        web_libs = {"Browser", "SeleniumLibrary"}
+        detected_web_libs = imports & web_libs
+
+        # Only resolve if both are detected
+        if len(detected_web_libs) != 2:
+            return imports
+
+        # Keywords unique to each library (not shared)
+        browser_unique = {
+            "new browser", "new context", "new page", "close context", "close page",
+            "fill text", "fill", "get viewport size", "set viewport size",
+            "wait for elements state", "get element count", "get elements",
+            "select options by", "check checkbox", "get property"
+        }
+        selenium_unique = {
+            "open browser", "input text", "click element", "click button",
+            "select from list", "wait until element", "page should contain",
+            "element should be visible", "capture page screenshot",
+            "maximize browser window", "select checkbox"
+        }
+
+        # Collect all keywords from test cases
+        all_keywords = set()
+        for tc in test_cases:
+            for step in tc.steps:
+                if step.keyword:
+                    all_keywords.add(step.keyword.lower().strip())
+
+        # Check for library-specific keywords
+        has_browser_specific = any(kw in all_keywords for kw in browser_unique)
+        has_selenium_specific = any(kw in all_keywords for kw in selenium_unique)
+
+        # Resolve conflict based on unique keywords
+        if has_browser_specific and not has_selenium_specific:
+            logger.info(
+                "Resolved library conflict: Keeping Browser (found Browser-specific keywords)"
+            )
+            imports.discard("SeleniumLibrary")
+        elif has_selenium_specific and not has_browser_specific:
+            logger.info(
+                "Resolved library conflict: Keeping SeleniumLibrary (found SeleniumLibrary-specific keywords)"
+            )
+            imports.discard("Browser")
+        elif has_browser_specific and has_selenium_specific:
+            # Both specific keywords found - this is a real conflict, log warning
+            logger.warning(
+                "Both Browser and SeleniumLibrary specific keywords detected. "
+                "Keeping Browser as default. Consider using separate sessions for each library."
+            )
+            imports.discard("SeleniumLibrary")
+        else:
+            # Only ambiguous keywords - default to Browser (more modern)
+            logger.info(
+                "No library-specific keywords found. Defaulting to Browser library."
+            )
+            imports.discard("SeleniumLibrary")
+
+        return imports
 
     async def _generate_suite_documentation(
         self, test_cases: List[GeneratedTestCase], session_id: str
@@ -1841,9 +1920,19 @@ class TestBuilder:
             if assign_to:
                 # Handle both string and list forms of assign_to
                 if isinstance(assign_to, list):
-                    var_assignment = "    ".join(assign_to)
+                    # Wrap each variable in ${} if not already wrapped
+                    wrapped_vars = []
+                    for v in assign_to:
+                        v_str = str(v).strip()
+                        if not (v_str.startswith("${") or v_str.startswith("@{") or v_str.startswith("&{")):
+                            v_str = f"${{{v_str}}}"
+                        wrapped_vars.append(v_str)
+                    var_assignment = "    ".join(wrapped_vars)
                 else:
-                    var_assignment = str(assign_to)
+                    var_assignment = str(assign_to).strip()
+                    # Wrap in ${} if not already wrapped
+                    if not (var_assignment.startswith("${") or var_assignment.startswith("@{") or var_assignment.startswith("&{")):
+                        var_assignment = f"${{{var_assignment}}}"
                 line = f"{indent}{var_assignment} =    {self._remove_library_prefix(kw)}"
             else:
                 line = f"{indent}{self._remove_library_prefix(kw)}"
@@ -1945,13 +2034,18 @@ class TestBuilder:
         setup/teardown, and flow blocks to identify which variables are used
         by the generated test suite.
 
+        Note: This method skips ${{ }} evaluation namespace expressions, which
+        are Python evaluation blocks and not variable references.
+
         Args:
             suite: The generated test suite to scan
 
         Returns:
             Set of variable names (without ${}/@ {}/&{} syntax) found in the suite
         """
-        variable_pattern = re.compile(r'[\$@&]\{([^}]+)\}')
+        # Pattern for ${var}, @{var}, &{var} - but NOT ${{ }} evaluation namespace
+        # We use negative lookahead (?!\{) to skip ${{ patterns
+        variable_pattern = re.compile(r'[\$@&]\{(?!\{)([^}]+)\}')
         found_variables = set()
 
         # Built-in RF variables that don't need to be defined
@@ -1970,7 +2064,14 @@ class TestBuilder:
             """Extract variable names from a string."""
             if not s:
                 return
-            for match in variable_pattern.finditer(str(s)):
+            text = str(s)
+            # First, remove ${{ ... }} evaluation namespace blocks to avoid false matches
+            # This handles nested braces by finding matching pairs
+            cleaned = re.sub(r'\$\{\{[^}]*\}\}', '', text)
+            # Also handle triple-brace (malformed) patterns like ${{{ }}}
+            cleaned = re.sub(r'\$\{\{\{[^}]*\}\}\}', '', cleaned)
+
+            for match in variable_pattern.finditer(cleaned):
                 var_name = match.group(1)
                 # Handle nested access like ${var.attr} or ${var}[0]
                 base_name = var_name.split('.')[0].split('[')[0].strip()
@@ -2168,6 +2269,46 @@ class TestBuilder:
         else:
             return "other"
 
+    def _fix_malformed_evaluation_namespace(self, arg: str) -> str:
+        """Fix malformed ${{ }} evaluation namespace expressions.
+
+        Fixes common issues:
+        1. Triple-brace ${{{ followed by empty set/dict: ${{{}...}} -> ${{...}}
+        2. Missing space after ${{ that creates confusion with dict literals
+        3. Spurious empty set at start: ${{{}}' -> ${{ '
+
+        Args:
+            arg: String that may contain malformed evaluation namespace
+
+        Returns:
+            String with corrected evaluation namespace syntax
+        """
+        if not arg or "${{" not in arg:
+            return arg
+
+        result = arg
+
+        # Fix: ${{{}}'... pattern - spurious {} followed by closing brace
+        # This catches ${{{}}'Hello'... -> ${{ 'Hello'...
+        # The pattern is: ${{ {} }} 'expr' but written as ${{{}}' which is malformed
+        result = re.sub(r'\$\{\{\{\}\}([\'"\$\w])', r"${{ \1", result)
+
+        # Fix: ${{{} at start of expression -> ${{ (remove spurious empty set/dict)
+        # Pattern: ${{{}' or ${{{}" or ${{{$var
+        result = re.sub(r'\$\{\{\{\}([\'"\$])', r"${{ \1", result)
+
+        # Fix: ${{{{ (4 braces) -> ${{ (probably double-escaped)
+        result = re.sub(r'\$\{\{\{\{', r"${{", result)
+
+        # Fix: ${{{' (3 braces followed by quote) -> ${{ '
+        # This handles cases like ${{{'-'.join(...)}}} -> ${{ '-'.join(...) }}
+        result = re.sub(r'\$\{\{\{([\'"])', r"${{ \1", result)
+
+        # Fix: }}} at end -> }} (extra closing brace from malformed input)
+        result = re.sub(r'\}\}\}(?!\})', r"}}", result)
+
+        return result
+
     def _escape_robot_argument(self, arg: Any) -> str:
         """Escape Robot Framework arguments that start with special characters.
 
@@ -2182,6 +2323,9 @@ class TestBuilder:
                 arg = f"<{type(arg).__name__}>"
         if not arg:
             return ""
+
+        # Fix malformed evaluation namespace expressions first
+        arg = self._fix_malformed_evaluation_namespace(arg)
 
         # Escape arguments starting with # (treated as comments in RF)
         if arg.startswith("#"):
