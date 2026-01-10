@@ -6,7 +6,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
 from fastmcp import FastMCP
 
@@ -1285,7 +1285,7 @@ async def manage_session(
     library_name: str | None = None,
     args: List[str] | None = None,
     alias: str | None = None,
-    scope: str = "test",
+    scope: Literal["test", "suite", "global"] = "suite",
     variable_file_path: str | None = None,
 ) -> Dict[str, Any]:
     """Manage a session: initialize, import libraries/resources, set variables.
@@ -1305,7 +1305,10 @@ async def manage_session(
               Example: For dynamic_variables.py with get_variables(env, api_key),
                        pass args=["dev", "dev_key_123"] to load dev environment
         alias: Optional library alias.
-        scope: Library scope when importing (default "test").
+        scope: Variable scope when action is "set_variables". One of:
+               - "test": Variable available only in current test case (Set Test Variable)
+               - "suite": Variable available in entire test suite (Set Suite Variable) [default]
+               - "global": Variable available across all test suites (Set Global Variable)
         variable_file_path: Variable file to import when action is "import_variables".
 
     Returns:
@@ -1316,6 +1319,21 @@ async def manage_session(
             - error/guidance: present on failure
 
     Examples:
+        Set suite-level variables (default scope):
+            manage_session(
+                action="set_variables",
+                session_id="test_session",
+                variables={"BASE_URL": "https://api.example.com", "TIMEOUT": "30"}
+            )
+
+        Set test-scoped variables:
+            manage_session(
+                action="set_variables",
+                session_id="test_session",
+                variables={"TEMP_VALUE": "123"},
+                scope="test"
+            )
+
         Load variable file with arguments:
             manage_session(
                 action="import_variables",
@@ -1444,7 +1462,7 @@ async def manage_session(
             "test": "Set Test Variable",
             "suite": "Set Suite Variable",
             "global": "Set Global Variable",
-        }.get(scope.lower(), "Set Test Variable")
+        }.get(scope.lower(), "Set Suite Variable")
 
         results: Dict[str, bool] = {}
         client = _get_external_client_if_configured()
@@ -1465,6 +1483,8 @@ async def manage_session(
             }
 
         for name, value in data.items():
+            # Pass value directly with ${name} syntax - RF 7 handles Python
+            # list/dict types automatically and stores them appropriately
             res = await execution_engine.execute_step(
                 set_kw,
                 [f"${{{name}}}", value],
@@ -1473,6 +1493,20 @@ async def manage_session(
                 use_context=True,
             )
             results[name] = bool(res.get("success"))
+
+        # Track ALL manage_session variables for *** Variables *** section generation
+        # Variables set via manage_session (any scope) should be included in the Variables
+        # section to ensure generated test suites are complete and executable.
+        # Without this, tests would reference variables that aren't defined.
+        try:
+            session = execution_engine.session_manager.get_or_create_session(session_id)
+            if not hasattr(session, 'suite_level_variables') or session.suite_level_variables is None:
+                session.suite_level_variables = set()
+            for name in data.keys():
+                session.suite_level_variables.add(name)
+            logger.debug(f"Tracked {len(data)} variables from manage_session for Variables section")
+        except Exception as track_error:
+            logger.warning(f"Failed to track manage_session variables: {track_error}")
 
         return {
             "success": all(results.values()),
