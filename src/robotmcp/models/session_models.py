@@ -139,6 +139,11 @@ class ExecutionSession:
     )
     # Track variable files imported through resources (path + args)
     loaded_variable_files: List[Dict[str, Any]] = field(default_factory=list)
+    # Track variables explicitly set via manage_session(action="set_variables", scope="suite")
+    # These are the ONLY variables that should appear in *** Variables *** section
+    # Variables set via RF keywords (Set Variable, Set Suite Variable, etc.) or VAR syntax
+    # should remain inline in generated test cases, not in the Variables section
+    suite_level_variables: Set[str] = field(default_factory=set)
 
     # Mobile-specific fields
     platform_type: PlatformType = (

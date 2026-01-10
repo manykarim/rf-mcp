@@ -60,6 +60,10 @@ class GeneratedTestSuite:
     resources: List[str] = None
     # Optional: preserved high-level flow blocks recorded during execution
     flow_blocks: List[Dict[str, Any]] | None = None
+    # Suite-level variables from session (set via manage_session or execute_step assignments)
+    variables: Dict[str, Any] = None
+    # Track variable files imported via manage_session(action="import_variables")
+    variable_files: List[str] = None
 
 
 class TestBuilder:
@@ -74,6 +78,202 @@ class TestBuilder:
             "add_meaningful_comments": True,
             "generate_variables": True,
         }
+
+    def _convert_to_evaluation_namespace_syntax(self, expression: str) -> str:
+        """Convert ${var} syntax to $var syntax for Robot Framework evaluation namespace.
+
+        In Robot Framework's evaluation namespace (used by Evaluate keyword, IF conditions,
+        and other Python evaluation contexts), variables should use $var syntax instead of
+        ${var}. The ${var} syntax causes string substitution BEFORE evaluation, while $var
+        provides direct access to the actual Python object in the evaluation namespace.
+
+        This method also fixes common quoting issues:
+        - '$var'.method() -> $var.method() (quoted variable with method call)
+        - Arithmetic with string variables: auto-detects and adds int()/float() wrappers
+
+        Reference: https://robotframework.org/robotframework/latest/RobotFrameworkUserGuide.html#evaluation-namespaces
+
+        Args:
+            expression: Expression that may contain ${var} syntax
+
+        Returns:
+            Expression with ${var} converted to $var and quoting issues fixed
+        """
+        if not expression:
+            return expression
+
+        result = expression
+
+        # Convert ${var.suffix} to $var.suffix
+        # The regex handles nested variables by being non-greedy within braces
+        result = re.sub(r"\$\{([A-Za-z_]\w*)([^}]*)\}", r"$\1\2", result)
+
+        # Fix quoted variable method calls: '$var'.method() -> $var.method()
+        # Pattern: single or double quoted $var followed by .method()
+        # This is wrong because '$var' is treated as literal string, not variable
+        result = re.sub(r"['\"](\$[A-Za-z_]\w*)['\"]\.(\w+\([^)]*\))", r"\1.\2", result)
+
+        # Also handle quoted variables without method calls that should be unquoted
+        # Pattern: '$var' at word boundaries in comparison/arithmetic contexts
+        # e.g., '$var' + something or '$var' == something
+        result = re.sub(r"['\"](\$[A-Za-z_]\w*)['\"](\s*[\+\-\*/%<>=!&|])", r"\1\2", result)
+        result = re.sub(r"([\+\-\*/%<>=!&|]\s*)['\"](\$[A-Za-z_]\w*)['\"]", r"\1\2", result)
+
+        # Handle quoted variables inside function arguments: func('$var') -> func($var)
+        # Common cases: len('$var'), int('$var'), str('$var'), upper('$var'), etc.
+        # Pattern: function_name('$var' or "$var")
+        result = re.sub(r"(\w+\s*\(\s*)['\"](\$[A-Za-z_]\w*)['\"](\s*\))", r"\1\2\3", result)
+
+        # Handle quoted variables as first argument in multi-arg functions: func('$var', ...)
+        result = re.sub(r"(\w+\s*\(\s*)['\"](\$[A-Za-z_]\w*)['\"](\s*,)", r"\1\2\3", result)
+
+        # Handle quoted variables as middle/last arguments: func(..., '$var') or func(..., '$var', ...)
+        result = re.sub(r"(,\s*)['\"](\$[A-Za-z_]\w*)['\"](\s*[,)])", r"\1\2\3", result)
+
+        return result
+
+    def _detect_arithmetic_type_warnings(self, expression: str) -> List[Dict[str, Any]]:
+        """Detect potential type-related issues in arithmetic expressions.
+
+        This method identifies patterns that commonly fail due to type mismatches,
+        such as multiplying string variables without explicit type conversion.
+
+        Common problematic patterns:
+        - $var * $other (strings can't multiply)
+        - $var + 1 (string + int fails)
+        - $var / 100 (string / int fails)
+
+        Args:
+            expression: The Evaluate expression to analyze
+
+        Returns:
+            List of warning dictionaries with 'type', 'message', and 'suggestion' keys
+        """
+        warnings = []
+
+        if not expression:
+            return warnings
+
+        # Pattern: $var operator $var (or $var operator number)
+        # These often fail when variables are strings
+        arithmetic_ops = r'[\*/%]'  # Multiply, divide, modulo - these fail with strings
+
+        # Detect: $var * $other or $var * number (without int() wrapper)
+        pattern_mult = rf'(\$[A-Za-z_]\w*)\s*{arithmetic_ops}\s*(\$[A-Za-z_]\w*|\d+)'
+        matches = re.findall(pattern_mult, expression)
+
+        for var1, operand in matches:
+            # Check if the variables are wrapped in int() or float()
+            wrapped_pattern = rf'(?:int|float)\s*\(\s*\{re.escape(var1)}\s*\)'
+            if not re.search(wrapped_pattern, expression):
+                warnings.append({
+                    "type": "potential_type_error",
+                    "variable": var1,
+                    "message": f"Variable {var1} may be a string. Arithmetic operations may fail.",
+                    "suggestion": f"Use int({var1}) or float({var1}) for numeric operations",
+                    "original_expression": expression,
+                })
+
+        # Detect: $var + number or $var - number (addition/subtraction)
+        pattern_add = rf'(\$[A-Za-z_]\w*)\s*[\+\-]\s*(\d+)'
+        add_matches = re.findall(pattern_add, expression)
+
+        for var, num in add_matches:
+            wrapped_pattern = rf'(?:int|float)\s*\(\s*\{re.escape(var)}\s*\)'
+            if not re.search(wrapped_pattern, expression):
+                # Only warn if not already warned
+                existing_vars = [w.get("variable") for w in warnings]
+                if var not in existing_vars:
+                    warnings.append({
+                        "type": "potential_type_error",
+                        "variable": var,
+                        "message": f"Variable {var} may be a string. Adding/subtracting may fail.",
+                        "suggestion": f"Use int({var}) or float({var}) for numeric operations",
+                        "original_expression": expression,
+                    })
+
+        return warnings
+
+    def _is_arithmetic_expression(self, value: str) -> bool:
+        """Check if a value contains an arithmetic expression that can't be used in VAR.
+
+        VAR keyword cannot evaluate expressions like ${count + 1} or ${price * 2}.
+        These must use the Evaluate keyword instead.
+
+        Args:
+            value: The value string to check
+
+        Returns:
+            True if the value contains arithmetic that VAR can't handle
+        """
+        if not value:
+            return False
+
+        # Pattern: ${var + num} or ${var - num} or ${var * num} etc.
+        # These patterns fail with VAR but work with Evaluate
+        arithmetic_pattern = r'\$\{[^}]*[\+\-\*/%][^}]*\}'
+        return bool(re.search(arithmetic_pattern, value))
+
+    def _extract_expression(self, value: str) -> Optional[str]:
+        """Extract the expression from a ${...} wrapper.
+
+        Args:
+            value: String like "${count + 1}" or "${price * 2}"
+
+        Returns:
+            The inner expression without ${}, or None if not wrapped
+        """
+        if not value:
+            return None
+
+        # Match ${...} and extract the content
+        match = re.match(r'\$\{([^}]+)\}', value.strip())
+        if match:
+            return match.group(1)
+        return None
+
+    def _add_type_conversion_if_needed(self, expression: str) -> str:
+        """Add int() or float() wrappers to variables in arithmetic expressions.
+
+        When variables come from external sources (input, API responses), they are
+        often strings. Arithmetic operations on strings fail, so we wrap them
+        with int() to ensure numeric operations work.
+
+        Args:
+            expression: An expression like "$count + 1" or "$price * 2"
+
+        Returns:
+            Expression with type conversion wrappers where needed
+        """
+        if not expression:
+            return expression
+
+        # Check if the expression has arithmetic operators
+        if not re.search(r'[\+\-\*/%]', expression):
+            return expression
+
+        # Pattern: $var followed by arithmetic (without existing int()/float() wrapper)
+        # Replace $var with int($var) when in arithmetic context
+
+        result = expression
+
+        # Find variables that need wrapping (not already wrapped)
+        # Pattern: $var that's not inside int() or float()
+        var_pattern = r'(?<!\w)(\$[A-Za-z_]\w*)(?!\s*\))'
+
+        def wrap_var(match):
+            var = match.group(1)
+            # Check if already wrapped by looking at what comes before
+            start = match.start()
+            prefix = result[:start]
+            # If preceded by 'int(' or 'float(', don't wrap
+            if prefix.rstrip().endswith('int(') or prefix.rstrip().endswith('float('):
+                return var
+            return f'int({var})'
+
+        result = re.sub(var_pattern, wrap_var, result)
+
+        return result
 
     async def build_suite(
         self,
@@ -161,6 +361,10 @@ class TestBuilder:
             # Generate execution statistics
             stats = await self._generate_statistics(successful_steps, suite)
 
+            # Check for untracked variables (referenced in steps but not in Variables section)
+            # This provides early warning when generated tests may be incomplete
+            variable_warnings = self._check_untracked_variables(suite, session_id)
+
             # Build structured steps (keywords + control blocks) for consumers
             structured_cases = []
             for tc in suite.test_cases:
@@ -172,6 +376,8 @@ class TestBuilder:
             result = {
                 "success": True,
                 "session_id": session_id,
+                # Include warnings about potentially missing variables
+                "warnings": variable_warnings if variable_warnings else None,
                 "suite": {
                         "name": suite.name,
                         "documentation": suite.documentation,
@@ -208,6 +414,9 @@ class TestBuilder:
                         for tc in suite.test_cases
                     ],
                     "imports": suite.imports or [],
+                    # Include session variables in suite output so consumers know what's defined
+                    "variables": suite.variables or {},
+                    "variable_files": suite.variable_files or [],
                     "setup": {
                         "keyword": suite.setup.keyword,
                         "arguments": [
@@ -298,6 +507,119 @@ class TestBuilder:
             logger.error(f"Error retrieving session steps: {e}")
             return []
 
+    def _reorder_steps_by_variable_dependencies(
+        self, steps: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Reorder steps so variable definitions precede their usages.
+
+        This fixes issues caused by parallel tool calls arriving in execution order
+        rather than logical order. Uses topological sort based on variable dependencies.
+
+        Args:
+            steps: List of step dictionaries
+
+        Returns:
+            Reordered list of steps with definitions before usages
+        """
+        import re
+
+        if not steps:
+            return steps
+
+        # Variable pattern: ${VAR}, $VAR, @{LIST}, %{ENV}
+        var_pattern = re.compile(r'[\$@%]\{?(\w+)\}?')
+
+        # Build mapping of which steps define which variables
+        step_defines: Dict[int, set] = {}  # step_index -> set of variable names defined
+        step_uses: Dict[int, set] = {}     # step_index -> set of variable names used
+
+        for i, step in enumerate(steps):
+            step_defines[i] = set()
+            step_uses[i] = set()
+
+            # Variables defined by this step
+            assigned = step.get("assigned_variables", [])
+            for var in assigned:
+                # Extract variable name from ${VAR} or $VAR
+                match = var_pattern.search(str(var))
+                if match:
+                    step_defines[i].add(match.group(1))
+
+            # For Set Variable keywords, the first argument defines the variable
+            keyword = step.get("keyword", "").lower()
+            if keyword in ["set suite variable", "set global variable", "set test variable"]:
+                args = step.get("arguments", [])
+                if args:
+                    match = var_pattern.search(str(args[0]))
+                    if match:
+                        step_defines[i].add(match.group(1))
+
+            # Variables used by this step (in arguments)
+            for arg in step.get("arguments", []):
+                for match in var_pattern.finditer(str(arg)):
+                    var_name = match.group(1)
+                    # Don't count a variable as "used" if this step defines it
+                    if var_name not in step_defines[i]:
+                        step_uses[i].add(var_name)
+
+        # Build dependency graph: step i depends on step j if j defines a var that i uses
+        dependencies: Dict[int, set] = {i: set() for i in range(len(steps))}
+        var_to_definer: Dict[str, int] = {}  # variable name -> step index that defines it
+
+        # First pass: record which step defines each variable
+        for i, defines in step_defines.items():
+            for var in defines:
+                var_to_definer[var] = i
+
+        # Second pass: build dependencies
+        for i, uses in step_uses.items():
+            for var in uses:
+                if var in var_to_definer:
+                    definer = var_to_definer[var]
+                    if definer != i:  # Don't depend on self
+                        dependencies[i].add(definer)
+
+        # Topological sort using Kahn's algorithm
+        # Count incoming edges for each node
+        in_degree = {i: 0 for i in range(len(steps))}
+        for deps in dependencies.values():
+            for dep in deps:
+                in_degree[dep] = in_degree.get(dep, 0)
+
+        # Actually count incoming edges correctly
+        in_degree = {i: 0 for i in range(len(steps))}
+        for i, deps in dependencies.items():
+            for dep in deps:
+                # dep -> i means i depends on dep, so in_degree[i] should increase
+                pass
+        # Recalculate: for each dependency i -> dep, dep must come before i
+        # So we want: i has dependencies, i's in_degree = len(dependencies[i])
+        in_degree = {i: len(deps) for i, deps in dependencies.items()}
+
+        # Queue of steps with no dependencies (in_degree = 0)
+        queue = [i for i, deg in in_degree.items() if deg == 0]
+        result = []
+
+        while queue:
+            # Pick the one with smallest original index to maintain order stability
+            queue.sort()
+            current = queue.pop(0)
+            result.append(current)
+
+            # Remove this node and update in_degrees
+            for i, deps in dependencies.items():
+                if current in deps:
+                    in_degree[i] -= 1
+                    if in_degree[i] == 0 and i not in result and i not in queue:
+                        queue.append(i)
+
+        # If we couldn't order all steps, there's a cycle - return original order
+        if len(result) != len(steps):
+            return steps
+
+        # Return steps in new order
+        return [steps[i] for i in result]
+
     async def _build_test_case(
         self,
         steps: List[Dict[str, Any]],
@@ -308,9 +630,37 @@ class TestBuilder:
     ) -> GeneratedTestCase:
         """Build a test case from execution steps."""
 
+        # Reorder steps so variable definitions precede usages
+        # This fixes issues caused by parallel tool calls arriving out of order
+        steps = self._reorder_steps_by_variable_dependencies(steps)
+
         # Convert steps to test case steps
         test_steps = []
         imports = set()
+
+        # Get suite_level_variables from session to filter out duplicate Set Variable steps
+        # These variables are already rendered in the *** Variables *** section
+        suite_level_var_names: set = set()
+        # Collect IF/WHILE conditions from flow_blocks to filter orphan Evaluate steps
+        # When an AI Agent calls Evaluate with the same expression as an IF condition,
+        # the Evaluate is redundant - the IF block already handles the condition evaluation
+        if_conditions: set = set()
+        if session_id and self.execution_engine:
+            try:
+                sess = self.execution_engine.sessions.get(session_id)
+                if sess:
+                    suite_level_var_names = getattr(sess, "suite_level_variables", set()) or set()
+                    # Collect IF conditions from flow_blocks
+                    for block in getattr(sess, "flow_blocks", []) or []:
+                        if block.get("type") == "if":
+                            cond = block.get("condition", "")
+                            if cond:
+                                # Normalize condition for comparison
+                                # Convert both ${var} and $var forms to canonical form
+                                norm_cond = self._convert_to_evaluation_namespace_syntax(cond).strip()
+                                if_conditions.add(norm_cond)
+            except Exception:
+                pass
 
         for step in steps:
             keyword = step.get("keyword", "")
@@ -323,6 +673,31 @@ class TestBuilder:
                 if arguments:
                     imports.add(arguments[0])
                 continue
+
+            # Filter out Set Variable steps for variables already in suite_level_variables
+            # These variables are rendered in *** Variables *** section, so we don't want duplicates
+            if keyword.lower() in ["set suite variable", "set global variable", "set test variable"]:
+                if arguments:
+                    # Extract variable name from first argument (e.g., "${VAR}" -> "VAR")
+                    var_arg = str(arguments[0])
+                    var_name = var_arg.strip("${}")
+                    if var_name in suite_level_var_names:
+                        # Skip this step - variable is already in *** Variables *** section
+                        continue
+
+            # Filter out orphan Evaluate steps that match IF conditions
+            # When an AI Agent calls Evaluate with the same expression as an IF condition,
+            # without assigning the result to a variable, it's redundant
+            if keyword.lower() == "evaluate" and if_conditions:
+                # Only filter if there's no assignment (orphan Evaluate)
+                if not assigned_variables:
+                    if arguments:
+                        expr = str(arguments[0]).strip()
+                        # Normalize expression for comparison
+                        norm_expr = self._convert_to_evaluation_namespace_syntax(expr).strip()
+                        if norm_expr in if_conditions:
+                            # Skip this step - it's an orphan Evaluate matching an IF condition
+                            continue
 
             # Apply optimizations with assignment information
             optimized_step = await self._optimize_step(
@@ -398,6 +773,11 @@ class TestBuilder:
                 if library and library != "BuiltIn":
                     all_imports.add(library)
 
+        # Resolve conflicting web automation libraries
+        # If both Browser and SeleniumLibrary are detected, determine which one to use
+        # based on library-specific keywords
+        all_imports = self._resolve_web_library_conflict(all_imports, test_cases)
+
         # Validate library exclusion rules for test suite generation
         # Only validate if we don't have a session with execution history
         if not self._session_has_execution_history(session_id):
@@ -434,6 +814,46 @@ class TestBuilder:
         except Exception:
             flow_blocks = None
 
+        # Collect session variables for inclusion in *** Variables *** section
+        # IMPORTANT: Only variables explicitly set via manage_session(action="set_variables", scope="suite")
+        # should be included in the *** Variables *** section.
+        # Variables created via RF keywords (Set Variable, Set Suite Variable, Set Test Variable,
+        # Set Global Variable) or VAR syntax should remain INLINE in the test cases.
+        # Variable files are imported via *** Settings *** section (Variables keyword).
+        suite_variables: Dict[str, Any] = {}
+        variable_files: List[str] = []
+        try:
+            sess = self.execution_engine.sessions.get(session_id)
+            if sess:
+                # Only include variables that were explicitly set via manage_session
+                # These are tracked in the suite_level_variables set
+                suite_level_var_names = getattr(sess, "suite_level_variables", set()) or set()
+
+                if suite_level_var_names and hasattr(sess, "variables") and sess.variables:
+                    for var_name in suite_level_var_names:
+                        # Look up value in session variables
+                        if var_name in sess.variables:
+                            suite_variables[var_name] = sess.variables[var_name]
+                        # Also check decorated form ${var_name}
+                        decorated_name = f"${{{var_name}}}"
+                        if decorated_name in sess.variables and var_name not in suite_variables:
+                            suite_variables[var_name] = sess.variables[decorated_name]
+
+                # Get imported variable files from session for *** Settings *** section
+                if hasattr(sess, "loaded_variable_files") and sess.loaded_variable_files:
+                    variable_files = [
+                        vf.get("path") for vf in sess.loaded_variable_files if vf.get("path")
+                    ]
+
+                logger.debug(
+                    f"Collected {len(suite_variables)} suite-level variables and {len(variable_files)} "
+                    f"variable files from session {session_id}"
+                )
+        except Exception as e:
+            logger.warning(f"Could not collect session variables: {e}")
+            suite_variables = {}
+            variable_files = []
+
         return GeneratedTestSuite(
             name=f"Generated_Suite_{session_id}",
             test_cases=test_cases,
@@ -442,6 +862,8 @@ class TestBuilder:
             imports=list(all_imports),
             resources=resources,
             flow_blocks=flow_blocks,
+            variables=suite_variables if suite_variables else None,
+            variable_files=variable_files if variable_files else None,
         )
 
     async def _optimize_step(
@@ -749,6 +1171,80 @@ class TestBuilder:
 
         return None
 
+    def _resolve_web_library_conflict(
+        self, imports: set, test_cases: List[GeneratedTestCase]
+    ) -> set:
+        """Resolve conflicts between Browser and SeleniumLibrary.
+
+        When both libraries are detected (due to ambiguous keywords like Click, Get Text),
+        this method determines which library to keep based on library-specific keywords.
+
+        Args:
+            imports: Set of detected library names
+            test_cases: List of test cases to analyze for library-specific keywords
+
+        Returns:
+            Updated imports set with conflicting library removed
+        """
+        web_libs = {"Browser", "SeleniumLibrary"}
+        detected_web_libs = imports & web_libs
+
+        # Only resolve if both are detected
+        if len(detected_web_libs) != 2:
+            return imports
+
+        # Keywords unique to each library (not shared)
+        browser_unique = {
+            "new browser", "new context", "new page", "close context", "close page",
+            "fill text", "fill", "get viewport size", "set viewport size",
+            "wait for elements state", "get element count", "get elements",
+            "select options by", "check checkbox", "get property"
+        }
+        selenium_unique = {
+            "open browser", "input text", "click element", "click button",
+            "select from list", "wait until element", "page should contain",
+            "element should be visible", "capture page screenshot",
+            "maximize browser window", "select checkbox"
+        }
+
+        # Collect all keywords from test cases
+        all_keywords = set()
+        for tc in test_cases:
+            for step in tc.steps:
+                if step.keyword:
+                    all_keywords.add(step.keyword.lower().strip())
+
+        # Check for library-specific keywords
+        has_browser_specific = any(kw in all_keywords for kw in browser_unique)
+        has_selenium_specific = any(kw in all_keywords for kw in selenium_unique)
+
+        # Resolve conflict based on unique keywords
+        if has_browser_specific and not has_selenium_specific:
+            logger.info(
+                "Resolved library conflict: Keeping Browser (found Browser-specific keywords)"
+            )
+            imports.discard("SeleniumLibrary")
+        elif has_selenium_specific and not has_browser_specific:
+            logger.info(
+                "Resolved library conflict: Keeping SeleniumLibrary (found SeleniumLibrary-specific keywords)"
+            )
+            imports.discard("Browser")
+        elif has_browser_specific and has_selenium_specific:
+            # Both specific keywords found - this is a real conflict, log warning
+            logger.warning(
+                "Both Browser and SeleniumLibrary specific keywords detected. "
+                "Keeping Browser as default. Consider using separate sessions for each library."
+            )
+            imports.discard("SeleniumLibrary")
+        else:
+            # Only ambiguous keywords - default to Browser (more modern)
+            logger.info(
+                "No library-specific keywords found. Defaulting to Browser library."
+            )
+            imports.discard("SeleniumLibrary")
+
+        return imports
+
     async def _generate_suite_documentation(
         self, test_cases: List[GeneratedTestCase], session_id: str
     ) -> str:
@@ -969,10 +1465,29 @@ class TestBuilder:
                     lib_line = library
                 lines.append(f"Library         {lib_line}")
 
+        # Variable files go in Settings section per RF documentation:
+        # https://robotframework.org/robotframework/latest/RobotFrameworkUserGuide.html#variable-files
+        if suite.variable_files:
+            for var_file in suite.variable_files:
+                lines.append(f"Variables       {self._format_path_for_rf(var_file)}")
+
         if suite.tags:
             lines.append(f"Test Tags       {'    '.join(suite.tags)}")
 
         lines.append("")
+
+        # Variables section - ONLY include variables explicitly set via manage_session
+        # Variables created via RF keywords (Set Variable, Set Suite Variable, etc.)
+        # or VAR syntax should remain inline in test cases, not in this section
+        if suite.variables:
+            lines.append("*** Variables ***")
+
+            # Add inline variables (only suite-level variables from manage_session)
+            for var_name, var_value in sorted(suite.variables.items()):
+                formatted_line = self._format_variable_for_rf(var_name, var_value)
+                lines.append(formatted_line)
+
+            lines.append("")
 
         # Test cases
         lines.append("*** Test Cases ***")
@@ -1043,6 +1558,43 @@ class TestBuilder:
 
     async def _render_linear_step(self, step: TestCaseStep) -> str:
         """Render a single linear keyword step with proper escaping and assignments."""
+        # Check if this is a Set Variable keyword that should be converted to VAR syntax
+        # This applies to Set Test/Suite/Global Variable keywords that remain after filtering
+        # (i.e., variables NOT in suite_level_variables - test-case-only variables)
+        keyword_lower = (step.keyword or "").strip().lower()
+        var_scope_mapping = {
+            "set test variable": "TEST",
+            "set suite variable": "SUITE",
+            "set global variable": "GLOBAL",
+        }
+
+        if keyword_lower in var_scope_mapping and step.arguments:
+            # Convert to VAR syntax: VAR    ${VAR}    value    scope=SCOPE
+            scope = var_scope_mapping[keyword_lower]
+            var_name = str(step.arguments[0])  # e.g., "${VAR}"
+            # Remaining arguments are values
+            if len(step.arguments) > 1:
+                # Check if the value contains arithmetic expression (${var + 1} pattern)
+                # VAR keyword cannot evaluate expressions - must use Evaluate keyword instead
+                value_str = str(step.arguments[1])
+                if self._is_arithmetic_expression(value_str):
+                    # Convert to Evaluate: ${var_name} =    Evaluate    expression
+                    # Extract expression from ${...} if present
+                    expr = self._extract_expression(value_str)
+                    if expr:
+                        # Convert to evaluation namespace syntax and add int() wrapper if needed
+                        converted_expr = self._convert_to_evaluation_namespace_syntax(expr)
+                        # Add type conversion for arithmetic
+                        converted_expr = self._add_type_conversion_if_needed(converted_expr)
+                        return f"    {var_name} =    Evaluate    {converted_expr}"
+
+                escaped_values = [self._escape_robot_argument(str(arg)) for arg in step.arguments[1:]]
+                values_str = "    ".join(escaped_values)
+                return f"    VAR    {var_name}    {values_str}    scope={scope}"
+            else:
+                # Variable with no value
+                return f"    VAR    {var_name}    scope={scope}"
+
         # Generate variable assignment syntax if applicable
         if step.assigned_variables and step.assignment_type:
             if step.assignment_type == "single" and len(step.assigned_variables) == 1:
@@ -1059,13 +1611,12 @@ class TestBuilder:
         if step.arguments:
             processed_args = list(step.arguments)
             # Normalize Evaluate expressions to use $var syntax (Robot Framework requirement)
+            # Reference: https://robotframework.org/robotframework/latest/RobotFrameworkUserGuide.html#evaluation-namespaces
             try:
                 if (step.keyword or "").strip().lower() == "evaluate" and processed_args:
-                    import re
                     expr = str(processed_args[0])
                     # Convert ${var.suffix} -> $var.suffix inside the expression
-                    expr = re.sub(r"\$\{([A-Za-z_]\w*)([^}]*)\}", r"$\1\2", expr)
-                    processed_args[0] = expr
+                    processed_args[0] = self._convert_to_evaluation_namespace_syntax(expr)
             except Exception:
                 pass
             if (
@@ -1228,6 +1779,28 @@ class TestBuilder:
             "assignment_type": step.assignment_type,
         }
 
+    def _build_step_dict_from_flow(self, s: Dict[str, Any]) -> Dict[str, Any]:
+        """Build a structured step dictionary from a flow block step.
+
+        Args:
+            s: Flow step dictionary with keyword, arguments, and optional assign_to
+
+        Returns:
+            Structured step dictionary for structured_steps output
+        """
+        step_dict = {
+            "type": "keyword",
+            "keyword": s.get("keyword", ""),
+            "arguments": [
+                self._escape_robot_argument(arg)
+                for arg in (s.get("arguments") or [])
+            ],
+        }
+        # Include assign_to if present
+        if s.get("assign_to"):
+            step_dict["assign_to"] = s.get("assign_to")
+        return step_dict
+
     def _structure_from_flow_blocks(self, nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for n in nodes or []:
@@ -1244,50 +1817,24 @@ class TestBuilder:
                     "args": [f"${{{item_var}}}", "IN", *escaped_items],
                 })
                 for s in n.get("body") or []:
-                    out.append({
-                        "type": "keyword",
-                        "keyword": s.get("keyword", ""),
-                        "arguments": [
-                            self._escape_robot_argument(arg)
-                            for arg in (s.get("arguments") or [])
-                        ],
-                    })
+                    out.append(self._build_step_dict_from_flow(s))
                 out.append({"type": "control", "control": "END"})
             elif ntype == "if":
-                out.append({"type": "control", "control": "IF", "args": [n.get("condition", "")]})
+                # Convert ${var} to $var for IF conditions (evaluation namespace syntax)
+                cond = self._convert_to_evaluation_namespace_syntax(n.get("condition", ""))
+                out.append({"type": "control", "control": "IF", "args": [cond]})
                 for s in n.get("then") or []:
-                    out.append({
-                        "type": "keyword",
-                        "keyword": s.get("keyword", ""),
-                        "arguments": [
-                            self._escape_robot_argument(arg)
-                            for arg in (s.get("arguments") or [])
-                        ],
-                    })
+                    out.append(self._build_step_dict_from_flow(s))
                 else_body = n.get("else") or []
                 if else_body:
                     out.append({"type": "control", "control": "ELSE"})
                     for s in else_body:
-                        out.append({
-                            "type": "keyword",
-                            "keyword": s.get("keyword", ""),
-                            "arguments": [
-                                self._escape_robot_argument(arg)
-                                for arg in (s.get("arguments") or [])
-                            ],
-                        })
+                        out.append(self._build_step_dict_from_flow(s))
                 out.append({"type": "control", "control": "END"})
             elif ntype == "try":
                 out.append({"type": "control", "control": "TRY"})
                 for s in n.get("try") or []:
-                    out.append({
-                        "type": "keyword",
-                        "keyword": s.get("keyword", ""),
-                        "arguments": [
-                            self._escape_robot_argument(arg)
-                            for arg in (s.get("arguments") or [])
-                        ],
-                    })
+                    out.append(self._build_step_dict_from_flow(s))
                 patterns = list(n.get("except_patterns") or [])
                 if n.get("except"):
                     # Use a single EXCEPT node with all patterns when sharing one handler
@@ -1298,37 +1845,16 @@ class TestBuilder:
                     else:
                         out.append({"type": "control", "control": "EXCEPT"})
                     for s in n.get("except") or []:
-                        out.append({
-                            "type": "keyword",
-                            "keyword": s.get("keyword", ""),
-                            "arguments": [
-                                self._escape_robot_argument(arg)
-                                for arg in (s.get("arguments") or [])
-                            ],
-                        })
+                        out.append(self._build_step_dict_from_flow(s))
                 if n.get("finally"):
                     out.append({"type": "control", "control": "FINALLY"})
                     for s in n.get("finally") or []:
-                        out.append({
-                            "type": "keyword",
-                            "keyword": s.get("keyword", ""),
-                            "arguments": [
-                                self._escape_robot_argument(arg)
-                                for arg in (s.get("arguments") or [])
-                            ],
-                        })
+                        out.append(self._build_step_dict_from_flow(s))
                 out.append({"type": "control", "control": "END"})
             else:
                 # Unknown node: best-effort as a keyword
                 if n.get("keyword"):
-                    out.append({
-                        "type": "keyword",
-                        "keyword": n.get("keyword", ""),
-                        "arguments": [
-                            self._escape_robot_argument(arg)
-                            for arg in (n.get("arguments") or [])
-                        ],
-                    })
+                    out.append(self._build_step_dict_from_flow(n))
         return out
 
     def _render_flow_blocks(self, nodes: List[Dict[str, Any]], indent: str = "") -> List[str]:
@@ -1347,6 +1873,8 @@ class TestBuilder:
                 lines.append(f"{indent}END")
             elif ntype == "if":
                 cond = n.get("condition", "")
+                # Convert ${var} to $var for IF conditions (evaluation namespace syntax)
+                cond = self._convert_to_evaluation_namespace_syntax(cond)
                 lines.append(f"{indent}IF    {cond}")
                 then_body = n.get("then") or []
                 lines.extend(self._render_flow_body(then_body, indent + "    "))
@@ -1381,8 +1909,34 @@ class TestBuilder:
         out: List[str] = []
         for s in steps or []:
             kw = s.get("keyword", "")
-            args = s.get("arguments", []) or []
-            line = f"{indent}{self._remove_library_prefix(kw)}"
+            args = list(s.get("arguments", []) or [])
+            assign_to = s.get("assign_to")  # Variable assignment (e.g., "${LENGTH}")
+
+            # Convert Evaluate expressions to use $var syntax (evaluation namespace)
+            if kw.strip().lower() == "evaluate" and args:
+                args[0] = self._convert_to_evaluation_namespace_syntax(str(args[0]))
+
+            # Build the line with optional variable assignment
+            if assign_to:
+                # Handle both string and list forms of assign_to
+                if isinstance(assign_to, list):
+                    # Wrap each variable in ${} if not already wrapped
+                    wrapped_vars = []
+                    for v in assign_to:
+                        v_str = str(v).strip()
+                        if not (v_str.startswith("${") or v_str.startswith("@{") or v_str.startswith("&{")):
+                            v_str = f"${{{v_str}}}"
+                        wrapped_vars.append(v_str)
+                    var_assignment = "    ".join(wrapped_vars)
+                else:
+                    var_assignment = str(assign_to).strip()
+                    # Wrap in ${} if not already wrapped
+                    if not (var_assignment.startswith("${") or var_assignment.startswith("@{") or var_assignment.startswith("&{")):
+                        var_assignment = f"${{{var_assignment}}}"
+                line = f"{indent}{var_assignment} =    {self._remove_library_prefix(kw)}"
+            else:
+                line = f"{indent}{self._remove_library_prefix(kw)}"
+
             if args:
                 esc = [self._escape_robot_argument(a) for a in args]
                 line += "    " + "    ".join(esc)
@@ -1416,6 +1970,253 @@ class TestBuilder:
             p for p in parts if p
         )
         return formatted or path
+
+    def _format_variable_for_rf(self, var_name: str, var_value: Any) -> str:
+        """Format a variable for Robot Framework *** Variables *** section.
+
+        Handles different variable types:
+        - Scalars: ${VAR}    value
+        - Lists: @{VAR}    item1    item2    item3
+        - Dictionaries: &{VAR}    key1=value1    key2=value2
+
+        Args:
+            var_name: Variable name (without ${}/@{}/&{} syntax)
+            var_value: Variable value (can be string, number, list, dict)
+
+        Returns:
+            Formatted variable line for RF Variables section
+        """
+        # Remove any existing ${} syntax from name
+        clean_name = var_name.strip()
+        if clean_name.startswith("${") and clean_name.endswith("}"):
+            clean_name = clean_name[2:-1]
+        elif clean_name.startswith("@{") and clean_name.endswith("}"):
+            clean_name = clean_name[2:-1]
+        elif clean_name.startswith("&{") and clean_name.endswith("}"):
+            clean_name = clean_name[2:-1]
+        elif clean_name.startswith("$") or clean_name.startswith("@") or clean_name.startswith("&"):
+            clean_name = clean_name[1:]
+
+        # Calculate column width for proper alignment
+        column_width = max(20, len(clean_name) + 4)  # At least 20 chars for variable column
+
+        # Handle different value types
+        if isinstance(var_value, dict):
+            # Dictionary variable: &{VAR}    key1=value1    key2=value2
+            items = [f"{k}={self._escape_robot_argument(v)}" for k, v in var_value.items()]
+            return f"&{{{clean_name}}}".ljust(column_width) + "    ".join(items)
+
+        elif isinstance(var_value, (list, tuple)):
+            # List variable: @{VAR}    item1    item2    item3
+            items = [self._escape_robot_argument(item) for item in var_value]
+            return f"@{{{clean_name}}}".ljust(column_width) + "    ".join(items)
+
+        else:
+            # Scalar variable: ${VAR}    value
+            # Handle special value types
+            if var_value is None:
+                str_value = "${NONE}"
+            elif isinstance(var_value, bool):
+                str_value = "${TRUE}" if var_value else "${FALSE}"
+            elif isinstance(var_value, (int, float)):
+                # Numeric values - keep as-is for RF to interpret
+                str_value = str(var_value)
+            else:
+                # String values
+                str_value = self._escape_robot_argument(str(var_value))
+
+            return f"${{{clean_name}}}".ljust(column_width) + str_value
+
+    def _scan_variable_references(self, suite: GeneratedTestSuite) -> set:
+        """Scan all test steps for variable references (${VAR}, @{VAR}, &{VAR}).
+
+        This method extracts all variable names referenced in test step arguments,
+        setup/teardown, and flow blocks to identify which variables are used
+        by the generated test suite.
+
+        Note: This method skips ${{ }} evaluation namespace expressions, which
+        are Python evaluation blocks and not variable references.
+
+        Args:
+            suite: The generated test suite to scan
+
+        Returns:
+            Set of variable names (without ${}/@ {}/&{} syntax) found in the suite
+        """
+        # Pattern for ${var}, @{var}, &{var} - but NOT ${{ }} evaluation namespace
+        # We use negative lookahead (?!\{) to skip ${{ patterns
+        variable_pattern = re.compile(r'[\$@&]\{(?!\{)([^}]+)\}')
+        found_variables = set()
+
+        # Built-in RF variables that don't need to be defined
+        builtin_vars = {
+            "CURDIR", "TEMPDIR", "EXECDIR", "OUTPUT_DIR", "OUTPUTDIR",
+            "OUTPUT_FILE", "LOG_FILE", "REPORT_FILE", "DEBUG_FILE",
+            "LOG_LEVEL", "OPTIONS", "TEST_NAME", "TEST_DOCUMENTATION",
+            "TEST_TAGS", "SUITE_NAME", "SUITE_SOURCE", "SUITE_DOCUMENTATION",
+            "PREV_TEST_NAME", "PREV_TEST_STATUS", "PREV_TEST_MESSAGE",
+            "TEST_STATUS", "TEST_MESSAGE", "KEYWORD_STATUS", "KEYWORD_MESSAGE",
+            "LOG_NAME", "REPORT_NAME", "EMPTY", "SPACE", "TRUE", "FALSE",
+            "NONE", "NULL", "/", ":"
+        }
+
+        def extract_vars_from_string(s: str) -> None:
+            """Extract variable names from a string."""
+            if not s:
+                return
+            text = str(s)
+            # First, remove ${{ ... }} evaluation namespace blocks to avoid false matches
+            # This handles nested braces by finding matching pairs
+            cleaned = re.sub(r'\$\{\{[^}]*\}\}', '', text)
+            # Also handle triple-brace (malformed) patterns like ${{{ }}}
+            cleaned = re.sub(r'\$\{\{\{[^}]*\}\}\}', '', cleaned)
+
+            for match in variable_pattern.finditer(cleaned):
+                var_name = match.group(1)
+                # Handle nested access like ${var.attr} or ${var}[0]
+                base_name = var_name.split('.')[0].split('[')[0].strip()
+                if base_name.upper() not in builtin_vars and not base_name.startswith("_"):
+                    found_variables.add(base_name)
+
+        def scan_step(step: TestCaseStep) -> None:
+            """Scan a single step for variable references."""
+            extract_vars_from_string(step.keyword)
+            for arg in (step.arguments or []):
+                extract_vars_from_string(arg)
+
+        # Scan all test cases
+        for test_case in suite.test_cases:
+            # Scan setup
+            if test_case.setup:
+                scan_step(test_case.setup)
+            # Scan steps
+            for step in test_case.steps:
+                scan_step(step)
+            # Scan teardown
+            if test_case.teardown:
+                scan_step(test_case.teardown)
+
+        # Scan suite-level setup/teardown
+        if suite.setup:
+            scan_step(suite.setup)
+        if suite.teardown:
+            scan_step(suite.teardown)
+
+        # Scan flow blocks for variable references in conditions
+        if suite.flow_blocks:
+            self._scan_flow_blocks_for_vars(suite.flow_blocks, extract_vars_from_string)
+
+        return found_variables
+
+    def _scan_flow_blocks_for_vars(self, blocks: List[Dict[str, Any]], extract_fn) -> None:
+        """Recursively scan flow blocks for variable references.
+
+        Args:
+            blocks: List of flow block dictionaries
+            extract_fn: Function to extract variables from strings
+        """
+        for block in blocks:
+            block_type = block.get("type", "")
+
+            if block_type == "if":
+                # Scan condition
+                extract_fn(block.get("condition", ""))
+                # Scan body
+                for step in block.get("body", []):
+                    if isinstance(step, dict) and "keyword" in step:
+                        extract_fn(step.get("keyword", ""))
+                        for arg in step.get("arguments", []):
+                            extract_fn(arg)
+                # Scan else_if branches
+                for branch in block.get("else_if", []):
+                    extract_fn(branch.get("condition", ""))
+                    for step in branch.get("body", []):
+                        if isinstance(step, dict) and "keyword" in step:
+                            extract_fn(step.get("keyword", ""))
+                            for arg in step.get("arguments", []):
+                                extract_fn(arg)
+                # Scan else body
+                for step in block.get("else_body", []):
+                    if isinstance(step, dict) and "keyword" in step:
+                        extract_fn(step.get("keyword", ""))
+                        for arg in step.get("arguments", []):
+                            extract_fn(arg)
+
+            elif block_type == "for_each":
+                extract_fn(block.get("variable", ""))
+                extract_fn(block.get("collection", ""))
+                for step in block.get("body", []):
+                    if isinstance(step, dict) and "keyword" in step:
+                        extract_fn(step.get("keyword", ""))
+                        for arg in step.get("arguments", []):
+                            extract_fn(arg)
+
+            elif block_type == "try":
+                for step in block.get("body", []):
+                    if isinstance(step, dict) and "keyword" in step:
+                        extract_fn(step.get("keyword", ""))
+                        for arg in step.get("arguments", []):
+                            extract_fn(arg)
+                for step in block.get("except_body", []):
+                    if isinstance(step, dict) and "keyword" in step:
+                        extract_fn(step.get("keyword", ""))
+                        for arg in step.get("arguments", []):
+                            extract_fn(arg)
+
+    def _check_untracked_variables(
+        self, suite: GeneratedTestSuite, session_id: str
+    ) -> List[Dict[str, str]]:
+        """Check for variables used in steps but not defined in Variables section.
+
+        This provides warnings when generated tests reference variables that weren't
+        explicitly set via manage_session, which may indicate incomplete test suites.
+
+        Args:
+            suite: The generated test suite
+            session_id: Session ID for context
+
+        Returns:
+            List of warning dictionaries with variable name and context
+        """
+        warnings = []
+
+        # Get all variable references in the suite
+        referenced_vars = self._scan_variable_references(suite)
+
+        # Get variables defined in the suite's Variables section
+        defined_vars = set()
+        if suite.variables:
+            for var_name in suite.variables.keys():
+                # Normalize name (remove ${} if present)
+                clean_name = var_name.strip()
+                if clean_name.startswith("${") and clean_name.endswith("}"):
+                    clean_name = clean_name[2:-1]
+                defined_vars.add(clean_name)
+
+        # Find untracked variables (referenced but not defined)
+        untracked = referenced_vars - defined_vars
+
+        # Generate warnings for each untracked variable
+        for var_name in sorted(untracked):
+            warnings.append({
+                "type": "untracked_variable",
+                "variable": var_name,
+                "message": (
+                    f"Variable '${{{var_name}}}' is used in test steps but not defined in "
+                    f"*** Variables *** section. If this variable was set via execute_step "
+                    f"(e.g., Set Variable, Set Suite Variable), consider using "
+                    f"manage_session(action='set_variables') instead to ensure the "
+                    f"generated test suite is complete and executable."
+                ),
+            })
+
+        if warnings:
+            logger.warning(
+                f"build_test_suite: Found {len(warnings)} untracked variable(s) in session "
+                f"{session_id}: {', '.join(w['variable'] for w in warnings)}"
+            )
+
+        return warnings
 
     async def _generate_statistics(
         self, steps: List[Dict[str, Any]], suite: GeneratedTestSuite
@@ -1468,6 +2269,46 @@ class TestBuilder:
         else:
             return "other"
 
+    def _fix_malformed_evaluation_namespace(self, arg: str) -> str:
+        """Fix malformed ${{ }} evaluation namespace expressions.
+
+        Fixes common issues:
+        1. Triple-brace ${{{ followed by empty set/dict: ${{{}...}} -> ${{...}}
+        2. Missing space after ${{ that creates confusion with dict literals
+        3. Spurious empty set at start: ${{{}}' -> ${{ '
+
+        Args:
+            arg: String that may contain malformed evaluation namespace
+
+        Returns:
+            String with corrected evaluation namespace syntax
+        """
+        if not arg or "${{" not in arg:
+            return arg
+
+        result = arg
+
+        # Fix: ${{{}}'... pattern - spurious {} followed by closing brace
+        # This catches ${{{}}'Hello'... -> ${{ 'Hello'...
+        # The pattern is: ${{ {} }} 'expr' but written as ${{{}}' which is malformed
+        result = re.sub(r'\$\{\{\{\}\}([\'"\$\w])', r"${{ \1", result)
+
+        # Fix: ${{{} at start of expression -> ${{ (remove spurious empty set/dict)
+        # Pattern: ${{{}' or ${{{}" or ${{{$var
+        result = re.sub(r'\$\{\{\{\}([\'"\$])', r"${{ \1", result)
+
+        # Fix: ${{{{ (4 braces) -> ${{ (probably double-escaped)
+        result = re.sub(r'\$\{\{\{\{', r"${{", result)
+
+        # Fix: ${{{' (3 braces followed by quote) -> ${{ '
+        # This handles cases like ${{{'-'.join(...)}}} -> ${{ '-'.join(...) }}
+        result = re.sub(r'\$\{\{\{([\'"])', r"${{ \1", result)
+
+        # Fix: }}} at end -> }} (extra closing brace from malformed input)
+        result = re.sub(r'\}\}\}(?!\})', r"}}", result)
+
+        return result
+
     def _escape_robot_argument(self, arg: Any) -> str:
         """Escape Robot Framework arguments that start with special characters.
 
@@ -1482,6 +2323,9 @@ class TestBuilder:
                 arg = f"<{type(arg).__name__}>"
         if not arg:
             return ""
+
+        # Fix malformed evaluation namespace expressions first
+        arg = self._fix_malformed_evaluation_namespace(arg)
 
         # Escape arguments starting with # (treated as comments in RF)
         if arg.startswith("#"):

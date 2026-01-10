@@ -58,10 +58,17 @@ class CompatibleVariables:
         logger.debug(f"Variables.set_test({name}, {value}) -> __setitem__")
         self._original[name] = value
 
-    def set_suite(self, name: str, value: Any) -> None:
-        """Set suite-scoped variable (compatibility shim)."""
+    def set_suite(self, name: str, value: Any, children: bool = False) -> None:
+        """Set suite-scoped variable (compatibility shim).
+
+        Args:
+            name: Variable name (with or without ${} syntax)
+            value: Variable value
+            children: RF 7.x parameter - whether to propagate to child suites.
+                      Accepted for compatibility but ignored in isolated context mode.
+        """
         name = self._normalize_var_name(name)
-        logger.debug(f"Variables.set_suite({name}, {value}) -> __setitem__")
+        logger.debug(f"Variables.set_suite({name}, {value}, children={children}) -> __setitem__")
         self._original[name] = value
 
     # RF user keyword lifecycle hooks expected by Namespace
