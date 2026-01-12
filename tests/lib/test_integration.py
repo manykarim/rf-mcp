@@ -329,8 +329,12 @@ class TestExporterFormatIntegration:
         recorder.stop_recording()
         exporter = TestSuiteExporter(recorder)
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".robot", delete=False) as f:
-            path = exporter.export(path=f.name, format="robot")
+        # Create temp file and close it before use (Windows compatibility)
+        fd, temp_path = tempfile.mkstemp(suffix=".robot")
+        os.close(fd)
+
+        try:
+            path = exporter.export(path=temp_path, format="robot")
 
             with open(path) as rf:
                 content = rf.read()
@@ -339,8 +343,8 @@ class TestExporterFormatIntegration:
             assert "*** Test Cases ***" in content
             assert "Fill Text" in content
             assert "Click" in content
-
-            os.unlink(f.name)
+        finally:
+            os.unlink(temp_path)
 
     def test_yaml_format_export(self):
         """Test YAML export maintains proper structure."""
@@ -358,16 +362,20 @@ class TestExporterFormatIntegration:
         recorder.stop_recording()
         exporter = TestSuiteExporter(recorder)
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            path = exporter.export(path=f.name, format="yaml")
+        # Create temp file and close it before use (Windows compatibility)
+        fd, temp_path = tempfile.mkstemp(suffix=".yaml")
+        os.close(fd)
+
+        try:
+            path = exporter.export(path=temp_path, format="yaml")
 
             with open(path) as yf:
                 data = yaml.safe_load(yf)
 
             assert "metadata" in data
             assert "steps" in data
-
-            os.unlink(f.name)
+        finally:
+            os.unlink(temp_path)
 
 
 class TestProviderConfigYAMLIntegration:
@@ -394,11 +402,15 @@ anthropic:
 openai:
   organization: test-org
 """
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write(yaml_content)
-            f.flush()
+        # Create temp file and close it before use (Windows compatibility)
+        fd, temp_path = tempfile.mkstemp(suffix=".yaml")
+        os.close(fd)
 
-            config = ProviderConfig.from_yaml(f.name)
+        try:
+            with open(temp_path, "w") as f:
+                f.write(yaml_content)
+
+            config = ProviderConfig.from_yaml(temp_path)
 
             assert config.provider == "anthropic"
             assert config.model == "claude-sonnet-4-20250514"
@@ -410,8 +422,8 @@ openai:
             assert config.temperature == 0.2
             # extra_options should contain provider-specific settings
             assert config.extra_options.get("thinking_mode") == "enabled"
-
-            os.unlink(f.name)
+        finally:
+            os.unlink(temp_path)
 
 
 class TestEndToEndRecordingScenario:
