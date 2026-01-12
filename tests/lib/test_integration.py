@@ -6,6 +6,7 @@ rf-mcp architecture and components.
 
 import os
 import tempfile
+from collections.abc import Mapping
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -296,9 +297,10 @@ class TestContextBridgeIntegration:
         # In our implementation, they should catch the error
         try:
             result = bridge.get_variables()
-            # If we get here, it should return a dict (possibly empty, or with
-            # RF built-in variables if there's a lingering execution context)
-            assert isinstance(result, dict)
+            # If we get here, it should return a dict-like object (possibly empty, or with
+            # RF built-in variables if there's a lingering execution context).
+            # Note: RF returns NormalizedDict which is a Mapping but not a dict subclass.
+            assert isinstance(result, Mapping)
         except RuntimeError:
             # Expected when no RF execution context
             pass
