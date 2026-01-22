@@ -529,19 +529,19 @@ class PageSourceService:
     async def extract_page_context(self, html: str) -> Dict[str, Any]:
         """
         Extract useful context information from page source.
-        
+
         Args:
             html: Raw HTML source
-            
+
         Returns:
-            dict: Context information including forms, buttons, inputs, etc.
+            dict: Context information including forms, buttons, inputs, text elements, etc.
         """
         if not html or not BS4_AVAILABLE:
             return {}
-        
+
         try:
             soup = BeautifulSoup(html, 'html.parser')
-            
+
             context = {
                 "forms": [],
                 "buttons": [],
@@ -549,14 +549,15 @@ class PageSourceService:
                 "links": [],
                 "images": [],
                 "page_title": "",
-                "headings": []
+                "headings": [],
+                "text_elements": []  # NEW: Text content elements (product names, prices, etc.)
             }
-            
+
             # Extract page title
             title_tag = soup.find('title')
             if title_tag:
                 context["page_title"] = title_tag.get_text().strip()
-            
+
             # Extract forms
             for form in soup.find_all('form'):
                 form_info = {
@@ -564,7 +565,7 @@ class PageSourceService:
                     "method": form.get('method', 'GET').upper(),
                     "inputs": []
                 }
-                
+
                 # Get form inputs
                 for input_elem in form.find_all(['input', 'textarea', 'select']):
                     input_info = {
@@ -572,48 +573,65 @@ class PageSourceService:
                         "name": input_elem.get('name', ''),
                         "id": input_elem.get('id', ''),
                         "placeholder": input_elem.get('placeholder', ''),
+                        "data_test": input_elem.get('data-test', ''),
                         "required": input_elem.get('required') is not None
                     }
                     form_info["inputs"].append(input_info)
-                
+
                 context["forms"].append(form_info)
-            
+
             # Extract buttons
             for button in soup.find_all(['button', 'input']):
                 if button.name == 'input' and button.get('type') not in ['button', 'submit', 'reset']:
                     continue
-                
+
                 button_info = {
                     "text": button.get_text().strip() or button.get('value', ''),
                     "type": button.get('type', 'button'),
                     "id": button.get('id', ''),
+                    "data_test": button.get('data-test', ''),
                     "class": button.get('class', [])
                 }
                 context["buttons"].append(button_info)
-            
+
             # Extract standalone inputs
             for input_elem in soup.find_all('input'):
                 if input_elem.find_parent('form'):
                     continue  # Skip inputs already captured in forms
-                
+
                 input_info = {
                     "type": input_elem.get('type', 'text'),
                     "name": input_elem.get('name', ''),
                     "id": input_elem.get('id', ''),
                     "placeholder": input_elem.get('placeholder', ''),
+                    "data_test": input_elem.get('data-test', ''),
                     "value": input_elem.get('value', '')
                 }
                 context["inputs"].append(input_info)
-            
+
             # Extract links (limit to first 20 to avoid too much data)
-            for link in soup.find_all('a', href=True)[:20]:
+            # Include ALL anchor tags, not just those with href (many modern sites use JS-triggered links)
+            for link in soup.find_all('a')[:30]:
+                # Skip links with no identifying attributes (href, id, data-test, class, or text)
+                has_href = link.get('href')
+                has_id = link.get('id')
+                has_data_test = link.get('data-test')
+                has_class = link.get('class')
+                link_text = link.get_text().strip()
+
+                if not (has_href or has_id or has_data_test or has_class or link_text):
+                    continue
+
                 link_info = {
                     "href": link.get('href', ''),
-                    "text": link.get_text().strip(),
-                    "title": link.get('title', '')
+                    "text": link_text,
+                    "title": link.get('title', ''),
+                    "id": link.get('id', ''),
+                    "data_test": link.get('data-test', ''),
+                    "class": ' '.join(link.get('class', []))
                 }
                 context["links"].append(link_info)
-            
+
             # Extract headings
             for heading in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
                 heading_info = {
@@ -622,7 +640,7 @@ class PageSourceService:
                     "id": heading.get('id', '')
                 }
                 context["headings"].append(heading_info)
-            
+
             # Extract images (limit to first 10)
             for img in soup.find_all('img')[:10]:
                 img_info = {
@@ -631,9 +649,101 @@ class PageSourceService:
                     "title": img.get('title', '')
                 }
                 context["images"].append(img_info)
-            
+
+            # ============================================================
+            # NEW: Extract text content elements (product names, prices, etc.)
+            # These are critical for e-commerce automation (SauceDemo, etc.)
+            # ============================================================
+
+            # Common e-commerce class patterns to look for
+            text_class_patterns = [
+                # SauceDemo specific patterns
+                ("inventory_item_name", "product name"),
+                ("inventory_item_price", "product price"),
+                ("inventory_item_desc", "product description"),
+                ("cart_quantity", "cart quantity"),
+                ("cart_item_label", "cart item"),
+                # Generic e-commerce patterns
+                ("product-name", "product name"),
+                ("product-price", "product price"),
+                ("product-title", "product title"),
+                ("item-name", "item name"),
+                ("item-price", "item price"),
+                # Shopping cart patterns
+                ("cart-item", "cart item"),
+                ("checkout-item", "checkout item"),
+            ]
+
+            seen_selectors = set()  # Avoid duplicates
+
+            # Extract elements by class pattern
+            for class_pattern, elem_type in text_class_patterns:
+                # Find all elements that have this class (partial match)
+                elements = soup.find_all(
+                    lambda tag: tag.get('class') and
+                    any(class_pattern in c for c in tag.get('class', []))
+                )
+
+                for idx, elem in enumerate(elements[:6]):  # Limit to 6 per pattern
+                    text_content = elem.get_text().strip()
+                    text_content = ' '.join(text_content.split())  # Normalize whitespace
+
+                    if text_content:
+                        # Get the exact matching class
+                        matching_class = next(
+                            (c for c in elem.get('class', []) if class_pattern in c),
+                            class_pattern
+                        )
+
+                        selector = f".{matching_class}"
+                        if selector in seen_selectors:
+                            continue
+
+                        context["text_elements"].append({
+                            "text": text_content,
+                            "class": matching_class,
+                            "type": elem_type,
+                            "data_test": elem.get('data-test', ''),
+                            "index": idx
+                        })
+
+            # Also extract elements with data-test attributes that contain text
+            for elem in soup.find_all(attrs={'data-test': True})[:30]:
+                data_test = elem.get('data-test', '')
+                text_content = elem.get_text().strip()
+                text_content = ' '.join(text_content.split())
+
+                if text_content and len(text_content) < 100:
+                    selector = f"[data-test='{data_test}']"
+                    if selector in seen_selectors:
+                        continue
+                    seen_selectors.add(selector)
+
+                    # Determine element type from data-test name
+                    if "name" in data_test.lower():
+                        elem_type = "name"
+                    elif "price" in data_test.lower():
+                        elem_type = "price"
+                    elif "desc" in data_test.lower():
+                        elem_type = "description"
+                    elif "title" in data_test.lower():
+                        elem_type = "title"
+                    elif "error" in data_test.lower():
+                        elem_type = "error"
+                    elif "message" in data_test.lower():
+                        elem_type = "message"
+                    else:
+                        elem_type = "text"
+
+                    context["text_elements"].append({
+                        "text": text_content,
+                        "data_test": data_test,
+                        "type": elem_type,
+                        "class": ' '.join(elem.get('class', []))
+                    })
+
             return context
-            
+
         except Exception as e:
             logger.error(f"Error extracting page context: {e}")
             return {}

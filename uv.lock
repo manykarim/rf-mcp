@@ -3355,6 +3355,7 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "django" },
+    { name = "pydantic-ai" },
     { name = "robotframework-appiumlibrary" },
     { name = "robotframework-browser" },
     { name = "robotframework-databaselibrary" },
@@ -3383,6 +3384,10 @@ dev = [
 frontend = [
     { name = "django" },
     { name = "uvicorn", extra = ["standard"] },
+]
+lib = [
+    { name = "pydantic-ai" },
+    { name = "robotframework" },
 ]
 mobile = [
     { name = "robotframework-appiumlibrary" },
@@ -3419,13 +3424,16 @@ requires-dist = [
     { name = "openai", marker = "extra == 'dev'", specifier = ">=1.51.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=2.20.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pydantic-ai", marker = "extra == 'all'", specifier = ">=0.1.0" },
     { name = "pydantic-ai", marker = "extra == 'dev'", specifier = ">=1.37.0" },
+    { name = "pydantic-ai", marker = "extra == 'lib'", specifier = ">=0.1.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "python-dotenv", marker = "extra == 'dev'", specifier = ">=1.0.1" },
     { name = "pyyaml", specifier = ">=6.0.0" },
     { name = "robotframework", specifier = ">=7.0" },
+    { name = "robotframework", marker = "extra == 'lib'", specifier = ">=7.0" },
     { name = "robotframework-appiumlibrary", marker = "extra == 'all'" },
     { name = "robotframework-appiumlibrary", marker = "extra == 'mobile'" },
     { name = "robotframework-browser", marker = "extra == 'all'" },
@@ -3439,7 +3447,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'all'", specifier = ">=0.24" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'frontend'", specifier = ">=0.24" },
 ]
-provides-extras = ["slim", "web", "frontend", "mobile", "api", "database", "all", "dev"]
+provides-extras = ["slim", "web", "frontend", "mobile", "api", "database", "lib", "all", "dev"]
 
 [package.metadata.requires-dev]
 dev = [
