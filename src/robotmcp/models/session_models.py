@@ -230,6 +230,14 @@ class ExecutionSession:
             ValueError: If trying to import a conflicting library without force=True
         """
         if library_name not in self.imported_libraries:
+            # Validate library is appropriate for session type
+            if not force and not self.validate_library_for_session(library_name):
+                allowed = self._get_allowed_libraries_for_session_type()
+                raise ValueError(
+                    f"Library '{library_name}' is not valid for session type '{self.session_type.value}'. "
+                    f"Allowed libraries: {sorted(allowed)}"
+                )
+
             # Enforce web automation library exclusion
             web_automation_libs = ["Browser", "SeleniumLibrary"]
 
@@ -268,6 +276,13 @@ class ExecutionSession:
         Returns:
             bool: True if library is loaded successfully, False otherwise
         """
+        # Validate library is appropriate for session type
+        if not self.validate_library_for_session(library_name):
+            logger.warning(
+                f"Library '{library_name}' not valid for session type '{self.session_type.value}', skipping"
+            )
+            return False
+
         try:
             # Check if already loaded
             if hasattr(self, "_session_manager") and self._session_manager:
@@ -796,24 +811,34 @@ class ExecutionSession:
                 )
 
     def validate_library_for_session(self, library_name: str) -> bool:
-        """Validate if a library is allowed in this session type."""
+        """Validate if a library is appropriate for this session type.
+
+        Args:
+            library_name: Name of library to validate
+
+        Returns:
+            True if library is valid for session type, False otherwise
+        """
+        allowed = self._get_allowed_libraries_for_session_type()
+        if not allowed:
+            return True  # Allow any if no profile
+        return library_name in allowed
+
+    def _get_allowed_libraries_for_session_type(self) -> Set[str]:
+        """Get set of allowed libraries for current session type."""
         if self.session_type.value == "unknown":
-            return True  # Allow any library for unknown sessions
+            return set()  # Empty set means allow any
 
         profiles = self._get_session_profiles()
-        if self.session_type in profiles:
-            profile = profiles[self.session_type]
-            allowed_libraries = set(profile.core_libraries + profile.optional_libraries)
-            is_allowed = library_name in allowed_libraries
+        profile = profiles.get(self.session_type)
+        if not profile:
+            return set()  # Allow any if no profile
 
-            if not is_allowed:
-                logger.warning(
-                    f"Library '{library_name}' not allowed in session type '{self.session_type.value}'. Allowed: {allowed_libraries}"
-                )
-
-            return is_allowed
-
-        return True  # Allow if no profile found
+        allowed = set(profile.core_libraries)
+        allowed.update(profile.optional_libraries)
+        # Always allow BuiltIn
+        allowed.add("BuiltIn")
+        return allowed
 
     def get_excluded_libraries_for_session(self) -> Set[str]:
         """Get libraries that are excluded from this session type."""

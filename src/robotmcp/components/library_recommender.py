@@ -33,7 +33,29 @@ class LibraryRecommendation:
 
 class LibraryRecommender:
     """Recommends Robot Framework libraries based on user scenarios and use cases."""
-    
+
+    # Minimum confidence threshold for including a recommendation
+    MIN_CONFIDENCE_THRESHOLD = 0.4
+
+    # Category weights - lower for generic categories
+    CATEGORY_WEIGHTS = {
+        'web': 1.0,
+        'api': 1.0,
+        'mobile': 1.0,
+        'database': 1.0,
+        'desktop': 0.9,
+        'utilities': 0.3,
+        'core': 0.2,
+        'data': 0.4,
+        'testing': 0.5,
+        'system': 0.7,
+    }
+
+    # Exclusion groups - only one from each group should be recommended
+    EXCLUSION_GROUPS = {
+        'web_automation': ['Browser', 'SeleniumLibrary'],
+    }
+
     def __init__(self):
         self.libraries_registry: Dict[str, LibraryInfo] = {}
         self.use_case_mapping: Dict[str, Set[str]] = {}
@@ -130,14 +152,20 @@ class LibraryRecommender:
             unique_matches = self._deduplicate_recommendations(matches)
             ranked_matches = self._rank_recommendations(unique_matches, scenario_keywords, context)
 
+            # Filter by minimum confidence threshold
+            confidence_filtered = self._filter_by_confidence(ranked_matches)
+
             # Apply context-based filtering (e.g., exclude mobile/database for web)
-            filtered = self._filter_by_context(ranked_matches, context, scenario_keywords)
+            filtered = self._filter_by_context(confidence_filtered, context, scenario_keywords)
 
             # Apply preferences (e.g., prefer Browser over SeleniumLibrary for web)
             preferred = self._apply_preferences(filtered, context)
 
+            # Apply strict exclusion group rules
+            exclusive = self._apply_strict_exclusions(preferred)
+
             # Limit results
-            top_recommendations = preferred[:max_recommendations]
+            top_recommendations = exclusive[:max_recommendations]
             
             return {
                 "success": True,
@@ -247,6 +275,53 @@ class LibraryRecommender:
             # Ensure AppiumLibrary is first if present
             recs.sort(key=lambda r: 0 if r.library.name == 'AppiumLibrary' else 1)
         return recs
+
+    def _apply_strict_exclusions(self, recommendations: List[LibraryRecommendation]) -> List[LibraryRecommendation]:
+        """Ensure only one library from each exclusion group is recommended.
+
+        Args:
+            recommendations: List of recommendations sorted by confidence
+
+        Returns:
+            Filtered list with exclusion groups enforced
+        """
+        result = []
+        used_groups = set()
+
+        for rec in recommendations:
+            lib_name = rec.library.name
+
+            # Check if this library belongs to an exclusion group
+            group = None
+            for group_name, group_libs in self.EXCLUSION_GROUPS.items():
+                if lib_name in group_libs:
+                    group = group_name
+                    break
+
+            if group:
+                if group in used_groups:
+                    logger.debug(f"Excluding {lib_name}: {group} group already represented")
+                    continue
+                used_groups.add(group)
+
+            result.append(rec)
+
+        return result
+
+    def _filter_by_confidence(self, recommendations: List[LibraryRecommendation]) -> List[LibraryRecommendation]:
+        """Filter recommendations below minimum confidence threshold.
+
+        Args:
+            recommendations: List of recommendations
+
+        Returns:
+            Filtered list with only high-confidence recommendations
+        """
+        filtered = [r for r in recommendations if r.confidence >= self.MIN_CONFIDENCE_THRESHOLD]
+        removed_count = len(recommendations) - len(filtered)
+        if removed_count > 0:
+            logger.debug(f"Filtered {removed_count} low-confidence recommendations (threshold: {self.MIN_CONFIDENCE_THRESHOLD})")
+        return filtered
 
     def _normalize_text(self, text: str) -> str:
         """Normalize text for keyword extraction."""
@@ -412,14 +487,17 @@ class LibraryRecommender:
                             matching_terms.append(keyword)
                             break
             
-            if matching_score > 0:
-                confidence = min(matching_score / len(keywords), 1.0) * 0.6
-                matches.append(LibraryRecommendation(
-                    library=library,
-                    confidence=confidence,
-                    matching_keywords=matching_terms,
-                    rationale=f"Keyword match in description ({len(matching_terms)} terms)"
-                ))
+            # Require at least 2 keyword matches for inclusion
+            if matching_score < 2:
+                continue
+
+            confidence = min(matching_score / len(keywords), 1.0) * 0.6
+            matches.append(LibraryRecommendation(
+                library=library,
+                confidence=confidence,
+                matching_keywords=matching_terms,
+                rationale=f"Keyword match in description ({len(matching_terms)} terms)"
+            ))
         
         return matches
 
