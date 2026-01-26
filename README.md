@@ -41,7 +41,7 @@ pip install rf-mcp
     "robotmcp": {
       "type": "stdio",
       "command": "uv",
-      "args": ["run", "robotmcp.server"]
+      "args": ["run", "-m", "robotmcp.server"]
     }
   }
 }
@@ -52,7 +52,7 @@ pip install rf-mcp
 Start the MCP server with HTTP transport:
 
 ```bash
-uv run robotmcp.server --transport http --host 127.0.0.1 --port 8000
+uv run -m robotmcp.server --transport http --host 127.0.0.1 --port 8000
 ```
 
 Then configure your AI agent:
@@ -268,7 +268,7 @@ RobotMCP ships with an optional Django-based dashboard that mirrors active sessi
    ```
 2. **Start the MCP server with the frontend enabled**
    ```bash
-   uv run robotmcp.server --with-frontend
+   uv run -m robotmcp.server --with-frontend
    ```
    - Default URL: <http://127.0.0.1:8001/>
    - Quick toggles: `--frontend-host`, `--frontend-port`, `--frontend-base-path`
@@ -295,7 +295,7 @@ To disable the dashboard for a given run, either omit the flag or pass `--withou
     "robotmcp": {
       "type": "stdio",
       "command": "uv",
-      "args": ["run", "robotmcp.server"]
+      "args": ["run", "-m", "robotmcp.server"]
     }
   }
 }
