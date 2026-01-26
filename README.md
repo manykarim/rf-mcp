@@ -9,17 +9,13 @@
 
 RobotMCP is a comprehensive Model Context Protocol (MCP) server that bridges the gap between human language and Robot Framework automation. It enables AI agents to understand test intentions, execute steps interactively, and generate complete test suites from successful executions.
 
+**📺 Video Tutorial**
+
+[![RobotMCP Tutorial](https://img.youtube.com/vi/CBXGEn8jRtU/0.jpg)](https://www.youtube.com/watch?v=CBXGEn8jRtU)
+
 **Intro**
 
 https://github.com/user-attachments/assets/ad89064f-cab3-4ae6-a4c4-5e8c241301a1
-
-**Setup**
-
-https://github.com/user-attachments/assets/8448cb70-6fb3-4f04-9742-a8a8453a9c7f
-
-**Debug Bridge**
-
-https://github.com/user-attachments/assets/8d87cd6e-c32e-4481-9f37-48b83f69f72f
 
 ---
 
@@ -87,6 +83,8 @@ Execute the test suite stepwise and build the final version afterwards.
 ---
 
 ## 🛠️ Installation & Setup
+
+https://github.com/user-attachments/assets/8448cb70-6fb3-4f04-9742-a8a8453a9c7f
 
 ### Prerequisites
 
@@ -349,6 +347,8 @@ If you set up a virtual environment, make sure to also use the python executable
 RobotMCP works with any MCP-compatible AI agent. Use the stdio configuration above.
 
 ## 🪝 Debug Attach Bridge
+
+https://github.com/user-attachments/assets/8d87cd6e-c32e-4481-9f37-48b83f69f72f
 
 RobotMCP ships with `robotmcp.attach.McpAttach`, a lightweight Robot Framework library that exposes the live `ExecutionContext` over a localhost HTTP bridge. When you debug a suite from VS Code (RobotCode) or another IDE, the bridge lets RobotMCP reuse the in-process variables, imports, and keyword search order instead of creating a separate context.
 
