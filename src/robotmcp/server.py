@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 
 from robotmcp.components.execution import ExecutionCoordinator
 from robotmcp.components.execution.external_rf_client import ExternalRFClient
@@ -640,6 +640,88 @@ async def manage_library_plugins(
     return {"success": False, "error": f"Unsupported action '{action}'"}
 
 
+async def _refine_recommendations_with_llm(
+    ctx: Context,
+    scenario: str,
+    context: str,
+    recommendations: List[Dict[str, Any]],
+) -> Optional[List[Dict[str, Any]]]:
+    """Use LLM to refine library recommendations.
+
+    Args:
+        ctx: FastMCP context with sample() method
+        scenario: Original scenario text
+        context: Testing context (web, api, etc.)
+        recommendations: Rule-based recommendations to refine
+
+    Returns:
+        Refined recommendations or None if refinement fails
+    """
+    if not ctx or not hasattr(ctx, "sample"):
+        return None
+
+    if not recommendations:
+        return None
+
+    # Build refinement prompt
+    lib_names = [
+        r.get("library_name", r.get("name", "Unknown")) for r in recommendations[:10]
+    ]
+
+    prompt = f"""Given this test automation scenario and candidate libraries, select the BEST 3-5 libraries.
+
+Scenario: {scenario}
+Context: {context}
+Candidate libraries: {', '.join(lib_names)}
+
+Rules:
+1. NEVER include both Browser and SeleniumLibrary (they conflict)
+2. Prefer Browser over SeleniumLibrary for web testing (it's more modern)
+3. Only include libraries actually needed for the scenario
+4. Include BuiltIn and Collections if other libraries are selected
+
+Respond with ONLY a JSON array of library names, like: ["Browser", "BuiltIn", "Collections"]
+"""
+
+    try:
+        result = await ctx.sample(
+            messages=prompt,
+            system_prompt="You are a Robot Framework expert. Respond only with a JSON array of library names.",
+            temperature=0.2,
+            max_tokens=256,
+        )
+
+        # Parse response
+        import json
+        import re
+
+        response_text = result.text if hasattr(result, "text") else str(result)
+
+        # Extract JSON array from response
+        json_match = re.search(r"\[.*?\]", response_text, re.DOTALL)
+        if json_match:
+            selected_names = json.loads(json_match.group())
+
+            # Filter recommendations to only include selected libraries
+            refined = [
+                r
+                for r in recommendations
+                if r.get("library_name", r.get("name")) in selected_names
+            ]
+
+            # Ensure we have at least some results
+            if refined:
+                logger.info(
+                    f"LLM refined {len(recommendations)} recommendations to {len(refined)}"
+                )
+                return refined
+
+    except Exception as e:
+        logger.debug(f"LLM refinement parsing failed: {e}")
+
+    return None
+
+
 @mcp.tool
 async def recommend_libraries(
     scenario: str,
@@ -653,6 +735,8 @@ async def recommend_libraries(
     k: int | None = None,
     available_libraries: List[Dict[str, Any]] | None = None,
     include_keywords: bool = True,
+    use_llm_refinement: bool = False,
+    ctx: Context = None,
 ) -> Dict[str, Any]:
     """Recommend libraries for a scenario or generate/merge sampling prompts.
 
@@ -676,6 +760,8 @@ async def recommend_libraries(
         k: Number of samples to request when mode="sampling_prompt" (defaults to 4).
         available_libraries: Optional pre-fetched library metadata to use instead of registry defaults.
         include_keywords: When True, include a compact keyword list (names only) for the top recommendation.
+        use_llm_refinement: When True, uses LLM via ctx.sample() to refine recommendations.
+        ctx: FastMCP Context object providing access to sample() for LLM refinement.
 
     Returns:
         Dict[str, Any]: Recommendation payload:
@@ -900,6 +986,22 @@ async def recommend_libraries(
             session_setup_info["applied"] = False
 
         result["session_setup"] = session_setup_info
+
+    # Optional: Use LLM to refine recommendations
+    if use_llm_refinement:
+        try:
+            refined = await _refine_recommendations_with_llm(
+                ctx,
+                scenario,
+                context,
+                result.get("recommendations", []),
+            )
+            if refined:
+                result["recommendations"] = refined
+                result["llm_refined"] = True
+        except Exception as e:
+            logger.debug(f"LLM refinement failed, using rule-based: {e}")
+            result["llm_refined"] = False
 
     return result
 

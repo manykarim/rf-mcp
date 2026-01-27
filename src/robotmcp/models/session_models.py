@@ -528,125 +528,52 @@ class ExecutionSession:
     # ===============================
 
     def detect_explicit_library_preference(self, scenario_text: str) -> Optional[str]:
-        """Detect explicit library preference from scenario text with enhanced patterns and confidence scoring."""
+        """Detect explicit library preference from scenario text.
+
+        Uses centralized LibraryDetector for consistent detection across the codebase.
+
+        Args:
+            scenario_text: The scenario text to analyze
+
+        Returns:
+            Library name if detected, None otherwise
+        """
         if not scenario_text:
             return None
 
-        text_lower = scenario_text.lower()
-        library_scores = {}
-
-        # Enhanced Selenium patterns (highest priority for explicit mentions)
-        selenium_patterns = [
-            (
-                r"\b(use|using|with|via|through)\s+(selenium|seleniumlibrary|selenium\s*library)\b",
-                10,
-            ),
-            (r"\btest\s+automation\s+with\s+selenium\b", 8),
-            (r"\bseleniumlibrary\b", 9),
-            (r"\bwebdriver\b", 6),  # WebDriver often implies Selenium
-            (
-                r"\bselenium\b(?!.*browser)(?!.*grid)",
-                7,
-            ),  # Selenium mentioned but not "selenium browser" or "selenium grid"
-            (r"\b(selenium|webdriver)\s+(automation|testing|framework)\b", 8),
-            (r"\bchrome\s*driver|firefox\s*driver|edge\s*driver\b", 5),
-        ]
-
-        # Enhanced Browser Library patterns
-        browser_patterns = [
-            (
-                r"\b(use|using|with|via|through)\s+(browser|browserlibrary|browser\s*library|playwright)\b",
-                10,
-            ),
-            (r"\btest\s+automation\s+with\s+(browser\s*library|playwright)\b", 8),
-            (r"\bbrowser\s*library\b", 9),
-            (r"\bplaywright\b", 8),
-            (r"\b(modern|new)\s+(browser|web)\s+(automation|testing)\b", 6),
-            (r"\b(chromium|firefox|webkit)\s+(browser|automation)\b", 7),
-            (r"\b(headless|headed)\s+(browser|testing)\b", 5),
-            (r"\basync\s+(browser|web)\s+automation\b", 6),
-        ]
-
-        # Enhanced API testing patterns
-        api_patterns = [
-            (
-                r"\b(use|using|with)\s+(requests|requestslibrary|requests\s*library)\b",
-                10,
-            ),
-            (r"\btest\s+automation\s+with\s+requests\b", 8),
-            (r"\brequestslibrary\b", 9),
-            (r"\b(rest|http)\s+(api|testing|automation)\b", 7),
-            (r"\b(post|get|put|delete)\s+(request|endpoint)\b", 6),
-            (r"\bjson\s+(api|response|request)\b", 5),
-            (r"\bapi\s+(automation|testing|validation)\b", 6),
-        ]
-
-        # Enhanced XML processing patterns
-        xml_patterns = [
-            (r"\b(use|using|with)\s+(xml|xmllibrary|xml\s*library)\b", 10),
-            (r"\btest\s+automation\s+with\s+xml\b", 8),
-            (r"\bxmllibrary\b", 9),
-            (r"\b(xml|xpath)\s+(processing|parsing|manipulation)\b", 7),
-            (r"\b(parse|process|manipulate)\s+xml\b", 6),
-            (r"\bxml\s+(validation|testing|automation)\b", 6),
-        ]
-
-        # Enhanced mobile testing patterns
-        mobile_patterns = [
-            (r"\b(use|using|with)\s+(appium|appiumlibrary|appium\s*library)\b", 10),
-            (r"\btest\s+automation\s+with\s+appium\b", 8),
-            (r"\bappiumlibrary\b", 9),
-            (r"\b(mobile|android|ios)\s+(app|testing|automation)\b", 7),
-            (r"\b(device|mobile)\s+(automation|testing)\b", 6),
-            (r"\b(native|hybrid)\s+(app|mobile)\s+(testing|automation)\b", 6),
-        ]
-
-        # Enhanced database testing patterns
-        database_patterns = [
-            (
-                r"\b(use|using|with)\s+(database|databaselibrary|database\s*library)\b",
-                10,
-            ),
-            (r"\btest\s+automation\s+with\s+database\b", 8),
-            (r"\bdatabaselibrary\b", 9),
-            (r"\b(sql|database)\s+(testing|automation|queries)\b", 7),
-            (r"\b(mysql|postgresql|sqlite|oracle)\s+(database|testing)\b", 6),
-            (r"\bdatabase\s+(validation|testing|automation)\b", 6),
-        ]
-
-        # Score all patterns
-        all_patterns = [
-            ("SeleniumLibrary", selenium_patterns),
-            ("Browser", browser_patterns),
-            ("RequestsLibrary", api_patterns),
-            ("XML", xml_patterns),
-            ("AppiumLibrary", mobile_patterns),
-            ("DatabaseLibrary", database_patterns),
-        ]
-
-        for library_name, patterns in all_patterns:
-            library_scores[library_name] = 0
-            for pattern, weight in patterns:
-                matches = len(re.findall(pattern, text_lower))
-                library_scores[library_name] += matches * weight
-
-        # Find highest scoring library
-        if library_scores:
-            best_library = max(library_scores, key=library_scores.get)
-            max_score = library_scores[best_library]
-
-            # Only return if confidence is high enough
-            if max_score >= 5:  # Minimum confidence threshold
+        try:
+            from robotmcp.utils.library_detection import detect_library_preference
+            result = detect_library_preference(scenario_text, min_score=5)
+            if result:
                 logger.info(
-                    f"Detected explicit {best_library} preference (score: {max_score}) in scenario"
+                    f"Detected explicit {result} preference in scenario (via LibraryDetector)"
                 )
-                return best_library
+                return result
+            # If LibraryDetector found nothing, try fallback
+            return self._fallback_detect_library(scenario_text)
+        except ImportError:
+            # Fallback to simple detection if LibraryDetector not available
+            logger.debug("LibraryDetector not available, using fallback detection")
+            return self._fallback_detect_library(scenario_text)
 
-        # Fallback: Generic patterns for common libraries (lower confidence)
+    def _fallback_detect_library(self, scenario_text: str) -> Optional[str]:
+        """Fallback library detection if LibraryDetector unavailable or finds nothing.
+
+        Args:
+            scenario_text: The scenario text to analyze
+
+        Returns:
+            Library name if detected via fallback patterns, None otherwise
+        """
+        text_lower = scenario_text.lower()
+
+        # Simple pattern matching fallback (lower confidence)
         fallback_patterns = [
+            (r"\b(selenium|webdriver)\b", "SeleniumLibrary"),
+            (r"\b(browser\s*library|playwright)\b", "Browser"),
             (r"\b(xml|xpath)\b", "XML"),
             (r"\b(api|http|rest|request)\b", "RequestsLibrary"),
-            (r"\b(mobile|android|ios|device)\b", "AppiumLibrary"),
+            (r"\b(mobile|android|ios|device|appium)\b", "AppiumLibrary"),
             (r"\b(database|sql|mysql|postgresql)\b", "DatabaseLibrary"),
         ]
 

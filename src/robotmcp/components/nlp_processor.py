@@ -30,7 +30,60 @@ class TestScenario:
 
 class NaturalLanguageProcessor:
     """Processes natural language test descriptions into structured formats."""
-    
+
+    # Stemming map for common verb forms
+    STEM_MAP = {
+        # Click variations
+        'clicking': 'click', 'clicks': 'click', 'clicked': 'click',
+        # Press variations
+        'pressing': 'press', 'presses': 'press', 'pressed': 'press',
+        # Navigate variations
+        'navigating': 'navigate', 'navigates': 'navigate', 'navigated': 'navigate',
+        # Open variations
+        'opening': 'open', 'opens': 'open', 'opened': 'open',
+        # Close variations
+        'closing': 'close', 'closes': 'close', 'closed': 'close',
+        # Fill variations
+        'filling': 'fill', 'fills': 'fill', 'filled': 'fill',
+        # Type variations
+        'typing': 'type', 'types': 'type', 'typed': 'type',
+        # Submit variations
+        'submitting': 'submit', 'submits': 'submit', 'submitted': 'submit',
+        # Verify variations
+        'verifying': 'verify', 'verifies': 'verify', 'verified': 'verify',
+        # Check variations
+        'checking': 'check', 'checks': 'check', 'checked': 'check',
+        # Wait variations
+        'waiting': 'wait', 'waits': 'wait', 'waited': 'wait',
+        # Select variations
+        'selecting': 'select', 'selects': 'select', 'selected': 'select',
+        # Enter variations
+        'entering': 'enter', 'enters': 'enter', 'entered': 'enter',
+        # Scroll variations
+        'scrolling': 'scroll', 'scrolls': 'scroll', 'scrolled': 'scroll',
+        # Test variations
+        'testing': 'test', 'tests': 'test', 'tested': 'test',
+        # Assert variations
+        'asserting': 'assert', 'asserts': 'assert', 'asserted': 'assert',
+        # Validate variations
+        'validating': 'validate', 'validates': 'validate', 'validated': 'validate',
+    }
+
+    # Synonym groups - first word is canonical
+    SYNONYMS = {
+        'click': ['click', 'press', 'tap', 'select', 'hit'],
+        'input': ['input', 'type', 'enter', 'fill', 'write'],
+        'verify': ['verify', 'check', 'assert', 'validate', 'confirm', 'ensure'],
+        'navigate': ['navigate', 'go', 'open', 'visit', 'browse', 'access'],
+        'wait': ['wait', 'pause', 'delay', 'sleep'],
+        'close': ['close', 'quit', 'exit', 'terminate', 'end'],
+        'submit': ['submit', 'send', 'post', 'confirm'],
+        'scroll': ['scroll', 'swipe', 'drag'],
+        'search': ['search', 'find', 'locate', 'query', 'lookup'],
+        'login': ['login', 'signin', 'authenticate', 'logon'],
+        'logout': ['logout', 'signout', 'logoff'],
+    }
+
     def __init__(self):
         self.action_patterns = {
             'navigate': [
@@ -77,6 +130,75 @@ class NaturalLanguageProcessor:
             'DatabaseLibrary': ['database', 'db', 'sql', 'table', 'query'],
             'AppiumLibrary': ['mobile', 'app', 'android', 'ios', 'appium']
         }
+
+    def _stem_word(self, word: str) -> str:
+        """Apply simple stemming to a word.
+
+        Args:
+            word: Word to stem
+
+        Returns:
+            Stemmed word
+        """
+        return self.STEM_MAP.get(word.lower(), word.lower())
+
+    def _normalize_keywords(self, keywords: List[str]) -> List[str]:
+        """Normalize a list of keywords by applying stemming.
+
+        Args:
+            keywords: List of keywords to normalize
+
+        Returns:
+            Normalized keywords
+        """
+        return [self._stem_word(kw) for kw in keywords]
+
+    def _expand_synonyms(self, keyword: str) -> List[str]:
+        """Expand a keyword to include its synonyms.
+
+        Args:
+            keyword: Keyword to expand
+
+        Returns:
+            List containing keyword and all synonyms
+        """
+        keyword_lower = keyword.lower()
+
+        # Check each synonym group
+        for canonical, synonyms in self.SYNONYMS.items():
+            if keyword_lower in synonyms:
+                return synonyms
+
+        return [keyword_lower]
+
+    def _expand_all_synonyms(self, keywords: List[str]) -> List[str]:
+        """Expand all keywords to include synonyms.
+
+        Args:
+            keywords: List of keywords to expand
+
+        Returns:
+            Expanded list with synonyms included
+        """
+        expanded = set()
+        for kw in keywords:
+            expanded.update(self._expand_synonyms(kw))
+        return list(expanded)
+
+    def _fuzzy_match(self, text: str, pattern: str, threshold: float = 0.85) -> bool:
+        """Check if text fuzzy matches pattern.
+
+        Args:
+            text: Text to check
+            pattern: Pattern to match
+            threshold: Similarity threshold (0-1)
+
+        Returns:
+            True if similarity >= threshold
+        """
+        from difflib import SequenceMatcher
+        ratio = SequenceMatcher(None, text.lower(), pattern.lower()).ratio()
+        return ratio >= threshold
 
     async def analyze_scenario(self, scenario: str, context: str = "web") -> Dict[str, Any]:
         """
