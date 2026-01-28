@@ -628,90 +628,117 @@ class NaturalLanguageProcessor:
         return verifications
     
     def _detect_explicit_library_preference(self, scenario_text: str) -> Optional[str]:
-        """Detect explicit library preference from scenario text."""
+        """Detect explicit library preference using centralized LibraryDetector."""
+        try:
+            from robotmcp.utils.library_detection import detect_library_preference
+            detected = detect_library_preference(scenario_text, min_score=5)
+            if detected:
+                return detected
+        except ImportError:
+            pass
+
+        # Fallback to local patterns for backward compatibility
+        return self._fallback_detect_library_preference(scenario_text)
+
+    def _fallback_detect_library_preference(self, scenario_text: str) -> Optional[str]:
+        """Fallback library preference detection using local patterns."""
         if not scenario_text:
             return None
-        
+
         text_lower = scenario_text.lower()
-        
+
         # Selenium patterns (highest priority for explicit mentions)
         selenium_patterns = [
             r'\b(use|using|with)\s+(selenium|seleniumlibrary|selenium\s*library)\b',
             r'\bselenium\b(?!.*browser)',  # Selenium mentioned but not "selenium browser"
             r'\bseleniumlibrary\b',
         ]
-        
+
         # Browser Library patterns
         browser_patterns = [
             r'\b(use|using|with)\s+(browser|browserlibrary|browser\s*library|playwright)\b',
             r'\bbrowser\s*library\b',
             r'\bplaywright\b',
         ]
-        
+
         # Check for explicit Selenium preference first
         for pattern in selenium_patterns:
             if re.search(pattern, text_lower):
                 logger.info(f"NLP: Detected explicit SeleniumLibrary preference: {pattern}")
                 return "SeleniumLibrary"
-        
+
         # Check for explicit Browser Library preference
         for pattern in browser_patterns:
             if re.search(pattern, text_lower):
                 logger.info(f"NLP: Detected explicit Browser Library preference: {pattern}")
                 return "Browser"
-        
+
         # Check for other library preferences
         if re.search(r'\b(xml|xpath)\b', text_lower):
             return "XML"
         if re.search(r'\b(api|http|rest|request)\b', text_lower):
             return "RequestsLibrary"
-        
+
         return None
     
-    def _detect_session_type(self, scenario_text: str, context: str) -> str:
-        """Detect session type from scenario text and context."""
+    def _detect_session_type(self, scenario: str, context: str) -> str:
+        """Detect session type using centralized session models detection."""
+        try:
+            from robotmcp.models.session_models import ExecutionSession
+            temp_session = ExecutionSession(session_id="__nlp_detect__")
+            session_type = temp_session.detect_session_type_from_scenario(scenario)
+            if session_type and session_type.value != "unknown":
+                return session_type.value
+        except (ImportError, Exception):
+            pass
+
+        # Fallback to local patterns
+        return self._fallback_detect_session_type(scenario, context)
+
+    def _fallback_detect_session_type(self, scenario_text: str, context: str) -> str:
+        """Fallback session type detection using local patterns."""
         if not scenario_text:
             return "unknown"
-        
+
         text_lower = scenario_text.lower()
-        
+
         # Web automation patterns
         web_patterns = [
             r'\b(click|fill|navigate|browser|page|element|locator)\b',
             r'\b(new page|go to|wait for|screenshot)\b',
             r'\b(get text|get attribute|should contain)\b'
         ]
-        
+
         # API testing patterns
         api_patterns = [
             r'\b(get request|post|put|delete|api|http)\b',
             r'\b(create session|request|response|status)\b',
             r'\b(json|rest|endpoint)\b'
         ]
-        
+
         # XML processing patterns
         xml_patterns = [
             r'\b(parse|xml|xpath|element|attribute)\b',
             r'\b(get element|set element|xml)\b'
         ]
-        
+
         # Count matches for each type
         web_score = sum(len(re.findall(pattern, text_lower)) for pattern in web_patterns)
         api_score = sum(len(re.findall(pattern, text_lower)) for pattern in api_patterns)
         xml_score = sum(len(re.findall(pattern, text_lower)) for pattern in xml_patterns)
-        
+
         # Determine session type based on highest score
         scores = {"web_automation": web_score, "api_testing": api_score, "xml_processing": xml_score}
-        
+
         # Consider context as a tie-breaker
         if context == "web":
             scores["web_automation"] += 1
         elif context == "api":
             scores["api_testing"] += 1
-        
+
         if max(scores.values()) == 0:
             return "unknown"
-        
+
         return max(scores, key=scores.get)
 
     def _validate_action(self, action: Dict[str, Any], available_libraries: List[str]) -> List[str]:

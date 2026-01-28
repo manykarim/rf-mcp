@@ -813,8 +813,19 @@ async def recommend_libraries(
             "prompt": prompt_text,
         }
 
+    # Get explicit library preference from session if available
+    explicit_pref = None
+    if session_id:
+        try:
+            session_for_pref = execution_engine.session_manager.get_session(session_id)
+            if session_for_pref and hasattr(session_for_pref, 'explicit_library_preference'):
+                explicit_pref = session_for_pref.explicit_library_preference
+        except Exception:
+            pass
+
     rec = library_recommender.recommend_libraries(
-        scenario, context=context, max_recommendations=max_recommendations
+        scenario, context=context, max_recommendations=max_recommendations,
+        explicit_library_preference=explicit_pref
     )
     if not rec.get("success"):
         return {"success": False, "error": rec.get("error", "Recommendation failed")}
@@ -987,20 +998,53 @@ async def recommend_libraries(
 
         result["session_setup"] = session_setup_info
 
-    # Optional: Use LLM to refine recommendations
-    if use_llm_refinement:
+    # Use LLM to refine/generate recommendations when enabled
+    from robotmcp.utils.sampling import is_sampling_enabled as _sampling_on
+    _do_llm = use_llm_refinement or (_sampling_on() and ctx is not None)
+    if _do_llm:
         try:
-            refined = await _refine_recommendations_with_llm(
-                ctx,
-                scenario,
-                context,
-                result.get("recommendations", []),
+            from robotmcp.utils.sampling import sample_recommend_libraries
+            llm_recs = await sample_recommend_libraries(
+                ctx, scenario, context, result.get("recommendations", [])
             )
-            if refined:
-                result["recommendations"] = refined
-                result["llm_refined"] = True
+            if llm_recs:
+                # Use LLM recommendations, keeping rule-based metadata
+                rule_recs = {r.get("library_name", r.get("name", "")): r for r in result.get("recommendations", [])}
+                merged = []
+                for llm_rec in llm_recs:
+                    lib_name = llm_rec.get("library_name", "")
+                    if lib_name in rule_recs:
+                        # Enrich rule-based rec with LLM confidence/rationale
+                        enriched = dict(rule_recs[lib_name])
+                        enriched["llm_confidence"] = llm_rec.get("confidence", 0.8)
+                        enriched["llm_rationale"] = llm_rec.get("rationale", "")
+                        merged.append(enriched)
+                    else:
+                        merged.append(llm_rec)
+                if merged:
+                    result["recommendations"] = merged
+                    result["recommended_libraries"] = [r.get("library_name", r.get("name", "")) for r in merged]
+                    result["llm_refined"] = True
+                    result["sampling_enhanced"] = True
+                    logger.info(f"LLM sampling generated {len(merged)} recommendations")
+                else:
+                    # Fallback to existing refinement
+                    refined = await _refine_recommendations_with_llm(
+                        ctx, scenario, context, result.get("recommendations", [])
+                    )
+                    if refined:
+                        result["recommendations"] = refined
+                        result["llm_refined"] = True
+            else:
+                # Fallback to existing refinement
+                refined = await _refine_recommendations_with_llm(
+                    ctx, scenario, context, result.get("recommendations", [])
+                )
+                if refined:
+                    result["recommendations"] = refined
+                    result["llm_refined"] = True
         except Exception as e:
-            logger.debug(f"LLM refinement failed, using rule-based: {e}")
+            logger.debug(f"LLM recommendation failed, using rule-based: {e}")
             result["llm_refined"] = False
 
     return result
@@ -1008,7 +1052,7 @@ async def recommend_libraries(
 
 @mcp.tool
 async def analyze_scenario(
-    scenario: str, context: str = "web", session_id: str = None
+    scenario: str, context: str = "web", session_id: str = None, ctx: Context = None
 ) -> Dict[str, Any]:
     """Analyze a natural-language scenario into structured intent and create a session.
 
@@ -1052,6 +1096,30 @@ async def analyze_scenario(
     # Analyze the scenario first
     result = await nlp_processor.analyze_scenario(scenario, context)
 
+    # Enhance with LLM sampling when feature flag is enabled
+    from robotmcp.utils.sampling import is_sampling_enabled
+    if is_sampling_enabled() and ctx:
+        try:
+            from robotmcp.utils.sampling import sample_analyze_scenario
+            sampling_result = await sample_analyze_scenario(ctx, scenario, context)
+            if sampling_result:
+                # Merge LLM insights into rule-based result
+                result["sampling_enhanced"] = True
+                analysis = result.get("analysis", {})
+                if sampling_result.get("session_type"):
+                    analysis["detected_session_type"] = sampling_result["session_type"]
+                if sampling_result.get("primary_library"):
+                    analysis["explicit_library_preference"] = sampling_result["primary_library"]
+                if sampling_result.get("library_preference"):
+                    analysis["explicit_library_preference"] = sampling_result["library_preference"]
+                if sampling_result.get("detected_context"):
+                    analysis["detected_context"] = sampling_result["detected_context"]
+                result["analysis"] = analysis
+                logger.info("Scenario analysis enhanced with LLM sampling")
+        except Exception as e:
+            logger.debug(f"LLM sampling enhancement failed, using rule-based: {e}")
+            result["sampling_enhanced"] = False
+
     # ALWAYS create a session - either use provided ID or generate one
     if not session_id:
         session_id = execution_engine.session_manager.create_session_id()
@@ -1081,6 +1149,26 @@ async def analyze_scenario(
         # Auto-configure session based on scenario (existing web flow)
         session.configure_from_scenario(scenario)
 
+    # Override session config with LLM-detected preferences when sampling enabled
+    from robotmcp.utils.sampling import is_sampling_enabled as _is_sampling_on
+    if _is_sampling_on() and ctx:
+        try:
+            from robotmcp.utils.sampling import sample_detect_library_preference, sample_detect_session_type
+            llm_lib_pref = await sample_detect_library_preference(ctx, scenario)
+            if llm_lib_pref:
+                session.explicit_library_preference = llm_lib_pref
+                logger.info(f"LLM sampling detected library preference: {llm_lib_pref}")
+            llm_session_type = await sample_detect_session_type(ctx, scenario, context)
+            if llm_session_type:
+                from robotmcp.models.session_models import SessionType
+                try:
+                    session.session_type = SessionType(llm_session_type)
+                    logger.info(f"LLM sampling detected session type: {llm_session_type}")
+                except ValueError:
+                    pass
+        except Exception as e:
+            logger.debug(f"LLM session config enhancement failed: {e}")
+
     # Enhanced session info with guidance
     result["session_info"] = {
         "session_id": session_id,
@@ -1108,6 +1196,7 @@ async def analyze_scenario(
     )
 
     result["session_id"] = session_id
+    result["context"] = context
 
     return result
 

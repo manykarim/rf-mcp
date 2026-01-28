@@ -608,6 +608,11 @@ class ExecutionSession:
                 (r"\b(url|link|element|locator|css|xpath)\b", 2),
                 (r"\b(headless|headed|screenshot|automation)\b", 1),
                 (r"\bhttps?://\S+", 3),  # URL detection
+                (r"\b(e-?commerce|shopping\s+cart|checkout\s+flow)\b", 3),
+                (r"\b(SPA|single\s+page\s+app(lication)?|PWA)\b", 3),
+                (r"\b(e2e|end.to.end)\s+test", 3),
+                (r"\b(login|signup|registration)\s+(form|page|flow)\b", 3),
+                (r"\b(chrome|firefox|safari|edge|chromium|webkit)\b", 2),
             ],
             SessionType.API_TESTING: [
                 (r"\b(api|rest|http|endpoint|request)\b", 3),
@@ -616,6 +621,11 @@ class ExecutionSession:
                 (r"\b(oauth|token|authentication|authorization)\b", 2),
                 (r"\bmicroservice|webhook|graphql\b", 2),
                 (r"\bapi\s+(testing|automation|validation)\b", 3),
+                (r"\b(webservice|web\s+service|microservice)\b", 3),
+                (r"\b(bearer|JWT|OAuth|API\s+key)\b", 3),
+                (r"\b(swagger|openapi|GraphQL|gRPC|SOAP)\b", 3),
+                (r"\b(health\s+check|smoke\s+test)\b", 2),
+                (r"\bstatus\s+(code|[12345]\d{2})\b", 3),
             ],
             SessionType.XML_PROCESSING: [
                 (r"\b(xml|xpath|parse|element|attribute)\b", 3),
@@ -634,18 +644,35 @@ class ExecutionSession:
                 (r"\b(command|shell|environment|terminal)\b", 2),
                 (r"\b(ssh|ftp|sftp|scp)\b", 2),
                 (r"\bsystem\s+(testing|automation|administration)\b", 3),
+                (r"\b(deploy|deployment|rollback|release)\b", 2),
+                (r"\b(log\s+file|error\s+log|server\s+log)\b", 3),
+                (r"\b(production|staging)\s+(server|environment)\b", 3),
+                (r"\b(disk\s+usage|memory\s+usage|CPU|uptime)\b", 3),
+                (r"\b(ci/?cd|pipeline|devops)\b", 2),
             ],
             SessionType.MOBILE_TESTING: [
                 (r"\b(mobile|android|ios|device|app)\b", 3),
                 (r"\b(appium|espresso|xcuitest)\b", 4),
                 (r"\b(tap|swipe|scroll|pinch|gesture)\b", 3),
                 (r"\bmobile\s+(testing|automation|app)\b", 4),
+                (r"\b(emulator|simulator|real\s+device)\b", 3),
+                (r"\b(APK|IPA|bundle\s+ID|package\s+name)\b", 3),
+                (r"\b(device\s+farm|BrowserStack|Sauce\s+Labs)\b", 3),
             ],
             SessionType.DATABASE_TESTING: [
                 (r"\b(database|sql|query|table|record)\b", 3),
                 (r"\b(mysql|postgresql|sqlite|oracle|mongodb)\b", 3),
                 (r"\b(select|insert|update|delete|create)\s+(table|from|into)\b", 3),
                 (r"\bdatabase\s+(testing|automation|validation)\b", 4),
+                (r"\b(CRUD|migration|schema\s+change)\b", 3),
+                (r"\b(connection\s+string|DSN|ODBC|JDBC)\b", 3),
+            ],
+            SessionType.VISUAL_TESTING: [
+                (r"\b(visual|image|screenshot|capture)\b", 2),
+                (r"\b(compare|comparison|diff|baseline|pixel)\b", 2),
+                (r"\b(pdf|document)\s+(test|verif|compar)", 3),
+                (r"\bvisual\s+(test|regression|comparison|validation)\b", 4),
+                (r"\b(doctest|imagelibrary|screencaplibrary)\b", 4),
             ],
         }
 
@@ -665,19 +692,64 @@ class ExecutionSession:
         if not scores or max(scores.values()) == 0:
             return SessionType.UNKNOWN
 
-        best_type = max(scores, key=scores.get)
         max_score = max(scores.values())
 
-        # Enhanced mixed-type detection with smarter thresholds
+        # Primary/secondary type detection: instead of returning MIXED,
+        # detect primary activity vs verification parts of the scenario
         high_scores = [k for k, v in scores.items() if v >= max_score * 0.7 and v > 1]
         if len(high_scores) > 1 and max_score > 2:
             logger.info(
                 f"Multiple high-scoring session types detected: {[k.value for k in high_scores]}"
             )
-            return SessionType.MIXED
 
-        logger.info(f"Detected session type: {best_type.value} (score: {max_score})")
-        return best_type
+            # Split scenario into action and verification parts
+            import re as _re
+
+            verification_markers = r"\b(?:then\s+)?(?:verify|check|validate|assert|confirm|ensure)\b"
+            parts = _re.split(verification_markers, text_lower, maxsplit=1)
+
+            if len(parts) > 1 and len(parts[0].strip()) > 10:
+                # Recompute scores weighting action part 2x, verification part 1x
+                action_scores: Dict[SessionType, int] = {}
+                verify_scores: Dict[SessionType, int] = {}
+                for session_type, patterns in pattern_weights.items():
+                    action_score = 0
+                    verify_score = 0
+                    for pattern, weight in patterns:
+                        action_matches = len(
+                            _re.findall(pattern, parts[0], _re.IGNORECASE)
+                        )
+                        action_score += action_matches * weight
+                        if len(parts) > 1:
+                            verify_matches = len(
+                                _re.findall(pattern, parts[-1], _re.IGNORECASE)
+                            )
+                            verify_score += verify_matches * weight
+                    action_scores[session_type] = action_score
+                    verify_scores[session_type] = verify_score
+
+                # Weighted combination: action part counts double
+                for session_type in scores:
+                    scores[session_type] = (
+                        action_scores.get(session_type, 0) * 2
+                        + verify_scores.get(session_type, 0)
+                    )
+
+                # Recompute max
+                max_score = max(scores.values()) if scores else 0
+
+        # Return the dominant type (highest score)
+        if max_score > 0:
+            sorted_types = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+            best_type = sorted_types[0][0]
+            logger.info(
+                f"Detected session type: {best_type.value} (score: {max_score})"
+            )
+            return best_type
+
+        # Last resort: return MIXED only if all scores are 0 and original scoring
+        # had multiple types with equal max (ambiguous scenario)
+        return SessionType.MIXED
 
     def configure_from_scenario(self, scenario_text: str) -> None:
         """Configure session based on scenario analysis."""
