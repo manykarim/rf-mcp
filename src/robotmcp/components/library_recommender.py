@@ -33,7 +33,29 @@ class LibraryRecommendation:
 
 class LibraryRecommender:
     """Recommends Robot Framework libraries based on user scenarios and use cases."""
-    
+
+    # Minimum confidence threshold for including a recommendation
+    MIN_CONFIDENCE_THRESHOLD = 0.4
+
+    # Category weights - lower for generic categories
+    CATEGORY_WEIGHTS = {
+        'web': 1.0,
+        'api': 1.0,
+        'mobile': 1.0,
+        'database': 1.0,
+        'desktop': 0.9,
+        'utilities': 0.3,
+        'core': 0.2,
+        'data': 0.4,
+        'testing': 0.5,
+        'system': 0.7,
+    }
+
+    # Exclusion groups - only one from each group should be recommended
+    EXCLUSION_GROUPS = {
+        'web_automation': ['Browser', 'SeleniumLibrary'],
+    }
+
     def __init__(self):
         self.libraries_registry: Dict[str, LibraryInfo] = {}
         self.use_case_mapping: Dict[str, Set[str]] = {}
@@ -85,16 +107,20 @@ class LibraryRecommender:
         self,
         scenario: str,
         context: str = "web",
-        max_recommendations: int = 5
+        max_recommendations: int = 5,
+        explicit_library_preference: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Recommend Robot Framework libraries based on a scenario description.
-        
+
         Args:
             scenario: Natural language description of the test scenario
             context: Testing context (web, mobile, api, desktop, etc.)
             max_recommendations: Maximum number of recommendations to return
-            
+            explicit_library_preference: Explicitly preferred library name
+                (e.g. "SeleniumLibrary" or "Browser") to override default
+                preference logic.
+
         Returns:
             Dictionary containing library recommendations
         """
@@ -130,14 +156,20 @@ class LibraryRecommender:
             unique_matches = self._deduplicate_recommendations(matches)
             ranked_matches = self._rank_recommendations(unique_matches, scenario_keywords, context)
 
+            # Filter by minimum confidence threshold
+            confidence_filtered = self._filter_by_confidence(ranked_matches)
+
             # Apply context-based filtering (e.g., exclude mobile/database for web)
-            filtered = self._filter_by_context(ranked_matches, context, scenario_keywords)
+            filtered = self._filter_by_context(confidence_filtered, context, scenario_keywords)
 
             # Apply preferences (e.g., prefer Browser over SeleniumLibrary for web)
-            preferred = self._apply_preferences(filtered, context)
+            preferred = self._apply_preferences(filtered, context, explicit_library_preference)
+
+            # Apply strict exclusion group rules
+            exclusive = self._apply_strict_exclusions(preferred)
 
             # Limit results
-            top_recommendations = preferred[:max_recommendations]
+            top_recommendations = exclusive[:max_recommendations]
             
             return {
                 "success": True,
@@ -222,17 +254,72 @@ class LibraryRecommender:
                 filtered.append(r)
             return filtered
 
+        if ctx == 'api':
+            # Exclude web-UI and mobile libraries unless explicitly mentioned
+            allow_web = any(k in kws for k in {'browser', 'web', 'page', 'click', 'form', 'ui'})
+            allow_mobile = any(k in kws for k in {'mobile', 'android', 'ios', 'app', 'device', 'appium'})
+            if not allow_web:
+                recs = [r for r in recs if r.library.name not in ('Browser', 'SeleniumLibrary')]
+            if not allow_mobile:
+                recs = [r for r in recs if r.library.name != 'AppiumLibrary']
+            return recs
+
+        if ctx == 'system':
+            allow_web = any(k in kws for k in {'browser', 'web', 'page', 'url', 'website'})
+            allow_mobile = any(k in kws for k in {'mobile', 'android', 'ios', 'appium'})
+            if not allow_web:
+                recs = [r for r in recs if r.library.name not in ('Browser', 'SeleniumLibrary')]
+            if not allow_mobile:
+                recs = [r for r in recs if r.library.name != 'AppiumLibrary']
+            return recs
+
+        if ctx == 'database':
+            allow_web = any(k in kws for k in {'browser', 'web', 'page', 'form', 'website'})
+            allow_mobile = any(k in kws for k in {'mobile', 'android', 'ios', 'appium'})
+            if not allow_web:
+                recs = [r for r in recs if r.library.name not in ('Browser', 'SeleniumLibrary')]
+            if not allow_mobile:
+                recs = [r for r in recs if r.library.name != 'AppiumLibrary']
+            return recs
+
+        # For "generic" or any other context: exclude web/mobile unless explicitly mentioned
+        allow_web = any(k in kws for k in {'browser', 'web', 'page', 'click', 'form', 'website', 'ui'})
+        allow_mobile = any(k in kws for k in {'mobile', 'android', 'ios', 'appium', 'device', 'app'})
+        if not allow_web:
+            recs = [r for r in recs if r.library.name not in ('Browser', 'SeleniumLibrary')]
+        if not allow_mobile:
+            recs = [r for r in recs if r.library.name != 'AppiumLibrary']
         return recs
 
-    def _apply_preferences(self, recs: List['LibraryRecommendation'], context: str) -> List['LibraryRecommendation']:
+    def _apply_preferences(
+        self,
+        recs: List['LibraryRecommendation'],
+        context: str,
+        explicit_library_preference: Optional[str] = None
+    ) -> List['LibraryRecommendation']:
         """Apply library preferences and resolve conflicts.
 
         - For web context, prefer Browser over SeleniumLibrary when both present.
+        - If explicit_library_preference is set, honour that choice instead.
         """
         if not recs:
             return recs
 
         ctx = (context or '').lower().strip()
+
+        # Handle explicit library preference (overrides default logic)
+        if explicit_library_preference:
+            names = [r.library.name for r in recs]
+            if explicit_library_preference == 'SeleniumLibrary':
+                if 'SeleniumLibrary' in names and 'Browser' in names:
+                    recs = [r for r in recs if r.library.name != 'Browser']
+                    recs.sort(key=lambda r: 0 if r.library.name == 'SeleniumLibrary' else 1)
+            elif explicit_library_preference == 'Browser':
+                if 'Browser' in names and 'SeleniumLibrary' in names:
+                    recs = [r for r in recs if r.library.name != 'SeleniumLibrary']
+                    recs.sort(key=lambda r: 0 if r.library.name == 'Browser' else 1)
+            return recs
+
         if ctx == 'web':
             names = [r.library.name for r in recs]
             if 'Browser' in names and 'SeleniumLibrary' in names:
@@ -248,11 +335,61 @@ class LibraryRecommender:
             recs.sort(key=lambda r: 0 if r.library.name == 'AppiumLibrary' else 1)
         return recs
 
+    def _apply_strict_exclusions(self, recommendations: List[LibraryRecommendation]) -> List[LibraryRecommendation]:
+        """Ensure only one library from each exclusion group is recommended.
+
+        Args:
+            recommendations: List of recommendations sorted by confidence
+
+        Returns:
+            Filtered list with exclusion groups enforced
+        """
+        result = []
+        used_groups = set()
+
+        for rec in recommendations:
+            lib_name = rec.library.name
+
+            # Check if this library belongs to an exclusion group
+            group = None
+            for group_name, group_libs in self.EXCLUSION_GROUPS.items():
+                if lib_name in group_libs:
+                    group = group_name
+                    break
+
+            if group:
+                if group in used_groups:
+                    logger.debug(f"Excluding {lib_name}: {group} group already represented")
+                    continue
+                used_groups.add(group)
+
+            result.append(rec)
+
+        return result
+
+    def _filter_by_confidence(self, recommendations: List[LibraryRecommendation]) -> List[LibraryRecommendation]:
+        """Filter recommendations below minimum confidence threshold.
+
+        Args:
+            recommendations: List of recommendations
+
+        Returns:
+            Filtered list with only high-confidence recommendations
+        """
+        filtered = [r for r in recommendations if r.confidence >= self.MIN_CONFIDENCE_THRESHOLD]
+        removed_count = len(recommendations) - len(filtered)
+        if removed_count > 0:
+            logger.debug(f"Filtered {removed_count} low-confidence recommendations (threshold: {self.MIN_CONFIDENCE_THRESHOLD})")
+        return filtered
+
     def _normalize_text(self, text: str) -> str:
         """Normalize text for keyword extraction."""
         # Convert to lowercase and remove extra whitespace
         normalized = re.sub(r'\s+', ' ', text.lower().strip())
         
+        # Strip URLs to prevent "https" from triggering "http" API matching
+        normalized = re.sub(r'https?://\S+', ' ', normalized)
+
         # Remove punctuation but keep important characters
         normalized = re.sub(r'[^\w\s\-]', ' ', normalized)
         normalized = re.sub(r'\s+', ' ', normalized).strip()
@@ -263,14 +400,52 @@ class LibraryRecommender:
         """Extract relevant keywords from scenario text."""
         # Common testing keywords and patterns
         testing_keywords = {
-            'web': ['web', 'browser', 'page', 'click', 'form', 'element', 'html', 'javascript', 
-                   'playwright', 'modern', 'fill', 'locator', 'wait', 'viewport', 'headless'],
-            'api': ['api', 'rest', 'http', 'json', 'request', 'response', 'endpoint', 'service'],
-            'mobile': ['mobile', 'app', 'android', 'ios', 'touch', 'swipe', 'device'],
-            'database': ['database', 'sql', 'query', 'table', 'data', 'record'],
+            'web': [
+                'web', 'browser', 'page', 'click', 'form', 'element', 'html', 'javascript',
+                'playwright', 'modern', 'fill', 'locator', 'wait', 'viewport', 'headless',
+                'website', 'webpage', 'frontend', 'ui', 'navigation', 'login', 'signup',
+                'registration', 'checkout', 'e-commerce', 'button', 'link', 'input',
+                'dropdown', 'checkbox', 'modal', 'dialog', 'popup', 'iframe', 'cookie',
+                'chromium', 'webkit', 'chrome', 'firefox', 'edge', 'safari', 'spa', 'pwa',
+                'responsive', 'e2e',
+            ],
+            'api': [
+                'api', 'rest', 'http', 'json', 'request', 'response', 'endpoint', 'service',
+                'webservice', 'microservice', 'backend', 'bearer', 'jwt', 'oauth', 'swagger',
+                'openapi', 'graphql', 'grpc', 'soap', 'webhook', 'callback', 'status code',
+                'payload', 'header', 'content-type', 'postman', 'curl',
+            ],
+            'mobile': [
+                'mobile', 'app', 'android', 'ios', 'touch', 'swipe', 'device',
+                'iphone', 'ipad', 'tablet', 'smartphone', 'appium', 'emulator', 'simulator',
+                'native app', 'hybrid app', 'apk', 'ipa', 'tap', 'long press', 'double tap',
+                'pinch', 'gesture', 'device farm', 'browserstack', 'sauce labs',
+            ],
+            'database': [
+                'database', 'sql', 'query', 'table', 'data', 'record',
+                'postgres', 'postgresql', 'mysql', 'mariadb', 'sqlite', 'oracle', 'mssql',
+                'mongodb', 'redis', 'stored procedure', 'crud', 'schema', 'migration',
+                'transaction', 'connection string',
+            ],
             'desktop': ['desktop', 'window', 'gui', 'application', 'dialog'],
             'visual': ['image', 'screenshot', 'visual', 'compare', 'pdf', 'document'],
-            'system': ['file', 'directory', 'process', 'command', 'system', 'ssh', 'remote']
+            'system': [
+                'file', 'directory', 'process', 'command', 'system', 'ssh', 'remote',
+                'server', 'deploy', 'deployment', 'terminal', 'shell', 'sftp', 'scp',
+                'linux', 'unix', 'production', 'staging', 'log file', 'disk usage',
+                'pipeline', 'devops', 'ci/cd',
+            ],
+            'xml': [
+                'xml', 'xpath', 'xslt', 'dtd', 'xsd', 'namespace', 'parse xml',
+                'xml schema', 'xml file',
+            ],
+            'data': [
+                'csv', 'excel', 'xlsx', 'data driven', 'test data', 'faker', 'etl',
+                'transform',
+            ],
+            'datetime': [
+                'date', 'time', 'timestamp', 'timezone', 'duration', 'epoch', 'utc',
+            ],
         }
         
         extracted_keywords = []
@@ -279,10 +454,10 @@ class LibraryRecommender:
         # Extract individual words
         extracted_keywords.extend(words)
         
-        # Extract domain-specific keywords
+        # Extract domain-specific keywords (word-boundary matching with suffix tolerance)
         for domain, keywords in testing_keywords.items():
             for keyword in keywords:
-                if keyword in text:
+                if re.search(r'\b' + re.escape(keyword) + r'(?:s|ed|ing|er|es|tion|ment|ly)?\b', text):
                     extracted_keywords.append(keyword)
         
         # Remove duplicates and very short words
@@ -412,14 +587,17 @@ class LibraryRecommender:
                             matching_terms.append(keyword)
                             break
             
-            if matching_score > 0:
-                confidence = min(matching_score / len(keywords), 1.0) * 0.6
-                matches.append(LibraryRecommendation(
-                    library=library,
-                    confidence=confidence,
-                    matching_keywords=matching_terms,
-                    rationale=f"Keyword match in description ({len(matching_terms)} terms)"
-                ))
+            # Require at least 2 keyword matches for inclusion
+            if matching_score < 2:
+                continue
+
+            confidence = min(matching_score / len(keywords), 1.0) * 0.6
+            matches.append(LibraryRecommendation(
+                library=library,
+                confidence=confidence,
+                matching_keywords=matching_terms,
+                rationale=f"Keyword match in description ({len(matching_terms)} terms)"
+            ))
         
         return matches
 

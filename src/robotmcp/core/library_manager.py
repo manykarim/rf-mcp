@@ -3,7 +3,7 @@
 import importlib
 import inspect
 import logging
-from typing import Any, Dict, Set
+from typing import Any, Dict, List, Optional, Set
 
 from robotmcp.config.library_registry import (
     get_library_install_hint,
@@ -81,6 +81,9 @@ class LibraryManager:
                     f"Added {len(lib_info.keywords)} BuiltIn keywords to cache"
                 )
 
+        # Pre-filter for exclusion groups to prevent loading conflicts
+        library_names = self._filter_exclusive_libraries(library_names)
+
         # Load requested libraries
         loaded_count = 0
         for library_name in library_names:
@@ -121,8 +124,68 @@ class LibraryManager:
 
         return success
 
+    def _check_exclusion_group(self, library_name: str) -> tuple[bool, str]:
+        """Check if library can be loaded based on exclusion groups.
+
+        Returns:
+            Tuple of (can_load, reason)
+        """
+        for group_name, group_libs in self.exclusion_groups.items():
+            if library_name in group_libs:
+                already_loaded = [lib for lib in group_libs if lib in self.libraries]
+                if already_loaded and library_name not in already_loaded:
+                    return False, f"Cannot load {library_name}: conflicts with {already_loaded[0]} (exclusion group: {group_name})"
+        return True, "OK"
+
+    def _get_exclusion_group(self, library_name: str) -> Optional[str]:
+        """Get the exclusion group a library belongs to, if any."""
+        for group_name, group_libs in self.exclusion_groups.items():
+            if library_name in group_libs:
+                return group_name
+        return None
+
+    def _filter_exclusive_libraries(self, library_names: list, preferred: str = None) -> list:
+        """Filter library list to keep only first from each exclusion group.
+
+        Args:
+            library_names: List of library names to filter
+            preferred: Optional preferred library name that takes priority
+
+        Returns:
+            Filtered list with no exclusion group conflicts
+        """
+        result = []
+        used_groups = {}  # group_name -> library_name
+
+        for lib in library_names:
+            group = self._get_exclusion_group(lib)
+            if group:
+                if group in used_groups:
+                    # Already have one from this group
+                    if lib == preferred:
+                        # Preferred overrides - remove previous and add this
+                        result.remove(used_groups[group])
+                        result.append(lib)
+                        used_groups[group] = lib
+                        logger.debug(f"Preferred {lib} replaced {used_groups[group]} in {group} group")
+                    else:
+                        logger.debug(f"Filtering out {lib}: {group} group already has {used_groups[group]}")
+                    continue
+                used_groups[group] = lib
+            result.append(lib)
+
+        return result
+
     def try_import_library(self, library_name: str, keyword_extractor) -> bool:
         """Try to import and initialize a Robot Framework library."""
+        # Check exclusion groups before loading
+        can_load, reason = self._check_exclusion_group(library_name)
+        if not can_load:
+            logger.warning(reason)
+            self.excluded_libraries.add(library_name)
+            self.failed_imports[library_name] = reason
+            return False
+
         try:
             # Handle special cases
             if library_name == "BuiltIn":
@@ -268,26 +331,34 @@ class LibraryManager:
                 self.failed_imports[library_name] = str(e)
             return False
 
-    def resolve_library_conflicts(self) -> None:
-        """
-        Resolve conflicts between loaded libraries by removing less preferred ones.
+    def resolve_library_conflicts(self, preferred: str = None) -> List[str]:
+        """Resolve conflicts by removing non-preferred libraries.
 
-        UPDATED: With session-based loading, conflicts are minimized since only
-        relevant libraries are loaded per session.
+        Args:
+            preferred: Optional preferred library name to keep
+
+        Returns:
+            List of removed library names
         """
+        removed = []
         web_automation_libs = self.exclusion_groups.get("web_automation", [])
-
-        # Check which web automation libraries were actually loaded
         loaded_web_libs = [lib for lib in web_automation_libs if lib in self.libraries]
 
         if len(loaded_web_libs) > 1:
-            logger.info(f"Multiple web automation libraries loaded: {loaded_web_libs}")
-            logger.info("Session-based search order will resolve keyword conflicts")
-
+            # Keep preferred or first loaded
+            keep = preferred if preferred in loaded_web_libs else loaded_web_libs[0]
+            for lib in loaded_web_libs:
+                if lib != keep:
+                    self.remove_library(lib)
+                    self.excluded_libraries.add(lib)
+                    removed.append(lib)
+                    logger.info(f"Removed conflicting library: {lib} (kept {keep})")
         elif len(loaded_web_libs) == 1:
             logger.info(f"Single web automation library loaded: {loaded_web_libs[0]}")
         else:
             logger.debug("No web automation libraries loaded")
+
+        return removed
 
     def remove_library(self, library_name: str) -> None:
         """
