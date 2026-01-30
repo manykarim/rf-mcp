@@ -3,7 +3,7 @@
 import inspect
 import logging
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from robotmcp.models.library_models import LibraryInfo, KeywordInfo
 
@@ -15,7 +15,9 @@ class KeywordDiscovery:
     
     def __init__(self):
         self.keyword_cache: Dict[str, KeywordInfo] = {}
-        
+        self.shadowed_keywords: Dict[str, List[Tuple[str, KeywordInfo]]] = {}  # keyword -> [(library, info), ...]
+        self.ambiguous_keywords: Set[str] = set()  # Keywords that exist in multiple libraries
+
         # Keywords that modify the DOM or navigate pages
         self.dom_changing_patterns = [
             'click', 'fill', 'type', 'select', 'check', 'uncheck',
@@ -152,8 +154,21 @@ class KeywordDiscovery:
             
             # Also maintain a simple lookup for backward compatibility
             simple_key = keyword_name.lower()
-            if simple_key not in self.keyword_cache:
-                # Only add if no other library has claimed this keyword name yet
+
+            if simple_key in self.keyword_cache:
+                existing = self.keyword_cache[simple_key]
+                existing_lib = getattr(existing, 'library', 'unknown')
+                if existing_lib != lib_info.name:
+                    # Track shadowed keyword
+                    if simple_key not in self.shadowed_keywords:
+                        self.shadowed_keywords[simple_key] = [(existing_lib, existing)]
+                    self.shadowed_keywords[simple_key].append((lib_info.name, keyword_info))
+                    self.ambiguous_keywords.add(simple_key)
+                    logger.warning(
+                        f"Keyword '{keyword_name}' from {lib_info.name} shadows "
+                        f"existing keyword from {existing_lib}. Use 'Library.{keyword_name}' for disambiguation."
+                    )
+            else:
                 self.keyword_cache[simple_key] = keyword_info
     
     def remove_keywords_from_cache(self, lib_info: LibraryInfo) -> int:
@@ -327,3 +342,22 @@ class KeywordDiscovery:
         """Check if a keyword likely changes the DOM."""
         keyword_lower = keyword_name.lower()
         return any(pattern in keyword_lower for pattern in self.dom_changing_patterns)
+
+    def get_keyword_shadow_info(self) -> Dict[str, Any]:
+        """Get information about shadowed keywords.
+
+        Returns:
+            Dictionary with shadow information
+        """
+        return {
+            "ambiguous_count": len(self.ambiguous_keywords),
+            "ambiguous_keywords": list(self.ambiguous_keywords),
+            "shadows": {
+                kw: [(lib, info.source_method if hasattr(info, 'source_method') else info.method_name) for lib, info in libs]
+                for kw, libs in self.shadowed_keywords.items()
+            }
+        }
+
+    def is_keyword_ambiguous(self, keyword_name: str) -> bool:
+        """Check if a keyword name is ambiguous (exists in multiple libraries)."""
+        return keyword_name.lower() in self.ambiguous_keywords

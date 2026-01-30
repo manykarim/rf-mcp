@@ -230,6 +230,14 @@ class ExecutionSession:
             ValueError: If trying to import a conflicting library without force=True
         """
         if library_name not in self.imported_libraries:
+            # Validate library is appropriate for session type
+            if not force and not self.validate_library_for_session(library_name):
+                allowed = self._get_allowed_libraries_for_session_type()
+                raise ValueError(
+                    f"Library '{library_name}' is not valid for session type '{self.session_type.value}'. "
+                    f"Allowed libraries: {sorted(allowed)}"
+                )
+
             # Enforce web automation library exclusion
             web_automation_libs = ["Browser", "SeleniumLibrary"]
 
@@ -268,6 +276,13 @@ class ExecutionSession:
         Returns:
             bool: True if library is loaded successfully, False otherwise
         """
+        # Validate library is appropriate for session type
+        if not self.validate_library_for_session(library_name):
+            logger.warning(
+                f"Library '{library_name}' not valid for session type '{self.session_type.value}', skipping"
+            )
+            return False
+
         try:
             # Check if already loaded
             if hasattr(self, "_session_manager") and self._session_manager:
@@ -513,125 +528,52 @@ class ExecutionSession:
     # ===============================
 
     def detect_explicit_library_preference(self, scenario_text: str) -> Optional[str]:
-        """Detect explicit library preference from scenario text with enhanced patterns and confidence scoring."""
+        """Detect explicit library preference from scenario text.
+
+        Uses centralized LibraryDetector for consistent detection across the codebase.
+
+        Args:
+            scenario_text: The scenario text to analyze
+
+        Returns:
+            Library name if detected, None otherwise
+        """
         if not scenario_text:
             return None
 
-        text_lower = scenario_text.lower()
-        library_scores = {}
-
-        # Enhanced Selenium patterns (highest priority for explicit mentions)
-        selenium_patterns = [
-            (
-                r"\b(use|using|with|via|through)\s+(selenium|seleniumlibrary|selenium\s*library)\b",
-                10,
-            ),
-            (r"\btest\s+automation\s+with\s+selenium\b", 8),
-            (r"\bseleniumlibrary\b", 9),
-            (r"\bwebdriver\b", 6),  # WebDriver often implies Selenium
-            (
-                r"\bselenium\b(?!.*browser)(?!.*grid)",
-                7,
-            ),  # Selenium mentioned but not "selenium browser" or "selenium grid"
-            (r"\b(selenium|webdriver)\s+(automation|testing|framework)\b", 8),
-            (r"\bchrome\s*driver|firefox\s*driver|edge\s*driver\b", 5),
-        ]
-
-        # Enhanced Browser Library patterns
-        browser_patterns = [
-            (
-                r"\b(use|using|with|via|through)\s+(browser|browserlibrary|browser\s*library|playwright)\b",
-                10,
-            ),
-            (r"\btest\s+automation\s+with\s+(browser\s*library|playwright)\b", 8),
-            (r"\bbrowser\s*library\b", 9),
-            (r"\bplaywright\b", 8),
-            (r"\b(modern|new)\s+(browser|web)\s+(automation|testing)\b", 6),
-            (r"\b(chromium|firefox|webkit)\s+(browser|automation)\b", 7),
-            (r"\b(headless|headed)\s+(browser|testing)\b", 5),
-            (r"\basync\s+(browser|web)\s+automation\b", 6),
-        ]
-
-        # Enhanced API testing patterns
-        api_patterns = [
-            (
-                r"\b(use|using|with)\s+(requests|requestslibrary|requests\s*library)\b",
-                10,
-            ),
-            (r"\btest\s+automation\s+with\s+requests\b", 8),
-            (r"\brequestslibrary\b", 9),
-            (r"\b(rest|http)\s+(api|testing|automation)\b", 7),
-            (r"\b(post|get|put|delete)\s+(request|endpoint)\b", 6),
-            (r"\bjson\s+(api|response|request)\b", 5),
-            (r"\bapi\s+(automation|testing|validation)\b", 6),
-        ]
-
-        # Enhanced XML processing patterns
-        xml_patterns = [
-            (r"\b(use|using|with)\s+(xml|xmllibrary|xml\s*library)\b", 10),
-            (r"\btest\s+automation\s+with\s+xml\b", 8),
-            (r"\bxmllibrary\b", 9),
-            (r"\b(xml|xpath)\s+(processing|parsing|manipulation)\b", 7),
-            (r"\b(parse|process|manipulate)\s+xml\b", 6),
-            (r"\bxml\s+(validation|testing|automation)\b", 6),
-        ]
-
-        # Enhanced mobile testing patterns
-        mobile_patterns = [
-            (r"\b(use|using|with)\s+(appium|appiumlibrary|appium\s*library)\b", 10),
-            (r"\btest\s+automation\s+with\s+appium\b", 8),
-            (r"\bappiumlibrary\b", 9),
-            (r"\b(mobile|android|ios)\s+(app|testing|automation)\b", 7),
-            (r"\b(device|mobile)\s+(automation|testing)\b", 6),
-            (r"\b(native|hybrid)\s+(app|mobile)\s+(testing|automation)\b", 6),
-        ]
-
-        # Enhanced database testing patterns
-        database_patterns = [
-            (
-                r"\b(use|using|with)\s+(database|databaselibrary|database\s*library)\b",
-                10,
-            ),
-            (r"\btest\s+automation\s+with\s+database\b", 8),
-            (r"\bdatabaselibrary\b", 9),
-            (r"\b(sql|database)\s+(testing|automation|queries)\b", 7),
-            (r"\b(mysql|postgresql|sqlite|oracle)\s+(database|testing)\b", 6),
-            (r"\bdatabase\s+(validation|testing|automation)\b", 6),
-        ]
-
-        # Score all patterns
-        all_patterns = [
-            ("SeleniumLibrary", selenium_patterns),
-            ("Browser", browser_patterns),
-            ("RequestsLibrary", api_patterns),
-            ("XML", xml_patterns),
-            ("AppiumLibrary", mobile_patterns),
-            ("DatabaseLibrary", database_patterns),
-        ]
-
-        for library_name, patterns in all_patterns:
-            library_scores[library_name] = 0
-            for pattern, weight in patterns:
-                matches = len(re.findall(pattern, text_lower))
-                library_scores[library_name] += matches * weight
-
-        # Find highest scoring library
-        if library_scores:
-            best_library = max(library_scores, key=library_scores.get)
-            max_score = library_scores[best_library]
-
-            # Only return if confidence is high enough
-            if max_score >= 5:  # Minimum confidence threshold
+        try:
+            from robotmcp.utils.library_detection import detect_library_preference
+            result = detect_library_preference(scenario_text, min_score=5)
+            if result:
                 logger.info(
-                    f"Detected explicit {best_library} preference (score: {max_score}) in scenario"
+                    f"Detected explicit {result} preference in scenario (via LibraryDetector)"
                 )
-                return best_library
+                return result
+            # If LibraryDetector found nothing, try fallback
+            return self._fallback_detect_library(scenario_text)
+        except ImportError:
+            # Fallback to simple detection if LibraryDetector not available
+            logger.debug("LibraryDetector not available, using fallback detection")
+            return self._fallback_detect_library(scenario_text)
 
-        # Fallback: Generic patterns for common libraries (lower confidence)
+    def _fallback_detect_library(self, scenario_text: str) -> Optional[str]:
+        """Fallback library detection if LibraryDetector unavailable or finds nothing.
+
+        Args:
+            scenario_text: The scenario text to analyze
+
+        Returns:
+            Library name if detected via fallback patterns, None otherwise
+        """
+        text_lower = scenario_text.lower()
+
+        # Simple pattern matching fallback (lower confidence)
         fallback_patterns = [
+            (r"\b(selenium|webdriver)\b", "SeleniumLibrary"),
+            (r"\b(browser\s*library|playwright)\b", "Browser"),
             (r"\b(xml|xpath)\b", "XML"),
             (r"\b(api|http|rest|request)\b", "RequestsLibrary"),
-            (r"\b(mobile|android|ios|device)\b", "AppiumLibrary"),
+            (r"\b(mobile|android|ios|device|appium)\b", "AppiumLibrary"),
             (r"\b(database|sql|mysql|postgresql)\b", "DatabaseLibrary"),
         ]
 
@@ -666,6 +608,11 @@ class ExecutionSession:
                 (r"\b(url|link|element|locator|css|xpath)\b", 2),
                 (r"\b(headless|headed|screenshot|automation)\b", 1),
                 (r"\bhttps?://\S+", 3),  # URL detection
+                (r"\b(e-?commerce|shopping\s+cart|checkout\s+flow)\b", 3),
+                (r"\b(SPA|single\s+page\s+app(lication)?|PWA)\b", 3),
+                (r"\b(e2e|end.to.end)\s+test", 3),
+                (r"\b(login|signup|registration)\s+(form|page|flow)\b", 3),
+                (r"\b(chrome|firefox|safari|edge|chromium|webkit)\b", 2),
             ],
             SessionType.API_TESTING: [
                 (r"\b(api|rest|http|endpoint|request)\b", 3),
@@ -674,6 +621,11 @@ class ExecutionSession:
                 (r"\b(oauth|token|authentication|authorization)\b", 2),
                 (r"\bmicroservice|webhook|graphql\b", 2),
                 (r"\bapi\s+(testing|automation|validation)\b", 3),
+                (r"\b(webservice|web\s+service|microservice)\b", 3),
+                (r"\b(bearer|JWT|OAuth|API\s+key)\b", 3),
+                (r"\b(swagger|openapi|GraphQL|gRPC|SOAP)\b", 3),
+                (r"\b(health\s+check|smoke\s+test)\b", 2),
+                (r"\bstatus\s+(code|[12345]\d{2})\b", 3),
             ],
             SessionType.XML_PROCESSING: [
                 (r"\b(xml|xpath|parse|element|attribute)\b", 3),
@@ -692,18 +644,35 @@ class ExecutionSession:
                 (r"\b(command|shell|environment|terminal)\b", 2),
                 (r"\b(ssh|ftp|sftp|scp)\b", 2),
                 (r"\bsystem\s+(testing|automation|administration)\b", 3),
+                (r"\b(deploy|deployment|rollback|release)\b", 2),
+                (r"\b(log\s+file|error\s+log|server\s+log)\b", 3),
+                (r"\b(production|staging)\s+(server|environment)\b", 3),
+                (r"\b(disk\s+usage|memory\s+usage|CPU|uptime)\b", 3),
+                (r"\b(ci/?cd|pipeline|devops)\b", 2),
             ],
             SessionType.MOBILE_TESTING: [
                 (r"\b(mobile|android|ios|device|app)\b", 3),
                 (r"\b(appium|espresso|xcuitest)\b", 4),
                 (r"\b(tap|swipe|scroll|pinch|gesture)\b", 3),
                 (r"\bmobile\s+(testing|automation|app)\b", 4),
+                (r"\b(emulator|simulator|real\s+device)\b", 3),
+                (r"\b(APK|IPA|bundle\s+ID|package\s+name)\b", 3),
+                (r"\b(device\s+farm|BrowserStack|Sauce\s+Labs)\b", 3),
             ],
             SessionType.DATABASE_TESTING: [
                 (r"\b(database|sql|query|table|record)\b", 3),
                 (r"\b(mysql|postgresql|sqlite|oracle|mongodb)\b", 3),
                 (r"\b(select|insert|update|delete|create)\s+(table|from|into)\b", 3),
                 (r"\bdatabase\s+(testing|automation|validation)\b", 4),
+                (r"\b(CRUD|migration|schema\s+change)\b", 3),
+                (r"\b(connection\s+string|DSN|ODBC|JDBC)\b", 3),
+            ],
+            SessionType.VISUAL_TESTING: [
+                (r"\b(visual|image|screenshot|capture)\b", 2),
+                (r"\b(compare|comparison|diff|baseline|pixel)\b", 2),
+                (r"\b(pdf|document)\s+(test|verif|compar)", 3),
+                (r"\bvisual\s+(test|regression|comparison|validation)\b", 4),
+                (r"\b(doctest|imagelibrary|screencaplibrary)\b", 4),
             ],
         }
 
@@ -723,19 +692,64 @@ class ExecutionSession:
         if not scores or max(scores.values()) == 0:
             return SessionType.UNKNOWN
 
-        best_type = max(scores, key=scores.get)
         max_score = max(scores.values())
 
-        # Enhanced mixed-type detection with smarter thresholds
+        # Primary/secondary type detection: instead of returning MIXED,
+        # detect primary activity vs verification parts of the scenario
         high_scores = [k for k, v in scores.items() if v >= max_score * 0.7 and v > 1]
         if len(high_scores) > 1 and max_score > 2:
             logger.info(
                 f"Multiple high-scoring session types detected: {[k.value for k in high_scores]}"
             )
-            return SessionType.MIXED
 
-        logger.info(f"Detected session type: {best_type.value} (score: {max_score})")
-        return best_type
+            # Split scenario into action and verification parts
+            import re as _re
+
+            verification_markers = r"\b(?:then\s+)?(?:verify|check|validate|assert|confirm|ensure)\b"
+            parts = _re.split(verification_markers, text_lower, maxsplit=1)
+
+            if len(parts) > 1 and len(parts[0].strip()) > 10:
+                # Recompute scores weighting action part 2x, verification part 1x
+                action_scores: Dict[SessionType, int] = {}
+                verify_scores: Dict[SessionType, int] = {}
+                for session_type, patterns in pattern_weights.items():
+                    action_score = 0
+                    verify_score = 0
+                    for pattern, weight in patterns:
+                        action_matches = len(
+                            _re.findall(pattern, parts[0], _re.IGNORECASE)
+                        )
+                        action_score += action_matches * weight
+                        if len(parts) > 1:
+                            verify_matches = len(
+                                _re.findall(pattern, parts[-1], _re.IGNORECASE)
+                            )
+                            verify_score += verify_matches * weight
+                    action_scores[session_type] = action_score
+                    verify_scores[session_type] = verify_score
+
+                # Weighted combination: action part counts double
+                for session_type in scores:
+                    scores[session_type] = (
+                        action_scores.get(session_type, 0) * 2
+                        + verify_scores.get(session_type, 0)
+                    )
+
+                # Recompute max
+                max_score = max(scores.values()) if scores else 0
+
+        # Return the dominant type (highest score)
+        if max_score > 0:
+            sorted_types = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+            best_type = sorted_types[0][0]
+            logger.info(
+                f"Detected session type: {best_type.value} (score: {max_score})"
+            )
+            return best_type
+
+        # Last resort: return MIXED only if all scores are 0 and original scoring
+        # had multiple types with equal max (ambiguous scenario)
+        return SessionType.MIXED
 
     def configure_from_scenario(self, scenario_text: str) -> None:
         """Configure session based on scenario analysis."""
@@ -796,24 +810,34 @@ class ExecutionSession:
                 )
 
     def validate_library_for_session(self, library_name: str) -> bool:
-        """Validate if a library is allowed in this session type."""
+        """Validate if a library is appropriate for this session type.
+
+        Args:
+            library_name: Name of library to validate
+
+        Returns:
+            True if library is valid for session type, False otherwise
+        """
+        allowed = self._get_allowed_libraries_for_session_type()
+        if not allowed:
+            return True  # Allow any if no profile
+        return library_name in allowed
+
+    def _get_allowed_libraries_for_session_type(self) -> Set[str]:
+        """Get set of allowed libraries for current session type."""
         if self.session_type.value == "unknown":
-            return True  # Allow any library for unknown sessions
+            return set()  # Empty set means allow any
 
         profiles = self._get_session_profiles()
-        if self.session_type in profiles:
-            profile = profiles[self.session_type]
-            allowed_libraries = set(profile.core_libraries + profile.optional_libraries)
-            is_allowed = library_name in allowed_libraries
+        profile = profiles.get(self.session_type)
+        if not profile:
+            return set()  # Allow any if no profile
 
-            if not is_allowed:
-                logger.warning(
-                    f"Library '{library_name}' not allowed in session type '{self.session_type.value}'. Allowed: {allowed_libraries}"
-                )
-
-            return is_allowed
-
-        return True  # Allow if no profile found
+        allowed = set(profile.core_libraries)
+        allowed.update(profile.optional_libraries)
+        # Always allow BuiltIn
+        allowed.add("BuiltIn")
+        return allowed
 
     def get_excluded_libraries_for_session(self) -> Set[str]:
         """Get libraries that are excluded from this session type."""

@@ -30,7 +30,60 @@ class TestScenario:
 
 class NaturalLanguageProcessor:
     """Processes natural language test descriptions into structured formats."""
-    
+
+    # Stemming map for common verb forms
+    STEM_MAP = {
+        # Click variations
+        'clicking': 'click', 'clicks': 'click', 'clicked': 'click',
+        # Press variations
+        'pressing': 'press', 'presses': 'press', 'pressed': 'press',
+        # Navigate variations
+        'navigating': 'navigate', 'navigates': 'navigate', 'navigated': 'navigate',
+        # Open variations
+        'opening': 'open', 'opens': 'open', 'opened': 'open',
+        # Close variations
+        'closing': 'close', 'closes': 'close', 'closed': 'close',
+        # Fill variations
+        'filling': 'fill', 'fills': 'fill', 'filled': 'fill',
+        # Type variations
+        'typing': 'type', 'types': 'type', 'typed': 'type',
+        # Submit variations
+        'submitting': 'submit', 'submits': 'submit', 'submitted': 'submit',
+        # Verify variations
+        'verifying': 'verify', 'verifies': 'verify', 'verified': 'verify',
+        # Check variations
+        'checking': 'check', 'checks': 'check', 'checked': 'check',
+        # Wait variations
+        'waiting': 'wait', 'waits': 'wait', 'waited': 'wait',
+        # Select variations
+        'selecting': 'select', 'selects': 'select', 'selected': 'select',
+        # Enter variations
+        'entering': 'enter', 'enters': 'enter', 'entered': 'enter',
+        # Scroll variations
+        'scrolling': 'scroll', 'scrolls': 'scroll', 'scrolled': 'scroll',
+        # Test variations
+        'testing': 'test', 'tests': 'test', 'tested': 'test',
+        # Assert variations
+        'asserting': 'assert', 'asserts': 'assert', 'asserted': 'assert',
+        # Validate variations
+        'validating': 'validate', 'validates': 'validate', 'validated': 'validate',
+    }
+
+    # Synonym groups - first word is canonical
+    SYNONYMS = {
+        'click': ['click', 'press', 'tap', 'select', 'hit'],
+        'input': ['input', 'type', 'enter', 'fill', 'write'],
+        'verify': ['verify', 'check', 'assert', 'validate', 'confirm', 'ensure'],
+        'navigate': ['navigate', 'go', 'open', 'visit', 'browse', 'access'],
+        'wait': ['wait', 'pause', 'delay', 'sleep'],
+        'close': ['close', 'quit', 'exit', 'terminate', 'end'],
+        'submit': ['submit', 'send', 'post', 'confirm'],
+        'scroll': ['scroll', 'swipe', 'drag'],
+        'search': ['search', 'find', 'locate', 'query', 'lookup'],
+        'login': ['login', 'signin', 'authenticate', 'logon'],
+        'logout': ['logout', 'signout', 'logoff'],
+    }
+
     def __init__(self):
         self.action_patterns = {
             'navigate': [
@@ -77,6 +130,75 @@ class NaturalLanguageProcessor:
             'DatabaseLibrary': ['database', 'db', 'sql', 'table', 'query'],
             'AppiumLibrary': ['mobile', 'app', 'android', 'ios', 'appium']
         }
+
+    def _stem_word(self, word: str) -> str:
+        """Apply simple stemming to a word.
+
+        Args:
+            word: Word to stem
+
+        Returns:
+            Stemmed word
+        """
+        return self.STEM_MAP.get(word.lower(), word.lower())
+
+    def _normalize_keywords(self, keywords: List[str]) -> List[str]:
+        """Normalize a list of keywords by applying stemming.
+
+        Args:
+            keywords: List of keywords to normalize
+
+        Returns:
+            Normalized keywords
+        """
+        return [self._stem_word(kw) for kw in keywords]
+
+    def _expand_synonyms(self, keyword: str) -> List[str]:
+        """Expand a keyword to include its synonyms.
+
+        Args:
+            keyword: Keyword to expand
+
+        Returns:
+            List containing keyword and all synonyms
+        """
+        keyword_lower = keyword.lower()
+
+        # Check each synonym group
+        for canonical, synonyms in self.SYNONYMS.items():
+            if keyword_lower in synonyms:
+                return synonyms
+
+        return [keyword_lower]
+
+    def _expand_all_synonyms(self, keywords: List[str]) -> List[str]:
+        """Expand all keywords to include synonyms.
+
+        Args:
+            keywords: List of keywords to expand
+
+        Returns:
+            Expanded list with synonyms included
+        """
+        expanded = set()
+        for kw in keywords:
+            expanded.update(self._expand_synonyms(kw))
+        return list(expanded)
+
+    def _fuzzy_match(self, text: str, pattern: str, threshold: float = 0.85) -> bool:
+        """Check if text fuzzy matches pattern.
+
+        Args:
+            text: Text to check
+            pattern: Pattern to match
+            threshold: Similarity threshold (0-1)
+
+        Returns:
+            True if similarity >= threshold
+        """
+        from difflib import SequenceMatcher
+        ratio = SequenceMatcher(None, text.lower(), pattern.lower()).ratio()
+        return ratio >= threshold
 
     async def analyze_scenario(self, scenario: str, context: str = "web") -> Dict[str, Any]:
         """
@@ -506,90 +628,117 @@ class NaturalLanguageProcessor:
         return verifications
     
     def _detect_explicit_library_preference(self, scenario_text: str) -> Optional[str]:
-        """Detect explicit library preference from scenario text."""
+        """Detect explicit library preference using centralized LibraryDetector."""
+        try:
+            from robotmcp.utils.library_detection import detect_library_preference
+            detected = detect_library_preference(scenario_text, min_score=5)
+            if detected:
+                return detected
+        except ImportError:
+            pass
+
+        # Fallback to local patterns for backward compatibility
+        return self._fallback_detect_library_preference(scenario_text)
+
+    def _fallback_detect_library_preference(self, scenario_text: str) -> Optional[str]:
+        """Fallback library preference detection using local patterns."""
         if not scenario_text:
             return None
-        
+
         text_lower = scenario_text.lower()
-        
+
         # Selenium patterns (highest priority for explicit mentions)
         selenium_patterns = [
             r'\b(use|using|with)\s+(selenium|seleniumlibrary|selenium\s*library)\b',
             r'\bselenium\b(?!.*browser)',  # Selenium mentioned but not "selenium browser"
             r'\bseleniumlibrary\b',
         ]
-        
+
         # Browser Library patterns
         browser_patterns = [
             r'\b(use|using|with)\s+(browser|browserlibrary|browser\s*library|playwright)\b',
             r'\bbrowser\s*library\b',
             r'\bplaywright\b',
         ]
-        
+
         # Check for explicit Selenium preference first
         for pattern in selenium_patterns:
             if re.search(pattern, text_lower):
                 logger.info(f"NLP: Detected explicit SeleniumLibrary preference: {pattern}")
                 return "SeleniumLibrary"
-        
+
         # Check for explicit Browser Library preference
         for pattern in browser_patterns:
             if re.search(pattern, text_lower):
                 logger.info(f"NLP: Detected explicit Browser Library preference: {pattern}")
                 return "Browser"
-        
+
         # Check for other library preferences
         if re.search(r'\b(xml|xpath)\b', text_lower):
             return "XML"
         if re.search(r'\b(api|http|rest|request)\b', text_lower):
             return "RequestsLibrary"
-        
+
         return None
     
-    def _detect_session_type(self, scenario_text: str, context: str) -> str:
-        """Detect session type from scenario text and context."""
+    def _detect_session_type(self, scenario: str, context: str) -> str:
+        """Detect session type using centralized session models detection."""
+        try:
+            from robotmcp.models.session_models import ExecutionSession
+            temp_session = ExecutionSession(session_id="__nlp_detect__")
+            session_type = temp_session.detect_session_type_from_scenario(scenario)
+            if session_type and session_type.value != "unknown":
+                return session_type.value
+        except (ImportError, Exception):
+            pass
+
+        # Fallback to local patterns
+        return self._fallback_detect_session_type(scenario, context)
+
+    def _fallback_detect_session_type(self, scenario_text: str, context: str) -> str:
+        """Fallback session type detection using local patterns."""
         if not scenario_text:
             return "unknown"
-        
+
         text_lower = scenario_text.lower()
-        
+
         # Web automation patterns
         web_patterns = [
             r'\b(click|fill|navigate|browser|page|element|locator)\b',
             r'\b(new page|go to|wait for|screenshot)\b',
             r'\b(get text|get attribute|should contain)\b'
         ]
-        
+
         # API testing patterns
         api_patterns = [
             r'\b(get request|post|put|delete|api|http)\b',
             r'\b(create session|request|response|status)\b',
             r'\b(json|rest|endpoint)\b'
         ]
-        
+
         # XML processing patterns
         xml_patterns = [
             r'\b(parse|xml|xpath|element|attribute)\b',
             r'\b(get element|set element|xml)\b'
         ]
-        
+
         # Count matches for each type
         web_score = sum(len(re.findall(pattern, text_lower)) for pattern in web_patterns)
         api_score = sum(len(re.findall(pattern, text_lower)) for pattern in api_patterns)
         xml_score = sum(len(re.findall(pattern, text_lower)) for pattern in xml_patterns)
-        
+
         # Determine session type based on highest score
         scores = {"web_automation": web_score, "api_testing": api_score, "xml_processing": xml_score}
-        
+
         # Consider context as a tie-breaker
         if context == "web":
             scores["web_automation"] += 1
         elif context == "api":
             scores["api_testing"] += 1
-        
+
         if max(scores.values()) == 0:
             return "unknown"
-        
+
         return max(scores, key=scores.get)
 
     def _validate_action(self, action: Dict[str, Any], available_libraries: List[str]) -> List[str]:
