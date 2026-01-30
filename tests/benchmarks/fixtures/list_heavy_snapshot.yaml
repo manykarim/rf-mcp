@@ -1,0 +1,59 @@
+# ARIA Accessibility Snapshot - List Heavy Page (1000 Products with Folding)
+# Tokens: ~200 (compared to ~15000 for raw HTML with all 1000 items)
+# Reduction: ~98.7% (achieved through SimHash-based list folding)
+#
+# SimHash folding detects repetitive list item structures and collapses them:
+# - Each product item has identical structure (img, title, desc, price, button)
+# - Hash similarity > 85% triggers folding
+# - Only first 3 representative items shown, rest folded
+
+- document [ref=e1]
+  - banner [ref=e2]
+    - navigation "Main navigation" [ref=e3]
+      - link "Home" [ref=e4]
+      - link "Products" [ref=e5]
+      - link "Cart" [ref=e6]
+      - link "Account" [ref=e7]
+  - main [ref=e8]
+    - heading "All Products" [level=1] [ref=e9]
+    - text "Showing 1,000 products"
+    - list "Product catalog" [ref=e10]
+      # Representative items (showing structure pattern)
+      - listitem [ref=e11]
+        - img "Product 0" [ref=e12]
+        - heading "Product Name 0" [level=3] [ref=e13]
+        - text "Description for product 0"
+        - text "$9.99"
+        - button "Add to Cart" [ref=e14]
+      - listitem [ref=e15]
+        - img "Product 1" [ref=e16]
+        - heading "Product Name 1" [level=3] [ref=e17]
+        - text "Description for product 1"
+        - text "$10.49"
+        - button "Add to Cart" [ref=e18]
+      - listitem [ref=e19]
+        - img "Product 2" [ref=e20]
+        - heading "Product Name 2" [level=3] [ref=e21]
+        - text "Description for product 2"
+        - text "$10.99"
+        - button "Add to Cart" [ref=e22]
+      # Folded representation (997 similar items)
+      - (... and 997 more similar items) [refs: e23-e3015]
+        # Folded items follow pattern:
+        # - img "Product N"
+        # - heading "Product Name N"
+        # - text "Description for product N"
+        # - text "$X.XX"
+        # - button "Add to Cart"
+    - navigation "Product pages" [ref=e3016]
+      - button "Previous" [ref=e3017]
+      - button "1" [ref=e3018] [current]
+      - button "2" [ref=e3019]
+      - button "3" [ref=e3020]
+      - button "4" [ref=e3021]
+      - button "5" [ref=e3022]
+      - text "..."
+      - button "100" [ref=e3023]
+      - button "Next" [ref=e3024]
+  - contentinfo [ref=e3025]
+    - text "2024 Product Catalog. All rights reserved."

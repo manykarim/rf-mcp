@@ -990,7 +990,304 @@ class PageSourceService:
             else:
                 logger.debug("AppiumLibrary instance found but get_source method not available")
                 return None
-                
+
         except Exception as e:
             logger.debug(f"Direct mobile source retrieval failed: {e}")
             return None
+
+    # =========================================================================
+    # DDD Integration Methods - Using domains for optimized snapshot capture
+    # =========================================================================
+
+    async def capture_optimized_snapshot(
+        self,
+        session: ExecutionSession,
+        browser_library_manager: Any,
+        snapshot_mode: str = "incremental",
+        selector: Optional[str] = None,
+        include_refs: bool = True,
+    ) -> Dict[str, Any]:
+        """Capture ARIA snapshot with full optimization pipeline.
+
+        Uses the DDD domains for:
+        - Token optimization via list folding
+        - Incremental diff mode for reduced responses
+        - Element ref registration for subsequent actions
+        - Performance metrics collection
+
+        Args:
+            session: The execution session
+            browser_library_manager: Browser library manager instance
+            snapshot_mode: "full", "incremental", or "none"
+            selector: Optional CSS selector to scope the snapshot
+            include_refs: Whether to include element refs in response
+
+        Returns:
+            Dict with snapshot content, refs, and metrics
+        """
+        import time
+        start_time = time.perf_counter()
+
+        try:
+            from robotmcp.container import get_container
+
+            container = get_container()
+
+            # 1. Capture raw ARIA snapshot
+            aria_result = await self._capture_browser_aria_snapshot(
+                session,
+                browser_library_manager,
+                selector=selector or "css=html",
+            )
+
+            if not aria_result.get("success"):
+                return {
+                    "success": False,
+                    "error": aria_result.get("error", "Failed to capture ARIA snapshot"),
+                }
+
+            raw_aria = aria_result.get("content", "")
+            if not raw_aria:
+                return {
+                    "success": False,
+                    "error": "Empty ARIA snapshot returned",
+                }
+
+            # 2. Build PageSnapshot using domain
+            from robotmcp.domains.snapshot import PageSnapshot, AriaTree
+
+            capture_duration_ms = (time.perf_counter() - start_time) * 1000
+
+            # Parse ARIA YAML into AriaTree
+            try:
+                aria_tree = AriaTree.from_yaml(raw_aria)
+            except Exception as parse_err:
+                logger.warning(f"Failed to parse ARIA YAML: {parse_err}")
+                # Create a simple tree from raw content
+                from robotmcp.domains.snapshot import AriaNode, AriaRole, ElementRef
+                aria_tree = AriaTree(
+                    root=AriaNode(
+                        ref=ElementRef.from_index(0),
+                        role=AriaRole("document"),
+                        name="(parse error)",
+                    )
+                )
+
+            snapshot = PageSnapshot.create(
+                session_id=session.session_id,
+                aria_tree=aria_tree,
+                url=session.browser_state.current_url,
+                title=session.browser_state.page_title,
+            )
+
+            # 3. Get compression settings from learned patterns
+            page_type = self._classify_page_type(session)
+            compression_settings = container.get_compression_settings(page_type)
+
+            # 4. Apply list folding if beneficial
+            fold_threshold = compression_settings.get("fold_threshold", 0.85)
+            if compression_settings.get("apply_folding", True):
+                snapshot = snapshot.fold_lists(threshold=fold_threshold)
+
+            # 5. Handle snapshot mode
+            if snapshot_mode == "none":
+                snapshot_content = "[Snapshot omitted]"
+            elif snapshot_mode == "incremental":
+                previous = container.get_cached_snapshot(session.session_id)
+                if previous:
+                    snapshot_content = snapshot.get_incremental_diff(previous)
+                else:
+                    snapshot_content = snapshot.to_yaml()
+            else:  # full
+                snapshot_content = snapshot.to_yaml()
+
+            # 6. Update element registry
+            refs = {}
+            if include_refs:
+                registry = container.get_element_registry(session.session_id)
+                # Register elements from snapshot
+                refs = self._update_element_registry_from_snapshot(
+                    registry, snapshot
+                )
+
+            # 7. Cache snapshot for incremental mode
+            container.cache_snapshot(session.session_id, snapshot)
+
+            # 8. Record metrics
+            latency_ms = (time.perf_counter() - start_time) * 1000
+            container.record_snapshot_metrics(
+                raw_chars=len(raw_aria),
+                aria_chars=len(snapshot_content),
+                latency_ms=latency_ms,
+                page_type=page_type,
+                fold_threshold=fold_threshold,
+            )
+
+            return {
+                "success": True,
+                "content": snapshot_content,
+                "refs": refs,
+                "token_estimate": snapshot.estimate_tokens(),
+                "node_count": snapshot.aria_tree.node_count,
+                "interactive_count": snapshot.aria_tree.interactive_count,
+                "compression_applied": snapshot.compression_applied,
+                "latency_ms": latency_ms,
+                "mode": snapshot_mode,
+            }
+
+        except Exception as e:
+            logger.error(f"Error in optimized snapshot capture: {e}")
+            return {
+                "success": False,
+                "error": f"Snapshot capture failed: {str(e)}",
+            }
+
+    def _classify_page_type(self, session: ExecutionSession) -> str:
+        """Classify the current page type for optimization.
+
+        Args:
+            session: The execution session
+
+        Returns:
+            Page type string (e.g., "search_results", "form", "article")
+        """
+        try:
+            from robotmcp.container import get_container
+
+            container = get_container()
+            analyzer = container.page_analyzer
+
+            # Analyze based on URL and title
+            url = session.browser_state.current_url or ""
+            title = session.browser_state.page_title or ""
+
+            classification = analyzer.classify_page(url, title)
+            return classification.page_type
+
+        except Exception as e:
+            logger.debug(f"Page classification failed: {e}")
+            return "unknown"
+
+    def _update_element_registry_from_snapshot(
+        self,
+        registry: Any,  # ElementRegistry
+        snapshot: Any,  # PageSnapshot
+    ) -> Dict[str, str]:
+        """Update element registry with refs from snapshot.
+
+        Args:
+            registry: The element registry to update
+            snapshot: The page snapshot with elements
+
+        Returns:
+            Dict mapping ref -> brief description
+        """
+        refs = {}
+        try:
+            # Iterate through snapshot's ARIA tree
+            for node in snapshot.aria_tree.root.traverse():
+                ref_str = str(node.ref)
+                description = node.display_name
+
+                # Register in registry (converts aria to locator)
+                # The registry will create appropriate locators based on node properties
+                try:
+                    registry.register_from_aria_node(node)
+                    refs[ref_str] = description
+                except Exception as reg_err:
+                    logger.debug(f"Failed to register ref {ref_str}: {reg_err}")
+
+        except Exception as e:
+            logger.warning(f"Failed to update element registry: {e}")
+
+        return refs
+
+    def get_element_registry(self, session_id: str) -> Any:
+        """Get the element registry for a session.
+
+        Args:
+            session_id: The session ID
+
+        Returns:
+            ElementRegistry instance
+        """
+        from robotmcp.container import get_container
+        return get_container().get_element_registry(session_id)
+
+    def get_locator_for_ref(self, session_id: str, ref: str) -> Optional[str]:
+        """Get the browser locator for an element ref.
+
+        Args:
+            session_id: The session ID
+            ref: Element reference (e.g., "e1", "e42")
+
+        Returns:
+            Browser-compatible locator string or None
+        """
+        try:
+            from robotmcp.container import get_container
+            from robotmcp.domains.shared.kernel import ElementRef
+
+            registry = get_container().get_element_registry(session_id)
+            element_ref = ElementRef(ref)
+
+            if not registry.has_ref(element_ref):
+                return None
+
+            locator = registry.get_locator(element_ref)
+            return locator.to_browser_library()
+
+        except Exception as e:
+            logger.warning(f"Failed to get locator for ref {ref}: {e}")
+            return None
+
+    def validate_ref(self, session_id: str, ref: str) -> Dict[str, Any]:
+        """Validate an element ref exists and is not stale.
+
+        Args:
+            session_id: The session ID
+            ref: Element reference to validate
+
+        Returns:
+            Dict with validation result
+        """
+        try:
+            from robotmcp.container import get_container
+            from robotmcp.domains.shared.kernel import ElementRef
+
+            registry = get_container().get_element_registry(session_id)
+
+            # Validate ref format
+            try:
+                element_ref = ElementRef(ref)
+            except ValueError as e:
+                return {
+                    "valid": False,
+                    "error": f"Invalid ref format: {e}",
+                }
+
+            if registry.is_stale():
+                return {
+                    "valid": False,
+                    "error": "Registry is stale. Capture a new snapshot to get fresh refs.",
+                }
+
+            # Check if ref exists in registry
+            if element_ref not in registry.refs:
+                available_refs = [str(r) for r in list(registry.refs.keys())[:10]]
+                return {
+                    "valid": False,
+                    "error": f"Ref '{ref}' not found. Available refs: {available_refs}",
+                }
+
+            return {
+                "valid": True,
+                "ref": ref,
+                "locator": self.get_locator_for_ref(session_id, ref),
+            }
+
+        except Exception as e:
+            return {
+                "valid": False,
+                "error": str(e),
+            }

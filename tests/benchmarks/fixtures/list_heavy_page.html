@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>List Heavy Test Page - Product Catalog</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; }
+        header { background: white; padding: 15px 30px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        nav a { margin-right: 20px; color: #333; text-decoration: none; }
+        main { max-width: 1200px; margin: 30px auto; padding: 0 20px; }
+        h1 { margin-bottom: 20px; }
+        .product-list { list-style: none; display: grid; grid-template-columns: repeat(5, 1fr); gap: 15px; }
+        .product-item { background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .product-item img { width: 100%; height: 150px; object-fit: cover; background: #eee; }
+        .product-item .info { padding: 12px; }
+        .product-item h3 { font-size: 14px; margin-bottom: 5px; color: #333; }
+        .product-item p { font-size: 12px; color: #666; margin-bottom: 8px; }
+        .product-item .price { font-weight: 700; color: #e74c3c; }
+        .product-item button { width: 100%; padding: 8px; background: #4a69bd; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; margin-top: 8px; }
+        .pagination { display: flex; justify-content: center; gap: 5px; margin-top: 30px; }
+        .pagination button { padding: 10px 15px; border: 1px solid #ddd; background: white; border-radius: 4px; cursor: pointer; }
+        .pagination button.active { background: #4a69bd; color: white; border-color: #4a69bd; }
+        footer { background: #333; color: white; padding: 30px; margin-top: 50px; text-align: center; }
+    </style>
+</head>
+<body>
+    <header>
+        <nav role="navigation" aria-label="Main navigation">
+            <a href="/" data-testid="nav-home">Home</a>
+            <a href="/products" data-testid="nav-products">Products</a>
+            <a href="/cart" data-testid="nav-cart">Cart</a>
+            <a href="/account" data-testid="nav-account">Account</a>
+        </nav>
+    </header>
+
+    <main>
+        <h1>All Products</h1>
+        <p>Showing 1,000 products</p>
+
+        <ul class="product-list" role="list" aria-label="Product catalog">
+            <!-- Generate 1000 product items -->
+            <li class="product-item" data-testid="product-0"><img src="/img/product-0.jpg" alt="Product 0"><div class="info"><h3>Product Name 0</h3><p>Description for product 0</p><span class="price">$9.99</span><button data-testid="add-cart-0">Add to Cart</button></div></li>
+            <li class="product-item" data-testid="product-1"><img src="/img/product-1.jpg" alt="Product 1"><div class="info"><h3>Product Name 1</h3><p>Description for product 1</p><span class="price">$10.49</span><button data-testid="add-cart-1">Add to Cart</button></div></li>
+            <li class="product-item" data-testid="product-2"><img src="/img/product-2.jpg" alt="Product 2"><div class="info"><h3>Product Name 2</h3><p>Description for product 2</p><span class="price">$10.99</span><button data-testid="add-cart-2">Add to Cart</button></div></li>
+            <li class="product-item" data-testid="product-3"><img src="/img/product-3.jpg" alt="Product 3"><div class="info"><h3>Product Name 3</h3><p>Description for product 3</p><span class="price">$11.49</span><button data-testid="add-cart-3">Add to Cart</button></div></li>
+            <li class="product-item" data-testid="product-4"><img src="/img/product-4.jpg" alt="Product 4"><div class="info"><h3>Product Name 4</h3><p>Description for product 4</p><span class="price">$11.99</span><button data-testid="add-cart-4">Add to Cart</button></div></li>
+            <li class="product-item" data-testid="product-5"><img src="/img/product-5.jpg" alt="Product 5"><div class="info"><h3>Product Name 5</h3><p>Description for product 5</p><span class="price">$12.49</span><button data-testid="add-cart-5">Add to Cart</button></div></li>
+            <li class="product-item" data-testid="product-6"><img src="/img/product-6.jpg" alt="Product 6"><div class="info"><h3>Product Name 6</h3><p>Description for product 6</p><span class="price">$12.99</span><button data-testid="add-cart-6">Add to Cart</button></div></li>
+            <li class="product-item" data-testid="product-7"><img src="/img/product-7.jpg" alt="Product 7"><div class="info"><h3>Product Name 7</h3><p>Description for product 7</p><span class="price">$13.49</span><button data-testid="add-cart-7">Add to Cart</button></div></li>
+            <li class="product-item" data-testid="product-8"><img src="/img/product-8.jpg" alt="Product 8"><div class="info"><h3>Product Name 8</h3><p>Description for product 8</p><span class="price">$13.99</span><button data-testid="add-cart-8">Add to Cart</button></div></li>
+            <li class="product-item" data-testid="product-9"><img src="/img/product-9.jpg" alt="Product 9"><div class="info"><h3>Product Name 9</h3><p>Description for product 9</p><span class="price">$14.49</span><button data-testid="add-cart-9">Add to Cart</button></div></li>
+            <li class="product-item" data-testid="product-10"><img src="/img/product-10.jpg" alt="Product 10"><div class="info"><h3>Product Name 10</h3><p>Description for product 10</p><span class="price">$14.99</span><button data-testid="add-cart-10">Add to Cart</button></div></li>
+            <li class="product-item" data-testid="product-11"><img src="/img/product-11.jpg" alt="Product 11"><div class="info"><h3>Product Name 11</h3><p>Description for product 11</p><span class="price">$15.49</span><button data-testid="add-cart-11">Add to Cart</button></div></li>
+            <li class="product-item" data-testid="product-12"><img src="/img/product-12.jpg" alt="Product 12"><div class="info"><h3>Product Name 12</h3><p>Description for product 12</p><span class="price">$15.99</span><button data-testid="add-cart-12">Add to Cart</button></div></li>
+            <li class="product-item" data-testid="product-13"><img src="/img/product-13.jpg" alt="Product 13"><div class="info"><h3>Product Name 13</h3><p>Description for product 13</p><span class="price">$16.49</span><button data-testid="add-cart-13">Add to Cart</button></div></li>
+            <li class="product-item" data-testid="product-14"><img src="/img/product-14.jpg" alt="Product 14"><div class="info"><h3>Product Name 14</h3><p>Description for product 14</p><span class="price">$16.99</span><button data-testid="add-cart-14">Add to Cart</button></div></li>
+            <li class="product-item" data-testid="product-15"><img src="/img/product-15.jpg" alt="Product 15"><div class="info"><h3>Product Name 15</h3><p>Description for product 15</p><span class="price">$17.49</span><button data-testid="add-cart-15">Add to Cart</button></div></li>
+            <li class="product-item" data-testid="product-16"><img src="/img/product-16.jpg" alt="Product 16"><div class="info"><h3>Product Name 16</h3><p>Description for product 16</p><span class="price">$17.99</span><button data-testid="add-cart-16">Add to Cart</button></div></li>
+            <li class="product-item" data-testid="product-17"><img src="/img/product-17.jpg" alt="Product 17"><div class="info"><h3>Product Name 17</h3><p>Description for product 17</p><span class="price">$18.49</span><button data-testid="add-cart-17">Add to Cart</button></div></li>
+            <li class="product-item" data-testid="product-18"><img src="/img/product-18.jpg" alt="Product 18"><div class="info"><h3>Product Name 18</h3><p>Description for product 18</p><span class="price">$18.99</span><button data-testid="add-cart-18">Add to Cart</button></div></li>
+            <li class="product-item" data-testid="product-19"><img src="/img/product-19.jpg" alt="Product 19"><div class="info"><h3>Product Name 19</h3><p>Description for product 19</p><span class="price">$19.49</span><button data-testid="add-cart-19">Add to Cart</button></div></li>
+            <!-- Products 20-999 would follow the same pattern -->
+            <!-- For brevity, we simulate with inline script below -->
+        </ul>
+
+        <nav class="pagination" aria-label="Product pages">
+            <button data-testid="page-prev" aria-label="Previous page">Previous</button>
+            <button class="active" data-testid="page-1" aria-label="Page 1">1</button>
+            <button data-testid="page-2" aria-label="Page 2">2</button>
+            <button data-testid="page-3" aria-label="Page 3">3</button>
+            <button data-testid="page-4" aria-label="Page 4">4</button>
+            <button data-testid="page-5" aria-label="Page 5">5</button>
+            <span>...</span>
+            <button data-testid="page-100" aria-label="Page 100">100</button>
+            <button data-testid="page-next" aria-label="Next page">Next</button>
+        </nav>
+    </main>
+
+    <footer>
+        <p>&copy; 2024 Product Catalog. All rights reserved.</p>
+    </footer>
+
+    <script>
+        // Simulate additional products being added dynamically
+        // In a real test, these would be present in the DOM
+        const list = document.querySelector('.product-list');
+        for (let i = 20; i < 1000; i++) {
+            const price = (9.99 + i * 0.50).toFixed(2);
+            const li = document.createElement('li');
+            li.className = 'product-item';
+            li.setAttribute('data-testid', `product-${i}`);
+            li.innerHTML = `
+                <img src="/img/product-${i}.jpg" alt="Product ${i}">
+                <div class="info">
+                    <h3>Product Name ${i}</h3>
+                    <p>Description for product ${i}</p>
+                    <span class="price">$${price}</span>
+                    <button data-testid="add-cart-${i}">Add to Cart</button>
+                </div>
+            `;
+            list.appendChild(li);
+        }
+    </script>
+</body>
+</html>

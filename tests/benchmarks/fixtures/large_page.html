@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Large Test Page - E-commerce Catalog</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; }
+        .header { background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.1); position: sticky; top: 0; z-index: 100; }
+        .header-top { display: flex; justify-content: space-between; align-items: center; padding: 15px 30px; border-bottom: 1px solid #eee; }
+        .logo { font-size: 24px; font-weight: 700; color: #e74c3c; }
+        .search-container { flex: 1; max-width: 600px; margin: 0 40px; }
+        .search-container input { width: 100%; padding: 12px 20px; border: 2px solid #eee; border-radius: 25px; }
+        .header-actions { display: flex; gap: 20px; align-items: center; }
+        .header-actions a { color: #333; text-decoration: none; }
+        .cart-count { background: #e74c3c; color: white; font-size: 10px; padding: 2px 6px; border-radius: 10px; margin-left: 5px; }
+        .nav-categories { display: flex; gap: 30px; padding: 15px 30px; background: #fafafa; }
+        .nav-categories a { color: #333; text-decoration: none; font-size: 14px; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 30px; }
+        .breadcrumb { margin-bottom: 20px; font-size: 14px; color: #666; }
+        .breadcrumb a { color: #4a69bd; text-decoration: none; }
+        .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+        .filters-sidebar { width: 250px; background: white; padding: 20px; border-radius: 8px; position: sticky; top: 120px; }
+        .filter-group { margin-bottom: 25px; }
+        .filter-group h3 { font-size: 14px; margin-bottom: 15px; color: #333; }
+        .filter-option { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 14px; }
+        .filter-option input { width: 18px; height: 18px; }
+        .price-range { display: flex; gap: 10px; }
+        .price-range input { width: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        .main-content { display: flex; gap: 30px; }
+        .products-area { flex: 1; }
+        .sort-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; background: white; padding: 15px 20px; border-radius: 8px; }
+        .view-options button { background: none; border: 1px solid #ddd; padding: 8px 15px; cursor: pointer; }
+        .view-options button.active { background: #4a69bd; color: white; border-color: #4a69bd; }
+        .products-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+        .product-card { background: white; border-radius: 8px; overflow: hidden; transition: transform 0.2s, box-shadow 0.2s; }
+        .product-card:hover { transform: translateY(-5px); box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+        .product-image { position: relative; padding-top: 100%; background: #f5f5f5; }
+        .product-image img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+        .product-badge { position: absolute; top: 10px; left: 10px; background: #e74c3c; color: white; padding: 5px 10px; font-size: 12px; border-radius: 4px; }
+        .wishlist-btn { position: absolute; top: 10px; right: 10px; background: white; border: none; width: 36px; height: 36px; border-radius: 50%; cursor: pointer; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .product-info { padding: 15px; }
+        .product-brand { color: #666; font-size: 12px; margin-bottom: 5px; }
+        .product-title { font-size: 14px; color: #333; margin-bottom: 10px; line-height: 1.4; }
+        .product-price { font-size: 18px; font-weight: 700; color: #333; }
+        .product-price .original { text-decoration: line-through; color: #999; font-size: 14px; margin-left: 10px; }
+        .product-rating { display: flex; align-items: center; gap: 5px; margin-top: 10px; font-size: 12px; }
+        .stars { color: #f1c40f; }
+        .product-actions { display: flex; gap: 10px; margin-top: 15px; }
+        .product-actions button { flex: 1; padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; }
+        .btn-cart { background: #4a69bd; color: white; }
+        .btn-quick { background: #f5f5f5; color: #333; }
+        .pagination { display: flex; justify-content: center; gap: 5px; margin-top: 40px; }
+        .pagination button { padding: 10px 18px; border: 1px solid #ddd; background: white; border-radius: 4px; cursor: pointer; }
+        .pagination button.active { background: #4a69bd; color: white; border-color: #4a69bd; }
+        .footer { background: #1a1a2e; color: white; margin-top: 60px; padding: 60px 30px 30px; }
+        .footer-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 40px; max-width: 1400px; margin: 0 auto; }
+        .footer-section h4 { margin-bottom: 20px; font-size: 16px; }
+        .footer-section a { display: block; color: #8888aa; text-decoration: none; margin-bottom: 10px; font-size: 14px; }
+        .footer-bottom { border-top: 1px solid #333; padding-top: 30px; margin-top: 40px; text-align: center; color: #666; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-top">
+            <div class="logo" data-testid="logo">ShopMart</div>
+            <div class="search-container">
+                <input type="search" placeholder="Search for products, brands, and more..." data-testid="search-input" aria-label="Search products">
+            </div>
+            <div class="header-actions">
+                <a href="/account" data-testid="account-link">Account</a>
+                <a href="/wishlist" data-testid="wishlist-link">Wishlist</a>
+                <a href="/cart" data-testid="cart-link">Cart <span class="cart-count">3</span></a>
+            </div>
+        </div>
+        <nav class="nav-categories" role="navigation" aria-label="Product categories">
+            <a href="/electronics" data-testid="cat-electronics">Electronics</a>
+            <a href="/fashion" data-testid="cat-fashion">Fashion</a>
+            <a href="/home" data-testid="cat-home">Home & Living</a>
+            <a href="/beauty" data-testid="cat-beauty">Beauty</a>
+            <a href="/sports" data-testid="cat-sports">Sports</a>
+            <a href="/books" data-testid="cat-books">Books</a>
+            <a href="/toys" data-testid="cat-toys">Toys</a>
+            <a href="/grocery" data-testid="cat-grocery">Grocery</a>
+        </nav>
+    </header>
+
+    <div class="container">
+        <nav class="breadcrumb" aria-label="Breadcrumb">
+            <a href="/">Home</a> / <a href="/electronics">Electronics</a> / <span>Smartphones</span>
+        </nav>
+
+        <div class="page-header">
+            <h1>Smartphones</h1>
+            <span>Showing 1-48 of 2,456 results</span>
+        </div>
+
+        <div class="main-content">
+            <aside class="filters-sidebar" role="complementary" aria-label="Product filters">
+                <div class="filter-group">
+                    <h3>Brand</h3>
+                    <label class="filter-option"><input type="checkbox" data-testid="filter-apple"> Apple (234)</label>
+                    <label class="filter-option"><input type="checkbox" data-testid="filter-samsung"> Samsung (189)</label>
+                    <label class="filter-option"><input type="checkbox" data-testid="filter-google"> Google (67)</label>
+                    <label class="filter-option"><input type="checkbox" data-testid="filter-oneplus"> OnePlus (45)</label>
+                    <label class="filter-option"><input type="checkbox" data-testid="filter-xiaomi"> Xiaomi (156)</label>
+                </div>
+                <div class="filter-group">
+                    <h3>Price Range</h3>
+                    <div class="price-range">
+                        <input type="number" placeholder="Min" data-testid="price-min" aria-label="Minimum price">
+                        <span>to</span>
+                        <input type="number" placeholder="Max" data-testid="price-max" aria-label="Maximum price">
+                    </div>
+                </div>
+                <div class="filter-group">
+                    <h3>Customer Rating</h3>
+                    <label class="filter-option"><input type="checkbox" data-testid="filter-4star"> 4 Stars & Up</label>
+                    <label class="filter-option"><input type="checkbox" data-testid="filter-3star"> 3 Stars & Up</label>
+                    <label class="filter-option"><input type="checkbox" data-testid="filter-2star"> 2 Stars & Up</label>
+                </div>
+                <div class="filter-group">
+                    <h3>Storage</h3>
+                    <label class="filter-option"><input type="checkbox" data-testid="filter-64gb"> 64 GB</label>
+                    <label class="filter-option"><input type="checkbox" data-testid="filter-128gb"> 128 GB</label>
+                    <label class="filter-option"><input type="checkbox" data-testid="filter-256gb"> 256 GB</label>
+                    <label class="filter-option"><input type="checkbox" data-testid="filter-512gb"> 512 GB</label>
+                </div>
+                <button class="btn-apply" data-testid="apply-filters">Apply Filters</button>
+                <button class="btn-clear" data-testid="clear-filters">Clear All</button>
+            </aside>
+
+            <main class="products-area">
+                <div class="sort-bar">
+                    <div>
+                        <select data-testid="sort-select" aria-label="Sort products">
+                            <option value="relevance">Sort by: Relevance</option>
+                            <option value="price-low">Price: Low to High</option>
+                            <option value="price-high">Price: High to Low</option>
+                            <option value="rating">Customer Rating</option>
+                            <option value="newest">Newest First</option>
+                        </select>
+                    </div>
+                    <div class="view-options">
+                        <button class="active" data-testid="view-grid" aria-label="Grid view">Grid</button>
+                        <button data-testid="view-list" aria-label="List view">List</button>
+                    </div>
+                </div>
+
+                <div class="products-grid" role="list" aria-label="Product list">
+                    <!-- Products 1-48 -->
+                    <article class="product-card" data-testid="product-1" role="listitem">
+                        <div class="product-image">
+                            <img src="/img/phone-1.jpg" alt="iPhone 15 Pro Max">
+                            <span class="product-badge">New</span>
+                            <button class="wishlist-btn" data-testid="wish-1" aria-label="Add to wishlist">♡</button>
+                        </div>
+                        <div class="product-info">
+                            <div class="product-brand">Apple</div>
+                            <h3 class="product-title">iPhone 15 Pro Max 256GB - Natural Titanium</h3>
+                            <div class="product-price">$1,199 <span class="original">$1,299</span></div>
+                            <div class="product-rating"><span class="stars">★★★★★</span> 4.8 (2,345)</div>
+                            <div class="product-actions">
+                                <button class="btn-cart" data-testid="cart-1">Add to Cart</button>
+                                <button class="btn-quick" data-testid="quick-1">Quick View</button>
+                            </div>
+                        </div>
+                    </article>
+                    <article class="product-card" data-testid="product-2" role="listitem">
+                        <div class="product-image">
+                            <img src="/img/phone-2.jpg" alt="Samsung Galaxy S24 Ultra">
+                            <button class="wishlist-btn" data-testid="wish-2" aria-label="Add to wishlist">♡</button>
+                        </div>
+                        <div class="product-info">
+                            <div class="product-brand">Samsung</div>
+                            <h3 class="product-title">Galaxy S24 Ultra 512GB - Titanium Black</h3>
+                            <div class="product-price">$1,299</div>
+                            <div class="product-rating"><span class="stars">★★★★★</span> 4.7 (1,890)</div>
+                            <div class="product-actions">
+                                <button class="btn-cart" data-testid="cart-2">Add to Cart</button>
+                                <button class="btn-quick" data-testid="quick-2">Quick View</button>
+                            </div>
+                        </div>
+                    </article>
+                    <article class="product-card" data-testid="product-3" role="listitem">
+                        <div class="product-image">
+                            <img src="/img/phone-3.jpg" alt="Google Pixel 8 Pro">
+                            <span class="product-badge">Sale</span>
+                            <button class="wishlist-btn" data-testid="wish-3" aria-label="Add to wishlist">♡</button>
+                        </div>
+                        <div class="product-info">
+                            <div class="product-brand">Google</div>
+                            <h3 class="product-title">Pixel 8 Pro 256GB - Obsidian</h3>
+                            <div class="product-price">$899 <span class="original">$999</span></div>
+                            <div class="product-rating"><span class="stars">★★★★☆</span> 4.5 (987)</div>
+                            <div class="product-actions">
+                                <button class="btn-cart" data-testid="cart-3">Add to Cart</button>
+                                <button class="btn-quick" data-testid="quick-3">Quick View</button>
+                            </div>
+                        </div>
+                    </article>
+                    <article class="product-card" data-testid="product-4" role="listitem">
+                        <div class="product-image">
+                            <img src="/img/phone-4.jpg" alt="OnePlus 12">
+                            <button class="wishlist-btn" data-testid="wish-4" aria-label="Add to wishlist">♡</button>
+                        </div>
+                        <div class="product-info">
+                            <div class="product-brand">OnePlus</div>
+                            <h3 class="product-title">OnePlus 12 256GB - Flowy Emerald</h3>
+                            <div class="product-price">$799</div>
+                            <div class="product-rating"><span class="stars">★★★★☆</span> 4.4 (456)</div>
+                            <div class="product-actions">
+                                <button class="btn-cart" data-testid="cart-4">Add to Cart</button>
+                                <button class="btn-quick" data-testid="quick-4">Quick View</button>
+                            </div>
+                        </div>
+                    </article>
+                    <article class="product-card" data-testid="product-5" role="listitem">
+                        <div class="product-image">
+                            <img src="/img/phone-5.jpg" alt="Xiaomi 14 Pro">
+                            <span class="product-badge">Hot</span>
+                            <button class="wishlist-btn" data-testid="wish-5" aria-label="Add to wishlist">♡</button>
+                        </div>
+                        <div class="product-info">
+                            <div class="product-brand">Xiaomi</div>
+                            <h3 class="product-title">Xiaomi 14 Pro 512GB - Black</h3>
+                            <div class="product-price">$699</div>
+                            <div class="product-rating"><span class="stars">★★★★☆</span> 4.3 (234)</div>
+                            <div class="product-actions">
+                                <button class="btn-cart" data-testid="cart-5">Add to Cart</button>
+                                <button class="btn-quick" data-testid="quick-5">Quick View</button>
+                            </div>
+                        </div>
+                    </article>
+                    <article class="product-card" data-testid="product-6" role="listitem">
+                        <div class="product-image">
+                            <img src="/img/phone-6.jpg" alt="iPhone 15">
+                            <button class="wishlist-btn" data-testid="wish-6" aria-label="Add to wishlist">♡</button>
+                        </div>
+                        <div class="product-info">
+                            <div class="product-brand">Apple</div>
+                            <h3 class="product-title">iPhone 15 128GB - Blue</h3>
+                            <div class="product-price">$799</div>
+                            <div class="product-rating"><span class="stars">★★★★★</span> 4.6 (1,567)</div>
+                            <div class="product-actions">
+                                <button class="btn-cart" data-testid="cart-6">Add to Cart</button>
+                                <button class="btn-quick" data-testid="quick-6">Quick View</button>
+                            </div>
+                        </div>
+                    </article>
+                    <article class="product-card" data-testid="product-7" role="listitem">
+                        <div class="product-image">
+                            <img src="/img/phone-7.jpg" alt="Samsung Galaxy A54">
+                            <span class="product-badge">Best Seller</span>
+                            <button class="wishlist-btn" data-testid="wish-7" aria-label="Add to wishlist">♡</button>
+                        </div>
+                        <div class="product-info">
+                            <div class="product-brand">Samsung</div>
+                            <h3 class="product-title">Galaxy A54 5G 128GB - Awesome Graphite</h3>
+                            <div class="product-price">$449</div>
+                            <div class="product-rating"><span class="stars">★★★★☆</span> 4.4 (3,456)</div>
+                            <div class="product-actions">
+                                <button class="btn-cart" data-testid="cart-7">Add to Cart</button>
+                                <button class="btn-quick" data-testid="quick-7">Quick View</button>
+                            </div>
+                        </div>
+                    </article>
+                    <article class="product-card" data-testid="product-8" role="listitem">
+                        <div class="product-image">
+                            <img src="/img/phone-8.jpg" alt="Google Pixel 7a">
+                            <button class="wishlist-btn" data-testid="wish-8" aria-label="Add to wishlist">♡</button>
+                        </div>
+                        <div class="product-info">
+                            <div class="product-brand">Google</div>
+                            <h3 class="product-title">Pixel 7a 128GB - Charcoal</h3>
+                            <div class="product-price">$499</div>
+                            <div class="product-rating"><span class="stars">★★★★☆</span> 4.5 (789)</div>
+                            <div class="product-actions">
+                                <button class="btn-cart" data-testid="cart-8">Add to Cart</button>
+                                <button class="btn-quick" data-testid="quick-8">Quick View</button>
+                            </div>
+                        </div>
+                    </article>
+                    <!-- Products 9-48 follow the same pattern -->
+                    <article class="product-card" data-testid="product-9" role="listitem">
+                        <div class="product-image"><img src="/img/phone-9.jpg" alt="Product 9"><button class="wishlist-btn" data-testid="wish-9" aria-label="Add to wishlist">♡</button></div>
+                        <div class="product-info"><div class="product-brand">Xiaomi</div><h3 class="product-title">Redmi Note 13 Pro 256GB</h3><div class="product-price">$349</div><div class="product-rating"><span class="stars">★★★★☆</span> 4.2 (567)</div><div class="product-actions"><button class="btn-cart" data-testid="cart-9">Add to Cart</button><button class="btn-quick" data-testid="quick-9">Quick View</button></div></div>
+                    </article>
+                    <article class="product-card" data-testid="product-10" role="listitem">
+                        <div class="product-image"><img src="/img/phone-10.jpg" alt="Product 10"><button class="wishlist-btn" data-testid="wish-10" aria-label="Add to wishlist">♡</button></div>
+                        <div class="product-info"><div class="product-brand">OnePlus</div><h3 class="product-title">OnePlus Nord 3 256GB</h3><div class="product-price">$399</div><div class="product-rating"><span class="stars">★★★★☆</span> 4.3 (345)</div><div class="product-actions"><button class="btn-cart" data-testid="cart-10">Add to Cart</button><button class="btn-quick" data-testid="quick-10">Quick View</button></div></div>
+                    </article>
+                    <article class="product-card" data-testid="product-11" role="listitem">
+                        <div class="product-image"><img src="/img/phone-11.jpg" alt="Product 11"><button class="wishlist-btn" data-testid="wish-11" aria-label="Add to wishlist">♡</button></div>
+                        <div class="product-info"><div class="product-brand">Apple</div><h3 class="product-title">iPhone SE (3rd Gen) 64GB</h3><div class="product-price">$429</div><div class="product-rating"><span class="stars">★★★★☆</span> 4.4 (2,123)</div><div class="product-actions"><button class="btn-cart" data-testid="cart-11">Add to Cart</button><button class="btn-quick" data-testid="quick-11">Quick View</button></div></div>
+                    </article>
+                    <article class="product-card" data-testid="product-12" role="listitem">
+                        <div class="product-image"><img src="/img/phone-12.jpg" alt="Product 12"><button class="wishlist-btn" data-testid="wish-12" aria-label="Add to wishlist">♡</button></div>
+                        <div class="product-info"><div class="product-brand">Samsung</div><h3 class="product-title">Galaxy S23 FE 128GB</h3><div class="product-price">$599</div><div class="product-rating"><span class="stars">★★★★☆</span> 4.5 (876)</div><div class="product-actions"><button class="btn-cart" data-testid="cart-12">Add to Cart</button><button class="btn-quick" data-testid="quick-12">Quick View</button></div></div>
+                    </article>
+                    <article class="product-card" data-testid="product-13" role="listitem"><div class="product-image"><img src="/img/phone-13.jpg" alt="Product 13"><button class="wishlist-btn" data-testid="wish-13">♡</button></div><div class="product-info"><div class="product-brand">Google</div><h3 class="product-title">Pixel 8 128GB</h3><div class="product-price">$699</div><div class="product-rating"><span class="stars">★★★★★</span> 4.6 (654)</div><div class="product-actions"><button class="btn-cart" data-testid="cart-13">Add to Cart</button><button class="btn-quick" data-testid="quick-13">Quick View</button></div></div></article>
+                    <article class="product-card" data-testid="product-14" role="listitem"><div class="product-image"><img src="/img/phone-14.jpg" alt="Product 14"><button class="wishlist-btn" data-testid="wish-14">♡</button></div><div class="product-info"><div class="product-brand">Xiaomi</div><h3 class="product-title">Xiaomi 13T Pro 256GB</h3><div class="product-price">$649</div><div class="product-rating"><span class="stars">★★★★☆</span> 4.3 (432)</div><div class="product-actions"><button class="btn-cart" data-testid="cart-14">Add to Cart</button><button class="btn-quick" data-testid="quick-14">Quick View</button></div></div></article>
+                    <article class="product-card" data-testid="product-15" role="listitem"><div class="product-image"><img src="/img/phone-15.jpg" alt="Product 15"><button class="wishlist-btn" data-testid="wish-15">♡</button></div><div class="product-info"><div class="product-brand">OnePlus</div><h3 class="product-title">OnePlus 11 256GB</h3><div class="product-price">$699</div><div class="product-rating"><span class="stars">★★★★☆</span> 4.5 (567)</div><div class="product-actions"><button class="btn-cart" data-testid="cart-15">Add to Cart</button><button class="btn-quick" data-testid="quick-15">Quick View</button></div></div></article>
+                    <article class="product-card" data-testid="product-16" role="listitem"><div class="product-image"><img src="/img/phone-16.jpg" alt="Product 16"><button class="wishlist-btn" data-testid="wish-16">♡</button></div><div class="product-info"><div class="product-brand">Apple</div><h3 class="product-title">iPhone 14 128GB</h3><div class="product-price">$699</div><div class="product-rating"><span class="stars">★★★★★</span> 4.7 (3,456)</div><div class="product-actions"><button class="btn-cart" data-testid="cart-16">Add to Cart</button><button class="btn-quick" data-testid="quick-16">Quick View</button></div></div></article>
+                    <article class="product-card" data-testid="product-17" role="listitem"><div class="product-image"><img src="/img/phone-17.jpg" alt="Product 17"><button class="wishlist-btn" data-testid="wish-17">♡</button></div><div class="product-info"><div class="product-brand">Samsung</div><h3 class="product-title">Galaxy Z Flip5 256GB</h3><div class="product-price">$999</div><div class="product-rating"><span class="stars">★★★★☆</span> 4.4 (987)</div><div class="product-actions"><button class="btn-cart" data-testid="cart-17">Add to Cart</button><button class="btn-quick" data-testid="quick-17">Quick View</button></div></div></article>
+                    <article class="product-card" data-testid="product-18" role="listitem"><div class="product-image"><img src="/img/phone-18.jpg" alt="Product 18"><button class="wishlist-btn" data-testid="wish-18">♡</button></div><div class="product-info"><div class="product-brand">Samsung</div><h3 class="product-title">Galaxy Z Fold5 512GB</h3><div class="product-price">$1,799</div><div class="product-rating"><span class="stars">★★★★★</span> 4.6 (654)</div><div class="product-actions"><button class="btn-cart" data-testid="cart-18">Add to Cart</button><button class="btn-quick" data-testid="quick-18">Quick View</button></div></div></article>
+                    <article class="product-card" data-testid="product-19" role="listitem"><div class="product-image"><img src="/img/phone-19.jpg" alt="Product 19"><button class="wishlist-btn" data-testid="wish-19">♡</button></div><div class="product-info"><div class="product-brand">Google</div><h3 class="product-title">Pixel Fold 512GB</h3><div class="product-price">$1,799</div><div class="product-rating"><span class="stars">★★★★☆</span> 4.3 (234)</div><div class="product-actions"><button class="btn-cart" data-testid="cart-19">Add to Cart</button><button class="btn-quick" data-testid="quick-19">Quick View</button></div></div></article>
+                    <article class="product-card" data-testid="product-20" role="listitem"><div class="product-image"><img src="/img/phone-20.jpg" alt="Product 20"><button class="wishlist-btn" data-testid="wish-20">♡</button></div><div class="product-info"><div class="product-brand">Xiaomi</div><h3 class="product-title">Mix Fold 3 512GB</h3><div class="product-price">$1,499</div><div class="product-rating"><span class="stars">★★★★☆</span> 4.2 (123)</div><div class="product-actions"><button class="btn-cart" data-testid="cart-20">Add to Cart</button><button class="btn-quick" data-testid="quick-20">Quick View</button></div></div></article>
+                    <article class="product-card" data-testid="product-21" role="listitem"><div class="product-image"><img src="/img/phone-21.jpg" alt="Product 21"><button class="wishlist-btn" data-testid="wish-21">♡</button></div><div class="product-info"><div class="product-brand">OnePlus</div><h3 class="product-title">Open 512GB</h3><div class="product-price">$1,699</div><div class="product-rating"><span class="stars">★★★★☆</span> 4.4 (345)</div><div class="product-actions"><button class="btn-cart" data-testid="cart-21">Add to Cart</button><button class="btn-quick" data-testid="quick-21">Quick View</button></div></div></article>
+                    <article class="product-card" data-testid="product-22" role="listitem"><div class="product-image"><img src="/img/phone-22.jpg" alt="Product 22"><button class="wishlist-btn" data-testid="wish-22">♡</button></div><div class="product-info"><div class="product-brand">Apple</div><h3 class="product-title">iPhone 15 Pro 128GB</h3><div class="product-price">$999</div><div class="product-rating"><span class="stars">★★★★★</span> 4.8 (2,345)</div><div class="product-actions"><button class="btn-cart" data-testid="cart-22">Add to Cart</button><button class="btn-quick" data-testid="quick-22">Quick View</button></div></div></article>
+                    <article class="product-card" data-testid="product-23" role="listitem"><div class="product-image"><img src="/img/phone-23.jpg" alt="Product 23"><button class="wishlist-btn" data-testid="wish-23">♡</button></div><div class="product-info"><div class="product-brand">Samsung</div><h3 class="product-title">Galaxy S24 128GB</h3><div class="product-price">$799</div><div class="product-rating"><span class="stars">★★★★★</span> 4.6 (1,234)</div><div class="product-actions"><button class="btn-cart" data-testid="cart-23">Add to Cart</button><button class="btn-quick" data-testid="quick-23">Quick View</button></div></div></article>
+                    <article class="product-card" data-testid="product-24" role="listitem"><div class="product-image"><img src="/img/phone-24.jpg" alt="Product 24"><button class="wishlist-btn" data-testid="wish-24">♡</button></div><div class="product-info"><div class="product-brand">Google</div><h3 class="product-title">Pixel 8a 128GB</h3><div class="product-price">$499</div><div class="product-rating"><span class="stars">★★★★☆</span> 4.4 (567)</div><div class="product-actions"><button class="btn-cart" data-testid="cart-24">Add to Cart</button><button class="btn-quick" data-testid="quick-24">Quick View</button></div></div></article>
+                </div>
+
+                <nav class="pagination" aria-label="Product pages">
+                    <button data-testid="page-prev" aria-label="Previous page">Previous</button>
+                    <button class="active" data-testid="page-1" aria-label="Page 1, current page">1</button>
+                    <button data-testid="page-2" aria-label="Page 2">2</button>
+                    <button data-testid="page-3" aria-label="Page 3">3</button>
+                    <button data-testid="page-4" aria-label="Page 4">4</button>
+                    <button data-testid="page-5" aria-label="Page 5">5</button>
+                    <span>...</span>
+                    <button data-testid="page-52" aria-label="Page 52">52</button>
+                    <button data-testid="page-next" aria-label="Next page">Next</button>
+                </nav>
+            </main>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <div class="footer-grid">
+            <div class="footer-section">
+                <h4>Shop</h4>
+                <a href="/electronics">Electronics</a>
+                <a href="/fashion">Fashion</a>
+                <a href="/home">Home & Living</a>
+                <a href="/beauty">Beauty</a>
+                <a href="/sports">Sports</a>
+            </div>
+            <div class="footer-section">
+                <h4>Help</h4>
+                <a href="/shipping">Shipping Info</a>
+                <a href="/returns">Returns</a>
+                <a href="/faq">FAQ</a>
+                <a href="/contact">Contact Us</a>
+                <a href="/track">Track Order</a>
+            </div>
+            <div class="footer-section">
+                <h4>Company</h4>
+                <a href="/about">About Us</a>
+                <a href="/careers">Careers</a>
+                <a href="/press">Press</a>
+                <a href="/investors">Investors</a>
+                <a href="/sustainability">Sustainability</a>
+            </div>
+            <div class="footer-section">
+                <h4>Connect</h4>
+                <a href="/facebook">Facebook</a>
+                <a href="/twitter">Twitter</a>
+                <a href="/instagram">Instagram</a>
+                <a href="/youtube">YouTube</a>
+                <a href="/newsletter">Newsletter</a>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>&copy; 2024 ShopMart. All rights reserved. <a href="/privacy">Privacy</a> | <a href="/terms">Terms</a></p>
+        </div>
+    </footer>
+
+    <script>
+        // E-commerce functionality
+        document.querySelectorAll('.wishlist-btn').forEach(btn => {
+            btn.addEventListener('click', () => btn.textContent = btn.textContent === '♡' ? '♥' : '♡');
+        });
+        document.querySelectorAll('.btn-cart').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const count = document.querySelector('.cart-count');
+                count.textContent = parseInt(count.textContent) + 1;
+            });
+        });
+    </script>
+</body>
+</html>
