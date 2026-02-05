@@ -1236,6 +1236,49 @@ async def analyze_scenario(
     # Get or create session using execution coordinator
     session = execution_engine.session_manager.get_or_create_session(session_id)
 
+    # --- Attach bridge awareness (R2) ---
+    # When a Debug Attach Bridge is configured, pre-populate the session from
+    # the live RF process instead of relying solely on NLP scenario analysis.
+    # This prevents accidental analyze_scenario calls from creating sessions
+    # that are disconnected from the actual RF state.
+    attach_bridge_active = False
+    attach_client = _get_external_client_if_configured()
+    if attach_client is not None:
+        try:
+            diag = attach_client.diagnostics()
+            if diag.get("success"):
+                attach_bridge_active = True
+                bridge_libs = diag.get("result", {}).get("libraries", [])
+                logger.info(
+                    f"Attach bridge active: pre-populating session '{session_id}' "
+                    f"with {len(bridge_libs)} libraries from live RF process"
+                )
+                # Import libraries discovered from the live RF process
+                for lib_name in bridge_libs:
+                    if lib_name not in session.imported_libraries:
+                        try:
+                            session.import_library(lib_name)
+                            session.loaded_libraries.add(lib_name)
+                        except Exception:
+                            pass
+                # Sync variables from the live RF process
+                try:
+                    var_resp = attach_client.get_variables()
+                    if var_resp.get("success"):
+                        bridge_vars = var_resp.get("result", {})
+                        for var_name, var_value in bridge_vars.items():
+                            # Strip ${} wrapper for session storage
+                            base = var_name
+                            if base.startswith("${") and base.endswith("}"):
+                                base = base[2:-1]
+                            session.variables[base] = var_value
+                except Exception as ve:
+                    logger.debug(f"Could not sync variables from bridge: {ve}")
+                # Mark libraries as loaded since they come from the live process
+                session.libraries_loaded = True
+        except Exception as be:
+            logger.debug(f"Attach bridge diagnostics failed: {be}")
+
     # Detect platform type from scenario
     platform_type = execution_engine.session_manager.detect_platform_from_scenario(
         scenario
@@ -1283,7 +1326,13 @@ async def analyze_scenario(
         "next_step_guidance": f"Use session_id='{session_id}' in all subsequent tool calls",
         "status": "active",
         "ready_for_execution": True,
+        "attach_bridge_active": attach_bridge_active,
     }
+    if attach_bridge_active:
+        result["session_info"]["attach_note"] = (
+            "Session was pre-populated from the live RF process via Debug Attach Bridge. "
+            "Libraries and variables reflect the actual RF runtime state."
+        )
     result["session_info"]["recommended_tools"] = [
         {
             "order": idx,
@@ -1700,6 +1749,9 @@ async def manage_session(
         problems: List[Dict[str, Any]] = []
 
         if libraries:
+            # Ensure BuiltIn is always included (standard RF behaviour)
+            if "BuiltIn" not in libraries:
+                libraries = ["BuiltIn"] + list(libraries)
             for library in libraries:
                 try:
                     session.import_library(library)
@@ -1707,6 +1759,14 @@ async def manage_session(
                     loaded.append(library)
                 except Exception as lib_error:
                     problems.append({"library": library, "error": str(lib_error)})
+        else:
+            # Even when no libraries are specified, ensure BuiltIn is present
+            try:
+                session.import_library("BuiltIn")
+                session.loaded_libraries.add("BuiltIn")
+                loaded.append("BuiltIn")
+            except Exception as lib_error:
+                problems.append({"library": "BuiltIn", "error": str(lib_error)})
 
         set_vars: List[str] = []
         if variables:
@@ -1820,7 +1880,7 @@ async def manage_session(
         if client is not None:
             for name, value in data.items():
                 try:
-                    resp = client.set_variable(name, value)
+                    resp = client.set_variable(name, value, scope=scope)
                     results[name] = bool(resp.get("success"))
                 except Exception:
                     results[name] = False
@@ -2725,7 +2785,7 @@ async def set_variables(
     if client is not None:
         for name, value in pairs.items():
             try:
-                resp = client.set_variable(name, value)
+                resp = client.set_variable(name, value, scope=scope)
                 results[name] = bool(resp.get("success"))
             except Exception:
                 results[name] = False
@@ -3449,6 +3509,33 @@ async def _get_context_variables_payload(session_id: str) -> Dict[str, Any]:
                 return val
             # Avoid serializing complex/large objects
             return f"<{type(val).__name__}>"
+
+        # --- Attach bridge routing (R3) ---
+        # When an attach bridge is configured, read variables from the live RF
+        # process.  This ensures variables created during RF execution (e.g. by
+        # test setup, resource files, keyword returns) are visible to MCP.
+        client = _get_external_client_if_configured()
+        if client is not None:
+            try:
+                bridge_resp = client.get_variables()
+                if bridge_resp.get("success"):
+                    raw_vars = bridge_resp.get("result", {})
+                    sanitized = {}
+                    for k, v in raw_vars.items():
+                        key = k
+                        if key.startswith("${") and key.endswith("}"):
+                            key = key[2:-1]
+                        sanitized[key] = _sanitize(v)
+                    return {
+                        "success": True,
+                        "session_id": session_id,
+                        "variables": sanitized,
+                        "variable_count": len(sanitized),
+                        "source": "attach_bridge",
+                        "truncated": bridge_resp.get("truncated", False),
+                    }
+            except Exception as bridge_err:
+                logger.debug(f"Attach bridge variable read failed, falling back: {bridge_err}")
 
         # Prefer RF Namespace/Variables if an RF context exists for the session
         try:

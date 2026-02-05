@@ -88,7 +88,13 @@ class _Server(threading.Thread):
                 replyq: "queue.Queue" = queue.Queue()
                 cmdq.put(_Command(verb, payload, replyq))
                 try:
-                    resp = replyq.get(timeout=120.0)
+                    # Use timeout from payload if provided, else default 120s
+                    cmd_timeout = payload.get("timeout_ms")
+                    if cmd_timeout and isinstance(cmd_timeout, (int, float)) and cmd_timeout > 0:
+                        effective_timeout = cmd_timeout / 1000.0
+                    else:
+                        effective_timeout = 120.0
+                    resp = replyq.get(timeout=effective_timeout)
                 except queue.Empty:
                     resp = {"success": False, "error": "timeout"}
                 body = json.dumps(resp).encode("utf-8")
@@ -294,7 +300,8 @@ class McpAttach:
             return self._get_variables(payload)
         if verb == "set_variable":
             return self._set_variable(payload)
-        # Placeholder for future verbs: import_library, import_resource, list_keywords, get_keyword_doc, get/set vars
+        if verb == "import_variables":
+            return self._import_variables(payload)
         return {"success": False, "error": f"unknown verb: {verb}"}
 
     def _diagnostics(self) -> Dict[str, Any]:
@@ -500,7 +507,7 @@ class McpAttach:
         # Limit size to avoid large payloads
         out = {}
         for i, (k, v) in enumerate(all_vars.items()):
-            if i >= 50:
+            if i >= 200:
                 break
             out[k] = v
         return {"success": True, "result": out, "truncated": True}
@@ -508,7 +515,30 @@ class McpAttach:
     def _set_variable(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         name = payload.get("name")
         value = payload.get("value")
+        scope = str(payload.get("scope", "test")).lower()
         if not name:
             return {"success": False, "error": "name required"}
-        BuiltIn().set_test_variable(self._norm_var(str(name)), value)
-        return {"success": True}
+        bi = BuiltIn()
+        norm_name = self._norm_var(str(name))
+        if scope == "suite":
+            bi.set_suite_variable(norm_name, value)
+        elif scope == "global":
+            bi.set_global_variable(norm_name, value)
+        else:
+            bi.set_test_variable(norm_name, value)
+        return {"success": True, "scope": scope}
+
+    def _import_variables(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Import variables from a variable file into the live RF context."""
+        variable_file_path = str(payload.get("variable_file_path", "")).strip()
+        args = payload.get("args") or []
+        if not variable_file_path:
+            return {"success": False, "error": "variable_file_path required"}
+        ctx = EXECUTION_CONTEXTS.current
+        if not ctx or not getattr(ctx, "namespace", None):
+            return {"success": False, "error": "no active RF context"}
+        try:
+            ctx.namespace.import_variables(variable_file_path, args=args, overwrite=True)
+            return {"success": True, "result": {"variable_file": variable_file_path}}
+        except Exception as e:
+            return {"success": False, "error": str(e)}

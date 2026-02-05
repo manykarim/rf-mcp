@@ -111,14 +111,14 @@ class TestInstructionLearningHooks:
 
     def test_on_session_start_without_llm_type(self, hooks):
         """Test session start without explicit LLM type."""
-        tracker = hooks.on_session_start(
-            session_id="test-session",
-            instruction_mode="default",
-        )
+        with patch.object(hooks, "_detect_llm_type", return_value="unknown"):
+            tracker = hooks.on_session_start(
+                session_id="test-session",
+                instruction_mode="default",
+            )
 
         assert tracker is not None
-        # Should detect or default to "unknown"
-        assert hooks._session_metadata["test-session"].llm_type in ("unknown", "")
+        assert hooks._session_metadata["test-session"].llm_type == "unknown"
 
     @patch.dict(os.environ, {"ROBOTMCP_LLM_TYPE": "custom-model"})
     def test_llm_type_from_env(self, temp_storage):

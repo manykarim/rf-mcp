@@ -36,7 +36,16 @@ class SessionManager:
 
         session = ExecutionSession(session_id=session_id)
         self.sessions[session_id] = session
-        
+
+        # BuiltIn must always be present in the session namespace, mirroring
+        # standard Robot Framework behaviour where BuiltIn is unconditionally
+        # available in every test suite.
+        if "BuiltIn" not in session.imported_libraries:
+            session.imported_libraries.append("BuiltIn")
+        session.loaded_libraries.add("BuiltIn")
+        if "BuiltIn" not in session.search_order:
+            session.search_order.insert(0, "BuiltIn")
+
         # Add reference to session manager for Phase 2 synchronization
         session._session_manager = self
 

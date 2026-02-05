@@ -45,11 +45,14 @@ class ExternalRFClient:
         return self._post("/stop", {})
 
     def run_keyword(
-        self, name: str, args: Optional[List[str]] = None, assign_to: Optional[str | List[str]] = None
+        self, name: str, args: Optional[List[str]] = None, assign_to: Optional[str | List[str]] = None,
+        timeout_ms: Optional[int] = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"name": name, "args": list(args or [])}
         if assign_to is not None:
             payload["assign_to"] = assign_to
+        if timeout_ms is not None and timeout_ms > 0:
+            payload["timeout_ms"] = timeout_ms
         return self._post("/run_keyword", payload)
 
     def import_library(self, name_or_path: str, args: Optional[List[str]] = None, alias: Optional[str] = None) -> Dict[str, Any]:
@@ -88,5 +91,5 @@ class ExternalRFClient:
             payload["names"] = names
         return self._post("/get_variables", payload)
 
-    def set_variable(self, name: str, value: Any) -> Dict[str, Any]:
-        return self._post("/set_variable", {"name": name, "value": value})
+    def set_variable(self, name: str, value: Any, scope: str = "test") -> Dict[str, Any]:
+        return self._post("/set_variable", {"name": name, "value": value, "scope": scope})
