@@ -298,10 +298,9 @@ class TestMcpAttachBridge:
 class TestServerAttachImprovements:
     """R2: analyze_scenario attach guard, R3: variable bridge routing."""
 
-    def test_analyze_scenario_detects_attach_bridge(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_analyze_scenario_detects_attach_bridge(self, monkeypatch):
         """When ROBOTMCP_ATTACH_HOST is set, analyze_scenario queries bridge diagnostics."""
-        import asyncio
-
         # Set the environment variable so _get_external_client_if_configured returns a client
         monkeypatch.setenv("ROBOTMCP_ATTACH_HOST", "127.0.0.1")
         monkeypatch.setenv("ROBOTMCP_ATTACH_PORT", "7317")
@@ -365,9 +364,7 @@ class TestServerAttachImprovements:
         # underlying coroutine.
         analyze_fn = server_module.analyze_scenario.fn
 
-        result = asyncio.get_event_loop().run_until_complete(
-            analyze_fn(scenario="Open browser to example.com", context="web")
-        )
+        result = await analyze_fn(scenario="Open browser to example.com", context="web")
 
         # The result should indicate attach bridge was active
         assert result["session_info"]["attach_bridge_active"] is True
@@ -375,10 +372,9 @@ class TestServerAttachImprovements:
         # Diagnostics must have been called
         mock_client.diagnostics.assert_called()
 
-    def test_get_context_variables_routes_through_bridge(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_get_context_variables_routes_through_bridge(self, monkeypatch):
         """When attach bridge is configured, variables should be read from bridge."""
-        import asyncio
-
         mock_client = MagicMock()
         mock_client.get_variables.return_value = {
             "success": True,
@@ -395,9 +391,7 @@ class TestServerAttachImprovements:
 
         from robotmcp.server import _get_context_variables_payload
 
-        result = asyncio.get_event_loop().run_until_complete(
-            _get_context_variables_payload("some-session")
-        )
+        result = await _get_context_variables_payload("some-session")
 
         assert result["success"] is True
         assert result["source"] == "attach_bridge"
