@@ -93,3 +93,49 @@ class ExternalRFClient:
 
     def set_variable(self, name: str, value: Any, scope: str = "test") -> Dict[str, Any]:
         return self._post("/set_variable", {"name": name, "value": value, "scope": scope})
+
+    def get_page_source(self) -> Dict[str, Any]:
+        """Get page source directly from bridge.
+
+        Automatically detects Browser Library vs SeleniumLibrary and uses
+        the appropriate keyword.
+
+        Returns:
+            Dict with success status and page source content, including
+            which library was used (Browser, SeleniumLibrary, or AppiumLibrary)
+        """
+        return self._post("/get_page_source", {})
+
+    def get_aria_snapshot(
+        self,
+        selector: str = "css=html",
+        format_type: str = "yaml"
+    ) -> Dict[str, Any]:
+        """Get ARIA accessibility tree snapshot from bridge.
+
+        Only available with Browser Library (Playwright).
+
+        Args:
+            selector: CSS selector for the element to snapshot (default: "css=html")
+            format_type: Output format - "yaml" or "json" (default: "yaml")
+
+        Returns:
+            Dict with success status and ARIA snapshot content
+        """
+        return self._post("/get_aria_snapshot", {
+            "selector": selector,
+            "format": format_type,
+        })
+
+    def get_session_info(self) -> Dict[str, Any]:
+        """Get RF execution context information from bridge.
+
+        Returns:
+            Dict with success status and session info including:
+            - context_active: Whether RF context is active
+            - variable_count: Number of variables defined
+            - suite_name: Current test suite name
+            - test_name: Current test case name
+            - libraries: List of loaded library names
+        """
+        return self._post("/get_session_info", {})

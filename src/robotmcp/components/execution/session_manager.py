@@ -1,6 +1,7 @@
 """Session management service with mobile platform detection."""
 
 import logging
+import threading
 import uuid
 import re
 from datetime import datetime, timedelta
@@ -21,35 +22,37 @@ class SessionManager:
     def __init__(self, config: Optional[ExecutionConfig] = None):
         self.config = config or ExecutionConfig()
         self.sessions: Dict[str, ExecutionSession] = {}
+        self._lock = threading.RLock()  # Thread safety for session operations
 
     def create_session_id(self) -> str:
         """Create a unique session ID."""
         return str(uuid.uuid4())
 
     def create_session(self, session_id: str) -> ExecutionSession:
-        """Create a new execution session."""
-        if session_id in self.sessions:
-            logger.debug(
-                f"Session '{session_id}' already exists, returning existing session"
-            )
-            return self.sessions[session_id]
+        """Create a new execution session, thread-safe."""
+        with self._lock:
+            if session_id in self.sessions:
+                logger.debug(
+                    f"Session '{session_id}' already exists, returning existing session"
+                )
+                return self.sessions[session_id]
 
-        session = ExecutionSession(session_id=session_id)
-        self.sessions[session_id] = session
+            session = ExecutionSession(session_id=session_id)
+            self.sessions[session_id] = session
 
-        # BuiltIn must always be present in the session namespace, mirroring
-        # standard Robot Framework behaviour where BuiltIn is unconditionally
-        # available in every test suite.
-        if "BuiltIn" not in session.imported_libraries:
-            session.imported_libraries.append("BuiltIn")
-        session.loaded_libraries.add("BuiltIn")
-        if "BuiltIn" not in session.search_order:
-            session.search_order.insert(0, "BuiltIn")
+            # BuiltIn must always be present in the session namespace, mirroring
+            # standard Robot Framework behaviour where BuiltIn is unconditionally
+            # available in every test suite.
+            if "BuiltIn" not in session.imported_libraries:
+                session.imported_libraries.append("BuiltIn")
+            session.loaded_libraries.add("BuiltIn")
+            if "BuiltIn" not in session.search_order:
+                session.search_order.insert(0, "BuiltIn")
 
-        # Add reference to session manager for Phase 2 synchronization
-        session._session_manager = self
+            # Add reference to session manager for Phase 2 synchronization
+            session._session_manager = self
 
-        # Notify plugins about the new session
+        # Notify plugins about the new session (outside lock to avoid deadlock)
         try:
             library_registry.get_all_libraries()
             plugin_manager = get_library_plugin_manager()
@@ -79,21 +82,26 @@ class SessionManager:
         return session
 
     def get_session(self, session_id: str) -> Optional[ExecutionSession]:
-        """Get an existing session by ID."""
-        return self.sessions.get(session_id)
+        """Get an existing session by ID, thread-safe."""
+        with self._lock:
+            return self.sessions.get(session_id)
 
     def get_or_create_session(self, session_id: str) -> ExecutionSession:
-        """Get existing session or create new one if it doesn't exist."""
-        session = self.get_session(session_id)
-        if session is None:
-            session = self.create_session(session_id)
-        else:
-            # Update activity timestamp
-            session.update_activity()
-            # Ensure session manager reference exists for Phase 2
-            if not hasattr(session, '_session_manager') or session._session_manager is None:
-                session._session_manager = self
-        return session
+        """Get existing session or create new one if it doesn't exist, thread-safe."""
+        with self._lock:
+            session = self.sessions.get(session_id)
+            if session is None:
+                # Release lock before create_session (it acquires its own lock)
+                pass
+            else:
+                # Update activity timestamp
+                session.update_activity()
+                # Ensure session manager reference exists for Phase 2
+                if not hasattr(session, '_session_manager') or session._session_manager is None:
+                    session._session_manager = self
+                return session
+        # Session not found, create it (create_session handles its own locking)
+        return self.create_session(session_id)
 
     def synchronize_requests_library_state(self, session: ExecutionSession) -> bool:
         """

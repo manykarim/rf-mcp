@@ -97,7 +97,13 @@ class _Server(threading.Thread):
                     resp = replyq.get(timeout=effective_timeout)
                 except queue.Empty:
                     resp = {"success": False, "error": "timeout"}
-                body = json.dumps(resp).encode("utf-8")
+                try:
+                    body = json.dumps(resp).encode("utf-8")
+                except (TypeError, ValueError) as e:
+                    body = json.dumps({
+                        "success": False,
+                        "error": f"Response serialization failed: {type(e).__name__}: {str(e)[:200]}"
+                    }).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
@@ -302,6 +308,12 @@ class McpAttach:
             return self._set_variable(payload)
         if verb == "import_variables":
             return self._import_variables(payload)
+        if verb == "get_page_source":
+            return self._get_page_source(payload)
+        if verb == "get_aria_snapshot":
+            return self._get_aria_snapshot(payload)
+        if verb == "get_session_info":
+            return self._get_session_info(payload)
         return {"success": False, "error": f"unknown verb: {verb}"}
 
     def _diagnostics(self) -> Dict[str, Any]:
@@ -341,7 +353,12 @@ class McpAttach:
         assigned = {}
         if assign_to:
             assigned = self._assign_variables(assign_to, result)
-        return {"success": True, "result": result, "assigned": assigned}
+        # Sanitize result and assigned values for JSON serialization
+        return {
+            "success": True,
+            "result": self._sanitize_for_json(result),
+            "assigned": self._sanitize_for_json(assigned),
+        }
 
     def _assign_variables(self, names: Any, value: Any) -> Dict[str, Any]:
         bi = BuiltIn()
@@ -376,6 +393,27 @@ class McpAttach:
         if not (s.startswith("${") and s.endswith("}")):
             return f"${{{s}}}"
         return s
+
+    def _sanitize_for_json(self, val: Any) -> Any:
+        """Convert a value to a JSON-serializable form.
+
+        - None, str, int, float, bool are returned as-is
+        - Path objects (anything with __fspath__) are converted to str
+        - Lists/tuples are recursively sanitized
+        - Dicts are recursively sanitized (keys converted to str)
+        - Other objects are converted to str(val) to preserve useful info
+        """
+        if val is None or isinstance(val, (str, int, float, bool)):
+            return val
+        # Handle Path-like objects (pathlib.Path, os.PathLike, etc.)
+        if hasattr(val, "__fspath__"):
+            return str(val)
+        if isinstance(val, (list, tuple)):
+            return [self._sanitize_for_json(item) for item in val]
+        if isinstance(val, dict):
+            return {str(k): self._sanitize_for_json(v) for k, v in val.items()}
+        # Fallback: convert to string to preserve useful information
+        return str(val)
 
     # --- Additional verbs ---
     def _import_library(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -502,14 +540,14 @@ class McpAttach:
             for n in names:
                 k = self._norm_var(n)
                 if k in all_vars:
-                    out[k] = all_vars[k]
+                    out[k] = self._sanitize_for_json(all_vars[k])
             return {"success": True, "result": out}
         # Limit size to avoid large payloads
         out = {}
         for i, (k, v) in enumerate(all_vars.items()):
             if i >= 200:
                 break
-            out[k] = v
+            out[k] = self._sanitize_for_json(v)
         return {"success": True, "result": out, "truncated": True}
 
     def _set_variable(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -540,5 +578,124 @@ class McpAttach:
         try:
             ctx.namespace.import_variables(variable_file_path, args=args, overwrite=True)
             return {"success": True, "result": {"variable_file": variable_file_path}}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def _get_page_source(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Get page source directly - faster than run_keyword wrapper.
+
+        Automatically detects Browser Library vs SeleniumLibrary and uses
+        the appropriate keyword.
+        """
+        try:
+            bi = BuiltIn()
+
+            # Try Browser Library keyword first (Playwright)
+            try:
+                source = bi.run_keyword("Get Page Source")
+                return {
+                    "success": True,
+                    "result": source,
+                    "library": "Browser",
+                }
+            except Exception:
+                pass
+
+            # Fall back to SeleniumLibrary keyword
+            try:
+                source = bi.run_keyword("Get Source")
+                return {
+                    "success": True,
+                    "result": source,
+                    "library": "SeleniumLibrary",
+                }
+            except Exception:
+                pass
+
+            # Try AppiumLibrary (returns XML)
+            try:
+                source = bi.run_keyword("Get Source")
+                return {
+                    "success": True,
+                    "result": source,
+                    "library": "AppiumLibrary",
+                    "format": "xml",
+                }
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": f"No browser library loaded or no page open: {e}",
+                }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def _get_aria_snapshot(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Get ARIA accessibility tree snapshot.
+
+        Only available with Browser Library (Playwright).
+        """
+        selector = payload.get("selector", "css=html")
+        format_type = payload.get("format", "yaml")
+
+        try:
+            bi = BuiltIn()
+            result = bi.run_keyword(
+                "Get Aria Snapshot",
+                selector,
+                f"return_type={format_type}"
+            )
+            return {
+                "success": True,
+                "result": result,
+                "format": format_type,
+                "selector": selector,
+                "library": "Browser",
+            }
+        except Exception as e:
+            error_str = str(e)
+            if "No keyword with name" in error_str:
+                return {
+                    "success": False,
+                    "error": "Aria snapshot not available",
+                    "note": "Get Aria Snapshot is only available with Browser Library (Playwright)",
+                }
+            return {"success": False, "error": error_str}
+
+    def _get_session_info(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Get RF execution context information."""
+        try:
+            ctx = EXECUTION_CONTEXTS.current
+
+            if ctx is None:
+                return {
+                    "success": False,
+                    "error": "No active execution context",
+                }
+
+            bi = BuiltIn()
+            variables = bi.get_variables()
+
+            # Get libraries from namespace
+            libs = []
+            if getattr(ctx, "namespace", None) and hasattr(ctx.namespace, "libraries"):
+                libraries = ctx.namespace.libraries
+                if hasattr(libraries, "keys"):
+                    libs = list(libraries.keys())
+                elif hasattr(libraries, "__iter__"):
+                    libs = [
+                        getattr(li, "name", getattr(li, "__class__", type(li)).__name__)
+                        for li in libraries
+                    ]
+
+            return {
+                "success": True,
+                "result": {
+                    "context_active": True,
+                    "variable_count": len(variables),
+                    "suite_name": getattr(ctx, "suite", None) and getattr(ctx.suite, "name", None),
+                    "test_name": getattr(ctx, "test", None) and getattr(ctx.test, "name", None),
+                    "libraries": libs,
+                },
+            }
         except Exception as e:
             return {"success": False, "error": str(e)}

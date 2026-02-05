@@ -163,12 +163,13 @@ class TestMCPErrorScenarios:
         """Ensure attach bridge failures fall back to local page source retrieval."""
         import robotmcp.server as server_module
 
-        calls: List[str] = []
+        get_page_source_called = False
 
         class DummyClient:
-            def run_keyword(self, keyword, args):
-                calls.append(keyword)
-                return {"success": False, "error": "keyword-not-available"}
+            def get_page_source(self):
+                nonlocal get_page_source_called
+                get_page_source_called = True
+                return {"success": False, "error": "connection-refused"}
 
         dummy_client = DummyClient()
         monkeypatch.setattr(
@@ -186,6 +187,7 @@ class TestMCPErrorScenarios:
                 "success": True,
                 "session_id": session_id,
                 "page_source": "<html></html>",
+                "source": "local",
                 "aria_snapshot": {"success": False, "skipped": not include_reduced_dom},
             }
 
@@ -206,7 +208,7 @@ class TestMCPErrorScenarios:
         page_section = result["sections"]["page_source"]
         assert page_section["success"] is True
         assert page_section["page_source"] == "<html></html>"
-        assert calls == ["Get Page Source", "Get Source"]
+        assert get_page_source_called is True  # Bridge was tried first
 
     @pytest.mark.asyncio
     async def test_build_test_suite_empty_session(self, mcp_client):

@@ -319,6 +319,240 @@ def _compute_effective_use_context(
     return effective, mode, strict
 
 
+def _get_external_client_with_session_sync(
+    session_id: str = "default",
+) -> tuple[ExternalRFClient | None, "ExecutionSession | None"]:
+    """Get bridge client and ensure local session is synchronized.
+
+    When bridge is configured and reachable with an active RF context,
+    automatically creates the local session if it doesn't exist.
+
+    This function implements Phase 1 of ADR-003 Debug Bridge Unification:
+    - S1: Auto-Initialize Session from Bridge
+    - Fixes the get_session_state first-call failure when bridge is active
+
+    Returns:
+        (client, session) tuple where:
+        - client is the ExternalRFClient if bridge is configured and reachable
+        - session is the local ExecutionSession (may be auto-created)
+        Both may be None if bridge not configured and no local session exists.
+    """
+    client = _get_external_client_if_configured()
+    session = execution_engine.session_manager.get_session(session_id)
+
+    if client is None:
+        # No bridge - return existing local session (may be None)
+        return None, session
+
+    # Bridge configured - check reachability and context
+    try:
+        diag = client.diagnostics()
+        if not diag.get("success"):
+            # Bridge unreachable - fall back to local
+            return None, session
+
+        # Bridge reachable with context - ensure local session exists
+        if session is None:
+            bridge_result = diag.get("result", {})
+            if bridge_result.get("context", False):
+                # Auto-create session from bridge state
+                session = execution_engine.session_manager.create_session(session_id)
+                for lib in bridge_result.get("libraries", []):
+                    if lib not in session.imported_libraries:
+                        session.imported_libraries.append(lib)
+                    session.loaded_libraries.add(lib)
+                if bridge_result.get("libraries"):
+                    # Preserve BuiltIn at front, add bridge libraries after
+                    bridge_libs = [
+                        lib for lib in bridge_result.get("libraries", [])
+                        if lib != "BuiltIn"
+                    ]
+                    # Keep BuiltIn first if present in search_order
+                    if session.search_order and session.search_order[0] == "BuiltIn":
+                        session.search_order = ["BuiltIn"] + bridge_libs
+                    else:
+                        session.search_order = bridge_libs
+                logger.info(
+                    f"Auto-created session '{session_id}' from bridge with "
+                    f"libraries: {bridge_result.get('libraries', [])}"
+                )
+
+        return client, session
+
+    except Exception as e:
+        logger.debug(f"Bridge check failed: {e}")
+        return None, session
+
+
+async def _sync_session_bidirectional(
+    session_id: str,
+    client: ExternalRFClient,
+    session: "ExecutionSession",
+    direction: str = "both",  # "to_bridge", "from_bridge", "both"
+) -> Dict[str, Any]:
+    """Synchronize session state between local and bridge.
+
+    This function implements Phase 4 of ADR-003 Debug Bridge Unification:
+    - Bidirectional sync of libraries and variables
+    - Ensures local session stays in sync with live RF process
+
+    Args:
+        session_id: Session identifier for logging
+        client: ExternalRFClient connected to the bridge
+        session: Local ExecutionSession to sync
+        direction: Sync direction - "to_bridge", "from_bridge", or "both"
+
+    Returns:
+        Dict with success status and list of synced items
+    """
+    results: Dict[str, Any] = {"success": True, "synced": [], "session_id": session_id}
+
+    try:
+        if direction in ("from_bridge", "both"):
+            # Sync libraries from bridge
+            diag = client.diagnostics()
+            if diag.get("success"):
+                bridge_libs = set(diag.get("result", {}).get("libraries", []))
+                for lib in bridge_libs:
+                    if lib not in session.imported_libraries:
+                        session.imported_libraries.append(lib)
+                    session.loaded_libraries.add(lib)
+                results["synced"].append("libraries_from_bridge")
+                results["libraries_synced"] = list(bridge_libs)
+
+            # Sync variables from bridge
+            var_resp = client.get_variables()
+            if var_resp.get("success"):
+                raw_vars = var_resp.get("result", {})
+                synced_count = 0
+                for k, v in raw_vars.items():
+                    # Strip ${} wrappers from variable names
+                    clean_key = k
+                    if clean_key.startswith("${") and clean_key.endswith("}"):
+                        clean_key = clean_key[2:-1]
+                    session.variables[clean_key] = v
+                    synced_count += 1
+                results["synced"].append("variables_from_bridge")
+                results["variables_synced_count"] = synced_count
+
+        if direction in ("to_bridge", "both"):
+            # Push local variables to bridge
+            pushed_count = 0
+            push_errors = []
+            for key, value in session.variables.items():
+                try:
+                    resp = client.set_variable(key, value, scope="suite")
+                    if resp.get("success"):
+                        pushed_count += 1
+                    else:
+                        push_errors.append(f"{key}: {resp.get('error', 'unknown')}")
+                except Exception as var_err:
+                    push_errors.append(f"{key}: {var_err}")
+            results["synced"].append("variables_to_bridge")
+            results["variables_pushed_count"] = pushed_count
+            if push_errors:
+                results["push_errors"] = push_errors[:5]  # Limit error list
+
+        return results
+
+    except Exception as e:
+        logger.error(f"Session bidirectional sync failed: {e}")
+        return {"success": False, "error": str(e), "session_id": session_id}
+
+
+def _check_bridge_health(client: ExternalRFClient) -> Dict[str, Any]:
+    """Check bridge health and provide recovery hints.
+
+    This function implements Phase 4 of ADR-003 Debug Bridge Unification:
+    - Health check for the attach bridge
+    - Provides actionable recovery hints for common errors
+
+    Args:
+        client: ExternalRFClient to check
+
+    Returns:
+        Dict with health status and recovery hints:
+        - healthy: True if bridge is reachable and has active context
+        - context_active: True if RF execution context is active
+        - error: Error type if unhealthy
+        - recovery_hint: Actionable hint for recovery
+    """
+    try:
+        diag = client.diagnostics()
+        if diag.get("success"):
+            bridge_result = diag.get("result", {})
+            return {
+                "healthy": True,
+                "context_active": bridge_result.get("context", False),
+                "libraries": bridge_result.get("libraries", []),
+                "host": client.host,
+                "port": client.port,
+            }
+        # Bridge responded but returned error
+        return {
+            "healthy": False,
+            "context_active": False,
+            "error": "diagnostics_failed",
+            "details": diag.get("error", "unknown error"),
+            "recovery_hint": "Bridge responded but returned error. Check RF process logs for details.",
+        }
+    except Exception as e:
+        error_str = str(e).lower()
+
+        if "connection refused" in error_str:
+            return {
+                "healthy": False,
+                "context_active": False,
+                "error": "connection_refused",
+                "recovery_hint": (
+                    "Bridge server not running. Ensure Robot Framework is running "
+                    "with McpAttach library loaded and 'MCP Serve' keyword has been called."
+                ),
+            }
+        elif "timeout" in error_str or "timed out" in error_str:
+            return {
+                "healthy": False,
+                "context_active": False,
+                "error": "timeout",
+                "recovery_hint": (
+                    "Bridge server not responding. RF process may be blocked, "
+                    "overloaded, or executing a long-running keyword. "
+                    "Try again after the current operation completes."
+                ),
+            }
+        elif "name or service not known" in error_str or "nodename nor servname" in error_str:
+            return {
+                "healthy": False,
+                "context_active": False,
+                "error": "dns_resolution_failed",
+                "recovery_hint": (
+                    f"Cannot resolve bridge host. Check ROBOTMCP_ATTACH_HOST "
+                    f"environment variable (current: {client.host})."
+                ),
+            }
+        elif "network is unreachable" in error_str:
+            return {
+                "healthy": False,
+                "context_active": False,
+                "error": "network_unreachable",
+                "recovery_hint": (
+                    "Network is unreachable. Check network connectivity "
+                    "and firewall settings."
+                ),
+            }
+
+        return {
+            "healthy": False,
+            "context_active": False,
+            "error": str(e),
+            "recovery_hint": (
+                "Unknown error connecting to bridge. Check network connectivity, "
+                "RF process status, and environment variables "
+                "(ROBOTMCP_ATTACH_HOST, ROBOTMCP_ATTACH_PORT)."
+            ),
+        }
+
+
 # Internal helpers to build prompt texts (used by both @mcp.prompt and wrapper tools)
 def _build_recommend_libraries_sampling_prompt(
     scenario: str,
@@ -2400,6 +2634,49 @@ async def _get_application_state_payload(
 ) -> Dict[str, Any]:
     if elements_of_interest is None:
         elements_of_interest = []
+
+    # S3: Bridge path - build application state from bridge data
+    client = _get_external_client_if_configured()
+    if client is not None:
+        try:
+            result: Dict[str, Any] = {"success": True, "source": "attach_bridge"}
+
+            if state_type in ("dom", "all"):
+                # Reuse _get_page_source_payload for DOM state via bridge
+                page_data = await _get_page_source_payload(
+                    session_id=session_id,
+                    include_reduced_dom=True,
+                )
+                result["dom_state"] = {
+                    "page_source": page_data.get("page_source"),
+                    "aria_snapshot": page_data.get("aria_snapshot"),
+                    "metadata": page_data.get("metadata"),
+                    "success": page_data.get("success", False),
+                }
+
+            if state_type in ("api", "all"):
+                result["api_state"] = {
+                    "note": "API state inspection not available via attach bridge",
+                    "success": False,
+                }
+
+            if state_type in ("database", "all"):
+                result["database_state"] = {
+                    "note": "Database state inspection not available via attach bridge",
+                    "success": False,
+                }
+
+            # Include variables from bridge
+            var_data = await _get_context_variables_payload(session_id)
+            if var_data.get("success"):
+                result["variables"] = var_data.get("variables", {})
+                result["variable_count"] = var_data.get("variable_count", 0)
+
+            return result
+        except Exception as e:
+            logger.debug(f"Application state via bridge failed: {e}")
+
+    # Local fallback
     return await state_manager.get_state(
         state_type, elements_of_interest, session_id, execution_engine
     )
@@ -2549,41 +2826,111 @@ async def _get_page_source_payload(
     filtering_level: str = "standard",
     include_reduced_dom: bool = True,
 ) -> Dict[str, Any]:
-    # Bridge path: try Browser.Get Page Source or SeleniumLibrary.Get Source in live debug session
+    """Get page source with ARIA snapshot, routing through bridge if available.
+
+    Phase 3 implementation (ADR-003): Uses dedicated bridge methods (get_page_source,
+    get_aria_snapshot) for cleaner and more efficient bridge communication.
+
+    Args:
+        session_id: Session identifier (used for local fallback)
+        full_source: Whether to return full unfiltered source (deprecated, use filtered=False)
+        filtered: Whether to apply DOM filtering to reduce content size
+        filtering_level: Filtering aggressiveness - "standard" or "aggressive"
+        include_reduced_dom: Whether to include ARIA snapshot for semantic DOM representation
+
+    Returns:
+        Dict with:
+            - success: bool
+            - source: "attach_bridge" or "local"
+            - page_source: str (HTML/XML content)
+            - library: str (Browser, SeleniumLibrary, AppiumLibrary, etc.)
+            - metadata: {filtered: bool, full: bool}
+            - aria_snapshot: {success: bool, content: str, format: str} or
+                           {skipped: True} or {success: False, error: str}
+    """
+    # Bridge path: use dedicated get_page_source method for cleaner communication
     client = _get_external_client_if_configured()
     if client is not None:
-        last_error = None
-        # Prefer Browser's keyword
-        for kw in ("Get Page Source", "Get Source"):
-            resp = client.run_keyword(kw, [])
-            if resp.get("success") and resp.get("result") is not None:
-                src = resp.get("result")
-                # Minimal normalized payload with external flag
-                aria_snapshot_payload = {
-                    "success": False,
-                    "selector": "css=html",
-                    "library": "Browser",
-                }
+        try:
+            # Get page source via dedicated bridge method
+            ps_resp = client.get_page_source()
+            if ps_resp.get("success"):
+                source = ps_resp.get("result", "")
+                library_type = ps_resp.get("library", "unknown")
+
+                # Apply local filtering if requested
+                is_filtered = False
+                if filtered and source:
+                    try:
+                        from robotmcp.components.execution.page_source_service import (
+                            PageSourceService,
+                        )
+
+                        source = PageSourceService.filter_page_source(source, filtering_level)
+                        is_filtered = True
+                    except Exception as filter_err:
+                        logger.debug(f"Page source filtering failed: {filter_err}")
+
+                # Get ARIA snapshot if requested
+                aria_payload: Dict[str, Any] = {"skipped": True}
                 if include_reduced_dom:
-                    aria_snapshot_payload["error"] = "not_supported_in_attach_mode"
-                else:
-                    aria_snapshot_payload["skipped"] = True
+                    if library_type == "Browser":
+                        # ARIA snapshots only available with Browser Library (Playwright)
+                        try:
+                            aria_resp = client.get_aria_snapshot(
+                                selector="css=html",
+                                format_type="yaml",
+                            )
+                            if aria_resp.get("success"):
+                                aria_payload = {
+                                    "success": True,
+                                    "content": aria_resp.get("result", ""),
+                                    "format": aria_resp.get("format", "yaml"),
+                                    "selector": "css=html",
+                                    "library": "Browser",
+                                    "source": "attach_bridge",
+                                }
+                            else:
+                                aria_payload = {
+                                    "success": False,
+                                    "error": aria_resp.get("error", "unknown"),
+                                    "note": aria_resp.get("note"),
+                                }
+                        except Exception as aria_err:
+                            logger.debug(f"ARIA snapshot via bridge failed: {aria_err}")
+                            aria_payload = {
+                                "success": False,
+                                "error": "aria_snapshot_failed_via_bridge",
+                            }
+                    else:
+                        # Non-Browser library - ARIA not available
+                        aria_payload = {
+                            "success": False,
+                            "error": "aria_not_available",
+                            "note": f"ARIA snapshots are only available with Browser Library (Playwright), not {library_type}",
+                        }
 
                 return {
                     "success": True,
-                    "external": True,
-                    "keyword_used": kw,
-                    "page_source": src,
-                    "metadata": {"full": True, "filtered": False},
-                    "aria_snapshot": aria_snapshot_payload,
+                    "source": "attach_bridge",
+                    "page_source": source,
+                    "library": library_type,
+                    "metadata": {
+                        "filtered": is_filtered,
+                        "full": not is_filtered,
+                    },
+                    "aria_snapshot": aria_payload,
                 }
-            last_error = resp.get("error") or resp.get("message")
-        logger.warning(
-            "Attach bridge could not retrieve page source (last error: %s); falling back to local execution",
-            last_error,
-        )
+            else:
+                # Bridge returned failure - log and fall back
+                logger.warning(
+                    "Bridge get_page_source failed: %s; falling back to local execution",
+                    ps_resp.get("error", "unknown error"),
+                )
+        except Exception as e:
+            logger.debug(f"Bridge page source failed: {e}, falling back to local")
 
-    # Local path
+    # Local path - fall back to execution engine
     return await execution_engine.get_page_source(
         session_id,
         full_source,
@@ -3502,6 +3849,12 @@ async def initialize_context(
 
 
 async def _get_context_variables_payload(session_id: str) -> Dict[str, Any]:
+    """Get variables, preferring bridge when available.
+
+    This function implements Phase 4 of ADR-003 Debug Bridge Unification:
+    - Uses _get_external_client_with_session_sync to auto-create session from bridge
+    - Ensures first-call success when bridge is active with RF context
+    """
     try:
         # Helper to sanitize values: return scalars as-is; for complex objects, return their type name.
         def _sanitize(val: Any) -> Any:
@@ -3510,11 +3863,15 @@ async def _get_context_variables_payload(session_id: str) -> Dict[str, Any]:
             # Avoid serializing complex/large objects
             return f"<{type(val).__name__}>"
 
+        # --- Phase 4: Use unified client+session retrieval with auto-sync ---
+        # This ensures sessions are auto-created from bridge state when needed,
+        # fixing first-call failures when bridge is active.
+        client, session = _get_external_client_with_session_sync(session_id)
+
         # --- Attach bridge routing (R3) ---
         # When an attach bridge is configured, read variables from the live RF
         # process.  This ensures variables created during RF execution (e.g. by
         # test setup, resource files, keyword returns) are visible to MCP.
-        client = _get_external_client_if_configured()
         if client is not None:
             try:
                 bridge_resp = client.get_variables()
@@ -3587,12 +3944,13 @@ async def _get_context_variables_payload(session_id: str) -> Dict[str, Any]:
             pass
 
         # Fallback: session-based variable store
-        session = execution_engine.session_manager.get_session(session_id)
+        # Note: session may have been auto-created by _get_external_client_with_session_sync
         if not session:
             return {
                 "success": False,
-                "error": f"Session '{session_id}' not found",
+                "error": f"Session '{session_id}' not found and no active attach bridge",
                 "session_id": session_id,
+                "hint": "Call execute_step or manage_session(action='init') first, or configure attach bridge",
             }
         sess_vars_raw = dict(session.variables)
         sess_vars = {str(k): _sanitize(v) for k, v in sess_vars_raw.items()}
@@ -3616,17 +3974,42 @@ async def get_context_variables(session_id: str) -> Dict[str, Any]:
 
 
 async def _get_session_info_payload(session_id: str = "default") -> Dict[str, Any]:
-    try:
-        session = execution_engine.session_manager.get_session(session_id)
+    """Get session info, auto-initializing from bridge if needed.
 
-        if not session:
+    This function implements Phase 1 of ADR-003 Debug Bridge Unification:
+    - Uses _get_external_client_with_session_sync() to auto-create session from bridge
+    - Does not fail if bridge is available even without local session
+    """
+    try:
+        # Use unified client+session retrieval (auto-creates session from bridge if needed)
+        client, session = _get_external_client_with_session_sync(session_id)
+        base_info = session.get_session_info() if session else {}
+
+        # S5: Enrich with bridge data when available
+        if client is not None:
+            try:
+                diag = client.diagnostics()
+                if diag.get("success"):
+                    bridge_result = diag.get("result", {})
+                    base_info["attach_bridge"] = {
+                        "active": True,
+                        "libraries": bridge_result.get("libraries", []),
+                        "context_active": bridge_result.get("context", False),
+                    }
+            except Exception as bridge_err:
+                logger.debug(f"Bridge diagnostics for session info failed: {bridge_err}")
+                base_info["attach_bridge"] = {"active": False, "error": "unreachable"}
+
+        # CRITICAL FIX (ADR-003 S1): Don't fail if bridge is available
+        if not session and not base_info.get("attach_bridge", {}).get("active"):
             return {
                 "success": False,
-                "error": f"Session '{session_id}' not found",
+                "error": f"Session '{session_id}' not found and no active attach bridge",
                 "available_sessions": execution_engine.session_manager.get_all_session_ids(),
+                "hint": "Call execute_step or manage_session(action='init') first, or configure attach bridge",
             }
 
-        return {"success": True, "session_info": session.get_session_info()}
+        return {"success": True, "session_info": base_info}
 
     except Exception as e:
         logger.error(f"Error getting session info: {e}")
@@ -3822,6 +4205,23 @@ async def get_appium_locator_guidance(
 
 
 async def _get_loaded_libraries_payload() -> Dict[str, Any]:
+    # S4: Check bridge first and use its library list when available
+    client = _get_external_client_if_configured()
+    if client is not None:
+        try:
+            diag = client.diagnostics()
+            if diag.get("success"):
+                bridge_libs = diag.get("result", {}).get("libraries", [])
+                return {
+                    "success": True,
+                    "source": "attach_bridge",
+                    "libraries": bridge_libs,
+                    "library_count": len(bridge_libs),
+                    "context_active": diag.get("result", {}).get("context", False),
+                }
+        except Exception as e:
+            logger.debug(f"Library status via bridge failed: {e}")
+
     return execution_engine.get_library_status()
 
 
