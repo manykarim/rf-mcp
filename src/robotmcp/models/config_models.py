@@ -22,6 +22,7 @@ class ExecutionConfig:
     NAVIGATION_TIMEOUT: int = 60000  # milliseconds - page navigation
     ASSERTION_TIMEOUT: int = 10000  # milliseconds - assertion retries
     READ_TIMEOUT: int = 2000  # milliseconds - read operations
+    PRE_VALIDATION_TIMEOUT: int = 500  # milliseconds - fast pre-validation checks
     
     # Page source settings
     DEFAULT_FILTERING_LEVEL: str = "standard"

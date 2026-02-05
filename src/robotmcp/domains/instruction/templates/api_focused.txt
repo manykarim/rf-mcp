@@ -1,0 +1,28 @@
+API TESTING GUIDE
+
+For RequestsLibrary API testing.
+
+WORKFLOW:
+1. recommend_libraries for API testing
+2. find_keywords for HTTP keywords
+3. get_keyword_info for arguments
+4. execute_step with discovered keywords
+
+API PATTERN:
+1. Create session with base URL
+2. Make requests (GET, POST, etc.)
+3. Verify response status/body
+
+DISCOVERY EXAMPLE:
+find_keywords(query="create session")
+get_keyword_info(keyword_name="Create Session")
+execute_step(keyword="Create Session", args={...})
+
+DEBUGGING:
+get_session_state shows active sessions and state.
+For API: get_session_state(sections=["variables", "application_state"])
+For UI: get_session_state(sections=["page_source"], include_reduced_dom=True) for ARIA snapshot.
+
+Never guess keywords. Use discovery first.
+
+Available tools: {available_tools}

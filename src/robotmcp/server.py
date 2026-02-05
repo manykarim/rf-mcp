@@ -24,18 +24,116 @@ from robotmcp.components.nlp_processor import NaturalLanguageProcessor
 from robotmcp.components.state_manager import StateManager
 from robotmcp.components.test_builder import TestBuilder
 from robotmcp.config import library_registry
+from robotmcp.domains.instruction import FastMCPInstructionAdapter
 from robotmcp.models.session_models import PlatformType
 from robotmcp.plugins import get_library_plugin_manager
 from robotmcp.utils.server_integration import initialize_enhanced_serialization
+from robotmcp.optimization.instruction_hooks import InstructionLearningHooks, get_hooks
 
 logger = logging.getLogger(__name__)
+
+# Initialize instruction learning hooks singleton
+_instruction_hooks: Optional[InstructionLearningHooks] = None
+
+
+def _get_instruction_hooks() -> InstructionLearningHooks:
+    """Get or initialize the instruction learning hooks.
+
+    Returns:
+        The singleton InstructionLearningHooks instance
+    """
+    global _instruction_hooks
+    if _instruction_hooks is None:
+        _instruction_hooks = InstructionLearningHooks.get_instance()
+    return _instruction_hooks
+
+
+def _track_tool_result(
+    session_id: str,
+    tool_name: str,
+    arguments: Dict[str, Any],
+    result: Dict[str, Any],
+) -> None:
+    """Track a tool call result for instruction learning.
+
+    Args:
+        session_id: Session identifier
+        tool_name: Name of the tool that was called
+        arguments: Arguments passed to the tool
+        result: Result dictionary from the tool
+    """
+    try:
+        hooks = _get_instruction_hooks()
+        success = result.get("success", True)
+        error = result.get("error") if not success else None
+        hooks.on_tool_call(session_id, tool_name, arguments, success, error, result)
+    except Exception as e:
+        # Don't let learning errors affect tool execution
+        logger.debug(f"Instruction learning tracking error: {e}")
 
 if TYPE_CHECKING:
     from robotmcp.frontend.controller import FrontendServerController
 
 
-# Initialize FastMCP server
-mcp = FastMCP("Robot Framework MCP Server")
+def _resolve_server_instructions() -> Optional[str]:
+    """Resolve MCP instructions based on environment configuration.
+
+    Environment variables (as per ADR-002):
+    - ROBOTMCP_INSTRUCTIONS: Mode control ("off", "default", "custom")
+    - ROBOTMCP_INSTRUCTIONS_TEMPLATE: Template selection
+      ("minimal", "standard", "detailed", "browser-focused", "api-focused")
+    - ROBOTMCP_INSTRUCTIONS_FILE: Path to custom instructions file
+
+    Returns:
+        Instruction string for FastMCP, or None if instructions are disabled.
+    """
+    try:
+        # Create adapter and resolve configuration from environment
+        adapter = FastMCPInstructionAdapter()
+        config = adapter.create_config_from_env()
+
+        # Get instructions formatted for FastMCP
+        instructions = adapter.get_server_instructions(
+            config,
+            context=adapter.get_default_tools_context(),
+        )
+
+        if instructions:
+            logger.info(
+                "MCP instructions enabled: mode=%s, template=%s, length=%d chars",
+                config.mode.value,
+                adapter.get_template_type().value if config.is_enabled else "n/a",
+                len(instructions),
+            )
+        else:
+            logger.info("MCP instructions disabled")
+
+        return instructions
+
+    except Exception as e:
+        logger.warning(
+            "Failed to resolve MCP instructions, continuing without: %s",
+            str(e),
+        )
+        return None
+
+
+def _create_mcp_server() -> FastMCP:
+    """Create and configure the FastMCP server with instructions.
+
+    Returns:
+        Configured FastMCP server instance.
+    """
+    instructions = _resolve_server_instructions()
+
+    return FastMCP(
+        "Robot Framework MCP Server",
+        instructions=instructions,
+    )
+
+
+# Initialize FastMCP server with instructions
+mcp = _create_mcp_server()
 
 # Optional reference to the running frontend controller
 _frontend_controller: "FrontendServerController | None" = None
@@ -1047,6 +1145,10 @@ async def recommend_libraries(
             logger.debug(f"LLM recommendation failed, using rule-based: {e}")
             result["llm_refined"] = False
 
+    # Track for instruction learning
+    if session_id:
+        _track_tool_result(session_id, "recommend_libraries", {"scenario": scenario, "context": context}, result)
+
     return result
 
 
@@ -1197,6 +1299,30 @@ async def analyze_scenario(
 
     result["session_id"] = session_id
     result["context"] = context
+
+    # Start instruction learning tracking for this session
+    try:
+        hooks = _get_instruction_hooks()
+        # Detect scenario type from context
+        scenario_type = "unknown"
+        if context == "web":
+            scenario_type = "web_automation"
+        elif context == "api":
+            scenario_type = "api_testing"
+        elif context == "mobile":
+            scenario_type = "mobile_testing"
+        elif context == "desktop":
+            scenario_type = "desktop_automation"
+
+        hooks.on_session_start(
+            session_id=session_id,
+            instruction_mode=os.environ.get("ROBOTMCP_INSTRUCTION_MODE", "default"),
+            scenario_type=scenario_type,
+        )
+        # Track the analyze_scenario call
+        _track_tool_result(session_id, "analyze_scenario", {"scenario": scenario, "context": context}, result)
+    except Exception as e:
+        logger.debug(f"Failed to start instruction learning: {e}")
 
     return result
 
@@ -1373,6 +1499,9 @@ async def find_keywords(
         if excluded:
             result["excluded_keywords"] = excluded
             result["session_library"] = session_library_preference
+        # Track for instruction learning
+        if session_id:
+            _track_tool_result(session_id, "find_keywords", {"query": query, "strategy": strategy}, result)
         return result
 
     if strategy_norm in {"pattern", "search"}:
@@ -1398,6 +1527,9 @@ async def find_keywords(
         if excluded:
             result["excluded_keywords"] = excluded
             result["session_library"] = session_library_preference
+        # Track for instruction learning
+        if session_id:
+            _track_tool_result(session_id, "find_keywords", {"query": query, "strategy": strategy}, result)
         return result
 
     if strategy_norm in {"catalog", "library"}:
@@ -1432,6 +1564,9 @@ async def find_keywords(
         if excluded:
             result["excluded_keywords"] = excluded
             result["session_library"] = session_library_preference
+        # Track for instruction learning
+        if session_id:
+            _track_tool_result(session_id, "find_keywords", {"query": query, "strategy": strategy}, result)
         return result
 
     if strategy_norm in {"session", "namespace"}:
@@ -1443,6 +1578,8 @@ async def find_keywords(
         mgr = get_rf_native_context_manager()
         payload = mgr.list_available_keywords(session_id)
         payload.update({"strategy": "session", "query": query})
+        # Track for instruction learning
+        _track_tool_result(session_id, "find_keywords", {"query": query, "strategy": strategy}, payload)
         return payload
 
     return {"success": False, "error": f"Unsupported strategy '{strategy}'"}
@@ -1538,6 +1675,27 @@ async def manage_session(
     session = execution_engine.session_manager.get_or_create_session(session_id)
 
     if action_norm in {"init", "initialize", "bootstrap"}:
+        # Start instruction learning tracking for this session
+        try:
+            hooks = _get_instruction_hooks()
+            # Detect scenario type from libraries or use default
+            scenario_type = "unknown"
+            if libraries:
+                if any("browser" in lib.lower() or "selenium" in lib.lower() for lib in libraries):
+                    scenario_type = "web_automation"
+                elif any("api" in lib.lower() or "request" in lib.lower() for lib in libraries):
+                    scenario_type = "api_testing"
+                elif any("mobile" in lib.lower() or "appium" in lib.lower() for lib in libraries):
+                    scenario_type = "mobile_testing"
+
+            hooks.on_session_start(
+                session_id=session_id,
+                instruction_mode=os.environ.get("ROBOTMCP_INSTRUCTION_MODE", "default"),
+                scenario_type=scenario_type,
+            )
+        except Exception as e:
+            logger.debug(f"Failed to start instruction learning: {e}")
+
         loaded: List[str] = []
         problems: List[Dict[str, Any]] = []
 
@@ -1565,7 +1723,7 @@ async def manage_session(
                 session.set_variable(key, value)
                 set_vars.append(name)
 
-        return {
+        result = {
             "success": True,
             "action": "init",
             "session_id": session_id,
@@ -1574,6 +1732,8 @@ async def manage_session(
             "import_issues": problems,
             "note": "Context mode is managed via session namespace; use execute_step(use_context=True) when needed.",
         }
+        _track_tool_result(session_id, "manage_session", {"action": action, "libraries": libraries}, result)
+        return result
 
     if action_norm in {"import_resource", "resource"}:
         if not resource_path:
@@ -1944,6 +2104,9 @@ async def get_session_state(
         rf_context = await _diagnose_rf_context_payload(session_id)
         payload["sections"]["rf_context"] = rf_context
 
+    # Track for instruction learning
+    _track_tool_result(session_id, "get_session_state", {"sections": sections}, payload)
+
     return payload
 
 
@@ -1959,6 +2122,7 @@ async def execute_step(
     use_context: bool | None = None,
     mode: str = "keyword",
     expression: str | None = None,
+    timeout_ms: int | None = None,
 ) -> Dict[str, Any]:
     """Execute a single Robot Framework keyword (or Evaluate) within a session.
 
@@ -1982,6 +2146,13 @@ async def execute_step(
         use_context: Whether to run inside RF native context; defaults via config/attach.
         mode: "keyword" (default) or "evaluate" (runs BuiltIn.Evaluate).
         expression: Expression for mode="evaluate"; falls back to keyword/first argument.
+        timeout_ms: Optional timeout in milliseconds for keyword execution.
+                    If not provided, uses smart defaults based on keyword type:
+                    - Element actions (Click, Fill): 5000ms
+                    - Navigation (Go To, New Page): 60000ms
+                    - Read operations (Get Text): 2000ms
+                    - API calls (GET, POST): 30000ms
+                    Set to 0 or negative to disable timeout.
 
     Returns:
         Dict[str, Any]: Execution result:
@@ -2004,6 +2175,14 @@ async def execute_step(
                 keyword="Should Be Equal",
                 arguments=["${api_response.status_code}", "200"],
                 session_id="api_session"
+            )
+
+        Execute with custom timeout:
+            execute_step(
+                keyword="Go To",
+                arguments=["https://slow-website.com"],
+                timeout_ms=120000,  # 2 minutes for slow page
+                session_id="web_session"
             )
     """
     arguments = list(arguments or [])
@@ -2115,6 +2294,7 @@ async def execute_step(
         scenario_hint=scenario_hint,
         assign_to=assign_to,
         use_context=bool(use_context),
+        timeout_ms=timeout_ms,
     )
 
     # For proper MCP protocol compliance, failed steps should raise exceptions
@@ -2146,6 +2326,10 @@ async def execute_step(
 
     result["mode"] = mode_norm
     result.setdefault("keyword", keyword_to_run)
+
+    # Track for instruction learning
+    _track_tool_result(session_id, "execute_step", {"keyword": keyword_to_run, "arguments": arguments}, result)
+
     return result
 
 
@@ -4209,6 +4393,18 @@ def main(argv: List[str] | None = None) -> None:
     except KeyboardInterrupt:
         logger.info("RobotMCP interrupted by user")
     finally:
+        # Shutdown instruction learning and persist metrics
+        try:
+            hooks = _get_instruction_hooks()
+            shutdown_result = hooks.shutdown()
+            if shutdown_result.get("persisted"):
+                logger.info(
+                    f"Instruction learning data persisted: "
+                    f"{shutdown_result.get('sessions_ended', 0)} sessions saved"
+                )
+        except Exception:
+            logger.debug("Failed to shutdown instruction learning", exc_info=True)
+
         try:
             execution_engine.session_manager.cleanup_all_sessions()
         except Exception:

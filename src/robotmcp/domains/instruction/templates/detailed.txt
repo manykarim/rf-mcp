@@ -1,0 +1,50 @@
+ROBOT FRAMEWORK MCP - DETAILED WORKFLOW GUIDE
+
+Follow this workflow exactly when using Robot Framework MCP tools.
+
+STEP 1: SCENARIO ANALYSIS
+- analyze_scenario with test goal description
+- recommend_libraries for library suggestions
+
+STEP 2: KEYWORD DISCOVERY
+DO NOT GUESS KEYWORDS. Use discovery tools:
+- find_keywords(query="click button") - Search for keywords
+- get_keyword_info(keyword_name="Click Element") - Get arguments
+Example: find_keywords returns "Click Element" from SeleniumLibrary
+
+STEP 3: VERIFY LIBRARIES
+- check_library_availability to verify libraries exist
+- manage_session to load libraries if needed
+
+STEP 4: EXECUTE WITH DISCOVERED INFO
+- execute_step(keyword="Click Element", args={"locator": "id=submit"})
+- execute_flow for sequences of steps
+
+STEP 5: DEBUG FAILURES
+If execution fails:
+- get_session_state to check current state and page DOM
+- find_keywords to verify keyword exists
+- get_keyword_info for correct argument names
+
+DOM/ARIA SNAPSHOTS (critical for UI testing):
+get_session_state retrieves page structure for element discovery:
+- sections=["page_source"] with include_reduced_dom=True -> ARIA snapshot (quick)
+- sections=["page_source"] with page_source_filtered=True -> Filtered/compact DOM
+- sections=["page_source"] alone -> Full page source for debugging
+Example: get_session_state(session_id="s1", sections=["page_source"], include_reduced_dom=True)
+
+ABSOLUTE RULES:
+- NEVER invent keyword names
+- NEVER guess argument patterns
+- ALWAYS use find_keywords before execute_step
+- ALWAYS use get_keyword_info for argument details
+- Report available keywords if expected ones missing
+
+DISCOVERY TOOLS:
+find_keywords, get_keyword_info, get_session_state, get_locator_guidance,
+analyze_scenario, recommend_libraries, check_library_availability
+
+ACTION TOOLS:
+execute_step, execute_flow, manage_session, build_test_suite, run_test_suite
+
+Available tools: {available_tools}

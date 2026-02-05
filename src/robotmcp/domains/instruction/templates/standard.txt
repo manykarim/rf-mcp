@@ -1,0 +1,36 @@
+DISCOVERY-FIRST WORKFLOW
+
+CRITICAL: Always discover before executing. Never guess keywords.
+
+DISCOVERY TOOLS (use first):
+1. analyze_scenario - Understand requirements
+2. recommend_libraries - Get library suggestions
+3. find_keywords - Search for keywords
+4. get_keyword_info - Get keyword arguments
+5. check_library_availability - Verify libraries
+6. get_locator_guidance - Get locator strategies
+7. get_session_state - Check session/debug/get DOM
+
+DOM/ARIA SNAPSHOTS (for UI testing):
+Use get_session_state to retrieve page structure:
+- get_session_state(sections=["page_source"], include_reduced_dom=True) - ARIA snapshot
+- get_session_state(sections=["page_source"], page_source_filtered=True) - Compact DOM
+- get_session_state(sections=["page_source"]) - Full page source
+
+ACTION TOOLS (after discovery):
+- execute_step - Run single keyword
+- execute_flow - Run keyword sequences
+- manage_session - Configure sessions
+- build_test_suite - Create suites
+- run_test_suite - Execute suites
+
+WORKFLOW:
+1. analyze_scenario for requirements
+2. recommend_libraries for needed libraries
+3. find_keywords to discover keywords
+4. get_keyword_info for arguments
+5. execute_step with discovered keywords
+
+DO NOT: Guess keywords, assume libraries, execute without discovery.
+
+Available tools: {available_tools}

@@ -74,6 +74,23 @@ from .services import (
     TimeoutContextManager,
 )
 
+# Keyword Classification
+from .keyword_classifier import (
+    classify_keyword,
+    get_timeout_for_keyword,
+    normalize_keyword,
+    get_all_keywords_for_action,
+    is_navigation_keyword,
+    is_read_keyword,
+    is_wait_keyword,
+    CLICK_KEYWORDS,
+    FILL_KEYWORDS,
+    NAVIGATION_KEYWORDS,
+    SELECT_KEYWORDS,
+    READ_KEYWORDS,
+    WAIT_KEYWORDS,
+)
+
 __all__ = [
     # Value Objects
     "PolicyId",
@@ -93,4 +110,18 @@ __all__ = [
     # Services
     "TimeoutService",
     "TimeoutContextManager",
+    # Keyword Classification
+    "classify_keyword",
+    "get_timeout_for_keyword",
+    "normalize_keyword",
+    "get_all_keywords_for_action",
+    "is_navigation_keyword",
+    "is_read_keyword",
+    "is_wait_keyword",
+    "CLICK_KEYWORDS",
+    "FILL_KEYWORDS",
+    "NAVIGATION_KEYWORDS",
+    "SELECT_KEYWORDS",
+    "READ_KEYWORDS",
+    "WAIT_KEYWORDS",
 ]

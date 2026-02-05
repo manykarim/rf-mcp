@@ -35,7 +35,24 @@ Example:
 
 Storage:
     All learned patterns are stored in ~/.rf-mcp/patterns/ as JSON files,
-    organized by namespace (compression, folding, timeouts, refs, metrics).
+    organized by namespace (compression, folding, timeouts, refs, metrics,
+    instruction_patterns, instruction_records, instruction_sequences).
+
+Instruction Learning Example:
+    from robotmcp.optimization import InstructionEffectivenessLearner
+
+    learner = InstructionEffectivenessLearner()
+
+    # Start tracking a session
+    tracker = learner.start_session("session-1", "default", "claude-sonnet")
+    tracker.record_tool_call("find_keywords", {}, True)
+    tracker.record_tool_call("execute_step", {"keyword": "Click"}, True)
+
+    # End session and record effectiveness
+    learner.end_session(tracker)
+
+    # Get recommendation for future sessions
+    rec = learner.get_recommendation("claude-sonnet", "web_automation")
 """
 
 from .pattern_store import PatternStore
@@ -73,6 +90,21 @@ from .collector import (
     TokenMetrics,
     LatencyMetrics,
     PerformanceMetricsCollector,
+)
+from .instruction_learner import (
+    InstructionMode,
+    ToolCallEvent,
+    InstructionEffectivenessRecord,
+    LLMBehaviorPattern,
+    SuccessfulSequence,
+    SessionTracker,
+    InstructionEffectivenessLearner,
+)
+from .instruction_hooks import (
+    SessionMetadata,
+    InstructionLearningHooks,
+    get_hooks,
+    track_tool_call,
 )
 
 __all__ = [
@@ -113,4 +145,19 @@ __all__ = [
     "TokenMetrics",
     "LatencyMetrics",
     "PerformanceMetricsCollector",
+
+    # Instruction learning
+    "InstructionMode",
+    "ToolCallEvent",
+    "InstructionEffectivenessRecord",
+    "LLMBehaviorPattern",
+    "SuccessfulSequence",
+    "SessionTracker",
+    "InstructionEffectivenessLearner",
+
+    # Instruction learning hooks
+    "SessionMetadata",
+    "InstructionLearningHooks",
+    "get_hooks",
+    "track_tool_call",
 ]
