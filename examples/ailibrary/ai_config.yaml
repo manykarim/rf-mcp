@@ -1,0 +1,33 @@
+# AILibrary Configuration File
+# Use with: Library    AILibrary    config=${CURDIR}/ai_config.yaml
+
+# Primary provider settings
+provider: anthropic
+model: claude-sonnet-4-20250514
+
+# Retry configuration
+retries: 5
+retry_delay: 1.5
+log_level: INFO
+
+# Provider-specific settings
+anthropic:
+  max_tokens: 8192
+  temperature: 0.1
+  # Additional Anthropic-specific options can be added here
+
+openai:
+  max_tokens: 4096
+  temperature: 0.2
+  organization: ""  # Set if using OpenAI organization
+
+ollama:
+  max_tokens: 2048
+  temperature: 0.3
+  base_url: http://localhost:11434
+
+azure:
+  max_tokens: 4096
+  temperature: 0.1
+  # base_url should be set via environment variable or directly
+  # base_url: https://your-endpoint.openai.azure.com/

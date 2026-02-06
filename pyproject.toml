@@ -28,6 +28,10 @@ frontend = ["django>=4.2,<5.0", "uvicorn[standard]>=0.24"]
 mobile = ["robotframework-appiumlibrary"]
 api = ["robotframework-requests"]
 database = ["robotframework-databaselibrary"]
+lib = [
+    "pydantic-ai>=0.1.0",
+    "robotframework>=7.0",
+]
 all = [
     "robotframework-browser",
     "robotframework-seleniumlibrary",
@@ -36,6 +40,7 @@ all = [
     "robotframework-databaselibrary",
     "django>=4.2,<5.0",
     "uvicorn[standard]>=0.24",
+    "pydantic-ai>=0.1.0",
 ]
 dev = [
     "pytest>=7.0.0",
