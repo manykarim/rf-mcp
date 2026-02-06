@@ -284,20 +284,32 @@ class RobotFrameworkDocStorage:
         return keywords
     
     def search_keywords(self, pattern: str) -> List[RFKeywordInfo]:
-        """Search for keywords matching a pattern."""
+        """Search for keywords matching a pattern.
+
+        Supports glob wildcards (*, ?, []) for name matching.
+        Plain text without wildcards uses substring matching across
+        name, doc, short_doc, and tags.
+        """
         if not HAS_LIBDOC:
             return []
-            
-        pattern = pattern.lower()
+
+        import fnmatch
+
+        is_glob = any(c in pattern for c in "*?[")
+        pattern_lower = pattern.lower()
         matches = []
-        
+
         for keyword_info in self.get_all_keywords():
-            if (pattern in keyword_info.name.lower() or 
-                pattern in keyword_info.doc.lower() or
-                pattern in keyword_info.short_doc.lower() or
-                any(pattern in tag.lower() for tag in keyword_info.tags)):
-                matches.append(keyword_info)
-        
+            if is_glob:
+                if fnmatch.fnmatch(keyword_info.name.lower(), pattern_lower):
+                    matches.append(keyword_info)
+            else:
+                if (pattern_lower in keyword_info.name.lower() or
+                    pattern_lower in keyword_info.doc.lower() or
+                    pattern_lower in keyword_info.short_doc.lower() or
+                    any(pattern_lower in tag.lower() for tag in keyword_info.tags)):
+                    matches.append(keyword_info)
+
         return matches
     
     def get_library_documentation(self, library_name: str) -> Optional[RFLibraryInfo]:

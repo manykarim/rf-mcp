@@ -51,6 +51,515 @@ def _base_url(url: str) -> Optional[str]:
     return None
 
 
+def _detect_library(ctx: HintContext) -> str:
+    """Return the primary UI library from the session search order."""
+    for lib in (ctx.session_search_order or []):
+        if lib == "Browser":
+            return "Browser"
+        if lib == "SeleniumLibrary":
+            return "SeleniumLibrary"
+        if lib == "AppiumLibrary":
+            return "AppiumLibrary"
+    return "unknown"
+
+
+def _has_library(ctx: HintContext, name: str) -> bool:
+    return name in (ctx.session_search_order or [])
+
+
+def _selector_arg(ctx: HintContext) -> str:
+    arg = _first_arg(ctx)
+    return str(arg) if arg else "<selector>"
+
+
+# ---------------------------------------------------------------------------
+# Element interaction error sub-checks
+# ---------------------------------------------------------------------------
+
+def _check_click_intercepted(ctx: HintContext, err: str) -> List[Hint]:
+    if not re.search(r"intercepts pointer events|element click intercepted|is not clickable at point|Other element would receive the click", err, re.IGNORECASE):
+        return []
+    lib = _detect_library(ctx)
+    sel = _selector_arg(ctx)
+    if lib == "Browser":
+        return [Hint(
+            title="Click intercepted by overlapping element",
+            message="Another element is covering the target element. The most common cause is styled form controls (radio buttons, checkboxes) where a decorative element sits on top of the actual input. Use Click With Options with force=True to bypass actionability checks, or click the overlapping element instead.",
+            examples=[
+                {"keyword": "Click With Options", "arguments": [sel, "force=True"]},
+                {"keyword": "Scroll To Element", "arguments": [sel]},
+            ],
+            relevance=92,
+        )]
+    if lib == "SeleniumLibrary":
+        return [Hint(
+            title="Click intercepted by overlapping element",
+            message="Another element is covering the target element at the click point. Common with styled form controls, modals, or sticky headers. Use JavaScript click to bypass, scroll the element into view, or use action_chain=True.",
+            examples=[
+                {"keyword": "Execute JavaScript", "arguments": ["arguments[0].click()", "ARGUMENTS", "${element}"]},
+                {"keyword": "Scroll Element Into View", "arguments": [sel]},
+                {"keyword": "Click Element", "arguments": [sel, "action_chain=True"]},
+            ],
+            relevance=92,
+        )]
+    if lib == "AppiumLibrary":
+        return [Hint(
+            title="Tap intercepted by overlay or keyboard",
+            message="Another element is covering the target. On mobile, this is commonly caused by the software keyboard, a toast notification, or a permission dialog. Hide the keyboard first, or wait for overlays to disappear.",
+            examples=[
+                {"keyword": "Hide Keyboard", "arguments": []},
+                {"keyword": "Click Element", "arguments": [sel]},
+            ],
+            relevance=92,
+        )]
+    return []
+
+
+def _check_strict_mode_violation(ctx: HintContext, err: str) -> List[Hint]:
+    if not re.search(r"strict mode violation.*resolved to \d+ elements", err, re.IGNORECASE):
+        return []
+    if _detect_library(ctx) != "Browser":
+        return []
+    sel = _selector_arg(ctx)
+    return [Hint(
+        title="Selector matches multiple elements",
+        message="The selector matched more than one element. Playwright requires exactly one match in strict mode. Use a more specific selector by adding text filters, nth index, or visibility constraints.",
+        examples=[
+            {"keyword": "Click", "arguments": [f"{sel} >> visible=true"]},
+            {"keyword": "Click", "arguments": [f"{sel} >> nth=0"]},
+        ],
+        relevance=90,
+    )]
+
+
+def _check_invalid_selector(ctx: HintContext, err: str) -> List[Hint]:
+    if not re.search(r"invalid selector|not a valid XPath expression|Unexpected token|selector syntax error", err, re.IGNORECASE):
+        return []
+    return [Hint(
+        title="Invalid selector syntax",
+        message="The locator expression has a syntax error. Verify the XPath or CSS selector syntax. This cannot be fixed at runtime \u2014 the locator itself must be corrected.",
+        examples=[],
+        relevance=90,
+    )]
+
+
+def _check_element_outside_viewport(ctx: HintContext, err: str) -> List[Hint]:
+    if not re.search(r"element is outside of the viewport|outside.*viewport", err, re.IGNORECASE):
+        return []
+    lib = _detect_library(ctx)
+    sel = _selector_arg(ctx)
+    if lib == "Browser":
+        return [Hint(
+            title="Element is outside the visible viewport",
+            message="The element exists but is positioned off-screen (common with hidden inputs styled via CSS). Scroll the element into view, click the associated label instead, or use force=True.",
+            examples=[
+                {"keyword": "Scroll To Element", "arguments": [sel]},
+                {"keyword": "Click With Options", "arguments": [sel, "force=True"]},
+            ],
+            relevance=88,
+        )]
+    if lib == "AppiumLibrary":
+        return [Hint(
+            title="Element is outside the visible viewport",
+            message="The element is not in the visible area on screen. On mobile, scroll to bring it into view.",
+            examples=[
+                {"keyword": "Scroll Down", "arguments": [sel, "timeout=10"]},
+                {"keyword": "Swipe", "arguments": ["start_x=500", "start_y=1500", "end_x=500", "end_y=500"]},
+            ],
+            relevance=88,
+        )]
+    return []
+
+
+def _check_element_not_interactable(ctx: HintContext, err: str) -> List[Hint]:
+    if not re.search(r"element not interactable|ElementNotInteractableException|not currently visible|element is not visible|element is not enabled", err, re.IGNORECASE):
+        return []
+    lib = _detect_library(ctx)
+    sel = _selector_arg(ctx)
+    if lib == "Browser":
+        return [Hint(
+            title="Element not interactable",
+            message="The element exists but cannot be interacted with (hidden, disabled, or not stable). Wait for the element to reach the required state before interacting.",
+            examples=[
+                {"keyword": "Wait For Elements State", "arguments": [sel, "visible", "timeout=10s"]},
+                {"keyword": "Wait For Elements State", "arguments": [sel, "enabled", "timeout=10s"]},
+                {"keyword": "Scroll To Element", "arguments": [sel]},
+            ],
+            relevance=88,
+        )]
+    if lib == "SeleniumLibrary":
+        return [Hint(
+            title="Element not interactable",
+            message="The element exists in the DOM but is hidden, disabled, or not scrolled into view. Wait for visibility/enabled state or scroll into view.",
+            examples=[
+                {"keyword": "Wait Until Element Is Visible", "arguments": [sel, "timeout=10s"]},
+                {"keyword": "Wait Until Element Is Enabled", "arguments": [sel, "timeout=10s"]},
+                {"keyword": "Scroll Element Into View", "arguments": [sel]},
+            ],
+            relevance=88,
+        )]
+    if lib == "AppiumLibrary":
+        return [Hint(
+            title="Element not interactable",
+            message="The element exists but cannot be interacted with. On mobile, this is often caused by the keyboard covering the element or the element being off-screen. Hide the keyboard and scroll to the element.",
+            examples=[
+                {"keyword": "Hide Keyboard", "arguments": []},
+                {"keyword": "Scroll Down", "arguments": [sel, "timeout=10"]},
+                {"keyword": "Expect Element", "arguments": [sel, "visible", "timeout=10"]},
+            ],
+            relevance=88,
+        )]
+    return []
+
+
+def _check_stale_element(ctx: HintContext, err: str) -> List[Hint]:
+    if not re.search(r"stale element reference|element is not attached|not attached to the page document|element reference.*is stale|not present in the current view|expired from the internal cache|Target closed", err, re.IGNORECASE):
+        return []
+    lib = _detect_library(ctx)
+    sel = _selector_arg(ctx)
+    if lib == "Browser":
+        return [Hint(
+            title="Stale element \u2014 DOM was rebuilt",
+            message="The element was removed and re-added to the DOM (page navigation, AJAX update, SPA route change). Wait for the element to be re-attached before interacting.",
+            examples=[
+                {"keyword": "Wait For Elements State", "arguments": [sel, "attached", "timeout=10s"]},
+            ],
+            relevance=85,
+        )]
+    if lib == "SeleniumLibrary":
+        return [Hint(
+            title="Stale element \u2014 DOM was rebuilt",
+            message="The element reference is no longer valid because the page was refreshed or updated. Re-locate the element by waiting for it again.",
+            examples=[
+                {"keyword": "Wait Until Page Contains Element", "arguments": [sel, "timeout=10s"]},
+                {"keyword": "Wait Until Element Is Visible", "arguments": [sel, "timeout=10s"]},
+            ],
+            relevance=85,
+        )]
+    if lib == "AppiumLibrary":
+        return [Hint(
+            title="Stale element \u2014 screen changed",
+            message="The element reference expired after a screen transition or navigation. Re-find the element by waiting for it to appear.",
+            examples=[
+                {"keyword": "Expect Element", "arguments": [sel, "visible", "timeout=10"]},
+            ],
+            relevance=85,
+        )]
+    return []
+
+
+def _check_unexpected_alert(ctx: HintContext, err: str) -> List[Hint]:
+    if not re.search(r"unexpected alert open|UnexpectedAlertPresentException|alert.*present", err, re.IGNORECASE):
+        return []
+    lib = _detect_library(ctx)
+    if lib == "SeleniumLibrary":
+        return [Hint(
+            title="Unexpected JavaScript alert blocking interaction",
+            message="A JavaScript alert, confirm, or prompt dialog appeared and is blocking all WebDriver commands. Accept or dismiss it before continuing.",
+            examples=[
+                {"keyword": "Handle Alert", "arguments": ["ACCEPT"]},
+                {"keyword": "Handle Alert", "arguments": ["DISMISS"]},
+            ],
+            relevance=85,
+        )]
+    if lib == "AppiumLibrary":
+        return [Hint(
+            title="System dialog blocking interaction",
+            message="A system permission dialog or alert is blocking the app. On iOS, use Click Alert Button. On Android, click the button text.",
+            examples=[
+                {"keyword": "Click Alert Button", "arguments": ["Allow"]},
+                {"keyword": "Click Text", "arguments": ["Allow"]},
+            ],
+            relevance=85,
+        )]
+    return []
+
+
+def _check_mobile_context_mismatch(ctx: HintContext, err: str) -> List[Hint]:
+    if not _has_library(ctx, "AppiumLibrary"):
+        return []
+    if not re.search(r"Unknown.*command|unknown command|UnknownCommandError", err, re.IGNORECASE):
+        return []
+    return [Hint(
+        title="Wrong context for mobile command",
+        message="The command is not available in the current context. Hybrid apps have both NATIVE_APP and WEBVIEW contexts. Check and switch to the correct context.",
+        examples=[
+            {"keyword": "Get Current Context", "arguments": []},
+            {"keyword": "Switch To Context", "arguments": ["NATIVE_APP"]},
+            {"keyword": "Get Contexts", "arguments": []},
+        ],
+        relevance=85,
+    )]
+
+
+_ELEMENT_NOT_FOUND_RE = re.compile(
+    r"no such element|could not be located|did not match any elements|Page should have contained element|waiting for locator",
+    re.IGNORECASE,
+)
+
+
+def _check_mobile_scroll_needed(ctx: HintContext, err: str) -> List[Hint]:
+    if not _has_library(ctx, "AppiumLibrary"):
+        return []
+    if not _ELEMENT_NOT_FOUND_RE.search(err):
+        return []
+    sel = _selector_arg(ctx)
+    return [Hint(
+        title="Element not found \u2014 try scrolling or inspect page",
+        message=(
+            "Mobile apps only render visible elements. Use get_session_state to inspect "
+            "the page source and verify the locator is correct. The element may be "
+            "off-screen (scroll to find it) or you may be in the wrong context "
+            "(NATIVE_APP vs WEBVIEW)."
+        ),
+        examples=[
+            {
+                "tool": "get_session_state",
+                "arguments": {"sections": ["page_source"]},
+                "note": "Inspect the page source to verify the locator and visible elements",
+            },
+            {"keyword": "Scroll Down", "arguments": [sel, "timeout=10"]},
+            {"keyword": "Swipe", "arguments": ["start_x=500", "start_y=1500", "end_x=500", "end_y=500"]},
+            {"keyword": "Get Current Context", "arguments": []},
+        ],
+        relevance=85,
+    )]
+
+
+def _check_element_not_found(ctx: HintContext, err: str) -> List[Hint]:
+    if not re.search(r"no such element|Unable to locate element|could not be located|did not match any elements|Page should have contained element|waiting for locator", err, re.IGNORECASE):
+        return []
+    # Skip if AppiumLibrary is present -- mobile scroll hint takes priority
+    if _has_library(ctx, "AppiumLibrary"):
+        return []
+    lib = _detect_library(ctx)
+    sel = _selector_arg(ctx)
+    # Common tool suggestion: inspect the page to find the correct locator
+    inspect_tool = {
+        "tool": "get_session_state",
+        "arguments": {"sections": ["page_source"], "include_reduced_dom": True},
+        "note": "Inspect the ARIA/DOM snapshot to find the correct locator for the element",
+    }
+    if lib == "Browser":
+        return [Hint(
+            title="Element not found — inspect the page",
+            message=(
+                "No element matches the selector. Use get_session_state to inspect the "
+                "page DOM/ARIA snapshot and find the correct locator. The element may have "
+                "a different id/selector, the page may not be fully loaded, or the element "
+                "may be inside an iframe."
+            ),
+            examples=[
+                inspect_tool,
+                {"keyword": "Wait For Elements State", "arguments": [sel, "attached", "timeout=15s"]},
+            ],
+            relevance=82,
+        )]
+    if lib == "SeleniumLibrary":
+        return [Hint(
+            title="Element not found — inspect the page",
+            message=(
+                "No element matches the locator. Use get_session_state to inspect the "
+                "page source and find the correct locator. The element may have a different "
+                "id/selector, the page may not be fully loaded, or the element may be inside "
+                "an iframe."
+            ),
+            examples=[
+                inspect_tool,
+                {"keyword": "Wait Until Page Contains Element", "arguments": [sel, "timeout=15s"]},
+                {"keyword": "Select Frame", "arguments": ["<frame_locator>"]},
+            ],
+            relevance=82,
+        )]
+    return []
+
+
+def _check_invalid_element_state(ctx: HintContext, err: str) -> List[Hint]:
+    if not re.search(r"invalid element state|InvalidElementStateException|may not be manipulated|element is not editable", err, re.IGNORECASE):
+        return []
+    lib = _detect_library(ctx)
+    sel = _selector_arg(ctx)
+    if lib == "Browser":
+        return [Hint(
+            title="Element in wrong state for this operation",
+            message="The element cannot accept this operation in its current state (e.g., input is readonly or disabled). Wait for it to become editable.",
+            examples=[
+                {"keyword": "Wait For Elements State", "arguments": [sel, "editable", "timeout=10s"]},
+            ],
+            relevance=82,
+        )]
+    if lib == "SeleniumLibrary":
+        return [Hint(
+            title="Element in wrong state for this operation",
+            message="The element's state does not allow this action (e.g., clearing a readonly field). Wait for it to become enabled.",
+            examples=[
+                {"keyword": "Wait Until Element Is Enabled", "arguments": [sel, "timeout=10s"]},
+            ],
+            relevance=82,
+        )]
+    return []
+
+
+def _check_frame_issues(ctx: HintContext, err: str) -> List[Hint]:
+    if not re.search(r"no such frame|NoSuchFrameException|frame was detached|ERR_ABORTED.*frame", err, re.IGNORECASE):
+        return []
+    lib = _detect_library(ctx)
+    if lib == "Browser":
+        return [Hint(
+            title="Frame detached or not found",
+            message="The target frame was removed or does not exist. This often happens during SPA navigation. Wait for the page to stabilize.",
+            examples=[],
+            relevance=80,
+        )]
+    if lib == "SeleniumLibrary":
+        return [Hint(
+            title="Frame not found",
+            message="The target frame/iframe does not exist or has not loaded. Return to the main document first, then switch to the correct frame.",
+            examples=[
+                {"keyword": "Unselect Frame", "arguments": []},
+                {"keyword": "Select Frame", "arguments": ["<frame_locator>"]},
+            ],
+            relevance=80,
+        )]
+    return []
+
+
+def _check_window_issues(ctx: HintContext, err: str) -> List[Hint]:
+    if not re.search(r"no such window|NoSuchWindowException", err, re.IGNORECASE):
+        return []
+    if _detect_library(ctx) != "SeleniumLibrary":
+        return []
+    return [Hint(
+        title="Window or tab not found",
+        message="The target browser window or tab was closed or never existed. Switch to the main window or a new window.",
+        examples=[
+            {"keyword": "Switch Window", "arguments": ["MAIN"]},
+            {"keyword": "Switch Window", "arguments": ["NEW"]},
+        ],
+        relevance=80,
+    )]
+
+
+def _check_timeout(ctx: HintContext, err: str, already_matched: bool) -> List[Hint]:
+    if already_matched:
+        return []
+    if not re.search(r"Timeout \d+ms exceeded|TimeoutException|timed out", err, re.IGNORECASE):
+        return []
+    lib = _detect_library(ctx)
+    # When timeout mentions "waiting for locator", the element likely doesn't exist —
+    # suggest inspecting the page rather than just increasing timeout
+    is_locator_wait = bool(re.search(r"waiting for locator|waiting for selector", err, re.IGNORECASE))
+    inspect_tool = {
+        "tool": "get_session_state",
+        "arguments": {"sections": ["page_source"], "include_reduced_dom": True},
+        "note": "Inspect the ARIA/DOM snapshot to verify the locator and page structure",
+    }
+    if lib == "Browser":
+        if is_locator_wait:
+            return [Hint(
+                title="Element not found within timeout — inspect the page",
+                message=(
+                    "The operation timed out waiting for an element. The locator may be "
+                    "incorrect or the element may not exist on the page. Use get_session_state "
+                    "to inspect the DOM/ARIA snapshot and find the correct locator before retrying."
+                ),
+                examples=[
+                    inspect_tool,
+                    {"keyword": "Set Browser Timeout", "arguments": ["30s"]},
+                ],
+                relevance=75,
+            )]
+        return [Hint(
+            title="Operation timed out",
+            message="The operation exceeded its timeout. Consider increasing the browser timeout or using explicit waits with longer durations.",
+            examples=[
+                {"keyword": "Set Browser Timeout", "arguments": ["30s"]},
+            ],
+            relevance=70,
+        )]
+    if lib == "SeleniumLibrary":
+        if is_locator_wait:
+            return [Hint(
+                title="Element not found within timeout — inspect the page",
+                message=(
+                    "The operation timed out waiting for an element. The locator may be "
+                    "incorrect or the element may not exist. Use get_session_state to inspect "
+                    "the page source and find the correct locator."
+                ),
+                examples=[
+                    inspect_tool,
+                    {"keyword": "Set Selenium Timeout", "arguments": ["30s"]},
+                ],
+                relevance=75,
+            )]
+        return [Hint(
+            title="Operation timed out",
+            message="The wait exceeded its time limit. Increase the timeout or verify the element/condition is achievable.",
+            examples=[
+                {"keyword": "Set Selenium Timeout", "arguments": ["30s"]},
+            ],
+            relevance=70,
+        )]
+    if lib == "AppiumLibrary":
+        if is_locator_wait:
+            return [Hint(
+                title="Element not found within timeout — inspect the page",
+                message=(
+                    "The operation timed out waiting for an element. The locator may be "
+                    "incorrect or the element may not be on screen. Use get_session_state to "
+                    "inspect the page source and verify what elements are available."
+                ),
+                examples=[
+                    inspect_tool,
+                    {"keyword": "Set Appium Timeout", "arguments": ["30s"]},
+                ],
+                relevance=75,
+            )]
+        return [Hint(
+            title="Operation timed out",
+            message="The operation exceeded its timeout. Check device responsiveness and consider increasing the timeout.",
+            examples=[
+                {"keyword": "Set Appium Timeout", "arguments": ["30s"]},
+            ],
+            relevance=70,
+        )]
+    return []
+
+
+def _check_element_interaction_errors(ctx: HintContext) -> List[Hint]:
+    """Detect element interaction errors and return library-aware hints."""
+    err = ctx.error_text or ""
+    if not err:
+        return []
+
+    hints: List[Hint] = []
+
+    # Check in priority order (most specific first)
+    checkers = [
+        _check_click_intercepted,
+        _check_strict_mode_violation,
+        _check_invalid_selector,
+        _check_element_outside_viewport,
+        _check_element_not_interactable,
+        _check_stale_element,
+        _check_unexpected_alert,
+        _check_mobile_context_mismatch,
+        _check_mobile_scroll_needed,
+        _check_element_not_found,
+        _check_invalid_element_state,
+        _check_frame_issues,
+        _check_window_issues,
+    ]
+
+    for checker in checkers:
+        hints.extend(checker(ctx, err))
+
+    # Timeout is a catch-all -- only fire if nothing more specific matched
+    hints.extend(_check_timeout(ctx, err, already_matched=len(hints) > 0))
+
+    return hints
+
+
 def generate_hints(ctx: HintContext) -> List[Dict[str, Any]]:
     """Generate a prioritized list of hint dicts suitable for inclusion in responses."""
     hints: List[Hint] = []
@@ -732,6 +1241,9 @@ def generate_hints(ctx: HintContext) -> List[Dict[str, Any]]:
                     relevance=85,
                 )
             )
+
+    # Element interaction errors (library-aware)
+    hints.extend(_check_element_interaction_errors(ctx))
 
     # Transform to serializable list of dicts, limited to top 3 by relevance
     hints_sorted = sorted(hints, key=lambda h: h.relevance, reverse=True)[:3]

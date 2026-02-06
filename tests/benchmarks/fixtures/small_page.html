@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Small Test Page - Login Form</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; }
+        .container { max-width: 400px; margin: 50px auto; padding: 20px; }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: 500; }
+        .form-group input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; }
+        .form-group input:focus { border-color: #007bff; outline: none; }
+        .btn { display: inline-block; padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .btn:hover { background: #0056b3; }
+        .links { margin-top: 20px; text-align: center; }
+        .links a { color: #007bff; text-decoration: none; margin: 0 10px; }
+        header { background: #f8f9fa; padding: 15px 20px; border-bottom: 1px solid #eee; }
+        nav a { margin-right: 20px; color: #333; text-decoration: none; }
+        nav a:hover { color: #007bff; }
+        footer { margin-top: 50px; padding: 20px; text-align: center; color: #666; font-size: 14px; }
+        .error { color: #dc3545; font-size: 14px; margin-top: 5px; display: none; }
+        .checkbox-group { display: flex; align-items: center; gap: 8px; }
+        .checkbox-group input { width: auto; }
+    </style>
+</head>
+<body>
+    <header>
+        <nav role="navigation" aria-label="Main navigation">
+            <a href="/" data-testid="nav-home">Home</a>
+            <a href="/products" data-testid="nav-products">Products</a>
+            <a href="/about" data-testid="nav-about">About</a>
+            <a href="/contact" data-testid="nav-contact">Contact</a>
+        </nav>
+    </header>
+
+    <main class="container">
+        <h1>Sign In</h1>
+        <p class="subtitle">Welcome back! Please sign in to your account.</p>
+
+        <form id="login-form" action="/login" method="POST" role="form" aria-label="Login form">
+            <div class="form-group">
+                <label for="email">Email Address</label>
+                <input type="email" id="email" name="email" placeholder="Enter your email" required data-testid="input-email" aria-describedby="email-error">
+                <span id="email-error" class="error" role="alert">Please enter a valid email address</span>
+            </div>
+
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" placeholder="Enter your password" required data-testid="input-password" aria-describedby="password-error">
+                <span id="password-error" class="error" role="alert">Password is required</span>
+            </div>
+
+            <div class="form-group checkbox-group">
+                <input type="checkbox" id="remember" name="remember" data-testid="checkbox-remember">
+                <label for="remember">Remember me</label>
+            </div>
+
+            <button type="submit" class="btn" data-testid="btn-submit">Sign In</button>
+        </form>
+
+        <div class="links">
+            <a href="/forgot-password" data-testid="link-forgot">Forgot password?</a>
+            <a href="/register" data-testid="link-register">Create account</a>
+        </div>
+
+        <div class="social-login" aria-label="Social login options">
+            <p>Or sign in with:</p>
+            <button type="button" class="btn btn-google" data-testid="btn-google">Google</button>
+            <button type="button" class="btn btn-facebook" data-testid="btn-facebook">Facebook</button>
+        </div>
+    </main>
+
+    <footer>
+        <p>&copy; 2024 Example Company. All rights reserved.</p>
+        <nav aria-label="Footer navigation">
+            <a href="/privacy">Privacy Policy</a>
+            <a href="/terms">Terms of Service</a>
+        </nav>
+    </footer>
+
+    <script>
+        // Form validation
+        document.getElementById('login-form').addEventListener('submit', function(e) {
+            const email = document.getElementById('email');
+            const password = document.getElementById('password');
+            let valid = true;
+
+            if (!email.value || !email.value.includes('@')) {
+                document.getElementById('email-error').style.display = 'block';
+                valid = false;
+            } else {
+                document.getElementById('email-error').style.display = 'none';
+            }
+
+            if (!password.value) {
+                document.getElementById('password-error').style.display = 'block';
+                valid = false;
+            } else {
+                document.getElementById('password-error').style.display = 'none';
+            }
+
+            if (!valid) {
+                e.preventDefault();
+            }
+        });
+
+        // Clear errors on input
+        document.querySelectorAll('input').forEach(function(input) {
+            input.addEventListener('input', function() {
+                const error = document.getElementById(this.id + '-error');
+                if (error) error.style.display = 'none';
+            });
+        });
+    </script>
+</body>
+</html>

@@ -990,7 +990,7 @@ class PageSourceService:
             else:
                 logger.debug("AppiumLibrary instance found but get_source method not available")
                 return None
-                
+
         except Exception as e:
             logger.debug(f"Direct mobile source retrieval failed: {e}")
             return None

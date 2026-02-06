@@ -1,0 +1,29 @@
+# ARIA Accessibility Snapshot - Small Page (Login Form)
+# Tokens: ~150 (compared to ~800 for raw HTML)
+# Reduction: ~81%
+
+- document [ref=e1]
+  - navigation "Main navigation" [ref=e2]
+    - link "Home" [ref=e3]
+    - link "Products" [ref=e4]
+    - link "About" [ref=e5]
+    - link "Contact" [ref=e6]
+  - main [ref=e7]
+    - heading "Sign In" [level=1] [ref=e8]
+    - text "Welcome back! Please sign in to your account."
+    - form "Login form" [ref=e9]
+      - textbox "Email Address" [ref=e10] [required]
+      - textbox "Password" [ref=e11] [required]
+      - checkbox "Remember me" [ref=e12]
+      - button "Sign In" [ref=e13]
+    - link "Forgot password?" [ref=e14]
+    - link "Create account" [ref=e15]
+    - region "Social login options" [ref=e16]
+      - text "Or sign in with:"
+      - button "Google" [ref=e17]
+      - button "Facebook" [ref=e18]
+  - contentinfo [ref=e19]
+    - text "2024 Example Company. All rights reserved."
+    - navigation "Footer navigation" [ref=e20]
+      - link "Privacy Policy" [ref=e21]
+      - link "Terms of Service" [ref=e22]

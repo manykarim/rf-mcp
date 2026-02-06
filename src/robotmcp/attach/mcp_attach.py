@@ -24,6 +24,7 @@ docstrings below document arguments and return values.
 """
 
 import json
+import logging
 import queue
 import threading
 import time
@@ -33,14 +34,23 @@ from typing import Any, Dict, Optional, Tuple
 from robot.libraries.BuiltIn import BuiltIn
 from robot.running.context import EXECUTION_CONTEXTS
 
+logger = logging.getLogger(__name__)
+
 
 class _Command:
     def __init__(
-        self, verb: str, payload: Dict[str, Any], replyq: "queue.Queue"
+        self,
+        verb: str,
+        payload: Dict[str, Any],
+        replyq: "queue.Queue",
+        instance_id: Optional[str] = None,
+        client_address: Optional[str] = None,
     ) -> None:
         self.verb = verb
         self.payload = payload
         self.replyq = replyq
+        self.instance_id = instance_id
+        self.client_address = client_address
 
 
 class _Server(threading.Thread):
@@ -85,13 +95,28 @@ class _Server(threading.Thread):
                     return
                 verb = (self.path or "/").strip("/")
                 payload = self._read_json()
+                # Extract instance ID from header for tracking
+                instance_id = self.headers.get("X-MCP-Instance-ID")
+                client_address = self.client_address[0] if self.client_address else None
                 replyq: "queue.Queue" = queue.Queue()
-                cmdq.put(_Command(verb, payload, replyq))
+                cmdq.put(_Command(verb, payload, replyq, instance_id, client_address))
                 try:
-                    resp = replyq.get(timeout=120.0)
+                    # Use timeout from payload if provided, else default 120s
+                    cmd_timeout = payload.get("timeout_ms")
+                    if cmd_timeout and isinstance(cmd_timeout, (int, float)) and cmd_timeout > 0:
+                        effective_timeout = cmd_timeout / 1000.0
+                    else:
+                        effective_timeout = 120.0
+                    resp = replyq.get(timeout=effective_timeout)
                 except queue.Empty:
                     resp = {"success": False, "error": "timeout"}
-                body = json.dumps(resp).encode("utf-8")
+                try:
+                    body = json.dumps(resp).encode("utf-8")
+                except (TypeError, ValueError) as e:
+                    body = json.dumps({
+                        "success": False,
+                        "error": f"Response serialization failed: {type(e).__name__}: {str(e)[:200]}"
+                    }).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
@@ -150,6 +175,7 @@ class McpAttach:
         self._cmdq: "queue.Queue" = queue.Queue()
         self._srv: Optional[_Server] = None
         self._stop_flag = False
+        self._connected_instances: Dict[str, float] = {}  # instance_id -> last_seen timestamp
 
     # --- Public Library Keywords ---
     def MCP_Serve(
@@ -250,6 +276,8 @@ class McpAttach:
             cmd: _Command = self._cmdq.get_nowait()
         except queue.Empty:
             return
+        # Track instance connections for debugging and session management
+        self._track_instance(cmd.instance_id, cmd.client_address)
         try:
             resp = self._execute_command(cmd.verb, cmd.payload)
         except Exception as e:  # pragma: no cover - defensive
@@ -267,6 +295,43 @@ class McpAttach:
         | MCP Stop
         """
         self._stop_flag = True
+
+    def _track_instance(self, instance_id: Optional[str], client_address: Optional[str]) -> bool:
+        """Track MCP instance connection.
+
+        Args:
+            instance_id: The X-MCP-Instance-ID header value from the request.
+            client_address: The client IP address.
+
+        Returns:
+            True if this is a new or reconnected instance, False otherwise.
+        """
+        if not instance_id:
+            return False
+
+        is_new = instance_id not in self._connected_instances
+        self._connected_instances[instance_id] = time.time()
+
+        if is_new:
+            logger.info(
+                f"[MCP] New instance connected: {instance_id} from {client_address or 'unknown'}"
+            )
+            try:
+                BuiltIn().log_to_console(
+                    f"[MCP] New instance connected: {instance_id} from {client_address or 'unknown'}"
+                )
+            except Exception:
+                pass
+
+        return is_new
+
+    def get_connected_instances(self) -> Dict[str, float]:
+        """Get dictionary of connected instances and their last seen timestamps.
+
+        Returns:
+            Dict mapping instance_id to last_seen timestamp.
+        """
+        return dict(self._connected_instances)
 
     # --- Internal command execution on RF thread ---
     def _execute_command(self, verb: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -294,7 +359,42 @@ class McpAttach:
             return self._get_variables(payload)
         if verb == "set_variable":
             return self._set_variable(payload)
-        # Placeholder for future verbs: import_library, import_resource, list_keywords, get_keyword_doc, get/set vars
+        if verb == "import_variables":
+            return self._import_variables(payload)
+        if verb == "get_page_source":
+            return self._get_page_source(payload)
+        if verb == "get_aria_snapshot":
+            return self._get_aria_snapshot(payload)
+        if verb == "get_session_info":
+            return self._get_session_info(payload)
+        if verb == "force_stop":
+            self._stop_flag = True
+            if self._srv and self._srv.httpd:
+                # Shutdown the server in a separate thread to avoid blocking
+                def shutdown_server():
+                    try:
+                        self._srv.httpd.shutdown()
+                        try:
+                            BuiltIn().log_to_console("[MCP] HTTP server shutdown complete")
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        try:
+                            BuiltIn().log_to_console(f"[MCP] Error during shutdown: {e}")
+                        except Exception:
+                            pass
+
+                threading.Thread(target=shutdown_server, daemon=True).start()
+                try:
+                    BuiltIn().log_to_console("[MCP] Bridge force stopping; HTTP server shutting down.")
+                except Exception:
+                    pass
+            else:
+                try:
+                    BuiltIn().log_to_console("[MCP] Bridge stopping (no active server).")
+                except Exception:
+                    pass
+            return {"success": True, "force_stopped": True}
         return {"success": False, "error": f"unknown verb: {verb}"}
 
     def _diagnostics(self) -> Dict[str, Any]:
@@ -334,7 +434,12 @@ class McpAttach:
         assigned = {}
         if assign_to:
             assigned = self._assign_variables(assign_to, result)
-        return {"success": True, "result": result, "assigned": assigned}
+        # Sanitize result and assigned values for JSON serialization
+        return {
+            "success": True,
+            "result": self._sanitize_for_json(result),
+            "assigned": self._sanitize_for_json(assigned),
+        }
 
     def _assign_variables(self, names: Any, value: Any) -> Dict[str, Any]:
         bi = BuiltIn()
@@ -369,6 +474,27 @@ class McpAttach:
         if not (s.startswith("${") and s.endswith("}")):
             return f"${{{s}}}"
         return s
+
+    def _sanitize_for_json(self, val: Any) -> Any:
+        """Convert a value to a JSON-serializable form.
+
+        - None, str, int, float, bool are returned as-is
+        - Path objects (anything with __fspath__) are converted to str
+        - Lists/tuples are recursively sanitized
+        - Dicts are recursively sanitized (keys converted to str)
+        - Other objects are converted to str(val) to preserve useful info
+        """
+        if val is None or isinstance(val, (str, int, float, bool)):
+            return val
+        # Handle Path-like objects (pathlib.Path, os.PathLike, etc.)
+        if hasattr(val, "__fspath__"):
+            return str(val)
+        if isinstance(val, (list, tuple)):
+            return [self._sanitize_for_json(item) for item in val]
+        if isinstance(val, dict):
+            return {str(k): self._sanitize_for_json(v) for k, v in val.items()}
+        # Fallback: convert to string to preserve useful information
+        return str(val)
 
     # --- Additional verbs ---
     def _import_library(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -495,20 +621,162 @@ class McpAttach:
             for n in names:
                 k = self._norm_var(n)
                 if k in all_vars:
-                    out[k] = all_vars[k]
+                    out[k] = self._sanitize_for_json(all_vars[k])
             return {"success": True, "result": out}
         # Limit size to avoid large payloads
         out = {}
         for i, (k, v) in enumerate(all_vars.items()):
-            if i >= 50:
+            if i >= 200:
                 break
-            out[k] = v
+            out[k] = self._sanitize_for_json(v)
         return {"success": True, "result": out, "truncated": True}
 
     def _set_variable(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         name = payload.get("name")
         value = payload.get("value")
+        scope = str(payload.get("scope", "test")).lower()
         if not name:
             return {"success": False, "error": "name required"}
-        BuiltIn().set_test_variable(self._norm_var(str(name)), value)
-        return {"success": True}
+        bi = BuiltIn()
+        norm_name = self._norm_var(str(name))
+        if scope == "suite":
+            bi.set_suite_variable(norm_name, value)
+        elif scope == "global":
+            bi.set_global_variable(norm_name, value)
+        else:
+            bi.set_test_variable(norm_name, value)
+        return {"success": True, "scope": scope}
+
+    def _import_variables(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Import variables from a variable file into the live RF context."""
+        variable_file_path = str(payload.get("variable_file_path", "")).strip()
+        args = payload.get("args") or []
+        if not variable_file_path:
+            return {"success": False, "error": "variable_file_path required"}
+        ctx = EXECUTION_CONTEXTS.current
+        if not ctx or not getattr(ctx, "namespace", None):
+            return {"success": False, "error": "no active RF context"}
+        try:
+            ctx.namespace.import_variables(variable_file_path, args=args, overwrite=True)
+            return {"success": True, "result": {"variable_file": variable_file_path}}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def _get_page_source(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Get page source directly - faster than run_keyword wrapper.
+
+        Automatically detects Browser Library vs SeleniumLibrary and uses
+        the appropriate keyword.
+        """
+        try:
+            bi = BuiltIn()
+
+            # Try Browser Library keyword first (Playwright)
+            try:
+                source = bi.run_keyword("Get Page Source")
+                return {
+                    "success": True,
+                    "result": source,
+                    "library": "Browser",
+                }
+            except Exception:
+                pass
+
+            # Fall back to SeleniumLibrary keyword
+            try:
+                source = bi.run_keyword("Get Source")
+                return {
+                    "success": True,
+                    "result": source,
+                    "library": "SeleniumLibrary",
+                }
+            except Exception:
+                pass
+
+            # Try AppiumLibrary (returns XML)
+            try:
+                source = bi.run_keyword("Get Source")
+                return {
+                    "success": True,
+                    "result": source,
+                    "library": "AppiumLibrary",
+                    "format": "xml",
+                }
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": f"No browser library loaded or no page open: {e}",
+                }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def _get_aria_snapshot(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Get ARIA accessibility tree snapshot.
+
+        Only available with Browser Library (Playwright).
+        """
+        selector = payload.get("selector", "css=html")
+        format_type = payload.get("format", "yaml")
+
+        try:
+            bi = BuiltIn()
+            result = bi.run_keyword(
+                "Get Aria Snapshot",
+                selector,
+                f"return_type={format_type}"
+            )
+            return {
+                "success": True,
+                "result": result,
+                "format": format_type,
+                "selector": selector,
+                "library": "Browser",
+            }
+        except Exception as e:
+            error_str = str(e)
+            if "No keyword with name" in error_str:
+                return {
+                    "success": False,
+                    "error": "Aria snapshot not available",
+                    "note": "Get Aria Snapshot is only available with Browser Library (Playwright)",
+                }
+            return {"success": False, "error": error_str}
+
+    def _get_session_info(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Get RF execution context information."""
+        try:
+            ctx = EXECUTION_CONTEXTS.current
+
+            if ctx is None:
+                return {
+                    "success": False,
+                    "error": "No active execution context",
+                }
+
+            bi = BuiltIn()
+            variables = bi.get_variables()
+
+            # Get libraries from namespace
+            libs = []
+            if getattr(ctx, "namespace", None) and hasattr(ctx.namespace, "libraries"):
+                libraries = ctx.namespace.libraries
+                if hasattr(libraries, "keys"):
+                    libs = list(libraries.keys())
+                elif hasattr(libraries, "__iter__"):
+                    libs = [
+                        getattr(li, "name", getattr(li, "__class__", type(li)).__name__)
+                        for li in libraries
+                    ]
+
+            return {
+                "success": True,
+                "result": {
+                    "context_active": True,
+                    "variable_count": len(variables),
+                    "suite_name": getattr(ctx, "suite", None) and getattr(ctx.suite, "name", None),
+                    "test_name": getattr(ctx, "test", None) and getattr(ctx.test, "name", None),
+                    "libraries": libs,
+                },
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}

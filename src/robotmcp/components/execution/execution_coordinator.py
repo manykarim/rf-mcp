@@ -80,6 +80,7 @@ class ExecutionCoordinator:
         scenario_hint: str = None,
         assign_to: Union[str, List[str]] = None,
         use_context: bool = False,
+        timeout_ms: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Execute a single Robot Framework keyword step with intelligent library auto-configuration.
@@ -92,6 +93,7 @@ class ExecutionCoordinator:
             library_prefix: Optional explicit library name to override session search order
             scenario_hint: Optional scenario text for auto-configuration (used on first call)
             assign_to: Variable name(s) to assign the keyword's return value to
+            timeout_ms: Optional timeout in milliseconds for keyword execution
 
         Returns:
             Execution result with status, output, and state
@@ -129,6 +131,7 @@ class ExecutionCoordinator:
                 library_prefix=library_prefix,
                 assign_to=assign_to,
                 use_context=use_context,
+                timeout_ms=timeout_ms,
             )
 
             return result

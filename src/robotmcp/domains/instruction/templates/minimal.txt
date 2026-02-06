@@ -1,0 +1,12 @@
+Use find_keywords before execute_step. Never guess keywords.
+
+Discovery tools: find_keywords, get_keyword_info, recommend_libraries,
+check_library_availability, analyze_scenario, get_locator_guidance, get_session_state
+
+Workflow: find_keywords -> get_keyword_info -> execute_step
+
+DOM/ARIA: get_session_state(sections=["page_source"], include_reduced_dom=True) for ARIA snapshot.
+
+If execution fails, use get_session_state to debug. Report actual errors.
+
+Available tools: {available_tools}

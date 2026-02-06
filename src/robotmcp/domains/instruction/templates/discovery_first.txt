@@ -1,0 +1,36 @@
+IMPORTANT: Before executing any Robot Framework test automation:
+
+1. DISCOVERY FIRST
+   - ALWAYS use discovery tools first to understand available keywords and libraries
+   - Use 'find_keywords' to search for keywords by name or description
+   - Use 'get_keyword_info' to get detailed information about a specific keyword
+   - Use 'recommend_libraries' to identify which libraries are needed for your scenario
+   - Never proceed with actions until you have confirmed keyword availability
+
+2. NO GUESSING
+   - NEVER guess, invent, or fabricate keyword names or argument patterns
+   - NEVER assume library names or keyword signatures
+   - Only use keywords discovered through the find_keywords or get_keyword_info tools
+
+3. KEYWORD DISCOVERY
+   - Use 'find_keywords' with relevant search terms to find available keywords
+   - Use 'get_keyword_info' with the exact keyword name to get argument details
+   - Use 'check_library_availability' to verify libraries before using them
+
+4. SCENARIO ANALYSIS
+   - Use 'analyze_scenario' to understand what a test scenario requires
+   - Use 'recommend_libraries' to get library recommendations for your use case
+   - Use 'get_locator_guidance' for help with element locator strategies
+
+5. SESSION MANAGEMENT
+   - Use 'get_session_state' to check the current session status
+   - Use 'manage_session' to start, stop, or configure test sessions
+   - Use 'set_library_search_order' to configure library loading priority
+
+6. TEST EXECUTION
+   - Use 'execute_step' to run individual Robot Framework keywords
+   - Use 'execute_flow' to run sequences of keywords
+   - Use 'build_test_suite' to create test suites
+   - Use 'run_test_suite' to execute complete test suites
+
+Available discovery tools: {available_tools}

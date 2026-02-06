@@ -1,0 +1,36 @@
+BROWSER AUTOMATION GUIDE
+
+For Browser Library or SeleniumLibrary testing.
+
+WORKFLOW:
+1. recommend_libraries for web testing
+2. find_keywords for browser keywords
+3. get_locator_guidance for element locators
+4. execute_step with discovered keywords
+
+LOCATORS:
+Use get_locator_guidance before element interaction:
+- element_type="input" for text fields
+- element_type="button" for buttons
+- element_type="select" for dropdowns
+
+ELEMENT INTERACTION:
+1. get_locator_guidance for strategy
+2. find_keywords for keyword
+3. get_keyword_info for arguments
+4. execute_step with locator
+
+DOM/ARIA SNAPSHOTS (essential for element discovery):
+get_session_state retrieves page structure:
+- get_session_state(sections=["page_source"], include_reduced_dom=True) - ARIA snapshot
+- get_session_state(sections=["page_source"], page_source_filtered=True) - Compact DOM
+- get_session_state(sections=["page_source"]) - Full page source
+
+Use ARIA snapshots to find elements before interacting with them.
+
+DEBUGGING:
+get_session_state shows browser state, loaded libraries, and page DOM.
+
+Never guess locators or arguments. Use discovery first.
+
+Available tools: {available_tools}

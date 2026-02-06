@@ -262,6 +262,12 @@ class ExecutionSession:
 
             self.imported_libraries.append(library_name)
 
+            # Ensure imported library is in the search order so RF namespace
+            # context creation picks it up (fixes first-call keyword-not-found
+            # for libraries like Browser that are imported but not in search_order).
+            if library_name not in self.search_order:
+                self.search_order.append(library_name)
+
             # CRITICAL FIX: Trigger immediate library loading
             self._ensure_library_loaded_immediately(library_name)
 

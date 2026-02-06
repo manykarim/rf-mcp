@@ -13,7 +13,10 @@ logger = logging.getLogger(__name__)
 
 class LocatorConverter:
     """Converts locators between different browser and mobile automation libraries."""
-    
+
+    # Maximum allowed locator length to prevent DoS via extremely long strings
+    MAX_LOCATOR_LENGTH = 10000
+
     # Mobile locator strategies and their patterns
     MOBILE_STRATEGIES = {
         'accessibility_id': r'^accessibility_id=(.+)$',
@@ -31,6 +34,75 @@ class LocatorConverter:
     def __init__(self, config: Optional[ExecutionConfig] = None):
         self.config = config or ExecutionConfig()
         self.platform_type = PlatformType.WEB  # Default platform
+
+    def _escape_xpath_string(self, text: str) -> str:
+        """
+        Safely escape a string for use in XPath expressions.
+
+        This method handles strings containing single quotes, double quotes,
+        or both by using the appropriate quoting strategy or XPath concat().
+
+        Args:
+            text: The text string to escape for XPath
+
+        Returns:
+            str: A safely quoted string for use in XPath expressions
+
+        Examples:
+            >>> self._escape_xpath_string("Hello")
+            '"Hello"'
+            >>> self._escape_xpath_string("It's a test")
+            '"It\\'s a test"'  # Actually uses single quotes
+            >>> self._escape_xpath_string('Say "Hello"')
+            "'Say \"Hello\"'"  # Uses single quotes
+            >>> self._escape_xpath_string("It's \"complex\"")
+            'concat("It", "\\'", "s \\"complex\\"")'  # Uses concat()
+        """
+        if '"' not in text:
+            # No double quotes - wrap in double quotes
+            return f'"{text}"'
+        elif "'" not in text:
+            # No single quotes - wrap in single quotes
+            return f"'{text}'"
+        else:
+            # Contains both quote types - use concat() function
+            # Split on double quotes and rejoin with proper escaping
+            parts = text.split('"')
+            escaped_parts = []
+            for i, part in enumerate(parts):
+                if part:  # Skip empty parts
+                    escaped_parts.append(f'"{part}"')
+                if i < len(parts) - 1:  # Add double quote literal between parts
+                    escaped_parts.append("'\"'")
+            return f"concat({', '.join(escaped_parts)})"
+
+    def _validate_locator_input(self, locator: str) -> str:
+        """
+        Validate and sanitize locator input to prevent injection attacks.
+
+        Args:
+            locator: The locator string to validate
+
+        Returns:
+            str: The validated locator string
+
+        Raises:
+            ValueError: If the locator is invalid or potentially malicious
+        """
+        if not locator:
+            return locator
+
+        # Check length to prevent DoS
+        if len(locator) > self.MAX_LOCATOR_LENGTH:
+            raise ValueError(
+                f"Locator exceeds maximum length of {self.MAX_LOCATOR_LENGTH} characters"
+            )
+
+        # Check for null bytes which could be used for injection
+        if '\x00' in locator:
+            raise ValueError("Locator contains null bytes which are not allowed")
+
+        return locator
     
     def add_explicit_strategy_prefix(self, locator: str, for_test_suite: bool = False, target_library: str = "Browser") -> str:
         """
@@ -134,9 +206,9 @@ class LocatorConverter:
                 if ' ' in locator and len(locator) < 50:  # Likely button/link text
                     return f"link:{locator}"
                 else:
-                    # Use xpath for complex text matching
-                    escaped_text = locator.replace('"', '\"')
-                    return f'xpath://*[contains(text(),"{escaped_text}")]'
+                    # Use xpath for complex text matching with safe escaping
+                    escaped_text = self._escape_xpath_string(locator)
+                    return f'xpath://*[contains(text(),{escaped_text})]'
             else:
                 return f"{strategy}:{locator}"
         else:
@@ -184,10 +256,13 @@ class LocatorConverter:
         """
         if not locator:
             return locator
-        
+
+        # Validate input to prevent injection attacks
+        locator = self._validate_locator_input(locator)
+
         if not self.config.ENABLE_LOCATOR_CONVERSION:
             return locator
-            
+
         # NOTE: Locator conversion disabled for Browser Library to preserve strategy prefixes
         # Browser Library supports strategy prefixes (css=, id=, xpath=, etc.) and we should preserve them
         # Only convert for SeleniumLibrary if needed
@@ -264,11 +339,16 @@ class LocatorConverter:
     
     def _convert_to_selenium_library(self, locator: str) -> str:
         """Convert locator to SeleniumLibrary format."""
+        # Validate input to prevent injection attacks
+        locator = self._validate_locator_input(locator)
+
         # Handle text selectors
         if locator.startswith("text="):
             # text=content -> xpath=//*[contains(text(),'content')]
             text_content = locator[5:]
-            return f'xpath=//*[contains(text(),"{text_content}")]'
+            # Use safe XPath string escaping to prevent injection
+            escaped_text = self._escape_xpath_string(text_content)
+            return f'xpath=//*[contains(text(),{escaped_text})]'
         
         # Handle CSS shortcuts
         elif locator.startswith("#"):
