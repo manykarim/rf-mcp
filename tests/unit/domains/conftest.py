@@ -2,9 +2,7 @@
 
 These fixtures support testing the token optimization bounded contexts:
 - Snapshot Context
-- Element Registry Context
 - Timeout Context
-- Action Context
 - Optimization/Self-Learning System
 """
 
@@ -102,54 +100,6 @@ def changed_aria_tree_yaml() -> str:
 
 
 # =============================================================================
-# Element Registry Domain Fixtures
-# =============================================================================
-
-
-@pytest.fixture
-def mock_browser_adapter():
-    """Mock browser adapter for element operations."""
-    adapter = MagicMock()
-    adapter.get_locator_for_ref = Mock(
-        side_effect=lambda ref: f"css=[data-ref='{ref}']"
-    )
-    adapter.is_element_attached = Mock(return_value=True)
-    adapter.get_element_states = Mock(return_value=["visible", "enabled", "attached"])
-    return adapter
-
-
-@pytest.fixture
-def element_registry_data() -> Dict[str, Dict[str, Any]]:
-    """Sample element registry data."""
-    return {
-        "e1": {
-            "locator": "css=html",
-            "role": "document",
-            "name": "",
-            "stale": False,
-        },
-        "e2": {
-            "locator": "css=h1",
-            "role": "heading",
-            "name": "Example Domain",
-            "stale": False,
-        },
-        "e4": {
-            "locator": "css=a",
-            "role": "link",
-            "name": "More information...",
-            "stale": False,
-        },
-        "e5": {
-            "locator": "css=button",
-            "role": "button",
-            "name": "Submit",
-            "stale": False,
-        },
-    }
-
-
-# =============================================================================
 # Timeout Domain Fixtures
 # =============================================================================
 
@@ -175,49 +125,6 @@ def custom_timeout_config() -> Dict[str, int]:
         "assertion_retry": 5000,
         "min_timeout": 50,
         "max_timeout": 120000,
-    }
-
-
-# =============================================================================
-# Action Domain Fixtures
-# =============================================================================
-
-
-@pytest.fixture
-def mock_action_executor():
-    """Mock action executor for testing action domain."""
-    executor = MagicMock()
-    executor.click = Mock(return_value={"success": True, "action": "click"})
-    executor.fill = Mock(return_value={"success": True, "action": "fill"})
-    executor.select = Mock(return_value={"success": True, "action": "select"})
-    executor.get_states = Mock(return_value=["visible", "enabled", "attached"])
-    return executor
-
-
-@pytest.fixture
-def sample_action_responses() -> Dict[str, Dict[str, Any]]:
-    """Sample action responses for different verbosity levels."""
-    return {
-        "click_success": {
-            "success": True,
-            "action": "click",
-            "element": "Submit button",
-            "ref": "e5",
-            "snapshot_mode": "incremental",
-        },
-        "click_failure": {
-            "success": False,
-            "action": "click",
-            "error": "Element not visible",
-            "ref": "e5",
-        },
-        "fill_success": {
-            "success": True,
-            "action": "fill",
-            "element": "Email textbox",
-            "ref": "e6",
-            "value": "test@example.com",
-        },
     }
 
 
@@ -356,21 +263,6 @@ class MockSnapshotId:
 
 
 @dataclass
-class MockElementRef:
-    """Mock ElementRef value object."""
-
-    index: int
-
-    @classmethod
-    def from_index(cls, index: int) -> "MockElementRef":
-        return cls(index=index)
-
-    @property
-    def ref(self) -> str:
-        return f"e{self.index}"
-
-
-@dataclass
 class MockMilliseconds:
     """Mock Milliseconds value object."""
 
@@ -392,12 +284,6 @@ class MockMilliseconds:
 def mock_snapshot_id():
     """Create a mock SnapshotId."""
     return MockSnapshotId()
-
-
-@pytest.fixture
-def mock_element_ref():
-    """Create a mock ElementRef factory."""
-    return MockElementRef.from_index
 
 
 @pytest.fixture

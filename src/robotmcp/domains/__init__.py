@@ -2,8 +2,6 @@
 
 This package contains the DDD implementation for:
 - Snapshot Context: Accessibility tree generation and compression
-- Element Registry Context: Element reference mapping and stale detection
-- Action Context: Tool execution and response filtering
 - Timeout Context: Timeout configuration and enforcement
 
 For architecture details, see:
@@ -37,33 +35,6 @@ from robotmcp.domains.timeout import (
     TimeoutContextManager,
 )
 
-from robotmcp.domains.action import (
-    # Value Objects
-    ActionParameters,
-    ExecutionId,
-    FilteredResponse,
-    PreValidationResult,
-    ResponseConfig,
-    # Protocols
-    BrowserAdapter,
-    ElementRegistry,
-    Locator,
-    # Services
-    PreValidator,
-    ResponseBuilder,
-    IncrementalResponseBuilder,
-    # Aggregates
-    ActionExecution,
-    RetryableActionExecution,
-    # Events
-    ActionCompleted,
-    ActionFailed,
-    ActionRetrying,
-    ActionStarted,
-    PreValidationCompleted,
-    TimeoutExceeded as ActionTimeoutExceeded,
-)
-
 __all__ = [
     # Shared Kernel
     "AriaNode",
@@ -87,28 +58,4 @@ __all__ = [
     # Timeout Domain - Services
     "TimeoutService",
     "TimeoutContextManager",
-    # Action Domain - Value Objects
-    "ActionParameters",
-    "ExecutionId",
-    "FilteredResponse",
-    "PreValidationResult",
-    "ResponseConfig",
-    # Action Domain - Protocols
-    "BrowserAdapter",
-    "ElementRegistry",
-    "Locator",
-    # Action Domain - Services
-    "PreValidator",
-    "ResponseBuilder",
-    "IncrementalResponseBuilder",
-    # Action Domain - Aggregates
-    "ActionExecution",
-    "RetryableActionExecution",
-    # Action Domain - Events
-    "ActionCompleted",
-    "ActionFailed",
-    "ActionRetrying",
-    "ActionStarted",
-    "PreValidationCompleted",
-    "ActionTimeoutExceeded",
 ]

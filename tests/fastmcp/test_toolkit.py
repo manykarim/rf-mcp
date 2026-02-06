@@ -132,6 +132,17 @@ async def test_find_keywords_strategies(mcp_client):
     assert pattern.data["success"] is True
     assert len(pattern.data["results"]) >= 1
 
+    # Glob pattern: Get* should match Get Count, Get Length, etc.
+    glob_pattern = await mcp_client.call_tool(
+        "find_keywords",
+        {"query": "Get*", "strategy": "pattern", "limit": 5},
+    )
+    assert glob_pattern.data["success"] is True
+    assert len(glob_pattern.data["results"]) >= 1
+    assert all(
+        r["name"].startswith("Get") for r in glob_pattern.data["results"]
+    )
+
     catalog = await mcp_client.call_tool(
         "find_keywords",
         {"query": "Dictionary", "strategy": "catalog", "library_name": "Collections"},

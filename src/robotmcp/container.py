@@ -2,8 +2,6 @@
 
 This container wires together the various DDD bounded contexts:
 - Snapshot Context: ARIA tree capture and token optimization
-- Element Registry Context: Ref-to-locator mapping
-- Action Context: Pre-validation and response filtering
 - Timeout Context: Dual timeout management
 
 Usage:
@@ -22,8 +20,6 @@ from typing import Dict, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from robotmcp.domains.timeout import TimeoutService, TimeoutPolicy
-    from robotmcp.domains.action import PreValidator
-    from robotmcp.domains.element_registry import ElementRegistry
     from robotmcp.domains.snapshot import PageSnapshot
     from robotmcp.optimization import (
         PatternStore,
@@ -48,11 +44,9 @@ class ServiceContainer:
         pattern_store: Shared pattern storage for learned optimizations
         performance_collector: Centralized performance metrics
         timeout_service: Timeout management service
-        pre_validator: Pre-validation service for actions
         page_analyzer: Page complexity analyzer
 
     Session-specific services (keyed by session_id):
-        - Element registries
         - Timeout policies
         - Snapshot caches
     """
@@ -63,13 +57,9 @@ class ServiceContainer:
         default=None, repr=False
     )
     _timeout_service: Optional["TimeoutService"] = field(default=None, repr=False)
-    _pre_validator: Optional["PreValidator"] = field(default=None, repr=False)
     _page_analyzer: Optional["PageAnalyzer"] = field(default=None, repr=False)
 
     # Session-scoped registries
-    _element_registries: Dict[str, "ElementRegistry"] = field(
-        default_factory=dict, repr=False
-    )
     _timeout_policies: Dict[str, "TimeoutPolicy"] = field(
         default_factory=dict, repr=False
     )
@@ -104,34 +94,12 @@ class ServiceContainer:
         return self._timeout_service
 
     @property
-    def pre_validator(self) -> "PreValidator":
-        """Get the pre-validation service."""
-        if self._pre_validator is None:
-            from robotmcp.domains.action import PreValidator
-            self._pre_validator = PreValidator()
-        return self._pre_validator
-
-    @property
     def page_analyzer(self) -> "PageAnalyzer":
         """Get the page complexity analyzer."""
         if self._page_analyzer is None:
             from robotmcp.optimization import PageAnalyzer
             self._page_analyzer = PageAnalyzer()
         return self._page_analyzer
-
-    def get_element_registry(self, session_id: str) -> "ElementRegistry":
-        """Get or create an element registry for a session.
-
-        Args:
-            session_id: The session identifier
-
-        Returns:
-            ElementRegistry for the session
-        """
-        if session_id not in self._element_registries:
-            from robotmcp.domains.element_registry import ElementRegistry
-            self._element_registries[session_id] = ElementRegistry.create_for_session(session_id)
-        return self._element_registries[session_id]
 
     def get_timeout_policy(self, session_id: str) -> "TimeoutPolicy":
         """Get or create a timeout policy for a session.
@@ -174,7 +142,6 @@ class ServiceContainer:
         Args:
             session_id: The session to clear
         """
-        self._element_registries.pop(session_id, None)
         self._timeout_policies.pop(session_id, None)
         self._snapshot_cache.pop(session_id, None)
         logger.debug(f"Cleared container data for session {session_id}")

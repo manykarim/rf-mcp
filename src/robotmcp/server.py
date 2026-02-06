@@ -2329,6 +2329,18 @@ async def manage_session(
                     name, value = item.split("=", 1)
                     data[name.strip()] = value
 
+        if not data:
+            return {
+                "success": False,
+                "action": "set_variables",
+                "session_id": session_id,
+                "error": "No variables to set. Provide a non-empty 'variables' parameter.",
+                "hint": (
+                    "Pass variables as a dict: variables={\"MY_VAR\": \"value\"} "
+                    "or as a list: variables=[\"MY_VAR=value\", \"OTHER=123\"]"
+                ),
+            }
+
         set_kw = {
             "test": "Set Test Variable",
             "suite": "Set Suite Variable",
@@ -2336,22 +2348,34 @@ async def manage_session(
         }.get(scope.lower(), "Set Suite Variable")
 
         results: Dict[str, bool] = {}
+        errors: Dict[str, str] = {}
         client = _get_external_client_if_configured()
         if client is not None:
             for name, value in data.items():
                 try:
                     resp = client.set_variable(name, value, scope=scope)
                     results[name] = bool(resp.get("success"))
-                except Exception:
+                    if not results[name]:
+                        errors[name] = resp.get("error", "Bridge returned success=false")
+                except Exception as e:
                     results[name] = False
-            return {
+                    errors[name] = str(e)
+            result_payload: Dict[str, Any] = {
                 "success": all(results.values()),
                 "action": "set_variables",
                 "session_id": session_id,
-                "set": list(results.keys()),
+                "set": [k for k, v in results.items() if v],
                 "scope": scope,
                 "external": True,
             }
+            if errors:
+                result_payload["errors"] = errors
+                result_payload["hint"] = (
+                    "Some variables failed to set via bridge. "
+                    "Check that the RF process is running and the bridge is reachable. "
+                    "Use manage_attach(action='status') to verify bridge health."
+                )
+            return result_payload
 
         for name, value in data.items():
             # Pass value directly with ${name} syntax - RF 7 handles Python
@@ -2364,6 +2388,8 @@ async def manage_session(
                 use_context=True,
             )
             results[name] = bool(res.get("success"))
+            if not results[name]:
+                errors[name] = res.get("error", "Keyword execution returned success=false")
 
         # Track ALL manage_session variables for *** Variables *** section generation
         # Variables set via manage_session (any scope) should be included in the Variables
@@ -2384,13 +2410,20 @@ async def manage_session(
         except Exception as track_error:
             logger.warning(f"Failed to track manage_session variables: {track_error}")
 
-        return {
+        result_payload = {
             "success": all(results.values()),
             "action": "set_variables",
             "session_id": session_id,
-            "set": list(results.keys()),
+            "set": [k for k, v in results.items() if v],
             "scope": scope,
         }
+        if errors:
+            result_payload["errors"] = errors
+            result_payload["hint"] = (
+                "Some variables failed to set. Ensure the session was initialized "
+                "with manage_session(action='init') first and that BuiltIn library is loaded."
+            )
+        return result_payload
 
     if action_norm in {"import_variables", "load_variables"}:
         if not variable_file_path:

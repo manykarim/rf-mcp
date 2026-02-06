@@ -2547,6 +2547,19 @@ class KeywordExecutor:
                 ]
                 base_response["resolved_arguments"] = serialized_resolved_args
 
+        else:
+            # Unrecognized detail_level — fall back to minimal (includes output)
+            logger.warning(
+                f"Unrecognized detail_level '{detail_level}', "
+                f"falling back to 'minimal'. Valid values: minimal, standard, full"
+            )
+            raw_output = result.get("output", "")
+            base_response["output"] = self.response_serializer.serialize_for_response(
+                raw_output
+            )
+            if "assigned_variables" in result:
+                base_response["assigned_variables"] = result["assigned_variables"]
+
         return base_response
 
     def get_supported_detail_levels(self) -> List[str]:

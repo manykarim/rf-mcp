@@ -118,147 +118,6 @@ class TestARIASnapshotLatency:
             )
 
 
-class TestRefLookupLatency:
-    """Benchmark element reference lookup latency."""
-
-    @pytest.mark.benchmark
-    def test_ref_lookup_latency(
-        self,
-        mock_element_registry,
-        element_refs: List[Dict[str, Any]],
-        benchmark_reporter,
-    ):
-        """Target: <1ms for ref resolution.
-
-        Element refs are short identifiers (e.g., "e15") that map to
-        full locators. Lookup must be fast since it occurs on every
-        element interaction.
-        """
-        registry = mock_element_registry
-
-        # Register all refs
-        for ref in element_refs:
-            registry.register_element(
-                ref_id=ref["ref_id"],
-                locator=ref["locator"],
-                role=ref["role"],
-                name=ref["name"],
-            )
-
-        # Benchmark lookup operations
-        iterations = 10000
-        ref_ids = [ref["ref_id"] for ref in element_refs]
-
-        start = time.perf_counter()
-        for i in range(iterations):
-            ref_id = ref_ids[i % len(ref_ids)]
-            _locator = registry.get_locator(ref_id)
-        total_ms = (time.perf_counter() - start) * 1000
-
-        result = benchmark_reporter.record_latency(
-            name="ref_lookup",
-            duration_ms=total_ms,
-            target_ms=1.0,
-            iterations=iterations,
-            registry_size=registry.size(),
-        )
-
-        assert result.target_met, (
-            f"Ref lookup {result.avg_per_operation_ms:.4f}ms exceeds 1ms target"
-        )
-
-    @pytest.mark.benchmark
-    def test_ref_lookup_scaling(
-        self,
-        benchmark_reporter,
-    ):
-        """Test ref lookup latency with increasing registry sizes."""
-
-        class SimpleRegistry:
-            def __init__(self):
-                self._refs: Dict[str, str] = {}
-
-            def register(self, ref_id: str, locator: str):
-                self._refs[ref_id] = locator
-
-            def get(self, ref_id: str) -> str:
-                return self._refs[ref_id]
-
-        sizes = [100, 1000, 10000, 100000]
-        results = {}
-
-        for size in sizes:
-            registry = SimpleRegistry()
-
-            # Populate registry
-            for i in range(size):
-                registry.register(f"e{i}", f'//div[@data-testid="element-{i}"]')
-
-            # Benchmark lookups
-            iterations = min(size, 10000)
-            start = time.perf_counter()
-            for i in range(iterations):
-                _loc = registry.get(f"e{i % size}")
-            total_ms = (time.perf_counter() - start) * 1000
-
-            avg_ms = total_ms / iterations
-            results[size] = avg_ms
-
-            benchmark_reporter.record_latency(
-                name=f"ref_lookup_{size}_entries",
-                duration_ms=total_ms,
-                target_ms=1.0,
-                iterations=iterations,
-            )
-
-        # Verify O(1) lookup (all sizes should be similar)
-        for size, avg_ms in results.items():
-            assert avg_ms < 1.0, (
-                f"Ref lookup with {size} entries: {avg_ms:.4f}ms exceeds 1ms target"
-            )
-
-    @pytest.mark.benchmark
-    def test_stale_ref_detection_latency(
-        self,
-        mock_element_registry,
-        benchmark_reporter,
-    ):
-        """Test latency of detecting stale refs after navigation."""
-        registry = mock_element_registry
-
-        # Register initial refs
-        for i in range(1000):
-            registry.register_element(f"e{i}", f'//div[@id="elem-{i}"]')
-
-        # Simulate navigation (invalidates refs)
-        registry.new_snapshot()
-
-        # Benchmark stale ref detection
-        iterations = 1000
-        stale_count = 0
-
-        start = time.perf_counter()
-        for i in range(iterations):
-            try:
-                registry.get_locator(f"e{i}")
-            except KeyError:
-                stale_count += 1
-        total_ms = (time.perf_counter() - start) * 1000
-
-        result = benchmark_reporter.record_latency(
-            name="stale_ref_detection",
-            duration_ms=total_ms,
-            target_ms=1.0,
-            iterations=iterations,
-            stale_refs_detected=stale_count,
-        )
-
-        assert stale_count == iterations, "All refs should be stale after new snapshot"
-        assert result.target_met, (
-            f"Stale ref detection {result.avg_per_operation_ms:.4f}ms exceeds 1ms target"
-        )
-
-
 class TestDiffComputationLatency:
     """Benchmark incremental snapshot diff computation."""
 
@@ -504,16 +363,14 @@ class TestEndToEndLatency:
         self,
         sample_html_pages: Dict[str, str],
         sample_aria_snapshots: Dict[str, str],
-        mock_element_registry,
         benchmark_reporter,
     ):
         """Benchmark the complete token optimization pipeline.
 
         Pipeline stages:
         1. ARIA snapshot generation
-        2. Ref extraction and registration
-        3. Response optimization
-        4. (Optional) Diff computation for incremental mode
+        2. Response optimization
+        3. (Optional) Diff computation for incremental mode
         """
         from robotmcp.utils.token_efficient_output import optimize_output
 
@@ -526,29 +383,11 @@ class TestEndToEndLatency:
         def full_pipeline(html_content: str, snapshot: str) -> Dict[str, Any]:
             """Execute full optimization pipeline."""
             # Stage 1: Simulate ARIA snapshot (already have it)
-            # In production: robot.run_keyword("Get Aria Snapshots")
 
-            # Stage 2: Extract refs from snapshot
-            refs = []
-            for i, line in enumerate(snapshot.split("\n")):
-                if "[ref=" in line:
-                    ref_start = line.find("[ref=") + 5
-                    ref_end = line.find("]", ref_start)
-                    ref_id = line[ref_start:ref_end]
-                    refs.append(ref_id)
-
-            # Stage 3: Register refs
-            registry = mock_element_registry
-            registry.new_snapshot()
-            for ref_id in refs:
-                registry.register_element(ref_id, f"//[ref={ref_id}]")
-
-            # Stage 4: Build optimized response
+            # Stage 2: Build optimized response
             response = {
                 "success": True,
                 "snapshot": snapshot,
-                "refs": refs[:50],  # First 50 refs
-                "total_refs": len(refs),
             }
 
             return optimize_output(response, verbosity="standard")
