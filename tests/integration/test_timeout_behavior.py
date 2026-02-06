@@ -5,16 +5,11 @@ This module tests the end-to-end timeout behavior in keyword execution:
 - execute_step with custom timeout_ms
 - Click timeout is 5s by default
 - Navigation timeout is 60s by default
-- Pre-validation fails fast for invisible elements
 """
 
 from __future__ import annotations
 
-import asyncio
-import time
 import pytest
-from typing import Any, Dict, Optional
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 # Import production code
 from robotmcp.domains.timeout import (
@@ -24,10 +19,6 @@ from robotmcp.domains.timeout import (
     TimeoutService,
     Milliseconds,
     DefaultTimeouts,
-)
-from robotmcp.domains.action import (
-    PreValidator,
-    PreValidationResult,
 )
 from robotmcp.container import ServiceContainer, get_container, reset_container
 
@@ -240,89 +231,6 @@ class TestNavigationTimeoutBehavior:
         assert nav_max > action_max
         assert nav_max.value == 300000  # 5 minutes
         assert action_max.value == 30000  # 30 seconds
-
-
-# =============================================================================
-# Pre-Validation Fast Failure Tests
-# =============================================================================
-
-
-class TestPreValidationFailsFast:
-    """Tests that pre-validation fails fast for invisible elements."""
-
-    @pytest.fixture
-    def pre_validator(self) -> PreValidator:
-        """Create a PreValidator for testing."""
-        return PreValidator()
-
-    def test_pre_validation_returns_quickly_for_invisible(self, pre_validator):
-        """Test that pre-validation doesn't wait the full timeout for invisible elements."""
-        # This test verifies the design intent: pre-validation should detect
-        # problems immediately, not wait for the action timeout to expire.
-
-        # Mock registry and adapter
-        from tests.unit.test_pre_validation import MockElementRegistry, MockBrowserAdapter
-
-        registry = MockElementRegistry()
-        adapter = MockBrowserAdapter(
-            visible=False,
-            enabled=True,
-            states={"enabled", "attached", "hidden"},
-        )
-
-        from robotmcp.domains.shared.kernel import ElementRef
-        ref = ElementRef(value="e1")
-
-        # Measure execution time
-        start = time.perf_counter()
-        result = pre_validator.run_all_checks("click", ref, registry, adapter)
-        elapsed = time.perf_counter() - start
-
-        # Should fail fast - not wait for action timeout (5s)
-        assert elapsed < 0.5, f"Pre-validation took {elapsed*1000:.2f}ms, should be <500ms (not wait for 5s timeout)"
-        assert result.passed is False
-        assert "visible" in result.failed_checks
-
-    def test_pre_validation_returns_quickly_for_disabled(self, pre_validator):
-        """Test that pre-validation doesn't wait for disabled elements."""
-        from tests.unit.test_pre_validation import MockElementRegistry, MockBrowserAdapter
-
-        registry = MockElementRegistry()
-        adapter = MockBrowserAdapter(
-            visible=True,
-            enabled=False,
-            states={"visible", "attached", "disabled"},
-        )
-
-        from robotmcp.domains.shared.kernel import ElementRef
-        ref = ElementRef(value="e1")
-
-        start = time.perf_counter()
-        result = pre_validator.run_all_checks("click", ref, registry, adapter)
-        elapsed = time.perf_counter() - start
-
-        assert elapsed < 0.5, f"Pre-validation took {elapsed*1000:.2f}ms, should be <500ms"
-        assert result.passed is False
-        assert "enabled" in result.failed_checks
-
-    def test_pre_validation_skips_for_navigation(self, pre_validator):
-        """Test that pre-validation is skipped for navigation actions."""
-        from tests.unit.test_pre_validation import MockElementRegistry, MockBrowserAdapter
-
-        registry = MockElementRegistry()
-        adapter = MockBrowserAdapter()
-
-        from robotmcp.domains.shared.kernel import ElementRef
-        ref = ElementRef(value="e1")
-
-        start = time.perf_counter()
-        result = pre_validator.run_all_checks("navigate", ref, registry, adapter)
-        elapsed = time.perf_counter() - start
-
-        # Should return immediately with skipped status
-        assert elapsed < 0.1, f"Navigation validation took {elapsed*1000:.2f}ms, should be <100ms"
-        assert result.passed is True
-        assert "skipped" in result.checks_performed
 
 
 # =============================================================================

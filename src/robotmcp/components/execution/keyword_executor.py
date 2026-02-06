@@ -55,8 +55,10 @@ class KeywordExecutor:
         "right click element",
         # Text input operations
         "fill text",
-        "input text",
+        "fill secret",
         "type text",
+        "type secret",
+        "input text",
         "input password",
         "clear text",
         "clear element value",

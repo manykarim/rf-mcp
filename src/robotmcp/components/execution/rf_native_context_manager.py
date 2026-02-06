@@ -468,146 +468,110 @@ class RobotFrameworkNativeContextManager:
     
     def _execute_any_keyword_generic(self, keyword_name: str, arguments: List[str], namespace) -> Any:
         """
-        Execute any keyword using Robot Framework's native keyword resolution.
-        
-        This is a generic approach that works with any library and avoids the
-        'Keyword object has no attribute body' issue in RF 7.x by using direct
-        keyword execution instead of run_keyword.
+        Execute any keyword using Robot Framework 7.x native keyword resolution.
+
+        Resolution order:
+        1. namespace.get_runner() — the canonical RF 7 API
+        2. Direct method lookup on the actual library Python instances
+        3. BuiltIn.run_keyword() — ultimate fallback
         """
         try:
-            # Use RF's native keyword resolution through the namespace
-            # This is the most generic approach that works with any library
-            
-            # Try to resolve the keyword using RF's namespace
-            try:
-                # Debug: Check available libraries and keywords
-                if hasattr(namespace, 'libraries'):
-                    lib_names = list(namespace.libraries.keys()) if hasattr(namespace.libraries, 'keys') else ['(unknown format)']
-                    logger.info(f"Available libraries in RF namespace: {lib_names}")
-                
-                keyword = namespace.get_keyword(keyword_name)
-                if keyword:
-                    logger.info(f"Found keyword '{keyword_name}' via namespace resolution")
-                    
-                    # Execute the keyword directly using its method
-                    if hasattr(keyword, 'method') and callable(keyword.method):
-                        return keyword.method(*arguments)
-                    elif hasattr(keyword, 'run'):
-                        # Some keywords have a run method
-                        return keyword.run(*arguments)
-                    else:
-                        # Fallback: try to get the actual callable
-                        if hasattr(keyword, '_handler') and callable(keyword._handler):
-                            return keyword._handler(*arguments)
-                        elif hasattr(keyword, 'keyword') and callable(keyword.keyword):
-                            return keyword.keyword(*arguments)
-                            
-            except Exception as e:
-                logger.debug(f"Namespace resolution failed for {keyword_name}: {e}")
-            
-            # HYBRID APPROACH: For Input Password specifically, use library manager instance with RF context
-            if keyword_name.lower() == "input password":
-                logger.info(f"Using hybrid approach for Input Password with RF context support")
+            # ── 1. RF-native resolution via Namespace.get_runner() ──────────
+            # get_runner() is the correct API in RF 7.x (get_keyword() does not exist)
+            if hasattr(namespace, 'get_runner'):
                 try:
-                    from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
-                    orchestrator = get_keyword_discovery()
-                    if "SeleniumLibrary" in orchestrator.library_manager.libraries:
-                        lib_instance = orchestrator.library_manager.libraries["SeleniumLibrary"]
-                        
-                        # Check if Input Password method exists directly
-                        if hasattr(lib_instance, 'input_password'):
-                            logger.info(f"Found input_password method in SeleniumLibrary instance")
-                            
-                            # Execute with RF context available for BuiltIn calls
-                            # The key is that we already have RF context set up, so BuiltIn calls should work
-                            return lib_instance.input_password(*arguments)
-                        else:
-                            logger.warning(f"input_password method not found in SeleniumLibrary instance")
-                            # List available methods for debugging
-                            methods = [attr for attr in dir(lib_instance) if not attr.startswith('_') and callable(getattr(lib_instance, attr))]
-                            logger.info(f"Available methods in SeleniumLibrary: {methods[:10]}...")  # Show first 10 methods
+                    runner = namespace.get_runner(keyword_name)
+                    if runner:
+                        logger.info(f"Found keyword '{keyword_name}' via namespace.get_runner()")
+
+                        # Build lightweight RF keyword models for the runner
+                        from robot.running.model import Keyword as RunKeyword
+                        from robot.result.model import Keyword as ResultKeyword
+
+                        data_kw = RunKeyword(name=keyword_name, args=tuple(arguments))
+                        res_kw = ResultKeyword(name=keyword_name, args=tuple(arguments))
+                        ctx = EXECUTION_CONTEXTS.current
+                        return runner.run(data_kw, res_kw, ctx)
                 except Exception as e:
-                    logger.warning(f"Hybrid approach failed for Input Password: {e}")
-            
-            # Fallback: Manual library search
-            from robot.running import EXECUTION_CONTEXTS
+                    logger.debug(f"namespace.get_runner() failed for '{keyword_name}': {e}")
+
+            # ── 2. Direct method lookup on actual library instances ──────────
+            # namespace.libraries yields TestLibrary wrappers in RF 7.x;
+            # access .instance to reach the real Python library object.
             ctx = EXECUTION_CONTEXTS.current
-            
+
             if ctx and hasattr(ctx, 'namespace') and hasattr(ctx.namespace, 'libraries'):
-                # Handle different RF versions - libraries might be dict or other collection
-                libraries = ctx.namespace.libraries
-                if hasattr(libraries, 'items'):
-                    # It's a dict-like object
-                    for lib_name, lib_instance in libraries.items():
-                        try:
-                            self._try_execute_from_library(keyword_name, arguments, lib_name, lib_instance)
-                        except Exception as e:
-                            logger.debug(f"Failed to execute {keyword_name} from {lib_name}: {e}")
-                            continue
-                elif hasattr(libraries, '__iter__'):
-                    # It's an iterable (like odict_values)
-                    for lib_instance in libraries:
-                        if hasattr(lib_instance, '__class__'):
-                            lib_name = lib_instance.__class__.__name__
-                            try:
-                                result = self._try_execute_from_library(keyword_name, arguments, lib_name, lib_instance)
-                                if result is not None:
-                                    return result
-                            except Exception as e:
-                                logger.debug(f"Failed to execute {keyword_name} from {lib_name}: {e}")
-                                continue
-            
-            # If we get here, try the final fallback approach
+                for test_library in ctx.namespace.libraries:
+                    lib_name = getattr(test_library, 'name', type(test_library).__name__)
+                    # Unwrap TestLibrary → actual Python library instance
+                    raw_instance = getattr(test_library, 'instance', test_library)
+                    try:
+                        result = self._try_execute_from_library(
+                            keyword_name, arguments, lib_name, raw_instance
+                        )
+                        if result is not None:
+                            return result
+                    except Exception as e:
+                        logger.debug(f"Direct method lookup failed for '{keyword_name}' in {lib_name}: {e}")
+                        continue
+
+            # ── 3. BuiltIn.run_keyword() fallback ───────────────────────────
             return self._final_fallback_execution(keyword_name, arguments)
-            
+
         except Exception as e:
-            logger.error(f"Generic keyword execution failed for {keyword_name}: {e}")
+            logger.error(f"Generic keyword execution failed for '{keyword_name}': {e}")
             raise
-    
+
     def _try_execute_from_library(self, keyword_name: str, arguments: List[str], lib_name: str, lib_instance) -> Any:
-        """Try to execute keyword from a specific library instance."""
-        # Check if this library has the keyword
-        if hasattr(lib_instance, keyword_name.replace(' ', '_').lower()):
-            method = getattr(lib_instance, keyword_name.replace(' ', '_').lower())
+        """Try to execute keyword from an actual Python library instance.
+
+        Args:
+            keyword_name: RF keyword name (e.g. "New Browser")
+            arguments: positional arguments
+            lib_name: library display name for logging
+            lib_instance: the raw Python library object (NOT a TestLibrary wrapper)
+        """
+        # Canonical RF method name: "New Browser" → "new_browser"
+        method_name = keyword_name.replace(' ', '_').lower()
+        if hasattr(lib_instance, method_name):
+            method = getattr(lib_instance, method_name)
             if callable(method):
-                logger.info(f"Executing {keyword_name} from {lib_name} via direct method")
+                logger.info(f"Executing '{keyword_name}' as {lib_name}.{method_name}()")
                 return method(*arguments)
-        
-        # Try different naming conventions
-        for method_name in [
-            keyword_name.replace(' ', '_'),
-            keyword_name.replace(' ', '').lower(),
-            keyword_name.lower().replace(' ', '_')
+
+        # Try alternative naming conventions
+        for alt_name in [
+            keyword_name.replace(' ', '_'),           # "New Browser" → "New_Browser"
+            keyword_name.replace(' ', '').lower(),     # "New Browser" → "newbrowser"
         ]:
-            if hasattr(lib_instance, method_name):
-                method = getattr(lib_instance, method_name)
+            if alt_name != method_name and hasattr(lib_instance, alt_name):
+                method = getattr(lib_instance, alt_name)
                 if callable(method):
-                    logger.info(f"Executing {keyword_name} as {method_name} from {lib_name}")
+                    logger.info(f"Executing '{keyword_name}' as {lib_name}.{alt_name}()")
                     return method(*arguments)
-        
+
         return None
-    
+
     def _final_fallback_execution(self, keyword_name: str, arguments: List[str]) -> Any:
         """Final fallback execution using BuiltIn library."""
         from robot.libraries.BuiltIn import BuiltIn
         builtin = BuiltIn()
 
-        # Try generic RF-level resolution with run_keyword (handles decorated names)
+        # BuiltIn.run_keyword delegates to the current RF namespace
         try:
             logger.info(f"FALLBACK: BuiltIn.run_keyword('{keyword_name}', args={len(arguments)})")
             return builtin.run_keyword(keyword_name, *arguments)
         except Exception as e:
-            logger.debug(f"BuiltIn.run_keyword failed for {keyword_name}: {e}")
+            logger.debug(f"BuiltIn.run_keyword failed for '{keyword_name}': {e}")
 
-        # Check if it's a BuiltIn method (direct call)
+        # Direct BuiltIn method call (e.g. "Log" → builtin.log)
         method_name = keyword_name.replace(' ', '_').lower()
         if hasattr(builtin, method_name):
             method = getattr(builtin, method_name)
             if callable(method):
-                logger.info(f"Executing {keyword_name} as BuiltIn method")
+                logger.info(f"Executing '{keyword_name}' as BuiltIn.{method_name}()")
                 return method(*arguments)
 
-        # If nothing worked, raise an error
         raise RuntimeError(f"Keyword '{keyword_name}' could not be resolved or executed")
     
     def _execute_with_native_resolution(
