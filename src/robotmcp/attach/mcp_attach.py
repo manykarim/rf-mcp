@@ -24,6 +24,7 @@ docstrings below document arguments and return values.
 """
 
 import json
+import logging
 import queue
 import threading
 import time
@@ -33,14 +34,23 @@ from typing import Any, Dict, Optional, Tuple
 from robot.libraries.BuiltIn import BuiltIn
 from robot.running.context import EXECUTION_CONTEXTS
 
+logger = logging.getLogger(__name__)
+
 
 class _Command:
     def __init__(
-        self, verb: str, payload: Dict[str, Any], replyq: "queue.Queue"
+        self,
+        verb: str,
+        payload: Dict[str, Any],
+        replyq: "queue.Queue",
+        instance_id: Optional[str] = None,
+        client_address: Optional[str] = None,
     ) -> None:
         self.verb = verb
         self.payload = payload
         self.replyq = replyq
+        self.instance_id = instance_id
+        self.client_address = client_address
 
 
 class _Server(threading.Thread):
@@ -85,8 +95,11 @@ class _Server(threading.Thread):
                     return
                 verb = (self.path or "/").strip("/")
                 payload = self._read_json()
+                # Extract instance ID from header for tracking
+                instance_id = self.headers.get("X-MCP-Instance-ID")
+                client_address = self.client_address[0] if self.client_address else None
                 replyq: "queue.Queue" = queue.Queue()
-                cmdq.put(_Command(verb, payload, replyq))
+                cmdq.put(_Command(verb, payload, replyq, instance_id, client_address))
                 try:
                     # Use timeout from payload if provided, else default 120s
                     cmd_timeout = payload.get("timeout_ms")
@@ -162,6 +175,7 @@ class McpAttach:
         self._cmdq: "queue.Queue" = queue.Queue()
         self._srv: Optional[_Server] = None
         self._stop_flag = False
+        self._connected_instances: Dict[str, float] = {}  # instance_id -> last_seen timestamp
 
     # --- Public Library Keywords ---
     def MCP_Serve(
@@ -262,6 +276,8 @@ class McpAttach:
             cmd: _Command = self._cmdq.get_nowait()
         except queue.Empty:
             return
+        # Track instance connections for debugging and session management
+        self._track_instance(cmd.instance_id, cmd.client_address)
         try:
             resp = self._execute_command(cmd.verb, cmd.payload)
         except Exception as e:  # pragma: no cover - defensive
@@ -279,6 +295,43 @@ class McpAttach:
         | MCP Stop
         """
         self._stop_flag = True
+
+    def _track_instance(self, instance_id: Optional[str], client_address: Optional[str]) -> bool:
+        """Track MCP instance connection.
+
+        Args:
+            instance_id: The X-MCP-Instance-ID header value from the request.
+            client_address: The client IP address.
+
+        Returns:
+            True if this is a new or reconnected instance, False otherwise.
+        """
+        if not instance_id:
+            return False
+
+        is_new = instance_id not in self._connected_instances
+        self._connected_instances[instance_id] = time.time()
+
+        if is_new:
+            logger.info(
+                f"[MCP] New instance connected: {instance_id} from {client_address or 'unknown'}"
+            )
+            try:
+                BuiltIn().log_to_console(
+                    f"[MCP] New instance connected: {instance_id} from {client_address or 'unknown'}"
+                )
+            except Exception:
+                pass
+
+        return is_new
+
+    def get_connected_instances(self) -> Dict[str, float]:
+        """Get dictionary of connected instances and their last seen timestamps.
+
+        Returns:
+            Dict mapping instance_id to last_seen timestamp.
+        """
+        return dict(self._connected_instances)
 
     # --- Internal command execution on RF thread ---
     def _execute_command(self, verb: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -314,6 +367,34 @@ class McpAttach:
             return self._get_aria_snapshot(payload)
         if verb == "get_session_info":
             return self._get_session_info(payload)
+        if verb == "force_stop":
+            self._stop_flag = True
+            if self._srv and self._srv.httpd:
+                # Shutdown the server in a separate thread to avoid blocking
+                def shutdown_server():
+                    try:
+                        self._srv.httpd.shutdown()
+                        try:
+                            BuiltIn().log_to_console("[MCP] HTTP server shutdown complete")
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        try:
+                            BuiltIn().log_to_console(f"[MCP] Error during shutdown: {e}")
+                        except Exception:
+                            pass
+
+                threading.Thread(target=shutdown_server, daemon=True).start()
+                try:
+                    BuiltIn().log_to_console("[MCP] Bridge force stopping; HTTP server shutting down.")
+                except Exception:
+                    pass
+            else:
+                try:
+                    BuiltIn().log_to_console("[MCP] Bridge stopping (no active server).")
+                except Exception:
+                    pass
+            return {"success": True, "force_stopped": True}
         return {"success": False, "error": f"unknown verb: {verb}"}
 
     def _diagnostics(self) -> Dict[str, Any]:

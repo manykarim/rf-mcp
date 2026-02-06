@@ -168,38 +168,51 @@ class SessionManager:
             return False
 
     def remove_session(self, session_id: str) -> bool:
-        """Remove a session."""
-        if session_id in self.sessions:
-            session = self.sessions[session_id]
-            try:
-                library_registry.get_all_libraries()
-                plugin_manager = get_library_plugin_manager()
-                for plugin_name in plugin_manager.list_plugin_names():
-                    plugin = plugin_manager.get_plugin(plugin_name)
-                    if not plugin:
-                        continue
-                    try:
-                        plugin.on_session_end(session)
-                    except Exception as exc:  # pragma: no cover - defensive
-                        logger.warning(
-                            "Plugin %s failed during on_session_end: %s",
-                            plugin_name,
-                            exc,
-                        )
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("Unable to notify plugins for session end: %s", exc)
+        """Remove a session, thread-safe.
+
+        ADR-004 fix: Hold lock during dict removal to prevent race conditions.
+        Session cleanup happens outside lock since session is already removed.
+        """
+        # Atomically remove session from dict under lock
+        with self._lock:
+            if session_id not in self.sessions:
+                return False
+            session = self.sessions.pop(session_id)
+
+        # Notify plugins outside lock (session already removed from dict)
+        try:
+            library_registry.get_all_libraries()
+            plugin_manager = get_library_plugin_manager()
+            for plugin_name in plugin_manager.list_plugin_names():
+                plugin = plugin_manager.get_plugin(plugin_name)
+                if not plugin:
+                    continue
+                try:
+                    plugin.on_session_end(session)
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.warning(
+                        "Plugin %s failed during on_session_end: %s",
+                        plugin_name,
+                        exc,
+                    )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Unable to notify plugins for session end: %s", exc)
+
+        # Cleanup session outside lock
+        try:
             session.cleanup()
-            del self.sessions[session_id]
-            logger.info(f"Removed session: {session_id}")
-            event_bus.publish_sync(
-                FrontendEvent(
-                    event_type="session_removed",
-                    session_id=session_id,
-                    payload={"session_id": session_id},
-                )
+        except Exception as e:
+            logger.warning(f"Session cleanup error for {session_id}: {e}")
+
+        logger.info(f"Removed session: {session_id}")
+        event_bus.publish_sync(
+            FrontendEvent(
+                event_type="session_removed",
+                session_id=session_id,
+                payload={"session_id": session_id},
             )
-            return True
-        return False
+        )
+        return True
 
     def cleanup_expired_sessions(self) -> int:
         """Clean up sessions that have been inactive for too long."""

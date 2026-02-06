@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
@@ -26,9 +27,9 @@ from robotmcp.components.test_builder import TestBuilder
 from robotmcp.config import library_registry
 from robotmcp.domains.instruction import FastMCPInstructionAdapter
 from robotmcp.models.session_models import PlatformType
+from robotmcp.optimization.instruction_hooks import InstructionLearningHooks
 from robotmcp.plugins import get_library_plugin_manager
 from robotmcp.utils.server_integration import initialize_enhanced_serialization
-from robotmcp.optimization.instruction_hooks import InstructionLearningHooks, get_hooks
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ def _track_tool_result(
     except Exception as e:
         # Don't let learning errors affect tool execution
         logger.debug(f"Instruction learning tracking error: {e}")
+
 
 if TYPE_CHECKING:
     from robotmcp.frontend.controller import FrontendServerController
@@ -243,6 +245,47 @@ def _install_frontend_lifespan(config: "FrontendConfig") -> None:
     )
 
 
+def _install_health_monitor_lifespan(
+    interval_seconds: int = 60,
+    failure_threshold: int = 3,
+) -> None:
+    """Attach a FastMCP lifespan that manages the bridge health monitor.
+
+    This function wraps any existing lifespan (e.g., frontend lifespan) to
+    also start/stop the health monitor.
+
+    Args:
+        interval_seconds: Time between health checks.
+        failure_threshold: Number of consecutive failures before cleanup.
+    """
+    global _health_monitor
+
+    monitor = BridgeHealthMonitor(
+        interval_seconds=interval_seconds,
+        failure_threshold=failure_threshold,
+    )
+    _health_monitor = monitor
+
+    # Capture existing lifespan (if any) to chain with it
+    existing_lifespan = getattr(mcp._mcp_server, "lifespan", None)
+
+    @asynccontextmanager
+    async def health_monitor_lifespan(server: FastMCP):  # type: ignore[override]
+        try:
+            await monitor.start()
+
+            # If there's an existing lifespan, chain with it
+            if existing_lifespan is not None:
+                async with existing_lifespan(server) as context:
+                    yield context
+            else:
+                yield {}
+        finally:
+            await monitor.stop()
+
+    mcp._mcp_server.lifespan = health_monitor_lifespan  # type: ignore[attr-defined]
+
+
 def _log_attach_banner() -> None:
     """Log attach-mode configuration and basic bridge health at server start."""
 
@@ -279,6 +322,109 @@ def _log_attach_banner() -> None:
         logger.info(f"Attach default: {mode}{' (strict)' if strict else ''}")
     except Exception as e:  # defensive
         logger.info(f"Attach bridge: check failed ({e})")
+
+
+def _startup_bridge_validation() -> Dict[str, Any]:
+    """Validate bridge at startup and reset any stale local state.
+
+    This function implements Phase 1 of ADR-004 Debug Bridge Connection Cleanup:
+    - Checks bridge health on MCP server startup
+    - Cleans local session state to synchronize with bridge state
+    - Configurable via ROBOTMCP_STARTUP_CLEANUP environment variable
+
+    Environment variable ROBOTMCP_STARTUP_CLEANUP:
+    - "auto" (default): Clean sessions only if bridge is healthy and context is active
+    - "always": Always clean local sessions at startup
+    - "off": Disable startup cleanup entirely
+
+    Returns:
+        Dict with validation results and actions taken:
+        - cleanup_mode: The configured cleanup mode
+        - attach_mode: Whether attach mode is configured
+        - healthy: Whether bridge is healthy (when attach mode enabled)
+        - cleanup_performed: Whether cleanup was performed
+        - sessions_cleaned: Number of sessions cleaned (if any)
+        - error: Error message (if cleanup failed)
+    """
+    cleanup_mode = os.environ.get("ROBOTMCP_STARTUP_CLEANUP", "auto").lower().strip()
+
+    # Validate cleanup mode
+    if cleanup_mode not in ("auto", "always", "off"):
+        logger.warning(
+            f"Invalid ROBOTMCP_STARTUP_CLEANUP value '{cleanup_mode}', using 'auto'"
+        )
+        cleanup_mode = "auto"
+
+    if cleanup_mode == "off":
+        logger.info("Startup cleanup disabled via ROBOTMCP_STARTUP_CLEANUP=off")
+        return {"cleanup_mode": "off", "skipped": True}
+
+    client = _get_external_client_if_configured()
+    if client is None:
+        # No attach mode configured - nothing to validate
+        logger.debug("Startup validation: attach mode not configured")
+        return {"attach_mode": False, "cleanup_performed": False}
+
+    try:
+        # Check bridge health
+        health = _check_bridge_health(client)
+
+        if cleanup_mode == "auto":
+            # In auto mode, only clean if bridge is healthy and context is active
+            if health.get("healthy") and health.get("context_active"):
+                cleaned = execution_engine.session_manager.cleanup_all_sessions()
+                logger.info(
+                    f"Startup cleanup: reset {cleaned} local sessions to sync with bridge"
+                )
+                return {
+                    "cleanup_mode": "auto",
+                    "attach_mode": True,
+                    "healthy": True,
+                    "context_active": True,
+                    "cleanup_performed": True,
+                    "sessions_cleaned": cleaned,
+                }
+            else:
+                # Bridge not healthy or no active context - keep local sessions
+                reason = (
+                    "bridge not healthy"
+                    if not health.get("healthy")
+                    else "no active RF context"
+                )
+                logger.info(f"Startup cleanup: skipped ({reason}), keeping local sessions")
+                return {
+                    "cleanup_mode": "auto",
+                    "attach_mode": True,
+                    "healthy": health.get("healthy", False),
+                    "context_active": health.get("context_active", False),
+                    "cleanup_performed": False,
+                    "reason": reason,
+                }
+
+        elif cleanup_mode == "always":
+            # Always clean local sessions at startup, regardless of bridge health
+            cleaned = execution_engine.session_manager.cleanup_all_sessions()
+            logger.info(f"Startup cleanup (always mode): reset {cleaned} local sessions")
+            return {
+                "cleanup_mode": "always",
+                "attach_mode": True,
+                "cleanup_performed": True,
+                "sessions_cleaned": cleaned,
+                "bridge_healthy": health.get("healthy", False),
+                "context_active": health.get("context_active", False),
+            }
+
+    except Exception as e:
+        logger.warning(f"Startup validation failed: {e}")
+        return {
+            "cleanup_mode": cleanup_mode,
+            "attach_mode": True,
+            "error": str(e),
+            "cleanup_performed": False,
+        }
+
+    # Should not reach here, but return a safe default
+    return {"cleanup_mode": cleanup_mode, "attach_mode": True, "cleanup_performed": False}
 
 
 def _compute_effective_use_context(
@@ -364,7 +510,8 @@ def _get_external_client_with_session_sync(
                 if bridge_result.get("libraries"):
                     # Preserve BuiltIn at front, add bridge libraries after
                     bridge_libs = [
-                        lib for lib in bridge_result.get("libraries", [])
+                        lib
+                        for lib in bridge_result.get("libraries", [])
                         if lib != "BuiltIn"
                     ]
                     # Keep BuiltIn first if present in search_order
@@ -520,7 +667,10 @@ def _check_bridge_health(client: ExternalRFClient) -> Dict[str, Any]:
                     "Try again after the current operation completes."
                 ),
             }
-        elif "name or service not known" in error_str or "nodename nor servname" in error_str:
+        elif (
+            "name or service not known" in error_str
+            or "nodename nor servname" in error_str
+        ):
             return {
                 "healthy": False,
                 "context_active": False,
@@ -1004,7 +1154,7 @@ async def _refine_recommendations_with_llm(
 
 Scenario: {scenario}
 Context: {context}
-Candidate libraries: {', '.join(lib_names)}
+Candidate libraries: {", ".join(lib_names)}
 
 Rules:
 1. NEVER include both Browser and SeleniumLibrary (they conflict)
@@ -1150,14 +1300,18 @@ async def recommend_libraries(
     if session_id:
         try:
             session_for_pref = execution_engine.session_manager.get_session(session_id)
-            if session_for_pref and hasattr(session_for_pref, 'explicit_library_preference'):
+            if session_for_pref and hasattr(
+                session_for_pref, "explicit_library_preference"
+            ):
                 explicit_pref = session_for_pref.explicit_library_preference
         except Exception:
             pass
 
     rec = library_recommender.recommend_libraries(
-        scenario, context=context, max_recommendations=max_recommendations,
-        explicit_library_preference=explicit_pref
+        scenario,
+        context=context,
+        max_recommendations=max_recommendations,
+        explicit_library_preference=explicit_pref,
     )
     if not rec.get("success"):
         return {"success": False, "error": rec.get("error", "Recommendation failed")}
@@ -1332,16 +1486,21 @@ async def recommend_libraries(
 
     # Use LLM to refine/generate recommendations when enabled
     from robotmcp.utils.sampling import is_sampling_enabled as _sampling_on
+
     _do_llm = use_llm_refinement or (_sampling_on() and ctx is not None)
     if _do_llm:
         try:
             from robotmcp.utils.sampling import sample_recommend_libraries
+
             llm_recs = await sample_recommend_libraries(
                 ctx, scenario, context, result.get("recommendations", [])
             )
             if llm_recs:
                 # Use LLM recommendations, keeping rule-based metadata
-                rule_recs = {r.get("library_name", r.get("name", "")): r for r in result.get("recommendations", [])}
+                rule_recs = {
+                    r.get("library_name", r.get("name", "")): r
+                    for r in result.get("recommendations", [])
+                }
                 merged = []
                 for llm_rec in llm_recs:
                     lib_name = llm_rec.get("library_name", "")
@@ -1355,7 +1514,9 @@ async def recommend_libraries(
                         merged.append(llm_rec)
                 if merged:
                     result["recommendations"] = merged
-                    result["recommended_libraries"] = [r.get("library_name", r.get("name", "")) for r in merged]
+                    result["recommended_libraries"] = [
+                        r.get("library_name", r.get("name", "")) for r in merged
+                    ]
                     result["llm_refined"] = True
                     result["sampling_enhanced"] = True
                     logger.info(f"LLM sampling generated {len(merged)} recommendations")
@@ -1381,7 +1542,12 @@ async def recommend_libraries(
 
     # Track for instruction learning
     if session_id:
-        _track_tool_result(session_id, "recommend_libraries", {"scenario": scenario, "context": context}, result)
+        _track_tool_result(
+            session_id,
+            "recommend_libraries",
+            {"scenario": scenario, "context": context},
+            result,
+        )
 
     return result
 
@@ -1434,9 +1600,11 @@ async def analyze_scenario(
 
     # Enhance with LLM sampling when feature flag is enabled
     from robotmcp.utils.sampling import is_sampling_enabled
+
     if is_sampling_enabled() and ctx:
         try:
             from robotmcp.utils.sampling import sample_analyze_scenario
+
             sampling_result = await sample_analyze_scenario(ctx, scenario, context)
             if sampling_result:
                 # Merge LLM insights into rule-based result
@@ -1445,9 +1613,13 @@ async def analyze_scenario(
                 if sampling_result.get("session_type"):
                     analysis["detected_session_type"] = sampling_result["session_type"]
                 if sampling_result.get("primary_library"):
-                    analysis["explicit_library_preference"] = sampling_result["primary_library"]
+                    analysis["explicit_library_preference"] = sampling_result[
+                        "primary_library"
+                    ]
                 if sampling_result.get("library_preference"):
-                    analysis["explicit_library_preference"] = sampling_result["library_preference"]
+                    analysis["explicit_library_preference"] = sampling_result[
+                        "library_preference"
+                    ]
                 if sampling_result.get("detected_context"):
                     analysis["detected_context"] = sampling_result["detected_context"]
                 result["analysis"] = analysis
@@ -1530,9 +1702,14 @@ async def analyze_scenario(
 
     # Override session config with LLM-detected preferences when sampling enabled
     from robotmcp.utils.sampling import is_sampling_enabled as _is_sampling_on
+
     if _is_sampling_on() and ctx:
         try:
-            from robotmcp.utils.sampling import sample_detect_library_preference, sample_detect_session_type
+            from robotmcp.utils.sampling import (
+                sample_detect_library_preference,
+                sample_detect_session_type,
+            )
+
             llm_lib_pref = await sample_detect_library_preference(ctx, scenario)
             if llm_lib_pref:
                 session.explicit_library_preference = llm_lib_pref
@@ -1540,9 +1717,12 @@ async def analyze_scenario(
             llm_session_type = await sample_detect_session_type(ctx, scenario, context)
             if llm_session_type:
                 from robotmcp.models.session_models import SessionType
+
                 try:
                     session.session_type = SessionType(llm_session_type)
-                    logger.info(f"LLM sampling detected session type: {llm_session_type}")
+                    logger.info(
+                        f"LLM sampling detected session type: {llm_session_type}"
+                    )
                 except ValueError:
                     pass
         except Exception as e:
@@ -1603,7 +1783,12 @@ async def analyze_scenario(
             scenario_type=scenario_type,
         )
         # Track the analyze_scenario call
-        _track_tool_result(session_id, "analyze_scenario", {"scenario": scenario, "context": context}, result)
+        _track_tool_result(
+            session_id,
+            "analyze_scenario",
+            {"scenario": scenario, "context": context},
+            result,
+        )
     except Exception as e:
         logger.debug(f"Failed to start instruction learning: {e}")
 
@@ -1632,13 +1817,17 @@ def _filter_keywords_by_session_library(
 
     # Get incompatible libraries from plugin
     plugin_manager = get_library_plugin_manager()
-    excluded_libraries = set(plugin_manager.get_incompatible_libraries(session_library_preference))
+    excluded_libraries = set(
+        plugin_manager.get_incompatible_libraries(session_library_preference)
+    )
 
     if not excluded_libraries:
         return keywords, []
 
     # Get keyword alternatives from plugin for helpful messages
-    keyword_alternatives = plugin_manager.get_keyword_alternatives(session_library_preference)
+    keyword_alternatives = plugin_manager.get_keyword_alternatives(
+        session_library_preference
+    )
 
     filtered_keywords = []
     excluded_with_alternatives = []
@@ -1656,7 +1845,7 @@ def _filter_keywords_by_session_library(
                 "keyword": kw_name,
                 "incompatible_library": kw_library,
                 "session_library": session_library_preference,
-                "reason": f"Keyword '{kw_name}' is from {kw_library}, but session uses {session_library_preference}"
+                "reason": f"Keyword '{kw_name}' is from {kw_library}, but session uses {session_library_preference}",
             }
 
             if alt_info:
@@ -1748,7 +1937,9 @@ async def find_keywords(
     if session_id:
         session = execution_engine.session_manager.get_session(session_id)
         if session:
-            session_library_preference = getattr(session, "explicit_library_preference", None)
+            session_library_preference = getattr(
+                session, "explicit_library_preference", None
+            )
 
     if strategy_norm in {"semantic", "intent"}:
         discovery = await keyword_matcher.discover_keywords(
@@ -1784,7 +1975,12 @@ async def find_keywords(
             result["session_library"] = session_library_preference
         # Track for instruction learning
         if session_id:
-            _track_tool_result(session_id, "find_keywords", {"query": query, "strategy": strategy}, result)
+            _track_tool_result(
+                session_id,
+                "find_keywords",
+                {"query": query, "strategy": strategy},
+                result,
+            )
         return result
 
     if strategy_norm in {"pattern", "search"}:
@@ -1812,7 +2008,12 @@ async def find_keywords(
             result["session_library"] = session_library_preference
         # Track for instruction learning
         if session_id:
-            _track_tool_result(session_id, "find_keywords", {"query": query, "strategy": strategy}, result)
+            _track_tool_result(
+                session_id,
+                "find_keywords",
+                {"query": query, "strategy": strategy},
+                result,
+            )
         return result
 
     if strategy_norm in {"catalog", "library"}:
@@ -1849,7 +2050,12 @@ async def find_keywords(
             result["session_library"] = session_library_preference
         # Track for instruction learning
         if session_id:
-            _track_tool_result(session_id, "find_keywords", {"query": query, "strategy": strategy}, result)
+            _track_tool_result(
+                session_id,
+                "find_keywords",
+                {"query": query, "strategy": strategy},
+                result,
+            )
         return result
 
     if strategy_norm in {"session", "namespace"}:
@@ -1862,7 +2068,9 @@ async def find_keywords(
         payload = mgr.list_available_keywords(session_id)
         payload.update({"strategy": "session", "query": query})
         # Track for instruction learning
-        _track_tool_result(session_id, "find_keywords", {"query": query, "strategy": strategy}, payload)
+        _track_tool_result(
+            session_id, "find_keywords", {"query": query, "strategy": strategy}, payload
+        )
         return payload
 
     return {"success": False, "error": f"Unsupported strategy '{strategy}'"}
@@ -1964,11 +2172,20 @@ async def manage_session(
             # Detect scenario type from libraries or use default
             scenario_type = "unknown"
             if libraries:
-                if any("browser" in lib.lower() or "selenium" in lib.lower() for lib in libraries):
+                if any(
+                    "browser" in lib.lower() or "selenium" in lib.lower()
+                    for lib in libraries
+                ):
                     scenario_type = "web_automation"
-                elif any("api" in lib.lower() or "request" in lib.lower() for lib in libraries):
+                elif any(
+                    "api" in lib.lower() or "request" in lib.lower()
+                    for lib in libraries
+                ):
                     scenario_type = "api_testing"
-                elif any("mobile" in lib.lower() or "appium" in lib.lower() for lib in libraries):
+                elif any(
+                    "mobile" in lib.lower() or "appium" in lib.lower()
+                    for lib in libraries
+                ):
                     scenario_type = "mobile_testing"
 
             hooks.on_session_start(
@@ -2026,17 +2243,26 @@ async def manage_session(
             "import_issues": problems,
             "note": "Context mode is managed via session namespace; use execute_step(use_context=True) when needed.",
         }
-        _track_tool_result(session_id, "manage_session", {"action": action, "libraries": libraries}, result)
+        _track_tool_result(
+            session_id,
+            "manage_session",
+            {"action": action, "libraries": libraries},
+            result,
+        )
         return result
 
     if action_norm in {"import_resource", "resource"}:
         if not resource_path:
             return {"success": False, "error": "resource_path is required"}
 
-        def _store_session_variables(session, variables_map: Dict[str, Any]) -> List[str]:
+        def _store_session_variables(
+            session, variables_map: Dict[str, Any]
+        ) -> List[str]:
             loaded: List[str] = []
             for name, value in variables_map.items():
-                base = name[2:-1] if name.startswith("${") and name.endswith("}") else name
+                base = (
+                    name[2:-1] if name.startswith("${") and name.endswith("}") else name
+                )
                 decorated = f"${{{base}}}"
                 session.variables[base] = value
                 session.variables[decorated] = value
@@ -2145,11 +2371,16 @@ async def manage_session(
         # Without this, tests would reference variables that aren't defined.
         try:
             session = execution_engine.session_manager.get_or_create_session(session_id)
-            if not hasattr(session, 'suite_level_variables') or session.suite_level_variables is None:
+            if (
+                not hasattr(session, "suite_level_variables")
+                or session.suite_level_variables is None
+            ):
                 session.suite_level_variables = set()
             for name in data.keys():
                 session.suite_level_variables.add(name)
-            logger.debug(f"Tracked {len(data)} variables from manage_session for Variables section")
+            logger.debug(
+                f"Tracked {len(data)} variables from manage_session for Variables section"
+            )
         except Exception as track_error:
             logger.warning(f"Failed to track manage_session variables: {track_error}")
 
@@ -2167,7 +2398,9 @@ async def manage_session(
 
         def _local_call() -> Dict[str, Any]:
             mgr = get_rf_native_context_manager()
-            return mgr.import_variables_for_session(session_id, variable_file_path, args or [])
+            return mgr.import_variables_for_session(
+                session_id, variable_file_path, args or []
+            )
 
         def _external_call(client: ExternalRFClient) -> Dict[str, Any]:
             return client.import_variables(variable_file_path, args or [])
@@ -2175,7 +2408,7 @@ async def manage_session(
         result = _call_attach_tool_with_fallback(
             "import_variables", _external_call, _local_call
         )
-        
+
         # Sync returned variables (local mode only) into the ExecutionSession store
         try:
             session = execution_engine.session_manager.get_or_create_session(session_id)
@@ -2183,34 +2416,40 @@ async def manage_session(
             if variables_map:
                 for name, value in variables_map.items():
                     # Store variables in session with proper normalization
-                    base = name[2:-1] if name.startswith("${") and name.endswith("}") else name
+                    base = (
+                        name[2:-1]
+                        if name.startswith("${") and name.endswith("}")
+                        else name
+                    )
                     decorated = f"${{{base}}}"
                     session.variables[base] = value
                     session.variables[decorated] = value
-                    
+
             # Track variable file metadata in session
             variable_file_record = {
                 "path": variable_file_path,
                 "args": args or [],
-                "variables_loaded": list(variables_map.keys()) if variables_map else []
+                "variables_loaded": list(variables_map.keys()) if variables_map else [],
             }
-            
-            if not hasattr(session, 'loaded_variable_files'):
+
+            if not hasattr(session, "loaded_variable_files"):
                 session.loaded_variable_files = []
-                
-            # Check if already imported (by path and args combination) 
+
+            # Check if already imported (by path and args combination)
             existing_key = (variable_file_path, tuple(args or []))
             existing_keys = {
                 (item.get("path"), tuple(item.get("args", [])))
                 for item in session.loaded_variable_files
             }
-            
+
             if existing_key not in existing_keys:
                 session.loaded_variable_files.append(variable_file_record)
-                
+
         except Exception as sync_error:
             # Best-effort sync; do not fail the import if syncing fails
-            logger.warning(f"Failed to sync variable file metadata to session: {sync_error}")
+            logger.warning(
+                f"Failed to sync variable file metadata to session: {sync_error}"
+            )
             pass
 
         result.update({"action": "import_variables", "session_id": session_id})
@@ -2537,13 +2776,43 @@ async def execute_step(
         attach_resp = client.run_keyword(keyword_to_run, arguments, assign_to)
         if not attach_resp.get("success"):
             err = attach_resp.get("error", "attach call failed")
-            logger.error(f"ATTACH mode error: {err}")
-            if strict or mode == "force":
-                raise Exception(
-                    f"Attach bridge call failed: {err}. Is MCP Serve running and token/port correct?"
-                )
-            # Fallback to local execution
-            logger.warning("ATTACH unreachable; falling back to local execution")
+
+            # Distinguish between connectivity errors and application errors.
+            # Connectivity errors (bridge unreachable) should fall back to local;
+            # application errors (keyword failed on bridge) should be returned
+            # directly — falling back to local would fail differently because
+            # the local RF context doesn't share browser/page state with the bridge.
+            is_connectivity_error = (
+                "connection error" in err.lower()
+                or "connection refused" in err.lower()
+                or "timed out" in err.lower()
+                or err == "attach call failed"
+                or err == "timeout"
+            )
+
+            if is_connectivity_error:
+                logger.error(f"ATTACH mode connectivity error: {err}")
+                if strict or mode == "force":
+                    raise Exception(
+                        f"Attach bridge call failed: {err}. Is MCP Serve running and token/port correct?"
+                    )
+                # Only fall back to local execution for connectivity errors
+                logger.warning("ATTACH unreachable; falling back to local execution")
+            else:
+                # Application-level error from the bridge (keyword actually ran but failed).
+                # Return the error directly instead of falling back to local execution,
+                # which would fail differently (e.g., "Could not find active page" because
+                # browser state lives in the bridge process, not locally).
+                logger.error(f"ATTACH mode keyword error: {err}")
+                return {
+                    "success": False,
+                    "keyword": keyword_to_run,
+                    "arguments": arguments,
+                    "assign_to": assign_to,
+                    "mode": mode_norm,
+                    "error": err,
+                    "source": "attach_bridge",
+                }
         else:
             return {
                 "success": True,
@@ -2563,7 +2832,9 @@ async def execute_step(
         try:
             # Try to find the keyword's source library
             plugin_manager = get_library_plugin_manager()
-            keyword_source_library = plugin_manager.get_library_for_keyword(keyword_to_run.lower())
+            keyword_source_library = plugin_manager.get_library_for_keyword(
+                keyword_to_run.lower()
+            )
 
             # If we found a source library, validate compatibility using plugin
             if keyword_source_library:
@@ -2622,7 +2893,12 @@ async def execute_step(
     result.setdefault("keyword", keyword_to_run)
 
     # Track for instruction learning
-    _track_tool_result(session_id, "execute_step", {"keyword": keyword_to_run, "arguments": arguments}, result)
+    _track_tool_result(
+        session_id,
+        "execute_step",
+        {"keyword": keyword_to_run, "arguments": arguments},
+        result,
+    )
 
     return result
 
@@ -2866,7 +3142,9 @@ async def _get_page_source_payload(
                             PageSourceService,
                         )
 
-                        source = PageSourceService.filter_page_source(source, filtering_level)
+                        source = PageSourceService.filter_page_source(
+                            source, filtering_level
+                        )
                         is_filtered = True
                     except Exception as filter_err:
                         logger.debug(f"Page source filtering failed: {filter_err}")
@@ -3892,7 +4170,9 @@ async def _get_context_variables_payload(session_id: str) -> Dict[str, Any]:
                         "truncated": bridge_resp.get("truncated", False),
                     }
             except Exception as bridge_err:
-                logger.debug(f"Attach bridge variable read failed, falling back: {bridge_err}")
+                logger.debug(
+                    f"Attach bridge variable read failed, falling back: {bridge_err}"
+                )
 
         # Prefer RF Namespace/Variables if an RF context exists for the session
         try:
@@ -3997,7 +4277,9 @@ async def _get_session_info_payload(session_id: str = "default") -> Dict[str, An
                         "context_active": bridge_result.get("context", False),
                     }
             except Exception as bridge_err:
-                logger.debug(f"Bridge diagnostics for session info failed: {bridge_err}")
+                logger.debug(
+                    f"Bridge diagnostics for session info failed: {bridge_err}"
+                )
                 base_info["attach_bridge"] = {"active": False, "error": "unreachable"}
 
         # CRITICAL FIX (ADR-003 S1): Don't fail if bridge is available
@@ -4489,7 +4771,12 @@ async def manage_attach(action: str = "status") -> Dict[str, Any]:
     """Inspect or control attach bridge configuration.
 
     Args:
-        action: "status" (default) or "stop".
+        action: One of:
+            - "status" (default): Check bridge configuration and health
+            - "stop": Send stop command to bridge (sets stop flag)
+            - "cleanup"/"clean": Clean expired sessions and check bridge health
+            - "reset"/"reconnect": Stop bridge and clean all local sessions
+            - "disconnect_all"/"terminate"/"force_stop": Force stop bridge and terminate all
 
     Returns:
         Dict[str, Any]: Attach status payload:
@@ -4497,6 +4784,21 @@ async def manage_attach(action: str = "status") -> Dict[str, Any]:
             - action: echoed action
             - configured/reachable/default_mode/strict: attach configuration fields
             - diagnostics/hint/error: context-specific fields
+
+        For cleanup action:
+            - sessions_cleaned: number of expired sessions removed
+            - remaining_sessions: count of active sessions
+            - bridge_status: bridge health information
+
+        For reset action:
+            - bridge_stopped: whether bridge was successfully stopped
+            - sessions_cleaned: number of sessions removed
+            - recovery_hint: how to restart the bridge
+
+        For disconnect_all action:
+            - bridge_stopped: whether bridge was successfully stopped
+            - sessions_cleaned: number of sessions removed
+            - hint: next steps for bridge restart
     """
 
     action_norm = (action or "status").strip().lower()
@@ -4554,6 +4856,105 @@ async def manage_attach(action: str = "status") -> Dict[str, Any]:
         except Exception as e:
             logger.error(f"attach stop failed: {e}")
             return {"success": False, "action": "stop", "error": str(e)}
+
+    # Phase 2a ADR-004: cleanup action - clean expired sessions and check bridge health
+    if action_norm in {"cleanup", "clean"}:
+        try:
+            # Clean expired local sessions
+            expired_count = execution_engine.session_manager.cleanup_expired_sessions()
+
+            # Check bridge health if configured
+            client = _get_external_client_if_configured()
+            bridge_status: Dict[str, Any] = {"configured": False}
+
+            if client is not None:
+                try:
+                    health = _check_bridge_health(client)
+                    bridge_status = {
+                        "configured": True,
+                        "reachable": health.get("healthy", False),
+                        "context_active": health.get("context_active", False),
+                    }
+                    if not health.get("healthy"):
+                        bridge_status["error"] = health.get("error")
+                        bridge_status["recovery_hint"] = health.get("recovery_hint")
+                except Exception as health_err:
+                    bridge_status = {
+                        "configured": True,
+                        "reachable": False,
+                        "error": str(health_err),
+                    }
+
+            return {
+                "success": True,
+                "action": "cleanup",
+                "sessions_cleaned": expired_count,
+                "remaining_sessions": len(execution_engine.session_manager.sessions),
+                "bridge_status": bridge_status,
+            }
+        except Exception as e:
+            logger.error(f"attach cleanup failed: {e}")
+            return {"success": False, "action": "cleanup", "error": str(e)}
+
+    # Phase 2a ADR-004: reset action - stop bridge and clean all local sessions
+    if action_norm in {"reset", "reconnect"}:
+        try:
+            client = _get_external_client_if_configured()
+            if client is None:
+                return {
+                    "success": False,
+                    "action": "reset",
+                    "error": "Attach mode not configured (ROBOTMCP_ATTACH_HOST not set)",
+                }
+
+            # Stop current bridge (sets stop flag)
+            stop_resp = client.stop()
+
+            # Clean all local sessions
+            sessions_cleaned = execution_engine.session_manager.cleanup_all_sessions()
+
+            return {
+                "success": True,
+                "action": "reset",
+                "bridge_stopped": bool(stop_resp.get("success")),
+                "sessions_cleaned": sessions_cleaned,
+                "recovery_hint": "RF process must call 'MCP Serve' again to restart bridge",
+            }
+        except Exception as e:
+            logger.error(f"attach reset failed: {e}")
+            return {"success": False, "action": "reset", "error": str(e)}
+
+    # Phase 2a ADR-004: disconnect_all action - force stop bridge and terminate all
+    if action_norm in {"disconnect_all", "terminate", "force_stop"}:
+        try:
+            client = _get_external_client_if_configured()
+            if client is None:
+                return {
+                    "success": False,
+                    "action": "disconnect_all",
+                    "error": "Attach mode not configured (ROBOTMCP_ATTACH_HOST not set)",
+                }
+
+            # Try force stop (new verb) with fallback to regular stop
+            try:
+                stop_resp = client.force_stop()
+            except Exception:
+                # Fall back to regular stop if force_stop not implemented
+                stop_resp = client.stop()
+
+            # Clean all local sessions
+            sessions_cleaned = execution_engine.session_manager.cleanup_all_sessions()
+
+            return {
+                "success": True,
+                "action": "disconnect_all",
+                "bridge_stopped": bool(stop_resp.get("success")),
+                "sessions_cleaned": sessions_cleaned,
+                "hint": "All connections terminated. Bridge must be restarted via MCP Serve.",
+            }
+        except Exception as e:
+            logger.error(f"attach disconnect_all failed: {e}")
+            return {"success": False, "action": "disconnect_all", "error": str(e)}
 
     return {
         "success": False,
@@ -4732,6 +5133,109 @@ async def get_session_keyword_documentation(
     return await _get_session_keyword_documentation_payload(session_id, keyword_name)
 
 
+class BridgeHealthMonitor:
+    """Monitors bridge health with periodic heartbeats.
+
+    This class implements Phase 4 of ADR-004: Optional Heartbeat Monitor.
+    It runs a background asyncio task that periodically checks the health
+    of the debug bridge connection and triggers session cleanup after
+    consecutive failures exceed a threshold.
+
+    Configuration via environment variables:
+        ROBOTMCP_BRIDGE_HEARTBEAT: Enable/disable (0 or 1, default 0)
+        ROBOTMCP_HEARTBEAT_INTERVAL: Check interval in seconds (default 60)
+        ROBOTMCP_HEARTBEAT_THRESHOLD: Failures before cleanup (default 3)
+    """
+
+    def __init__(self, interval_seconds: int = 60, failure_threshold: int = 3):
+        """Initialize the health monitor.
+
+        Args:
+            interval_seconds: Time between health checks in seconds.
+            failure_threshold: Number of consecutive failures before triggering cleanup.
+        """
+        self.interval = interval_seconds
+        self.failure_threshold = failure_threshold
+        self.consecutive_failures = 0
+        self.last_healthy: Optional[float] = None
+        self._running = False
+        self._task: Optional[asyncio.Task] = None
+
+    async def start(self) -> None:
+        """Start the health monitor loop."""
+        self._running = True
+        self._task = asyncio.create_task(self._monitor_loop())
+        logger.info(f"Bridge health monitor started (interval: {self.interval}s)")
+
+    async def stop(self) -> None:
+        """Stop the health monitor."""
+        self._running = False
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        logger.info("Bridge health monitor stopped")
+
+    async def _monitor_loop(self) -> None:
+        """Main monitoring loop that runs health checks at the configured interval."""
+        while self._running:
+            await asyncio.sleep(self.interval)
+            await self._check_health()
+
+    async def _check_health(self) -> None:
+        """Perform a single health check against the bridge.
+
+        Updates consecutive_failures counter and triggers cleanup if threshold exceeded.
+        """
+        client = _get_external_client_if_configured()
+        if client is None:
+            # No attach mode configured, nothing to monitor
+            return
+
+        try:
+            health = _check_bridge_health(client)
+
+            if health.get("healthy"):
+                self.last_healthy = time.time()
+                self.consecutive_failures = 0
+                logger.debug(
+                    f"Bridge health check passed (context_active: {health.get('context_active')})"
+                )
+            else:
+                self.consecutive_failures += 1
+                logger.warning(
+                    f"Bridge health check failed ({self.consecutive_failures}/{self.failure_threshold}): "
+                    f"{health.get('recovery_hint', 'unknown issue')}"
+                )
+
+                if self.consecutive_failures >= self.failure_threshold:
+                    await self._handle_unhealthy_bridge()
+        except Exception as e:
+            self.consecutive_failures += 1
+            logger.warning(f"Bridge health check error: {e}")
+
+            if self.consecutive_failures >= self.failure_threshold:
+                await self._handle_unhealthy_bridge()
+
+    async def _handle_unhealthy_bridge(self) -> None:
+        """Handle persistent bridge failure by cleaning expired sessions."""
+        logger.warning("Bridge unhealthy for extended period, cleaning stale sessions")
+        try:
+            cleaned = execution_engine.session_manager.cleanup_expired_sessions()
+            if cleaned > 0:
+                logger.info(f"Cleaned {cleaned} expired sessions due to unhealthy bridge")
+            # Reset counter after cleanup to avoid repeated cleanups
+            self.consecutive_failures = 0
+        except Exception as e:
+            logger.error(f"Failed to cleanup sessions after unhealthy bridge detection: {e}")
+
+
+# Global health monitor instance (set in main() if enabled)
+_health_monitor: Optional[BridgeHealthMonitor] = None
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="RobotMCP server entry point with optional Django frontend."
@@ -4823,6 +5327,12 @@ def main(argv: List[str] | None = None) -> None:
     except Exception:
         pass
 
+    # ADR-004 Phase 1: Startup validation and cleanup
+    try:
+        _startup_bridge_validation()
+    except Exception:
+        pass
+
     from robotmcp.frontend.config import (
         FrontendConfig,
         build_frontend_config,
@@ -4855,6 +5365,41 @@ def main(argv: List[str] | None = None) -> None:
         logger.info("Starting RobotMCP with frontend at %s", frontend_config.url)
     else:
         logger.info("Starting RobotMCP without frontend")
+
+    # Configure bridge health monitor if enabled (Phase 4 of ADR-004)
+    # Environment variables:
+    #   ROBOTMCP_BRIDGE_HEARTBEAT: 0 or 1 (default 0 - disabled)
+    #   ROBOTMCP_HEARTBEAT_INTERVAL: seconds (default 60)
+    #   ROBOTMCP_HEARTBEAT_THRESHOLD: failures before cleanup (default 3)
+    heartbeat_enabled = os.environ.get("ROBOTMCP_BRIDGE_HEARTBEAT", "0").strip() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if heartbeat_enabled:
+        # Only enable if attach mode is configured
+        if _get_external_client_if_configured() is not None:
+            try:
+                heartbeat_interval = int(
+                    os.environ.get("ROBOTMCP_HEARTBEAT_INTERVAL", "60")
+                )
+                heartbeat_threshold = int(
+                    os.environ.get("ROBOTMCP_HEARTBEAT_THRESHOLD", "3")
+                )
+                _install_health_monitor_lifespan(
+                    interval_seconds=heartbeat_interval,
+                    failure_threshold=heartbeat_threshold,
+                )
+                logger.info(
+                    f"Bridge health monitor enabled (interval: {heartbeat_interval}s, "
+                    f"threshold: {heartbeat_threshold} failures)"
+                )
+            except ValueError as e:
+                logger.warning(f"Invalid heartbeat configuration, monitor disabled: {e}")
+        else:
+            logger.debug(
+                "Bridge health monitor requested but attach mode not configured, skipping"
+            )
 
     try:
         run_kwargs = {}
