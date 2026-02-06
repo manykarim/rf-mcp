@@ -201,6 +201,7 @@ class RobotFrameworkNativeContextManager:
             
             # Import libraries into the RF namespace
             imported_libraries = []
+            failed_imports: Dict[str, str] = {}  # H2: track failed imports for diagnostics
             if libraries:
                 logger.info(f"Importing libraries into RF context: {libraries}")
                 for lib_name in libraries:
@@ -210,18 +211,19 @@ class RobotFrameworkNativeContextManager:
                         namespace.import_library(lib_name, args=(), alias=None)
                         imported_libraries.append(lib_name)
                         logger.info(f"Successfully imported {lib_name} into RF context using correct API")
-                            
+
                     except Exception as e:
                         logger.warning(f"Failed to import library {lib_name} into RF context: {e}")
                         logger.warning(f"Import error type: {type(e).__name__}")
                         import traceback
                         logger.warning(f"Import traceback: {traceback.format_exc()}")
-                        
+
                         # For Browser Library specifically, try to avoid the problematic import
                         if lib_name == "Browser" and ("list index out of range" in str(e) or "index out of range" in str(e)):
-                            logger.info(f"Skipping Browser Library import due to index error - will try alternative approach")
+                            logger.warning(f"Skipping Browser Library import due to index error — keywords from Browser will not resolve until a prefixed call (e.g., Browser.New Browser) triggers late import")
+                            failed_imports[lib_name] = f"index error during import: {e}"
                             continue
-                        
+
                         # For SeleniumLibrary, try with proper arguments for RF context
                         if lib_name == "SeleniumLibrary":
                             logger.info(f"Retrying SeleniumLibrary import with proper RF context configuration")
@@ -234,7 +236,7 @@ class RobotFrameworkNativeContextManager:
                             except Exception as retry_error:
                                 logger.warning(f"SeleniumLibrary retry also failed: {retry_error}")
                                 # Continue to alternative approach
-                        
+
                         # Try alternative approach with library arguments from library manager
                         try:
                             from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
@@ -254,6 +256,7 @@ class RobotFrameworkNativeContextManager:
                         except Exception as fallback_error:
                             logger.warning(f"Fallback import also failed for {lib_name}: {fallback_error}")
                             logger.warning(f"Fallback error type: {type(fallback_error).__name__}")
+                            failed_imports[lib_name] = str(fallback_error)
 
             # Apply RF search order and initialize suite/test scopes in Namespace and Context
             try:
@@ -297,7 +300,8 @@ class RobotFrameworkNativeContextManager:
                 "result_test": result_test,
                 "created_at": datetime.now(),
                 "libraries": libraries or [],
-                "imported_libraries": imported_libraries
+                "imported_libraries": imported_libraries,
+                "failed_imports": failed_imports,
             }
             
             # Set as active context
@@ -615,8 +619,16 @@ class RobotFrameworkNativeContextManager:
                     "variables": current_vars,
                     "assigned_variables": assigned_vars,
                 }
-            except Exception:
-                pass
+            except Exception as generic_err:
+                # M1: Log the error instead of silently swallowing it.
+                # This path covers namespace.get_runner(), library method lookup,
+                # and BuiltIn.run_keyword() fallback.  Falling through to the
+                # outer get_runner() + BuiltIn fallback below is intentional, but
+                # the error should be visible for debugging.
+                logger.debug(
+                    f"Generic keyword execution path failed for '{keyword_name}': "
+                    f"{type(generic_err).__name__}: {generic_err}"
+                )
             # Evaluate expression normalization: support ${var} and bare variable names
             try:
                 if keyword_name.strip().lower() == "evaluate" and arguments:
@@ -807,7 +819,24 @@ class RobotFrameworkNativeContextManager:
             logger.error(f"RF native execution failed for {keyword_name}: {e}")
             import traceback
             logger.error(f"RF native execution traceback: {traceback.format_exc()}")
-            
+
+            # H2: Surface failed library imports when keyword resolution fails.
+            # If the keyword's library failed to import during context creation,
+            # include that in the error so the user sees the real cause instead
+            # of a cryptic "No keyword with name 'X' found" message.
+            error_msg = f"Keyword execution failed: {str(e)}"
+            ctx_info = self._session_contexts.get(session_id)
+            if ctx_info:
+                failed_imports = ctx_info.get("failed_imports") or {}
+                if failed_imports:
+                    failed_list = ", ".join(
+                        f"{lib} ({reason})" for lib, reason in failed_imports.items()
+                    )
+                    error_msg += (
+                        f". Note: the following libraries failed to import into "
+                        f"the RF namespace: {failed_list}"
+                    )
+
             # Attach contextual hints
             try:
                 from robotmcp.utils.hints import HintContext, generate_hints
@@ -823,7 +852,7 @@ class RobotFrameworkNativeContextManager:
 
             return {
                 "success": False,
-                "error": f"Keyword execution failed: {str(e)}",
+                "error": error_msg,
                 "keyword": keyword_name,
                 "arguments": arguments,
                 "hints": hints,

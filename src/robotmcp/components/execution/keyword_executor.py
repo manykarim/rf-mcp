@@ -203,6 +203,20 @@ class KeywordExecutor:
         }
 
         try:
+            # Ensure ctx.test is set for BuiltIn.run_keyword() support.
+            # All pre-validation paths call BuiltIn.run_keyword() which internally
+            # does kw.run(result, ctx).  When ctx.test is None, RF falls back to
+            # ctx.suite.setup — a running-model Keyword without .body — causing
+            # AttributeError: 'Keyword' object has no attribute 'body'.
+            try:
+                from robot.running.context import EXECUTION_CONTEXTS as _EC
+                _ctx = _EC.current
+                if _ctx and not _ctx.test:
+                    from robot.result.model import TestCase as _ResTest
+                    _ctx.test = _ResTest(name="MCP_PreValidation")
+            except Exception:
+                pass
+
             active_library = session.browser_state.active_library
             if active_library == "browser":
                 result = await self._pre_validate_browser_element(locator, required_states, timeout_ms)
