@@ -60,6 +60,9 @@ class GeneratedTestSuite:
     resources: List[str] = None
     # Optional: preserved high-level flow blocks recorded during execution
     flow_blocks: List[Dict[str, Any]] | None = None
+    # ADR-005: per-test flow blocks (test_name → List[Dict]). When set, overrides
+    # suite.flow_blocks for individual test case rendering.
+    per_test_flow_blocks: Dict[str, List[Dict[str, Any]]] | None = None
     # Suite-level variables from session (set via manage_session or execute_step assignments)
     variables: Dict[str, Any] = None
     # Track variable files imported via manage_session(action="import_variables")
@@ -300,53 +303,114 @@ class TestBuilder:
             if tags is None:
                 tags = []
 
-            # First, check if session is ready for test suite generation
+            # ── ADR-005: Check for multi-test mode ────────────────────────
+            session = None
             if self.execution_engine:
-                readiness_check = await self.execution_engine.validate_test_readiness(
-                    session_id
-                )
-                if not readiness_check.get("ready_for_suite_generation", False):
+                session = self.execution_engine.sessions.get(session_id)
+
+            if session and session.test_registry.is_multi_test_mode():
+                # MULTI-TEST MODE: build from TestRegistry
+                # Auto-end any running test
+                if session.test_registry.current_test_name:
+                    session.test_registry.end_test(status="pass")
+                    try:
+                        from robotmcp.components.execution.rf_native_context_manager import (
+                            get_rf_native_context_manager,
+                        )
+                        mgr = get_rf_native_context_manager()
+                        mgr.end_test_in_context(session_id)
+                    except Exception:
+                        pass
+
+                test_cases = []
+                for name, test_info in session.test_registry.tests.items():
+                    if not test_info.steps:
+                        continue
+                    tc = self._build_test_case_from_test_info(test_info)
+                    test_cases.append(tc)
+
+                if not test_cases:
                     return {
                         "success": False,
-                        "error": "Session not ready for test suite generation",
-                        "guidance": readiness_check.get("guidance", []),
-                        "validation_summary": readiness_check.get(
-                            "validation_summary", {}
-                        ),
-                        "recommendation": "Use validate_step_before_suite() to validate individual steps first",
+                        "error": "No tests with steps found in multi-test session",
+                        "suite": None,
                     }
 
-            # Get session steps from execution engine
-            steps = await self._get_session_steps(session_id)
+                suite = await self._build_test_suite(test_cases, session_id)
 
-            if not steps:
-                return {
-                    "success": False,
-                    "error": f"No steps found for session '{session_id}'",
-                    "suite": None,
-                }
+                # Add suite setup/teardown from session metadata
+                if session.suite_setup:
+                    suite.setup = TestCaseStep(
+                        keyword=session.suite_setup["keyword"],
+                        arguments=session.suite_setup.get("arguments", []),
+                    )
+                if session.suite_teardown:
+                    suite.teardown = TestCaseStep(
+                        keyword=session.suite_teardown["keyword"],
+                        arguments=session.suite_teardown.get("arguments", []),
+                    )
 
-            # Filter successful steps
-            successful_steps = [step for step in steps if step.get("status") == "pass"]
+                # Populate per-test flow blocks for rendering
+                per_test_fb = {}
+                for name, ti in session.test_registry.tests.items():
+                    if ti.flow_blocks:
+                        per_test_fb[name] = ti.flow_blocks
+                if per_test_fb:
+                    suite.per_test_flow_blocks = per_test_fb
 
-            if not successful_steps:
-                return {
-                    "success": False,
-                    "error": "No successful steps to build suite from",
-                    "suite": None,
-                }
+                # Override suite name if test_name provided
+                if test_name:
+                    suite.name = test_name
+            else:
+                # ── LEGACY MODE: unchanged single-test behavior ──────────
 
-            # Build test case from steps
-            test_case = await self._build_test_case(
-                successful_steps,
-                test_name or f"Test_{session_id}",
-                tags,
-                documentation,
-                session_id,
-            )
+                # First, check if session is ready for test suite generation
+                if self.execution_engine:
+                    readiness_check = await self.execution_engine.validate_test_readiness(
+                        session_id
+                    )
+                    if not readiness_check.get("ready_for_suite_generation", False):
+                        return {
+                            "success": False,
+                            "error": "Session not ready for test suite generation",
+                            "guidance": readiness_check.get("guidance", []),
+                            "validation_summary": readiness_check.get(
+                                "validation_summary", {}
+                            ),
+                            "recommendation": "Use validate_step_before_suite() to validate individual steps first",
+                        }
 
-            # Create test suite
-            suite = await self._build_test_suite([test_case], session_id)
+                # Get session steps from execution engine
+                steps = await self._get_session_steps(session_id)
+
+                if not steps:
+                    return {
+                        "success": False,
+                        "error": f"No steps found for session '{session_id}'",
+                        "suite": None,
+                    }
+
+                # Filter successful steps
+                successful_steps = [step for step in steps if step.get("status") == "pass"]
+
+                if not successful_steps:
+                    return {
+                        "success": False,
+                        "error": "No successful steps to build suite from",
+                        "suite": None,
+                    }
+
+                # Build test case from steps
+                test_case = await self._build_test_case(
+                    successful_steps,
+                    test_name or f"Test_{session_id}",
+                    tags,
+                    documentation,
+                    session_id,
+                )
+
+                # Create test suite
+                suite = await self._build_test_suite([test_case], session_id)
 
             # Apply library prefix removal if requested
             if remove_library_prefixes:
@@ -359,6 +423,18 @@ class TestBuilder:
             rf_text = await self._generate_rf_text(suite)
 
             # Generate execution statistics
+            # In multi-test mode, collect all steps as dicts for stats
+            if session and session.test_registry.is_multi_test_mode():
+                successful_steps = [
+                    {
+                        "keyword": s.keyword,
+                        "arguments": s.arguments,
+                        "status": s.status,
+                        "result": s.result,
+                    }
+                    for s in session.test_registry.all_steps_flat()
+                    if s.is_successful
+                ]
             stats = await self._generate_statistics(successful_steps, suite)
 
             # Check for untracked variables (referenced in steps but not in Variables section)
@@ -455,6 +531,41 @@ class TestBuilder:
         except Exception as e:
             logger.error(f"Error building test suite: {e}")
             return {"success": False, "error": str(e), "suite": None}
+
+    def _build_test_case_from_test_info(self, test_info) -> "GeneratedTestCase":
+        """Build a GeneratedTestCase from a TestInfo (ADR-005 multi-test mode)."""
+        steps = []
+        for exec_step in test_info.steps:
+            tc_step = TestCaseStep(
+                keyword=exec_step.keyword,
+                arguments=exec_step.arguments,
+                assigned_variables=getattr(exec_step, "assigned_variables", []),
+                assignment_type=getattr(exec_step, "assignment_type", None),
+            )
+            steps.append(tc_step)
+
+        setup = None
+        if test_info.setup:
+            setup = TestCaseStep(
+                keyword=test_info.setup["keyword"],
+                arguments=test_info.setup.get("arguments", []),
+            )
+
+        teardown = None
+        if test_info.teardown:
+            teardown = TestCaseStep(
+                keyword=test_info.teardown["keyword"],
+                arguments=test_info.teardown.get("arguments", []),
+            )
+
+        return GeneratedTestCase(
+            name=test_info.name,
+            steps=steps,
+            documentation=test_info.documentation,
+            tags=test_info.tags,
+            setup=setup,
+            teardown=teardown,
+        )
 
     async def _get_session_steps(self, session_id: str) -> List[Dict[str, Any]]:
         """Get executed steps from session."""
@@ -1471,6 +1582,20 @@ class TestBuilder:
             for var_file in suite.variable_files:
                 lines.append(f"Variables       {self._format_path_for_rf(var_file)}")
 
+        # ADR-005: Suite Setup / Suite Teardown in Settings
+        if suite.setup:
+            escaped_args = [
+                self._escape_robot_argument(a) for a in (suite.setup.arguments or [])
+            ]
+            args_str = ("    " + "    ".join(escaped_args)) if escaped_args else ""
+            lines.append(f"Suite Setup     {suite.setup.keyword}{args_str}")
+        if suite.teardown:
+            escaped_args = [
+                self._escape_robot_argument(a) for a in (suite.teardown.arguments or [])
+            ]
+            args_str = ("    " + "    ".join(escaped_args)) if escaped_args else ""
+            lines.append(f"Suite Teardown  {suite.teardown.keyword}{args_str}")
+
         if suite.tags:
             lines.append(f"Test Tags       {'    '.join(suite.tags)}")
 
@@ -1516,9 +1641,15 @@ class TestBuilder:
 
             # Flow-aware rendering: if structured flow blocks exist, merge them with
             # surrounding linear steps so that keywords before/after the block are kept.
-            if hasattr(suite, 'flow_blocks') and suite.flow_blocks:
+            # ADR-005: prefer per-test flow blocks over suite-level
+            tc_flow_blocks = None
+            if suite.per_test_flow_blocks and test_case.name in suite.per_test_flow_blocks:
+                tc_flow_blocks = suite.per_test_flow_blocks[test_case.name]
+            elif hasattr(suite, 'flow_blocks') and suite.flow_blocks:
+                tc_flow_blocks = suite.flow_blocks
+            if tc_flow_blocks:
                 # Map each flow block to its covered index range in linear steps
-                block_ranges, used_indices = self._map_blocks_to_ranges(test_case.steps, suite.flow_blocks)
+                block_ranges, used_indices = self._map_blocks_to_ranges(test_case.steps, tc_flow_blocks)
                 cur = 0
                 for block, start_idx, end_idx in block_ranges:
                     # Emit linear steps before this block

@@ -8,7 +8,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Set
 
 from .browser_models import BrowserState
-from .execution_models import ExecutionStep
+from .execution_models import ExecutionStep, TestRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +145,12 @@ class ExecutionSession:
     # should remain inline in generated test cases, not in the Variables section
     suite_level_variables: Set[str] = field(default_factory=set)
 
+    # Multi-test support (ADR-005)
+    test_registry: TestRegistry = field(default_factory=TestRegistry)
+    suite_setup: Optional[Dict[str, Any]] = None  # {"keyword": ..., "arguments": [...]}
+    suite_teardown: Optional[Dict[str, Any]] = None  # {"keyword": ..., "arguments": [...]}
+    suite_level_steps: List[ExecutionStep] = field(default_factory=list)
+
     # Mobile-specific fields
     platform_type: PlatformType = (
         PlatformType.WEB
@@ -154,9 +160,21 @@ class ExecutionSession:
     current_context: Optional[str] = None  # NATIVE_APP, WEBVIEW_*, etc.
 
     def add_step(self, step: ExecutionStep) -> None:
-        """Add a successful step to the session."""
+        """Add a successful step to the session.
+
+        In multi-test mode (after start_test), routes to the current test's
+        step list. Steps executed between tests go to suite_level_steps.
+        In legacy mode (no start_test called), uses the flat steps list.
+        """
         if step.is_successful:
-            self.steps.append(step)
+            if self.test_registry.is_multi_test_mode():
+                current = self.test_registry.get_current_test()
+                if current:
+                    current.steps.append(step)
+                else:
+                    self.suite_level_steps.append(step)
+            else:
+                self.steps.append(step)
             self.last_activity = datetime.now()
 
     def update_activity(self) -> None:
@@ -374,6 +392,8 @@ class ExecutionSession:
     @property
     def step_count(self) -> int:
         """Get the total number of successful steps."""
+        if self.test_registry.is_multi_test_mode():
+            return len(self.test_registry.all_steps_flat()) + len(self.suite_level_steps)
         return len(self.steps)
 
     @property

@@ -1,6 +1,8 @@
 """Robot Framework native execution context manager for MCP keywords."""
 
 import logging
+import os as _os
+import sys as _sys
 import uuid
 from typing import Any, Dict, List, Optional, Union, Tuple
 from datetime import datetime
@@ -12,6 +14,7 @@ try:
     from robot.running.context import EXECUTION_CONTEXTS, _ExecutionContext
     from robot.running.namespace import Namespace
     from robot.variables import Variables
+    from robot.variables.scopes import VariableScopes
     from robot.output import Output
     from robot.running.model import TestSuite, TestCase
     from robot.libraries import STDLIBS
@@ -22,32 +25,60 @@ try:
     from robot.libdoc import LibraryDocumentation
     from robot.running.importer import Importer
     # Avoid importing robot.running.Keyword to prevent shadowing model classes in some RF versions
-    from robot.conf import Languages
+    from robot.conf import Languages, RobotSettings
     RF_NATIVE_AVAILABLE = True
     logger.info("Robot Framework native components imported successfully")
 except ImportError as e:
     RF_NATIVE_AVAILABLE = False
     logger.error(f"Robot Framework native components not available: {e}")
 
-# Import our compatibility utilities
-from robotmcp.utils.rf_variables_compatibility import (
-    create_compatible_variables, 
-    create_compatible_namespace
-)
+
+def _suppress_stdout():
+    """Context manager that redirects fd 1 → fd 2 (stderr) to prevent RF console
+    output from corrupting the MCP stdio transport.
+
+    RF's Output class writes test progress (suite/test names, dots) directly
+    to file descriptor 1 via a C-level buffered file object.  In MCP stdio
+    mode fd 1 IS the JSON-RPC transport, so any non-JSON bytes corrupt the
+    protocol and cause the client to hang waiting for a valid response.
+    """
+    import contextlib
+
+    @contextlib.contextmanager
+    def _redirect():
+        try:
+            saved_fd = _os.dup(1)
+        except OSError:
+            yield
+            return
+        try:
+            _os.dup2(2, 1)  # fd 1 → stderr
+            yield
+        finally:
+            try:
+                _os.dup2(saved_fd, 1)
+            except OSError:
+                pass
+            try:
+                _os.close(saved_fd)
+            except OSError:
+                pass
+
+    return _redirect()
 
 
 class RobotFrameworkNativeContextManager:
     """
     Manages Robot Framework execution context using native RF APIs.
-    
+
     This provides the proper execution environment for keywords that require
     RF execution context like Evaluate, Set Test Variable, etc.
     """
-    
+
     def __init__(self):
         self._session_contexts = {}  # session_id -> context info
         self._active_context = None
-        
+
         if not RF_NATIVE_AVAILABLE:
             logger.warning("RF native context manager initialized without RF components")
     
@@ -73,11 +104,8 @@ class RobotFrameworkNativeContextManager:
             
             # Check if we already have a context
             if EXECUTION_CONTEXTS.current is None:
-                # Create minimal variables with proper structure for BuiltIn.evaluate
-                original_variables = Variables()
-                
-                # Create compatible variables with set_global/start_keyword methods for BuiltIn/RF
-                variables = create_compatible_variables(original_variables)
+                # Create VariableScopes for proper test/suite scope isolation (ADR-005)
+                variables = VariableScopes(RobotSettings())
                 # Inject Robot built-in variables for runtime scalar replacement (e.g., ${True})
                 try:
                     from robotmcp.components.variables.variable_resolver import (
@@ -99,11 +127,6 @@ class RobotFrameworkNativeContextManager:
                 except Exception:
                     pass
                 
-                # Add the 'current' attribute that BuiltIn.evaluate expects
-                if not hasattr(variables, 'current'):
-                    variables.current = variables
-                    logger.info("Added 'current' attribute to compatible Variables for BuiltIn compatibility")
-                
                 # Create a basic test suite with proper output directory setup
                 suite = TestSuite(name=f"MCP_Session_{session_id}")
                 
@@ -115,15 +138,11 @@ class RobotFrameworkNativeContextManager:
                 from robot.running.resourcemodel import ResourceFile
                 suite.resource = ResourceFile(source=suite.source)
                 
-                # Create minimal namespace; assign compatible variables so RF internals use it
-                original_namespace = Namespace(original_variables, suite, suite.resource, Languages())
-                # Replace Variables with our compatible wrapper
-                original_namespace.variables = variables
-                namespace = original_namespace
+                # Create namespace with VariableScopes for proper scope management
+                namespace = Namespace(variables, suite, suite.resource, Languages())
                 
                 # Create simple output with proper output directory for Browser Library
                 try:
-                    from robot.conf import RobotSettings
                     import tempfile
                     import os
                     
@@ -131,7 +150,9 @@ class RobotFrameworkNativeContextManager:
                     temp_output_dir = tempfile.mkdtemp(prefix="rf_mcp_")
                     
                     # Create settings with output directory - this fixes Browser Library initialization
-                    settings = RobotSettings(outputdir=temp_output_dir, output=None)
+                    # console='none' prevents RF from writing test progress to stdout,
+                    # which would corrupt the MCP stdio transport (fd 1 = JSON-RPC).
+                    settings = RobotSettings(outputdir=temp_output_dir, output=None, console='none')
                     output = Output(settings)
 
                     # Library listeners expect a suite scope before registering any
@@ -166,19 +187,22 @@ class RobotFrameworkNativeContextManager:
                 
                 # Ensure BuiltIn is available for user keywords and variable ops
                 try:
-                    original_namespace.import_library("BuiltIn")
+                    namespace.import_library("BuiltIn")
                 except Exception:
                     pass
 
                 # Start execution context (must not be dry_run to actually execute keywords)
-                if output:
-                    ctx = EXECUTION_CONTEXTS.start_suite(suite, namespace, output, dry_run=False)
-                else:
-                    # Fallback: create a minimal context without output
-                    from robot.running.context import _ExecutionContext
-                    ctx = _ExecutionContext(suite, namespace, output, dry_run=False)
-                    EXECUTION_CONTEXTS._contexts.append(ctx)
-                    EXECUTION_CONTEXTS._context = ctx
+                # Wrap in _suppress_stdout() to prevent RF console output from
+                # corrupting the MCP stdio transport (fd 1 = JSON-RPC channel).
+                with _suppress_stdout():
+                    if output:
+                        ctx = EXECUTION_CONTEXTS.start_suite(suite, namespace, output, dry_run=False)
+                    else:
+                        # Fallback: create a minimal context without output
+                        from robot.running.context import _ExecutionContext
+                        ctx = _ExecutionContext(suite, namespace, output, dry_run=False)
+                        EXECUTION_CONTEXTS._contexts.append(ctx)
+                        EXECUTION_CONTEXTS._context = ctx
 
                 # Tag the execution context so tests can clean up deterministically
                 try:
@@ -258,27 +282,30 @@ class RobotFrameworkNativeContextManager:
                             logger.warning(f"Fallback error type: {type(fallback_error).__name__}")
                             failed_imports[lib_name] = str(fallback_error)
 
-            # Apply RF search order and initialize suite/test scopes in Namespace and Context
-            try:
-                if imported_libraries:
-                    namespace.set_search_order(imported_libraries)
-                    logger.info(f"Set RF Namespace search order: {imported_libraries}")
-                # Initialize variable and library scopes for suite and test
-                namespace.start_suite()
-                namespace.start_test()
-                # Also start a real running+result test in ExecutionContext for StatusReporter/BuiltIn
+            # Apply RF search order and initialize suite/test scopes in Namespace and Context.
+            # Wrap in _suppress_stdout() because ctx.start_test() writes the test name
+            # to fd 1 via the Output console writer, which would corrupt MCP stdio.
+            with _suppress_stdout():
                 try:
-                    from robot.running.model import TestCase as RunTest
-                    from robot.result.model import TestCase as ResTest
-                    run_test = RunTest(name=f"MCP_Test_{session_id}")
-                    res_test = ResTest(name=f"MCP_Test_{session_id}")
-                    ctx.start_test(run_test, res_test)
-                    logger.info("Started ExecutionContext test for session")
+                    if imported_libraries:
+                        namespace.set_search_order(imported_libraries)
+                        logger.info(f"Set RF Namespace search order: {imported_libraries}")
+                    # Initialize variable and library scopes for suite and test
+                    namespace.start_suite()
+                    namespace.start_test()
+                    # Also start a real running+result test in ExecutionContext for StatusReporter/BuiltIn
+                    try:
+                        from robot.running.model import TestCase as RunTest
+                        from robot.result.model import TestCase as ResTest
+                        run_test = RunTest(name=f"MCP_Test_{session_id}")
+                        res_test = ResTest(name=f"MCP_Test_{session_id}")
+                        ctx.start_test(run_test, res_test)
+                        logger.info("Started ExecutionContext test for session")
+                    except Exception as e:
+                        logger.debug(f"Could not start ExecutionContext test: {e}")
+                    logger.info("Initialized Namespace + Context suite/test scopes for session context")
                 except Exception as e:
-                    logger.debug(f"Could not start ExecutionContext test: {e}")
-                logger.info("Initialized Namespace + Context suite/test scopes for session context")
-            except Exception as e:
-                logger.debug(f"Namespace initialization failed: {e}")
+                    logger.debug(f"Namespace initialization failed: {e}")
 
             # Store context info
             # Prepare result model holders (for future RF runner/BuiltIn status reporting integration)
@@ -302,6 +329,9 @@ class RobotFrameworkNativeContextManager:
                 "libraries": libraries or [],
                 "imported_libraries": imported_libraries,
                 "failed_imports": failed_imports,
+                # ADR-005: multi-test cycling tracking
+                "current_run_test": None,
+                "current_res_test": None,
             }
             
             # Set as active context
@@ -369,8 +399,6 @@ class RobotFrameworkNativeContextManager:
             # Ensure the RF context is healthy after any prior suite execution.
             # Rebuild missing output/result parent as needed to avoid NoneType.is_logged errors.
             try:
-                from robot.conf import RobotSettings
-                from robot.output import Output
                 from robot.output import logger as rf_logger
                 import tempfile, os
 
@@ -382,7 +410,7 @@ class RobotFrameworkNativeContextManager:
                 needs_output = not getattr(active_ctx, 'output', None) or not hasattr(getattr(active_ctx, 'output', None), 'message')
                 if needs_output:
                     temp_output_dir = tempfile.mkdtemp(prefix="rf_mcp_")
-                    settings = RobotSettings(outputdir=temp_output_dir, output=None)
+                    settings = RobotSettings(outputdir=temp_output_dir, output=None, console='none')
                     active_ctx.output = Output(settings)
                     try:
                         active_ctx.output.library_listeners.new_suite_scope()
@@ -398,13 +426,16 @@ class RobotFrameworkNativeContextManager:
                 # Ensure global LOGGER has an output file registered
                 try:
                     if getattr(rf_logger.LOGGER, "_output_file", None) is None:
-                        temp_output_dir = variables.get("${OUTPUTDIR}")
+                        try:
+                            temp_output_dir = variables["${OUTPUTDIR}"]
+                        except (KeyError, Exception):
+                            temp_output_dir = None
                         if not temp_output_dir:
                             temp_output_dir = tempfile.mkdtemp(prefix="rf_mcp_")
                             variables["${OUTPUTDIR}"] = temp_output_dir
                             variables["${OUTPUT}"] = os.path.join(temp_output_dir, "output.xml")
                             variables["${LOGFILE}"] = os.path.join(temp_output_dir, "log.html")
-                        settings = RobotSettings(outputdir=temp_output_dir, output=None)
+                        settings = RobotSettings(outputdir=temp_output_dir, output=None, console='none')
                         # Creating Output registers output file with LOGGER
                         new_output = Output(settings)
                         try:
@@ -448,10 +479,13 @@ class RobotFrameworkNativeContextManager:
                 logger.warning(f"Context mismatch for session {session_id}, fixing...")
                 # Note: We may need to handle context switching differently
             
-            # Use RF's native argument resolution
-            result = self._execute_with_native_resolution(
-                session_id, keyword_name, arguments, namespace, variables, assign_to
-            )
+            # Use RF's native argument resolution.
+            # Suppress stdout to prevent RF console output from corrupting
+            # the MCP stdio transport (runner.run writes test progress to fd 1).
+            with _suppress_stdout():
+                result = self._execute_with_native_resolution(
+                    session_id, keyword_name, arguments, namespace, variables, assign_to
+                )
             
             # Update session variables from RF variables
             context_info["variables"] = variables
@@ -578,13 +612,113 @@ class RobotFrameworkNativeContextManager:
 
         raise RuntimeError(f"Keyword '{keyword_name}' could not be resolved or executed")
     
+    # ── ADR-005: Multi-test context cycling ────────────────────────────
+
+    def start_test_in_context(
+        self, session_id: str, test_name: str,
+        documentation: str = "", tags: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Start a new test in the RF execution context.
+
+        Pushes a new test scope onto the variable stack and starts a running/result
+        test pair in the ExecutionContext. If a test is already active it is
+        auto-ended first.
+        """
+        ctx_info = self._session_contexts.get(session_id)
+        if not ctx_info:
+            return {"success": False, "error": f"No context for session {session_id}"}
+
+        ctx = ctx_info.get("context")
+        namespace = ctx_info.get("namespace")
+
+        # Auto-end current test if still active
+        if ctx_info.get("current_run_test"):
+            self.end_test_in_context(session_id)
+
+        try:
+            from robot.running.model import TestCase as RunTest
+            from robot.result.model import TestCase as ResTest
+
+            run_test = RunTest(name=test_name)
+            if documentation:
+                run_test.doc = documentation
+            if tags:
+                run_test.tags = tags
+
+            res_test = ResTest(name=test_name)
+
+            # Push test scope in Namespace (variable scope) and ExecutionContext.
+            # Suppress stdout: ctx.start_test writes test name via console writer.
+            with _suppress_stdout():
+                namespace.start_test()
+                ctx.start_test(run_test, res_test)
+
+            ctx_info["current_run_test"] = run_test
+            ctx_info["current_res_test"] = res_test
+
+            logger.info(f"Started RF test '{test_name}' for session {session_id}")
+            return {"success": True, "test_name": test_name}
+
+        except Exception as e:
+            logger.error(f"Failed to start test '{test_name}' in context: {e}")
+            return {"success": False, "error": str(e)}
+
+    def end_test_in_context(
+        self, session_id: str, status: str = "PASS", message: str = "",
+    ) -> Dict[str, Any]:
+        """End the current test in the RF execution context.
+
+        Pops the test-scoped variables and sets ``PREV_TEST_*`` automatic vars.
+        """
+        ctx_info = self._session_contexts.get(session_id)
+        if not ctx_info:
+            return {"success": False, "error": f"No context for session {session_id}"}
+
+        ctx = ctx_info.get("context")
+        namespace = ctx_info.get("namespace")
+        res_test = ctx_info.get("current_res_test")
+
+        if not res_test:
+            return {"success": False, "error": "No active test to end"}
+
+        try:
+            res_test.status = status
+            if message:
+                res_test.message = message
+
+            # Pop test scope — cleans test-scoped variables, sets PREV_TEST_*
+            with _suppress_stdout():
+                ctx.end_test(res_test)
+                namespace.end_test()
+
+            test_name = res_test.name
+            ctx_info["current_run_test"] = None
+            ctx_info["current_res_test"] = None
+
+            logger.info(f"Ended RF test '{test_name}' ({status}) for session {session_id}")
+            return {"success": True, "test_name": test_name, "status": status}
+
+        except Exception as e:
+            logger.error(f"Failed to end test in context: {e}")
+            return {"success": False, "error": str(e)}
+
+    def ensure_test_active(self, session_id: str, default_name: str = None) -> None:
+        """Ensure a test is active. Auto-starts default test if needed (legacy compat)."""
+        ctx_info = self._session_contexts.get(session_id)
+        if not ctx_info or ctx_info.get("current_run_test"):
+            return  # already active or no context
+        name = default_name or f"MCP_Test_{session_id}"
+        self.start_test_in_context(session_id, name)
+
+    # ── End ADR-005 test cycling ─────────────────────────────────────
+
     def _execute_with_native_resolution(
         self,
         session_id: str,
         keyword_name: str,
-        arguments: List[str], 
+        arguments: List[str],
         namespace: Namespace,
-        variables: Variables,
+        variables,
         assign_to: Optional[Union[str, List[str]]] = None
     ) -> Dict[str, Any]:
         """

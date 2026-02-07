@@ -68,7 +68,7 @@ def test_context_sets_standard_output_variables():
         variables = context_info["variables"]
         output_dir = variables["${OUTPUTDIR}"]
         output_log = variables["${LOGFILE}"]
-        output_file = variables.get("${OUTPUT}")
+        output_file = variables["${OUTPUT}"]
 
         assert output_dir and os.path.isdir(output_dir)
         assert output_log and output_log.startswith(output_dir)
