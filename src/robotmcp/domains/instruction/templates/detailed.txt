@@ -14,11 +14,12 @@ Example: find_keywords returns "Click Element" from SeleniumLibrary
 
 STEP 3: VERIFY LIBRARIES
 - check_library_availability to verify libraries exist
-- manage_session to load libraries if needed
+- manage_session(action="init", libraries=["Browser", "BuiltIn"]) to create session with libraries
 
 STEP 4: EXECUTE WITH DISCOVERED INFO
-- execute_step(keyword="Click Element", args={"locator": "id=submit"})
+- execute_step(keyword="Click Element", arguments=["id=submit"])
 - execute_flow for sequences of steps
+- Use assign_to to capture return values: execute_step(keyword="Get Text", arguments=["id=msg"], assign_to="result")
 
 STEP 5: DEBUG FAILURES
 If execution fails:

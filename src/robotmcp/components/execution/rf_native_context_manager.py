@@ -3,6 +3,7 @@
 import logging
 import os as _os
 import sys as _sys
+import threading as _threading
 import uuid
 from typing import Any, Dict, List, Optional, Union, Tuple
 from datetime import datetime
@@ -33,6 +34,16 @@ except ImportError as e:
     logger.error(f"Robot Framework native components not available: {e}")
 
 
+# ── P2: Thread-safe fd 1 redirect with reference counting ────────────
+# A process-global lock + counter ensures that concurrent RF executions
+# (dispatched via asyncio.to_thread) keep fd 1 redirected until the LAST
+# thread exits.  Without this, Thread A restoring fd 1 while Thread B is
+# still inside RF would expose the MCP transport to contamination.
+_stdout_redirect_lock = _threading.Lock()
+_stdout_redirect_count = 0
+_stdout_saved_fd = None
+
+
 def _suppress_stdout():
     """Context manager that redirects fd 1 → fd 2 (stderr) to prevent RF console
     output from corrupting the MCP stdio transport.
@@ -41,28 +52,53 @@ def _suppress_stdout():
     to file descriptor 1 via a C-level buffered file object.  In MCP stdio
     mode fd 1 IS the JSON-RPC transport, so any non-JSON bytes corrupt the
     protocol and cause the client to hang waiting for a valid response.
+
+    Uses reference counting so concurrent threads all keep fd 1 redirected
+    until the last thread exits.  The lock is only held during fd operations,
+    never during the (potentially slow) RF keyword execution.
     """
     import contextlib
 
     @contextlib.contextmanager
     def _redirect():
-        try:
-            saved_fd = _os.dup(1)
-        except OSError:
+        global _stdout_redirect_count, _stdout_saved_fd
+
+        redirect_ok = False
+        with _stdout_redirect_lock:
+            _stdout_redirect_count += 1
+            if _stdout_redirect_count == 1:
+                # First redirector — save original fd 1 and redirect
+                try:
+                    _stdout_saved_fd = _os.dup(1)
+                    _os.dup2(2, 1)  # fd 1 → stderr
+                    redirect_ok = True
+                except OSError:
+                    _stdout_redirect_count -= 1
+            else:
+                # Another thread already redirected — just piggyback
+                redirect_ok = True
+
+        if not redirect_ok:
+            # Could not redirect (OSError on dup) — execute unprotected
             yield
             return
+
         try:
-            _os.dup2(2, 1)  # fd 1 → stderr
             yield
         finally:
-            try:
-                _os.dup2(saved_fd, 1)
-            except OSError:
-                pass
-            try:
-                _os.close(saved_fd)
-            except OSError:
-                pass
+            with _stdout_redirect_lock:
+                _stdout_redirect_count -= 1
+                if _stdout_redirect_count == 0 and _stdout_saved_fd is not None:
+                    # Last redirector — restore fd 1 to MCP transport
+                    try:
+                        _os.dup2(_stdout_saved_fd, 1)
+                    except OSError:
+                        pass
+                    try:
+                        _os.close(_stdout_saved_fd)
+                    except OSError:
+                        pass
+                    _stdout_saved_fd = None
 
     return _redirect()
 
@@ -531,6 +567,15 @@ class RobotFrameworkNativeContextManager:
                         ctx = EXECUTION_CONTEXTS.current
                         return runner.run(data_kw, res_kw, ctx)
                 except Exception as e:
+                    # P1: If RF resolved the keyword and it entered StatusReporter
+                    # but the execution itself failed (assertion error, wrong args,
+                    # keyword-not-found via InvalidKeywordRunner, etc.), the error
+                    # comes out as ExecutionStatus.  Re-raise immediately — retrying
+                    # through alternative paths will just repeat the same failure
+                    # with extra StatusReporter cycles (console output to fd 1).
+                    from robot.errors import ExecutionStatus
+                    if isinstance(e, ExecutionStatus):
+                        raise
                     logger.debug(f"namespace.get_runner() failed for '{keyword_name}': {e}")
 
             # ── 2. Direct method lookup on actual library instances ──────────
@@ -754,6 +799,13 @@ class RobotFrameworkNativeContextManager:
                     "assigned_variables": assigned_vars,
                 }
             except Exception as generic_err:
+                # P1: If the generic path raised ExecutionStatus, the keyword was
+                # resolved by RF and executed through StatusReporter — retrying
+                # via the outer runner.run / BuiltIn fallback will just repeat
+                # the same failure with additional StatusReporter cycles.
+                from robot.errors import ExecutionStatus
+                if isinstance(generic_err, ExecutionStatus):
+                    raise
                 # M1: Log the error instead of silently swallowing it.
                 # This path covers namespace.get_runner(), library method lookup,
                 # and BuiltIn.run_keyword() fallback.  Falling through to the
