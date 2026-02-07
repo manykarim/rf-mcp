@@ -29,12 +29,38 @@ class ExternalRFClient:
     that has imported the `McpAttach` library and started `MCP Serve`.
     """
 
+    # Class-level bridge reachability cache (shared across instances in same process)
+    _reachable_cache: Optional[bool] = None
+    _reachable_cache_time: float = 0.0
+    _CACHE_TTL: float = 5.0  # seconds — re-probe after this
+
     def __init__(self, host: str = "127.0.0.1", port: int = 7317, token: str = "change-me") -> None:
         self.host = host
         self.port = int(port)
         self.token = token
         # Use module-level instance ID so all clients from same MCP process share the same ID
         self.instance_id = _MCP_INSTANCE_ID
+
+    def is_reachable(self) -> bool:
+        """Fast cached TCP probe — returns True only if bridge port accepts connections."""
+        now = time.time()
+        if (
+            ExternalRFClient._reachable_cache is not None
+            and (now - ExternalRFClient._reachable_cache_time) < ExternalRFClient._CACHE_TTL
+        ):
+            return ExternalRFClient._reachable_cache
+        import socket
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.3)
+            result = sock.connect_ex((self.host, self.port))
+            sock.close()
+            reachable = result == 0
+        except Exception:
+            reachable = False
+        ExternalRFClient._reachable_cache = reachable
+        ExternalRFClient._reachable_cache_time = now
+        return reachable
 
     def _post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         body = json.dumps(payload).encode("utf-8")
@@ -45,7 +71,7 @@ class ExternalRFClient:
             "X-MCP-Instance-ID": self.instance_id,
         }
         try:
-            conn = http.client.HTTPConnection(self.host, self.port, timeout=10)
+            conn = http.client.HTTPConnection(self.host, self.port, timeout=5)
             conn.request("POST", path, body, headers)
             resp = conn.getresponse()
             data = resp.read()

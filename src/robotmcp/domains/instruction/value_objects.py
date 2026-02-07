@@ -391,22 +391,23 @@ class InstructionTemplate:
 4. SCENARIO ANALYSIS
    - Use 'analyze_scenario' to understand what a test scenario requires
    - Use 'recommend_libraries' to get library recommendations for your use case
-   - Use 'get_locator_guidance' for help with element locator strategies
+   - Use 'get_locator_guidance' for locator syntax help (CSS, XPath, text strategies)
 
-5. SESSION MANAGEMENT & DOM/ARIA RETRIEVAL
-   - Use 'get_session_state' to check the current session status
-   - Use 'manage_session' to start, stop, or configure test sessions
+5. SESSION MANAGEMENT & PAGE INSPECTION
+   - Use 'manage_session' with action="init" to create and configure sessions
+   - Use 'get_session_state' to check session status and inspect page content
    - Use 'set_library_search_order' to configure library loading priority
-   - To get DOM/ARIA snapshots, use get_session_state with:
-     * sections=["page_source"] to retrieve page content
-     * include_reduced_dom=True for ARIA snapshot (lightweight semantic DOM)
-     * page_source_filtered=True for sanitized/compact DOM
+   - For web testing, inspect the page BEFORE interacting with elements:
+     * get_session_state(sections=["page_source"], include_reduced_dom=True) for ARIA snapshot
+     * get_session_state(sections=["page_source"], page_source_filtered=True) for compact DOM
+   - Read the snapshot to identify elements, then use real locators (id=, css=, text=, etc.)
 
 6. TEST EXECUTION
    - Use 'execute_step' to run individual Robot Framework keywords
-   - Use 'execute_flow' to run sequences of keywords
-   - Use 'build_test_suite' to create test suites
-   - Use 'run_test_suite' to execute complete test suites
+   - Use 'execute_flow' to run structured control flow (if/for/try)
+   - Use assign_to in execute_step to capture return values for later steps
+   - Use 'build_test_suite' to generate .robot file from executed steps
+   - Use 'run_test_suite' to execute a .robot file from disk
 
 Available discovery tools: {available_tools}""",
             description="Encourages discovery-first approach to prevent guessing",
@@ -472,26 +473,32 @@ For DOM inspection: get_session_state(sections=["page_source"], include_reduced_
    - Call check_library_availability or recommend_libraries to see loaded libraries
 
 2. GET LOCATOR GUIDANCE before INTERACT:
-   - Call get_locator_guidance to get element refs (e1, e2, etc.)
-   - Use refs in execute_step, NEVER guess locators
+   - Call get_locator_guidance to get locator syntax help for your target library
+   - Use real locators (id=, css=, text=, xpath=) based on actual page content
 
 3. SESSION MANAGEMENT & DOM INSPECTION:
-   - Call manage_session with scenario description first
+   - Call manage_session(action="init", scenario="...", libraries=["Browser", "BuiltIn"]) first
    - Use session_id from response in subsequent calls
    - To inspect DOM/ARIA: get_session_state(sections=["page_source"])
      * include_reduced_dom=True -> ARIA snapshot (lightweight semantic DOM)
      * page_source_filtered=True -> sanitized/compact DOM
+   - Read the ARIA snapshot to find real locator values (ids, roles, text)
 
 4. ERROR RECOVERY:
-   - If element not found: call get_locator_guidance for fresh refs
+   - If element not found: call get_session_state for fresh DOM/ARIA snapshot
    - If keyword unknown: call find_keywords with library filter
 
+5. MULTI-TEST SUITES (optional):
+   - manage_session(action="start_test", test_name="Login Test") to begin a named test
+   - manage_session(action="end_test") to finish it, then start another
+   - build_test_suite generates a multi-test .robot file
+
 RULES:
-- NEVER fabricate locators like "css=#submit" or "xpath=//button"
-- ALWAYS use refs from get_locator_guidance (e.g., ref=e15)
+- NEVER fabricate locators - inspect the DOM first with get_session_state
 - ALWAYS discover keywords before executing unfamiliar ones
-- For web: manage_session -> get_locator_guidance -> execute_step
-- For API: manage_session -> find_keywords -> execute_step
+- For web: manage_session(action="init") -> get_session_state(ARIA) -> execute_step
+- For API: manage_session(action="init") -> find_keywords -> execute_step
+- Use assign_to in execute_step to capture return values into variables
 
 Available tools: {available_tools}""",
             description="Standard guidance for general use",
@@ -509,41 +516,38 @@ Available tools: {available_tools}""",
             content="""rf-mcp STEP-BY-STEP GUIDE FOR TEST AUTOMATION:
 
 STEP 1: START SESSION
-- Always call manage_session first with a scenario description
+- Always call manage_session first with action="init"
+- Specify libraries you need (e.g., libraries=["Browser", "BuiltIn"])
 - Save the session_id from the response
-- Example: manage_session(action="start", scenario="Login to web app", context="web")
+- Example: manage_session(action="init", scenario="Login to web app", libraries=["Browser", "BuiltIn"])
 
 STEP 2: DISCOVER KEYWORDS
 - Call find_keywords to see what actions are available
 - Filter by library: find_keywords(library="Browser")
-- Common keywords: "Click", "Fill Text", "Get Text", "New Browser"
+- Call get_keyword_info for argument details: get_keyword_info(keyword_name="Fill Text")
 
-STEP 3: FOR WEB TESTING - GET LOCATOR GUIDANCE
-- Call get_locator_guidance to see elements on the page
-- Response contains refs like: e1, e2, e3, etc.
-- Example ref usage: execute_step(keyword="Click", args=["ref=e15"])
-
-STEP 3B: INSPECT DOM/ARIA (ALTERNATIVE TO LOCATOR GUIDANCE)
-- Call get_session_state(sections=["page_source"]) to retrieve page content
-- Use include_reduced_dom=True for ARIA snapshot (lightweight semantic DOM)
-- Use page_source_filtered=True for sanitized/compact DOM
-- ARIA snapshot shows semantic structure with roles, names, and states
+STEP 3: FOR WEB TESTING - INSPECT THE PAGE
+- Call get_session_state(sections=["page_source"], include_reduced_dom=True) for ARIA snapshot
+- ARIA snapshot shows semantic structure with roles, names, and element IDs
+- Read the snapshot to find real locator values (id=login-btn, text=Submit, css=.nav-link)
+- Call get_locator_guidance for locator syntax help for your target library
 
 STEP 4: EXECUTE STEPS
-- Use refs from step 3, NEVER guess locators
-- Wrong: execute_step(keyword="Click", args=["css=#submit"])
-- Right: execute_step(keyword="Click", args=["ref=e15"])
+- Use real locators from the DOM/ARIA snapshot, NEVER guess locators
+- Wrong: execute_step(keyword="Click", arguments=["css=#submit"]) (guessed locator)
+- Right: execute_step(keyword="Click", arguments=["id=submit-btn"]) (from ARIA snapshot)
+- Use assign_to to capture return values: execute_step(keyword="Get Text", arguments=["id=msg"], assign_to="message")
 
 STEP 5: HANDLE ERRORS
-- "Element not found" -> call get_locator_guidance or get_session_state for DOM
+- "Element not found" -> call get_session_state for fresh DOM/ARIA snapshot
 - "Keyword not found" -> call find_keywords to verify spelling
 
 CRITICAL RULES:
-1. NEVER use css=, xpath=, id= locators - only use ref= from get_locator_guidance
-2. ALWAYS call get_locator_guidance before any element interaction
-3. ALWAYS verify keyword exists with find_keywords before first use
-4. ALWAYS include session_id in execute_step calls
-5. Use get_session_state with include_reduced_dom=True for semantic DOM inspection
+1. NEVER guess locators - always inspect the page first with get_session_state
+2. ALWAYS verify keyword exists with find_keywords before first use
+3. ALWAYS include session_id in execute_step calls
+4. Use get_session_state with include_reduced_dom=True for semantic DOM inspection
+5. Use arguments=["arg1", "arg2"] (list of strings) for keyword arguments
 
 Available tools: {available_tools}""",
             description="Detailed step-by-step guide for smaller LLMs",
@@ -557,21 +561,17 @@ Available tools: {available_tools}""",
             template_id="browser-focused",
             content="""rf-mcp WEB AUTOMATION WORKFLOW:
 
-1. manage_session(action="start", scenario="...", context="web")
-2. get_locator_guidance() -> get element refs (e1, e2, ...)
-3. execute_step(keyword="Click", args=["ref=e15"])
+1. manage_session(action="init", scenario="...", libraries=["Browser", "BuiltIn"])
+2. get_session_state(sections=["page_source"], include_reduced_dom=True) -> read ARIA snapshot
+3. execute_step(keyword="Click", arguments=["id=submit-btn"]) -> use real locator from snapshot
 
-ELEMENT REFS:
-- Refs are short IDs: e1, e2, e3, etc.
-- Use format: ref=e15 (not css= or xpath=)
-- Refs expire after page changes -> call get_locator_guidance again
-
-DOM/ARIA SNAPSHOT RETRIEVAL:
-- Use get_session_state(sections=["page_source"]) to inspect page content
-- include_reduced_dom=True -> ARIA snapshot (lightweight semantic DOM)
-  Shows roles, names, states - ideal for accessibility-based element targeting
-- page_source_filtered=True -> sanitized/compact DOM (removes scripts, styles)
-- Example: get_session_state(sections=["page_source"], include_reduced_dom=True)
+FINDING ELEMENTS:
+- ARIA snapshot: get_session_state(sections=["page_source"], include_reduced_dom=True)
+  Shows roles, names, states - find real IDs and text for locators
+- Full DOM: get_session_state(sections=["page_source"], page_source_filtered=True)
+  Sanitized/compact HTML - for detailed DOM inspection
+- After page changes, call get_session_state again for fresh DOM
+- Call get_locator_guidance for locator syntax help (css=, id=, text=, xpath=)
 
 COMMON BROWSER KEYWORDS:
 - "New Browser" / "New Page" - start browser
@@ -581,7 +581,7 @@ COMMON BROWSER KEYWORDS:
 - "Get Text" - read element text
 - "Wait For Elements State" - wait for element
 
-NEVER guess locators. ALWAYS use refs from get_locator_guidance or inspect DOM/ARIA first.
+NEVER guess locators. ALWAYS inspect the DOM/ARIA snapshot first.
 
 Available tools: {available_tools}""",
             description="Web automation focused template",
@@ -595,9 +595,9 @@ Available tools: {available_tools}""",
             template_id="api-focused",
             content="""rf-mcp API TESTING WORKFLOW:
 
-1. manage_session(action="start", scenario="...", context="api")
+1. manage_session(action="init", scenario="...", libraries=["RequestsLibrary", "BuiltIn"])
 2. find_keywords(library="RequestsLibrary") -> see HTTP keywords
-3. execute_step(keyword="GET", args=["https://api.example.com/users"])
+3. execute_step(keyword="GET", arguments=["https://api.example.com/users"])
 
 COMMON API KEYWORDS (RequestsLibrary):
 - "Create Session" - establish base URL

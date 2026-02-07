@@ -142,7 +142,10 @@ _frontend_controller: "FrontendServerController | None" = None
 
 
 def _get_external_client_if_configured() -> ExternalRFClient | None:
-    """Return an ExternalRFClient when attach mode is configured via env.
+    """Return an ExternalRFClient when attach mode is configured AND reachable.
+
+    Uses a fast cached TCP probe (0.3ms when refused, 5s cache TTL) so callers
+    never block on an unreachable bridge.
 
     Env vars:
     - ROBOTMCP_ATTACH_HOST (required to enable attach mode)
@@ -153,9 +156,16 @@ def _get_external_client_if_configured() -> ExternalRFClient | None:
         host = os.environ.get("ROBOTMCP_ATTACH_HOST")
         if not host:
             return None
+        mode = os.environ.get("ROBOTMCP_ATTACH_DEFAULT", "auto").strip().lower()
+        if mode == "off":
+            return None
         port = int(os.environ.get("ROBOTMCP_ATTACH_PORT", "7317"))
         token = os.environ.get("ROBOTMCP_ATTACH_TOKEN", "change-me")
-        return ExternalRFClient(host=host, port=port, token=token)
+        client = ExternalRFClient(host=host, port=port, token=token)
+        # Fast probe: if bridge port is unreachable, return None immediately
+        if not client.is_reachable():
+            return None
+        return client
     except Exception:
         return None
 
@@ -2106,60 +2116,102 @@ async def manage_session(
     alias: str | None = None,
     scope: Literal["test", "suite", "global"] = "suite",
     variable_file_path: str | None = None,
+    # ADR-005: Multi-test parameters
+    test_name: str | None = None,
+    test_documentation: str = "",
+    test_tags: List[str] | None = None,
+    test_setup: Dict[str, Any] | None = None,
+    test_teardown: Dict[str, Any] | None = None,
+    test_status: str = "pass",
+    test_message: str = "",
+    keyword: str | None = None,
 ) -> Dict[str, Any]:
-    """Manage a session: initialize, import libraries/resources, set variables.
+    """Manage session lifecycle: initialize, configure libraries/variables, and organize tests.
 
-    Args:
-        action: One of "init", "import_library", "import_resource", "set_variables", "import_variables".
-        session_id: Session to create or update.
-        libraries: Libraries to import when action is "init".
-        variables: Variables to set (dict or Robot-style list) when action is "set_variables".
-        resource_path: Resource file to import when action is "import_resource".
-        library_name: Library to import when action is "import_library".
-        args: Arguments for library/resource/variable file initialization.
-              REQUIRED when:
-              - Variable file has get_variables(arg1, arg2, ...) function
-              - Library constructor requires arguments
-              - Resource file needs parameterization
-              Example: For dynamic_variables.py with get_variables(env, api_key),
-                       pass args=["dev", "dev_key_123"] to load dev environment
-        alias: Optional library alias.
-        scope: Variable scope when action is "set_variables". One of:
-               - "test": Variable available only in current test case (Set Test Variable)
-               - "suite": Variable available in entire test suite (Set Suite Variable) [default]
-               - "global": Variable available across all test suites (Set Global Variable)
-        variable_file_path: Variable file to import when action is "import_variables".
+    Workflows:
+        Single test:  init -> execute_step (repeat) -> build_test_suite
+        Multi-test:   init -> set_suite_setup -> start_test -> execute_step (repeat)
+                      -> end_test -> start_test -> ... -> build_test_suite
+
+    Actions and parameters (session_id is always required):
+
+        init             - Create session and load libraries.
+                           Params: libraries (list of library names),
+                                   variables (dict or list to pre-set).
+
+        import_library   - Add a library to an existing session.
+                           Params: library_name, args (constructor args), alias.
+
+        import_resource  - Import a Robot Framework resource file.
+                           Params: resource_path, args.
+
+        set_variables    - Set variables in the session.
+                           Params: variables (dict {"NAME": "value"} or list ["NAME=value"]),
+                                   scope ("test" | "suite" | "global", default "suite").
+
+        import_variables - Load variables from a Python variable file.
+                           Params: variable_file_path, args (passed to get_variables()).
+
+        start_test       - Begin a named test (enables multi-test mode). Local mode only.
+                           Params: test_name (required),
+                                   test_documentation, test_tags,
+                                   test_setup (dict {"keyword": "...", "arguments": [...]}),
+                                   test_teardown (same format as test_setup).
+                           Alias: start_task.
+
+        end_test         - End the current test. Local mode only.
+                           Params: test_status ("pass" or "fail", default "pass"),
+                                   test_message (optional error description).
+                           NOTE: test_status and test_message are session tracking metadata.
+                           They do NOT affect the .robot file generated by build_test_suite.
+                           Alias: end_task.
+
+        list_tests       - List all tests in the session with their status and step counts.
+                           Params: (none).
+
+        set_suite_setup    - Set a suite-level setup keyword (appears in *** Settings ***).
+                             Params: keyword (required), args (keyword arguments).
+
+        set_suite_teardown - Set a suite-level teardown keyword (appears in *** Settings ***).
+                             Params: keyword (required), args (keyword arguments).
 
     Returns:
-        Dict[str, Any]: Action-specific result with:
-            - success: bool
-            - session_id: echoed session id
-            - details per action (loaded libraries, set variables, etc.)
-            - error/guidance: present on failure
+        Dict with success, session_id, and action-specific details.
+        On failure: error and guidance fields are present.
 
     Examples:
-        Set suite-level variables (default scope):
-            manage_session(
-                action="set_variables",
-                session_id="test_session",
-                variables={"BASE_URL": "https://api.example.com", "TIMEOUT": "30"}
-            )
+        Initialize session with libraries:
+            manage_session(action="init", session_id="s1",
+                           libraries=["Browser", "BuiltIn", "Collections"])
 
-        Set test-scoped variables:
-            manage_session(
-                action="set_variables",
-                session_id="test_session",
-                variables={"TEMP_VALUE": "123"},
-                scope="test"
-            )
+        Set suite-level variables:
+            manage_session(action="set_variables", session_id="s1",
+                           variables={"BASE_URL": "https://example.com", "TIMEOUT": "30"})
 
-        Load variable file with arguments:
-            manage_session(
-                action="import_variables",
-                session_id="test_session",
-                variable_file_path="config/variables.py",
-                args=["production", "secret_key"]  # Passed to get_variables(env, key)
-            )
+        Import a library with constructor arguments:
+            manage_session(action="import_library", session_id="s1",
+                           library_name="Browser", args=["chromium"])
+
+        Load a Python variable file:
+            manage_session(action="import_variables", session_id="s1",
+                           variable_file_path="config/variables.py",
+                           args=["production", "secret_key"])
+
+        Start a named test (multi-test mode):
+            manage_session(action="start_test", session_id="s1",
+                           test_name="Login Test", test_tags=["smoke"],
+                           test_setup={"keyword": "Open Browser", "arguments": ["chromium"]})
+
+        End the current test:
+            manage_session(action="end_test", session_id="s1")
+
+        Set suite setup (for generated .robot file):
+            manage_session(action="set_suite_setup", session_id="s1",
+                           keyword="New Browser", args=["chromium"])
+
+        Set suite teardown:
+            manage_session(action="set_suite_teardown", session_id="s1",
+                           keyword="Close Browser")
     """
 
     action_norm = (action or "").strip().lower()
@@ -2487,6 +2539,137 @@ async def manage_session(
 
         result.update({"action": "import_variables", "session_id": session_id})
         return result
+
+    # ── ADR-005: Multi-test session management ─────────────────────────
+
+    if action_norm in {"start_test", "start_task"}:
+        if not test_name:
+            return {"success": False, "error": "test_name is required for start_test action"}
+
+        # Guard: multi-test not supported with active attach bridge
+        if _get_external_client_if_configured() is not None:
+            return {
+                "success": False,
+                "error": (
+                    "Multi-test mode is not supported with attach bridge. "
+                    "Use separate sessions or generate .robot files."
+                ),
+            }
+
+        session = execution_engine.session_manager.get_or_create_session(session_id)
+
+        session.test_registry.start_test(
+            name=test_name,
+            documentation=test_documentation,
+            tags=test_tags or [],
+            setup=test_setup,
+            teardown=test_teardown,
+        )
+
+        # Start test in RF context (pushes test scope)
+        ctx_result = {}
+        try:
+            mgr = get_rf_native_context_manager()
+            ctx_result = mgr.start_test_in_context(session_id, test_name, test_documentation, test_tags or [])
+        except Exception as e:
+            logger.warning(f"RF context start_test failed (non-fatal): {e}")
+            ctx_result = {"success": False, "error": str(e)}
+
+        return {
+            "success": True,
+            "session_id": session_id,
+            "action": action_norm,
+            "test_name": test_name,
+            "context_result": ctx_result,
+        }
+
+    if action_norm in {"end_test", "end_task"}:
+        # Guard: multi-test not supported with active attach bridge
+        if _get_external_client_if_configured() is not None:
+            return {
+                "success": False,
+                "error": "Multi-test mode is not supported with attach bridge.",
+            }
+
+        session = execution_engine.session_manager.get_or_create_session(session_id)
+        _status = test_status.lower() if test_status else "pass"
+
+        test_info = session.test_registry.end_test(
+            status=_status,
+            message=test_message,
+        )
+
+        # End test in RF context (pops test scope, sets PREV_TEST_*)
+        ctx_result = {}
+        try:
+            mgr = get_rf_native_context_manager()
+            rf_status = "PASS" if _status == "pass" else "FAIL"
+            ctx_result = mgr.end_test_in_context(session_id, rf_status, test_message)
+        except Exception as e:
+            logger.warning(f"RF context end_test failed (non-fatal): {e}")
+            ctx_result = {"success": False, "error": str(e)}
+
+        return {
+            "success": True,
+            "session_id": session_id,
+            "action": action_norm,
+            "test_name": test_info.name if test_info else None,
+            "test_status": _status,
+            "context_result": ctx_result,
+        }
+
+    if action_norm in {"list_tests"}:
+        session = execution_engine.session_manager.get_or_create_session(session_id)
+        tests = []
+        for name, ti in session.test_registry.tests.items():
+            tests.append({
+                "name": name,
+                "status": ti.status,
+                "step_count": len(ti.steps),
+                "tags": ti.tags,
+                "started_at": ti.started_at.isoformat() if ti.started_at else None,
+                "ended_at": ti.ended_at.isoformat() if ti.ended_at else None,
+                "error_message": ti.error_message,
+            })
+        return {
+            "success": True,
+            "session_id": session_id,
+            "action": "list_tests",
+            "multi_test_mode": session.test_registry.is_multi_test_mode(),
+            "current_test": session.test_registry.current_test_name,
+            "tests": tests,
+            "total_tests": len(tests),
+        }
+
+    if action_norm in {"set_suite_setup"}:
+        if not keyword:
+            return {"success": False, "error": "keyword is required for set_suite_setup"}
+        kw_args = list(args or [])
+        session = execution_engine.session_manager.get_or_create_session(session_id)
+        session.suite_setup = {"keyword": keyword, "arguments": kw_args}
+        return {
+            "success": True,
+            "session_id": session_id,
+            "action": "set_suite_setup",
+            "keyword": keyword,
+            "arguments": kw_args,
+        }
+
+    if action_norm in {"set_suite_teardown"}:
+        if not keyword:
+            return {"success": False, "error": "keyword is required for set_suite_teardown"}
+        kw_args = list(args or [])
+        session = execution_engine.session_manager.get_or_create_session(session_id)
+        session.suite_teardown = {"keyword": keyword, "arguments": kw_args}
+        return {
+            "success": True,
+            "session_id": session_id,
+            "action": "set_suite_teardown",
+            "keyword": keyword,
+            "arguments": kw_args,
+        }
+
+    # ── End ADR-005 ──────────────────────────────────────────────────
 
     return {"success": False, "error": f"Unsupported action '{action}'"}
 
@@ -3490,7 +3673,15 @@ async def _execute_if_impl(
             "then": [_normalize_step(s) for s in (then_steps or [])],
             "else": [_normalize_step(s) for s in (else_steps or [])],
         }
-        sess.flow_blocks.append(block)
+        # ADR-005: route flow block to current test in multi-test mode
+        if sess.test_registry.is_multi_test_mode():
+            current = sess.test_registry.get_current_test()
+            if current:
+                current.flow_blocks.append(block)
+            else:
+                sess.flow_blocks.append(block)
+        else:
+            sess.flow_blocks.append(block)
     except Exception:
         pass
 
@@ -3534,7 +3725,15 @@ async def _execute_for_each_impl(
             "items": list(items or []),
             "body": [_normalize_step(s) for s in (steps or [])],
         }
-        sess.flow_blocks.append(block)
+        # ADR-005: route flow block to current test in multi-test mode
+        if sess.test_registry.is_multi_test_mode():
+            current = sess.test_registry.get_current_test()
+            if current:
+                current.flow_blocks.append(block)
+            else:
+                sess.flow_blocks.append(block)
+        else:
+            sess.flow_blocks.append(block)
     except Exception:
         pass
 
@@ -3589,7 +3788,15 @@ async def _execute_try_except_impl(
             if finally_steps
             else [],
         }
-        sess.flow_blocks.append(block)
+        # ADR-005: route flow block to current test in multi-test mode
+        if sess.test_registry.is_multi_test_mode():
+            current = sess.test_registry.get_current_test()
+            if current:
+                current.flow_blocks.append(block)
+            else:
+                sess.flow_blocks.append(block)
+        else:
+            sess.flow_blocks.append(block)
     except Exception:
         pass
 
@@ -4323,6 +4530,25 @@ async def _get_session_info_payload(session_id: str = "default") -> Dict[str, An
                 "available_sessions": execution_engine.session_manager.get_all_session_ids(),
                 "hint": "Call execute_step or manage_session(action='init') first, or configure attach bridge",
             }
+
+        # ADR-005: Expose multi-test info when active
+        if session and session.test_registry.is_multi_test_mode():
+            tests_info = []
+            for name, ti in session.test_registry.tests.items():
+                tests_info.append({
+                    "name": name,
+                    "status": ti.status,
+                    "step_count": len(ti.steps),
+                    "tags": ti.tags,
+                })
+            base_info["multi_test_mode"] = True
+            base_info["current_test"] = session.test_registry.current_test_name
+            base_info["tests"] = tests_info
+            if session.suite_setup:
+                base_info["suite_setup"] = session.suite_setup
+            if session.suite_teardown:
+                base_info["suite_teardown"] = session.suite_teardown
+            base_info["suite_level_step_count"] = len(session.suite_level_steps)
 
         return {"success": True, "session_info": base_info}
 
