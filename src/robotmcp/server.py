@@ -2281,10 +2281,18 @@ async def manage_session(
                     if isinstance(item, str) and "=" in item:
                         name, value = item.split("=", 1)
                         iterable.append((name, value))
+            # Ensure suite_level_variables set exists for variable tracking
+            if (
+                not hasattr(session, "suite_level_variables")
+                or session.suite_level_variables is None
+            ):
+                session.suite_level_variables = set()
             for name, value in iterable:
                 key = name if name.startswith("${") else f"${{{name}}}"
                 session.set_variable(key, value)
                 set_vars.append(name)
+                # Track for *** Variables *** section in generated test suite
+                session.suite_level_variables.add(name)
 
         result = {
             "success": True,

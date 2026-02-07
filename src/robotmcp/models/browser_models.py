@@ -28,7 +28,7 @@ class BrowserState:
     driver_instance: Optional[Any] = None
     selenium_session_id: Optional[str] = None
     
-    # Active library indicator ("browser" or "selenium" or None)
+    # Active library indicator ("browser", "selenium", "appium", or None)
     active_library: Optional[str] = None
     session_storage: Dict[str, str] = field(default_factory=dict)
     page_elements: List[Dict[str, Any]] = field(default_factory=list)
@@ -40,6 +40,10 @@ class BrowserState:
     def is_selenium_library_active(self) -> bool:
         """Check if SeleniumLibrary is the active library."""
         return self.active_library == "selenium"
+
+    def is_appium_library_active(self) -> bool:
+        """Check if AppiumLibrary is the active library."""
+        return self.active_library == "appium"
     
     def has_browser_session(self) -> bool:
         """Check if there's an active browser session."""

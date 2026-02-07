@@ -319,6 +319,14 @@ class BrowserLibraryPlugin(StaticLibraryPlugin):
             if active and getattr(active, "active_library", None) == "selenium":
                 return None
 
+            # If SeleniumLibrary is imported (and Browser is NOT), this is a
+            # SeleniumLibrary session — do not reject Open Browser.
+            imported = getattr(session, "imported_libraries", []) or []
+            has_selenium = "SeleniumLibrary" in imported
+            has_browser = "Browser" in imported
+            if has_selenium and not has_browser:
+                return None
+
             # Get the alternative info
             alt_info = self.KEYWORD_ALTERNATIVES.get("open browser", {})
 

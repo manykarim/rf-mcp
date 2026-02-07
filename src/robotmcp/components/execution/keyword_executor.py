@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -46,13 +47,18 @@ class KeywordExecutor:
     # Keywords that require element pre-validation before execution
     # These keywords interact with elements and benefit from fast visibility/state checks
     ELEMENT_INTERACTION_KEYWORDS: Set[str] = {
-        # Click operations
+        # Click operations (Browser + Selenium + Appium)
         "click",
         "click element",
         "double click",
         "double click element",
         "right click",
         "right click element",
+        "click with options",       # Browser: click with modifiers
+        "click button",             # SeleniumLibrary: button-specific click
+        "click link",               # SeleniumLibrary: link-specific click
+        "click image",              # SeleniumLibrary: image-specific click
+        "click element at coordinates",  # SeleniumLibrary: offset click
         # Text input operations
         "fill text",
         "fill secret",
@@ -60,8 +66,10 @@ class KeywordExecutor:
         "type secret",
         "input text",
         "input password",
+        "input value",              # AppiumLibrary: mobile text input
         "clear text",
         "clear element value",
+        "clear element text",       # SeleniumLibrary: clear form field text
         # Checkbox/Radio operations
         "check checkbox",
         "uncheck checkbox",
@@ -69,6 +77,8 @@ class KeywordExecutor:
         "unselect checkbox",
         # Select/Dropdown operations
         "select options",
+        "select options by",        # Browser: select by attribute+value
+        "deselect options",         # Browser: deselect from dropdown
         "select from list",
         "select from list by value",
         "select from list by label",
@@ -82,8 +92,31 @@ class KeywordExecutor:
         "focus",
         "hover",
         "mouse over",
+        "mouse out",                # SeleniumLibrary: mouse leave
+        "set focus to element",     # SeleniumLibrary: focus keyword
+        # Scroll operations
         "scroll to element",
         "scroll element into view",
+        "scroll by",                # Browser: scroll near element
+        "scroll to",                # Browser: scroll to position
+        # Drag operations
+        "drag and drop",            # Selenium + Appium
+        "drag and drop by offset",  # SeleniumLibrary: drag by pixel offset
+        # Touch/Gesture operations (Appium)
+        "tap",                      # Browser (mobile) + Appium
+        "long press",               # AppiumLibrary: touch-and-hold
+        # Mouse operations
+        "mouse down",               # SeleniumLibrary: mouse press
+        "mouse up",                 # SeleniumLibrary: mouse release
+        "mouse down on image",      # SeleniumLibrary: mouse press on image
+        "mouse down on link",       # SeleniumLibrary: mouse press on link
+        "mouse move relative to",   # Browser: move relative to element
+        # Form operations
+        "submit form",              # SeleniumLibrary: form submission
+        "open context menu",        # SeleniumLibrary: right-click menu
+        # File upload operations
+        "choose file",              # SeleniumLibrary: file upload
+        "upload file by selector",  # Browser: file upload to element
     }
 
     # Required element states for different action types
@@ -100,6 +133,11 @@ class KeywordExecutor:
         "hover": {"visible"},
         "scroll": {"attached"},
         "clear": {"visible", "enabled", "editable"},
+        "drag": {"visible", "enabled"},
+        "tap": {"visible", "enabled"},
+        "submit": {"visible", "enabled"},
+        "upload": {"visible", "enabled"},
+        "open": {"visible", "enabled"},
     }
 
     def __init__(
@@ -134,6 +172,11 @@ class KeywordExecutor:
             "true",
             "True",
         )
+        # Lock to serialize Browser timeout mutations during pre-validation.
+        # Browser.Set Browser Timeout is a Playwright-global setting; without
+        # a lock, concurrent pre-validations in different threads could see
+        # the 500ms pre-validation timeout instead of the action timeout.
+        self._browser_timeout_lock = threading.Lock()
 
     def _requires_pre_validation(self, keyword: str) -> bool:
         """Check if a keyword requires element pre-validation."""
@@ -143,16 +186,28 @@ class KeywordExecutor:
     def _get_action_type_from_keyword_for_states(self, keyword: str) -> str:
         """Extract the action type from a keyword name for state requirements."""
         keyword_lower = keyword.lower()
-        if "click" in keyword_lower:
-            return "click"
+        if "clear" in keyword_lower:
+            return "clear"
         elif "fill" in keyword_lower or "input" in keyword_lower or "type" in keyword_lower:
             return "fill"
-        elif "check" in keyword_lower and "uncheck" not in keyword_lower:
-            return "check"
         elif "uncheck" in keyword_lower:
             return "uncheck"
-        elif "select" in keyword_lower:
+        elif "check" in keyword_lower:
+            return "check"
+        elif "upload" in keyword_lower or "choose file" in keyword_lower:
+            return "upload"
+        elif "deselect" in keyword_lower or "select" in keyword_lower:
             return "select"
+        elif "drag" in keyword_lower:
+            return "drag"
+        elif "tap" in keyword_lower or "long press" in keyword_lower:
+            return "tap"
+        elif "click" in keyword_lower:
+            return "click"
+        elif "submit" in keyword_lower:
+            return "submit"
+        elif "open context" in keyword_lower:
+            return "open"
         elif "press" in keyword_lower or "key" in keyword_lower:
             return "press"
         elif "focus" in keyword_lower:
@@ -161,8 +216,6 @@ class KeywordExecutor:
             return "hover"
         elif "scroll" in keyword_lower:
             return "scroll"
-        elif "clear" in keyword_lower:
-            return "clear"
         return "click"
 
     def _extract_locator_from_args(self, keyword: str, arguments: List[Any]) -> Optional[str]:
@@ -218,6 +271,38 @@ class KeywordExecutor:
                 pass
 
             active_library = session.browser_state.active_library
+            # Normalize case for matching (devserver sets "Browser", manager sets "browser")
+            if active_library:
+                active_library = active_library.lower()
+
+            # Validate active_library against session imports to prevent
+            # misrouting (e.g., active_library stuck on "browser" when only
+            # SeleniumLibrary is imported).  When the claimed library is NOT
+            # imported, detect the correct one from actual imports.
+            imported = {lib.lower() for lib in (session.imported_libraries or [])}
+            if active_library == "browser" and "browser" not in imported:
+                if "seleniumlibrary" in imported:
+                    active_library = "selenium"
+                elif "appiumlibrary" in imported:
+                    active_library = "appium"
+                else:
+                    active_library = None
+            elif active_library == "selenium" and "seleniumlibrary" not in imported:
+                if "browser" in imported:
+                    active_library = "browser"
+                elif "appiumlibrary" in imported:
+                    active_library = "appium"
+                else:
+                    active_library = None
+
+            # Fallback: detect library from session imports when active_library
+            # is not set.  Only handles Appium — Browser/Selenium set
+            # active_library via browser_library_manager, so None means no
+            # browser is open yet (pre-validation will be skipped below).
+            if not active_library:
+                if "appiumlibrary" in imported:
+                    active_library = "appium"
+
             if active_library == "browser":
                 result = await self._pre_validate_browser_element(locator, required_states, timeout_ms)
             elif active_library == "selenium":
@@ -303,8 +388,14 @@ class KeywordExecutor:
         IMPORTANT: The browser timeout MUST be restored after pre-validation,
         otherwise subsequent keyword executions (like Click) will use the
         pre-validation timeout (500ms) instead of the intended action timeout.
+
+        Thread safety: Uses _browser_timeout_lock to serialize timeout
+        mutations so concurrent threads don't see the pre-validation timeout.
         """
         builtin = BuiltIn()
+
+        # Acquire lock to prevent concurrent timeout mutations
+        self._browser_timeout_lock.acquire()
 
         # Set timeout temporarily (Browser Library uses global timeout for element operations)
         # Note: Set Browser Timeout returns the previous timeout value, so we use that
@@ -340,6 +431,12 @@ class KeywordExecutor:
             # Check if error is due to strict mode violation (multiple elements)
             if error and ("strict mode" in error.lower() or "resolved to" in error.lower() and "elements" in error.lower()):
                 logger.debug(f"Strict mode violation for '{locator}': {error}. Trying with visible filter.")
+
+                # Use shorter timeout for retry attempts to stay within budget
+                try:
+                    builtin.run_keyword("Browser.Set Browser Timeout", "200ms")
+                except Exception:
+                    pass
 
                 # Try with >> visible=true filter to get only visible element
                 visible_locator = f"{locator} >> visible=true"
@@ -382,6 +479,8 @@ class KeywordExecutor:
                             )
                 if restore_success:
                     logger.debug(f"Browser timeout restored to {original_timeout}")
+            # Release lock after timeout is restored (or if it was never set)
+            self._browser_timeout_lock.release()
 
     async def _pre_validate_selenium_element(
         self, locator: str, required_states: Set[str], timeout_ms: int
@@ -412,10 +511,10 @@ class KeywordExecutor:
         try:
             # Save and set implicit wait temporarily
             try:
-                # SeleniumLibrary doesn't have a "Get Selenium Implicit Wait", so we
-                # use a reasonable default for restoration (10 seconds is Selenium default)
-                original_implicit_wait = "10s"
-                builtin.run_keyword("SeleniumLibrary.Set Selenium Implicit Wait", f"{timeout_ms / 1000}s")
+                # Set Selenium Implicit Wait returns the previous value, so capture it
+                original_implicit_wait = builtin.run_keyword(
+                    "SeleniumLibrary.Set Selenium Implicit Wait", f"{timeout_ms / 1000}s"
+                )
                 implicit_wait_was_set = True
             except Exception as e:
                 logger.debug(f"Failed to set Selenium implicit wait: {e}")
@@ -476,7 +575,8 @@ class KeywordExecutor:
             if (style.display !== 'none' && style.visibility !== 'hidden' &&
                 rect.width > 0 && rect.height > 0) states.push('visible');
             if (!el.disabled) states.push('enabled');
-            if ((el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && !el.readOnly)
+            if (el.isContentEditable) states.push('editable');
+            else if ((el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && !el.readOnly)
                 states.push('editable');
             if (el.checked !== undefined) states.push(el.checked ? 'checked' : 'unchecked');
             return states;
@@ -529,9 +629,22 @@ class KeywordExecutor:
         """Run AppiumLibrary state check.
 
         Handles multiple elements by finding the first visible/enabled one.
+        Temporarily sets Appium implicit wait to the pre-validation timeout
+        to avoid blocking for the full default wait duration.
         """
         try:
             builtin = BuiltIn()
+
+            # Set Appium implicit wait temporarily for fast pre-validation
+            original_implicit_wait = None
+            implicit_wait_was_set = False
+            try:
+                original_implicit_wait = builtin.run_keyword(
+                    "AppiumLibrary.Set Appium Implicit Wait", f"{timeout_ms / 1000}"
+                )
+                implicit_wait_was_set = True
+            except Exception as e:
+                logger.debug(f"Failed to set Appium implicit wait: {e}")
 
             # Try to get all matching elements to handle duplicates
             elements = []
@@ -603,6 +716,18 @@ class KeywordExecutor:
         except Exception as e:
             return {"valid": False, "states": [], "missing": list(required_states),
                     "error": f"Pre-validation error: {str(e)}"}
+
+        finally:
+            # Restore Appium implicit wait if we changed it
+            if implicit_wait_was_set and original_implicit_wait is not None:
+                try:
+                    builtin.run_keyword(
+                        "AppiumLibrary.Set Appium Implicit Wait", original_implicit_wait
+                    )
+                except Exception as e:
+                    logger.debug(
+                        f"Failed to restore Appium implicit wait to {original_implicit_wait}: {e}"
+                    )
 
     async def execute_keyword(
         self,
@@ -746,70 +871,89 @@ class KeywordExecutor:
             if self.pre_validation_enabled and self._requires_pre_validation(keyword):
                 locator = self._extract_locator_from_args(keyword, arguments)
                 if locator:
-                    is_valid, error_msg, pre_validation_details = await self._pre_validate_element(
-                        locator, session, keyword
-                    )
-                    if not is_valid:
-                        # Pre-validation failed - return early with helpful error
-                        step.end_time = datetime.now()
-                        step.mark_failure(error_msg)
-                        hints: List[Dict[str, Any]] = [
-                            {
-                                "type": "pre_validation_failure",
-                                "message": "Element is not in an actionable state",
-                                "suggestion": "Ensure the element is visible and enabled before interaction",
-                                "details": pre_validation_details,
-                            }
-                        ]
-                        # Add specific hints based on missing states
-                        if pre_validation_details and "missing_states" in pre_validation_details:
-                            missing = pre_validation_details.get("missing_states", [])
-                            if "visible" in missing:
-                                hints.append({
-                                    "type": "visibility_hint",
-                                    "message": "Element is not visible",
-                                    "suggestion": "Use 'Wait For Elements State' with 'visible' before clicking",
-                                    "example": f"Wait For Elements State    {locator}    visible    timeout=5s",
-                                })
-                            if "enabled" in missing:
-                                hints.append({
-                                    "type": "enabled_hint",
-                                    "message": "Element is not enabled",
-                                    "suggestion": "Check if the element is disabled or if a previous action is required",
-                                })
-
-                        event_bus.publish_sync(
-                            FrontendEvent(
-                                event_type="step_failed",
-                                session_id=session.session_id,
-                                step_id=step.step_id,
-                                payload={
-                                    "status": "fail",
-                                    "keyword": keyword,
-                                    "arguments": arguments,
-                                    "error": error_msg,
-                                    "pre_validation_failed": True,
-                                },
+                    # Derive pre-validation timeout from user's timeout_ms:
+                    # - None → use default (config.PRE_VALIDATION_TIMEOUT, 500ms)
+                    # - <= 0 → skip pre-validation (user disabled timeout)
+                    # - > 0 → use min(default, user_timeout) for fast check
+                    preval_timeout = None  # will use config default
+                    skip_preval = False
+                    if timeout_ms is not None:
+                        if timeout_ms <= 0:
+                            skip_preval = True
+                        else:
+                            preval_timeout = min(
+                                self.config.PRE_VALIDATION_TIMEOUT, timeout_ms
                             )
-                        )
-                        return {
-                            "success": False,
-                            "error": f"Pre-validation failed: {error_msg}",
-                            "hint": "Element is not in an actionable state. Previous steps may not have completed.",
-                            "pre_validation_failed": True,
-                            "pre_validation_details": pre_validation_details,
-                            "step_id": step.step_id,
-                            "keyword": keyword,
-                            "arguments": arguments,
-                            "status": "fail",
-                            "execution_time": step.execution_time,
-                            "session_variables": dict(session.variables),
-                            "hints": hints,
-                        }
-                    else:
+
+                    if skip_preval:
                         logger.debug(
-                            f"Pre-validation passed for '{keyword}' with locator '{locator}'"
+                            f"Pre-validation skipped: timeout disabled by user for '{keyword}'"
                         )
+                    else:
+                        is_valid, error_msg, pre_validation_details = await self._pre_validate_element(
+                            locator, session, keyword, timeout_ms=preval_timeout
+                        )
+                        if not is_valid:
+                            # Pre-validation failed - return early with helpful error
+                            step.end_time = datetime.now()
+                            step.mark_failure(error_msg)
+                            hints: List[Dict[str, Any]] = [
+                                {
+                                    "type": "pre_validation_failure",
+                                    "message": "Element is not in an actionable state",
+                                    "suggestion": "Ensure the element is visible and enabled before interaction",
+                                    "details": pre_validation_details,
+                                }
+                            ]
+                            # Add specific hints based on missing states
+                            if pre_validation_details and "missing_states" in pre_validation_details:
+                                missing = pre_validation_details.get("missing_states", [])
+                                if "visible" in missing:
+                                    hints.append({
+                                        "type": "visibility_hint",
+                                        "message": "Element is not visible",
+                                        "suggestion": "Use 'Wait For Elements State' with 'visible' before clicking",
+                                        "example": f"Wait For Elements State    {locator}    visible    timeout=5s",
+                                    })
+                                if "enabled" in missing:
+                                    hints.append({
+                                        "type": "enabled_hint",
+                                        "message": "Element is not enabled",
+                                        "suggestion": "Check if the element is disabled or if a previous action is required",
+                                    })
+
+                            event_bus.publish_sync(
+                                FrontendEvent(
+                                    event_type="step_failed",
+                                    session_id=session.session_id,
+                                    step_id=step.step_id,
+                                    payload={
+                                        "status": "fail",
+                                        "keyword": keyword,
+                                        "arguments": arguments,
+                                        "error": error_msg,
+                                        "pre_validation_failed": True,
+                                    },
+                                )
+                            )
+                            return {
+                                "success": False,
+                                "error": f"Pre-validation failed: {error_msg}",
+                                "hint": "Element is not in an actionable state. Previous steps may not have completed.",
+                                "pre_validation_failed": True,
+                                "pre_validation_details": pre_validation_details,
+                                "step_id": step.step_id,
+                                "keyword": keyword,
+                                "arguments": arguments,
+                                "status": "fail",
+                                "execution_time": step.execution_time,
+                                "session_variables": dict(session.variables),
+                                "hints": hints,
+                            }
+                        else:
+                            logger.debug(
+                                f"Pre-validation passed for '{keyword}' with locator '{locator}'"
+                            )
 
             # Context-only execution: route all keywords through RF native context
             if True:
@@ -1278,27 +1422,31 @@ class KeywordExecutor:
         # - get_text, get_attribute, get_property, get_element_count, get_element_states
         # They all use the global browser timeout
 
-        # SeleniumLibrary keywords that accept timeout parameter
+        # SeleniumLibrary keywords that accept timeout parameter.
+        # NOTE: Action keywords (click_element, click_button, input_text, etc.)
+        # do NOT accept a timeout= named parameter. SeleniumLibrary interprets
+        # unknown named args as Selenium Keys modifiers, causing:
+        #   ValueError: 'TIMEOUT=5.0' modifier does not match to Selenium Keys
+        # Only explicit wait keywords accept a timeout parameter.
+        #
+        # Value = positional index of the timeout argument in the keyword
+        # signature.  Used to detect when timeout is already provided as a
+        # positional arg (prevents "got multiple values for argument 'timeout'").
         selenium_library_timeout_keywords = {
-            # Element actions
-            "click_element": "timeout",
-            "click_button": "timeout",
-            "click_link": "timeout",
-            "input_text": "timeout",
-            "input_password": "timeout",
-            "select_from_list_by_value": "timeout",
-            "select_from_list_by_label": "timeout",
-            "select_from_list_by_index": "timeout",
-            "select_checkbox": "timeout",
-            "unselect_checkbox": "timeout",
-            "mouse_over": "timeout",
-            # Wait operations
-            "wait_until_element_is_visible": "timeout",
-            "wait_until_element_is_not_visible": "timeout",
-            "wait_until_element_is_enabled": "timeout",
-            "wait_until_element_contains": "timeout",
-            "wait_until_page_contains_element": "timeout",
-            "wait_until_page_does_not_contain_element": "timeout",
+            # signature: (locator, timeout=None, error=None)  → timeout at idx 1
+            "wait_until_element_is_visible": 1,
+            "wait_until_element_is_not_visible": 1,
+            "wait_until_element_is_enabled": 1,
+            "wait_until_element_is_not_enabled": 1,
+            # signature: (locator, text, timeout=None, error=None)  → timeout at idx 2
+            "wait_until_element_contains": 2,
+            "wait_until_element_does_not_contain": 2,
+            # signature: (text, timeout=None, error=None)  → timeout at idx 1
+            "wait_until_page_contains": 1,
+            "wait_until_page_does_not_contain": 1,
+            # signature: (locator, timeout=None, error=None)  → timeout at idx 1
+            "wait_until_page_contains_element": 1,
+            "wait_until_page_does_not_contain_element": 1,
         }
 
         # Convert timeout to seconds (most RF libraries use seconds)
@@ -1313,6 +1461,18 @@ class KeywordExecutor:
 
         # Check SeleniumLibrary keywords
         if keyword_lower in selenium_library_timeout_keywords:
+            # Check if timeout is already provided as a positional argument.
+            # SeleniumLibrary wait keywords accept timeout positionally (e.g.,
+            # Wait Until Element Is Visible    locator    5).  Injecting
+            # timeout= on top of that causes "got multiple values for argument
+            # 'timeout'" error.
+            timeout_pos_idx = selenium_library_timeout_keywords[keyword_lower]
+            if len(arguments) > timeout_pos_idx:
+                logger.debug(
+                    f"Timeout already provided as positional arg at index {timeout_pos_idx} for {keyword}"
+                )
+                return arguments
+
             # SeleniumLibrary uses seconds
             timeout_arg = f"timeout={timeout_seconds}"
             logger.debug(f"Injecting SeleniumLibrary timeout: {timeout_arg} for {keyword}")
