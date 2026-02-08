@@ -25,6 +25,17 @@ async def test_collections_dictionary_create_and_get(mcp_client):
     """Create a dictionary via named args, retrieve a value, and assert result."""
     session_id = "collections_dict_session"
 
+    # Initialize session with Collections library (auto-created sessions only have BuiltIn)
+    init_res = await mcp_client.call_tool(
+        "manage_session",
+        {
+            "action": "init",
+            "session_id": session_id,
+            "libraries": ["Collections", "BuiltIn"],
+        },
+    )
+    assert init_res.data.get("success") is True
+
     # Create Dictionary with named args; assign to ${d}
     res_create = await mcp_client.call_tool(
         "execute_step",
@@ -62,6 +73,17 @@ async def test_collections_dictionary_create_and_get(mcp_client):
 async def test_collections_set_to_dictionary_named_object_arg(mcp_client):
     """Set To Dictionary should accept object-valued named args preserved via ${var}."""
     session_id = "collections_setdict_session"
+
+    # Initialize session with Collections library (auto-created sessions only have BuiltIn)
+    init_res = await mcp_client.call_tool(
+        "manage_session",
+        {
+            "action": "init",
+            "session_id": session_id,
+            "libraries": ["Collections", "BuiltIn"],
+        },
+    )
+    assert init_res.data.get("success") is True
 
     # Start with empty dict
     res_create = await mcp_client.call_tool(

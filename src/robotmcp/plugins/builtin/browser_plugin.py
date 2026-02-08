@@ -9,6 +9,7 @@ from robotmcp.plugins.base import StaticLibraryPlugin
 from robotmcp.plugins.contracts import (
     KeywordOverrideHandler,
     LibraryCapabilities,
+    LibraryHints,
     LibraryMetadata,
     LibraryStateProvider,
 )
@@ -113,6 +114,31 @@ class BrowserStateProvider(LibraryStateProvider):
 class BrowserLibraryPlugin(StaticLibraryPlugin):
     """Builtin Browser plugin with custom state provider and capabilities."""
 
+    # Keywords that exist in BOTH Browser Library and SeleniumLibrary with
+    # the same name.  These must NOT be blocked when the session uses
+    # Browser Library, because Browser Library has its own implementation.
+    # Programmatically verified against Browser Library 18.x and SeleniumLibrary 6.x.
+    _SHARED_KEYWORDS = frozenset({
+        "add cookie",
+        "close browser",
+        "delete all cookies",
+        "drag and drop",
+        "get browser ids",
+        "get cookie",
+        "get cookies",
+        "get element count",
+        "get property",
+        "get text",
+        "get title",
+        "go back",
+        "go to",
+        "open browser",
+        "press keys",
+        "register keyword to run on failure",
+        "switch browser",
+        "wait for condition",
+    })
+
     # Mapping of SeleniumLibrary keywords to Browser Library alternatives
     KEYWORD_ALTERNATIVES = {
         "open browser": {
@@ -120,20 +146,10 @@ class BrowserLibraryPlugin(StaticLibraryPlugin):
             "example": "New Browser    browser=firefox    headless=${False}\nNew Page    https://example.com",
             "explanation": "Browser Library uses Playwright which requires separate browser and page creation",
         },
-        "close browser": {
-            "alternative": "Close Browser",
-            "example": "Close Browser",
-            "explanation": "Same keyword name, but use with Browser Library context",
-        },
         "close all browsers": {
             "alternative": "Close Browser    ALL",
             "example": "Close Browser    ALL",
             "explanation": "Use Close Browser with ALL parameter",
-        },
-        "go to": {
-            "alternative": "Go To",
-            "example": "Go To    https://example.com",
-            "explanation": "Same keyword available in Browser Library",
         },
         "get source": {
             "alternative": "Get Page Source",
@@ -200,7 +216,29 @@ class BrowserLibraryPlugin(StaticLibraryPlugin):
             requires_type_conversion=True,
             supports_async=True,
         )
-        super().__init__(metadata=metadata, capabilities=capabilities)
+        hints = LibraryHints(
+            standard_keywords=[
+                "New Browser", "New Page", "Close Browser", "Close Page",
+                "Go To", "Get Url", "Get Title", "Get Text",
+                "Click", "Fill Text", "Check Checkbox", "Select Options By",
+                "Wait For Elements State", "Get Element Count",
+                "Take Screenshot", "Get Page Source",
+                "HTTP", "Wait For Response",
+            ],
+            error_hints=[
+                "Browser Library uses Playwright — use 'New Browser' + 'New Page' instead of 'Open Browser'",
+                "Use 'Fill Text' instead of 'Input Text'",
+                "Use 'Click' instead of 'Click Element' or 'Click Button'",
+            ],
+            usage_examples=[
+                "New Browser    browser=chromium    headless=${True}",
+                "New Page    https://example.com",
+                "Click    text=Submit",
+                "Fill Text    css=input#username    myuser",
+                "Get Text    css=h1    ==    Expected Title",
+            ],
+        )
+        super().__init__(metadata=metadata, capabilities=capabilities, hints=hints)
         self._provider = BrowserStateProvider()
 
     def get_state_provider(self) -> LibraryStateProvider:
@@ -255,14 +293,24 @@ class BrowserLibraryPlugin(StaticLibraryPlugin):
         Returns error with alternative if keyword is from SeleniumLibrary.
         """
         try:
-            # Check if this session prefers Browser Library
+            # Check if this session uses Browser Library
             pref = (getattr(session, "explicit_library_preference", "") or "").lower()
-            if not pref or pref != "browser":
-                return None  # Not a Browser Library session
+            if pref and pref != "browser":
+                return None  # Explicitly set to something other than Browser
+            # If no explicit preference, check if Browser is imported
+            if not pref:
+                imported = getattr(session, "imported_libraries", []) or []
+                if "Browser" not in imported:
+                    return None  # Browser not loaded — skip validation
 
             # Check if keyword is from SeleniumLibrary
             if keyword_source_library and keyword_source_library.lower() == "seleniumlibrary":
                 keyword_lower = keyword_name.lower()
+
+                # Allow keywords that exist in BOTH libraries (same name)
+                if keyword_lower in self._SHARED_KEYWORDS:
+                    return None
+
                 alternative_info = self.KEYWORD_ALTERNATIVES.get(keyword_lower, {})
 
                 error_msg = (
@@ -319,11 +367,18 @@ class BrowserLibraryPlugin(StaticLibraryPlugin):
             if active and getattr(active, "active_library", None) == "selenium":
                 return None
 
+            # If SeleniumLibrary is imported, the user has expressed intent to
+            # use SeleniumLibrary — do not reject Open Browser.  RF namespace
+            # resolution will determine which library handles the call.
+            imported = getattr(session, "imported_libraries", []) or []
+            if "SeleniumLibrary" in imported:
+                return None
+
             # Get the alternative info
             alt_info = self.KEYWORD_ALTERNATIVES.get("open browser", {})
 
             error_msg = (
-                "'Open Browser' is a SeleniumLibrary keyword and cannot be used with Browser Library.\n\n"
+                "'Open Browser' is available but Browser Library recommends 'New Browser + New Page' for better control over browser contexts and pages.\n\n"
                 f"💡 Use '{alt_info.get('alternative', 'New Browser + New Page')}' instead:\n"
                 f"   {alt_info.get('explanation', 'Browser Library requires separate browser and page creation')}\n\n"
                 "Example:\n"
@@ -360,12 +415,6 @@ class BrowserLibraryPlugin(StaticLibraryPlugin):
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("Open Browser override failed: %s", exc)
             return None
-
-
-try:  # pragma: no cover
-    from robotmcp.models.session_models import ExecutionSession  # noqa: F401
-except Exception:  # pragma: no cover
-    ExecutionSession = object  # type: ignore
 
 
 try:  # pragma: no cover

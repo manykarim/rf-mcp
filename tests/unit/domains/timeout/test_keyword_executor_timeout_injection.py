@@ -69,25 +69,31 @@ class TestTimeoutInjection:
         # Wait keywords DO accept timeout parameter
         assert "timeout=5000ms" in result
 
-    def test_selenium_library_click_element_timeout_injection(self, executor, mock_session):
-        """Test timeout injection for SeleniumLibrary click_element keyword."""
+    def test_selenium_library_click_element_no_timeout_injection(self, executor, mock_session):
+        """Test that SeleniumLibrary click_element does NOT get timeout injected.
+
+        SeleniumLibrary action keywords (click_element, click_button, etc.) do NOT
+        accept a timeout= named parameter. They interpret unknown named args as
+        Selenium Keys modifiers, causing ValueError.
+        """
         mock_session.browser_state.active_library = "selenium"
         arguments = ["id:button"]
         result = executor._inject_timeout_into_arguments(
             "click_element", arguments, 5000, mock_session
         )
-        # SeleniumLibrary uses seconds, so 5000ms = 5.0s
-        assert "timeout=5.0" in result
+        assert result == arguments
 
-    def test_selenium_library_input_text_timeout_injection(self, executor, mock_session):
-        """Test timeout injection for SeleniumLibrary input_text keyword."""
+    def test_selenium_library_input_text_no_timeout_injection(self, executor, mock_session):
+        """Test that SeleniumLibrary input_text does NOT get timeout injected.
+
+        SeleniumLibrary action keywords do NOT accept timeout= parameter.
+        """
         mock_session.browser_state.active_library = "selenium"
         arguments = ["id:input", "some text"]
         result = executor._inject_timeout_into_arguments(
             "input_text", arguments, 3000, mock_session
         )
-        # SeleniumLibrary uses seconds, so 3000ms = 3.0s
-        assert "timeout=3.0" in result
+        assert result == arguments
 
     def test_no_injection_for_unsupported_keyword(self, executor, mock_session):
         """Test that no timeout is injected for keywords that don't support it."""
@@ -235,19 +241,40 @@ class TestSeleniumLibraryTimeoutKeywords:
         return session
 
     @pytest.mark.parametrize("keyword", [
-        "click_element", "click_button", "click_link", "input_text",
-        "input_password", "select_from_list_by_value", "select_from_list_by_label",
-        "select_from_list_by_index", "select_checkbox", "unselect_checkbox",
-        "mouse_over", "wait_until_element_is_visible",
-        "wait_until_element_is_not_visible", "wait_until_element_is_enabled",
-        "wait_until_element_contains", "wait_until_page_contains_element",
+        # Only wait keywords accept timeout parameter in SeleniumLibrary
+        "wait_until_element_is_visible",
+        "wait_until_element_is_not_visible",
+        "wait_until_element_is_enabled",
+        "wait_until_element_is_not_enabled",
+        "wait_until_element_contains",
+        "wait_until_element_does_not_contain",
+        "wait_until_page_contains",
+        "wait_until_page_does_not_contain",
+        "wait_until_page_contains_element",
         "wait_until_page_does_not_contain_element",
     ])
-    def test_selenium_library_keywords_support_timeout(self, executor, mock_session, keyword):
-        """Test that SeleniumLibrary keywords that support timeout get it injected."""
+    def test_selenium_library_wait_keywords_support_timeout(self, executor, mock_session, keyword):
+        """Test that SeleniumLibrary wait keywords get timeout injected."""
         arguments = ["id:element"]
         result = executor._inject_timeout_into_arguments(
             keyword, arguments, 5000, mock_session
         )
         # SeleniumLibrary uses seconds
         assert "timeout=5.0" in result
+
+    @pytest.mark.parametrize("keyword", [
+        # Action keywords do NOT accept timeout parameter in SeleniumLibrary.
+        # They interpret unknown named args as Selenium Keys modifiers, causing:
+        # ValueError: 'TIMEOUT=5.0' modifier does not match to Selenium Keys
+        "click_element", "click_button", "click_link", "input_text",
+        "input_password", "select_from_list_by_value", "select_from_list_by_label",
+        "select_from_list_by_index", "select_checkbox", "unselect_checkbox",
+        "mouse_over",
+    ])
+    def test_selenium_library_action_keywords_no_timeout_injection(self, executor, mock_session, keyword):
+        """Test that SeleniumLibrary action keywords do NOT get timeout injected."""
+        arguments = ["id:element"]
+        result = executor._inject_timeout_into_arguments(
+            keyword, arguments, 5000, mock_session
+        )
+        assert result == arguments

@@ -38,7 +38,7 @@ def _create_sample_session(session_id: str = "frontend-demo") -> None:
     session.variables.update({"CITY": "Helsinki", "ENV": "demo"})
     session.browser_state.browser_type = "chromium"
     session.browser_state.current_url = "https://robotframework.org/"
-    session.browser_state.active_library = "Browser"
+    session.browser_state.active_library = "browser"
 
     steps: Sequence[tuple[str, Iterable[str]]] = [
         ("Open Browser", ["https://robotframework.org", "chromium"]),

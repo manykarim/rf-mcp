@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from robotmcp.components.execution.keyword_executor import KeywordExecutor
 from robotmcp.models.config_models import ExecutionConfig
 from robotmcp.models.session_models import ExecutionSession, BrowserState
+from tests.unit.helpers.rf_context_mock import rf_context_with_owner, no_rf_context
 
 
 @pytest.fixture
@@ -28,6 +29,7 @@ def mock_session():
     session.variables = {}
     session.browser_state = MagicMock(spec=BrowserState)
     session.browser_state.active_library = "browser"
+    session.imported_libraries = ["Browser", "BuiltIn"]
     return session
 
 
@@ -160,9 +162,8 @@ class TestPreValidationBrowserLibrary:
     @pytest.mark.asyncio
     async def test_pre_validate_passes_for_visible_enabled_element(self, executor, mock_session):
         """Pre-validation should pass when element has required states."""
-        with patch.object(executor, '_run_browser_get_states') as mock_get_states:
-            # Simulate Browser Library returning visible and enabled states
-            # Return tuple (result, error_info) - new signature
+        with rf_context_with_owner("Browser"), \
+             patch.object(executor, '_run_browser_get_states') as mock_get_states:
             mock_get_states.return_value = (["ElementState.visible", "ElementState.enabled"], None)
 
             is_valid, error, details = await executor._pre_validate_element(
@@ -177,9 +178,8 @@ class TestPreValidationBrowserLibrary:
     @pytest.mark.asyncio
     async def test_pre_validate_fails_for_hidden_element(self, executor, mock_session):
         """Pre-validation should fail when element is hidden."""
-        with patch.object(executor, '_run_browser_get_states') as mock_get_states:
-            # Simulate hidden element (only attached, not visible)
-            # Return tuple (result, error_info) - new signature
+        with rf_context_with_owner("Browser"), \
+             patch.object(executor, '_run_browser_get_states') as mock_get_states:
             mock_get_states.return_value = (["ElementState.attached", "ElementState.enabled"], None)
 
             is_valid, error, details = await executor._pre_validate_element(
@@ -193,9 +193,8 @@ class TestPreValidationBrowserLibrary:
     @pytest.mark.asyncio
     async def test_pre_validate_fails_for_disabled_element(self, executor, mock_session):
         """Pre-validation should fail when element is disabled."""
-        with patch.object(executor, '_run_browser_get_states') as mock_get_states:
-            # Simulate visible but disabled element
-            # Return tuple (result, error_info) - new signature
+        with rf_context_with_owner("Browser"), \
+             patch.object(executor, '_run_browser_get_states') as mock_get_states:
             mock_get_states.return_value = (["ElementState.visible", "ElementState.disabled"], None)
 
             is_valid, error, details = await executor._pre_validate_element(
@@ -209,8 +208,8 @@ class TestPreValidationBrowserLibrary:
     @pytest.mark.asyncio
     async def test_pre_validate_fails_for_not_found_element(self, executor, mock_session):
         """Pre-validation should fail when element is not found."""
-        with patch.object(executor, '_run_browser_get_states') as mock_get_states:
-            # Simulate element not found - return tuple (None, error_message)
+        with rf_context_with_owner("Browser"), \
+             patch.object(executor, '_run_browser_get_states') as mock_get_states:
             mock_get_states.return_value = (None, "Element not found: css=#non-existent")
 
             is_valid, error, details = await executor._pre_validate_element(
@@ -223,8 +222,8 @@ class TestPreValidationBrowserLibrary:
     @pytest.mark.asyncio
     async def test_pre_validate_handles_multiple_elements_strict_mode(self, executor, mock_session):
         """Pre-validation should report multiple elements error instead of 'not found'."""
-        with patch.object(executor, '_run_browser_get_states') as mock_get_states:
-            # Simulate strict mode violation - multiple elements found
+        with rf_context_with_owner("Browser"), \
+             patch.object(executor, '_run_browser_get_states') as mock_get_states:
             mock_get_states.return_value = (
                 None,
                 "Multiple elements found for 'id=nav_automobile'. "
@@ -237,7 +236,6 @@ class TestPreValidationBrowserLibrary:
             )
 
             assert is_valid is False
-            # Should contain "Multiple elements" instead of generic "not found"
             assert "multiple elements" in error.lower()
             assert "strict mode" in error.lower()
 
@@ -249,10 +247,13 @@ class TestPreValidationSkip:
     async def test_pre_validate_skips_when_no_active_browser(self, executor, mock_session):
         """Pre-validation should be skipped when no browser is active."""
         mock_session.browser_state.active_library = None
+        # Ensure imported_libraries doesn't contain any UI library
+        mock_session.imported_libraries = ["BuiltIn", "Collections"]
 
-        is_valid, error, details = await executor._pre_validate_element(
-            "css=#button", mock_session, "click"
-        )
+        with no_rf_context():
+            is_valid, error, details = await executor._pre_validate_element(
+                "css=#button", mock_session, "click"
+            )
 
         assert is_valid is True
         assert error is None
@@ -277,15 +278,14 @@ class TestPreValidationTimeout:
     @pytest.mark.asyncio
     async def test_custom_timeout_passed_to_browser_get_states(self, executor, mock_session):
         """Custom timeout should be passed to Browser Library."""
-        with patch.object(executor, '_run_browser_get_states') as mock_get_states:
-            # Return tuple (result, error_info) - new signature
+        with rf_context_with_owner("Browser"), \
+             patch.object(executor, '_run_browser_get_states') as mock_get_states:
             mock_get_states.return_value = (["ElementState.visible", "ElementState.enabled"], None)
 
             await executor._pre_validate_element(
                 "css=#button", mock_session, "click", timeout_ms=1000
             )
 
-            # Check the timeout was passed correctly
             mock_get_states.assert_called_once()
             call_args = mock_get_states.call_args
             assert "1000ms" in call_args[0]
@@ -744,8 +744,10 @@ class TestAppiumStateCheckKeywordCalls:
             executor._run_appium_state_check("accessibility_id=Submit", {"visible"}, 5000)
 
             calls = mock_builtin.run_keyword.call_args_list
-            # Note: Code uses 'Get Webelements' (lowercase 'e') - RF keywords are case-insensitive
-            assert calls[0] == (("AppiumLibrary.Get Webelements", "accessibility_id=Submit"), {})
+            # First call is Set Appium Implicit Wait (P0-3 fix: timeout control)
+            assert calls[0] == (("AppiumLibrary.Set Appium Implicit Wait", "5.0"), {})
+            # Second call is Get Webelements (lowercase 'e' - RF keywords are case-insensitive)
+            assert calls[1] == (("AppiumLibrary.Get Webelements", "accessibility_id=Submit"), {})
 
     def test_get_webelement_appium_fallback(self, executor):
         """Test that AppiumLibrary.Get Webelement is tried when Get Webelements returns empty.
@@ -1045,7 +1047,8 @@ class TestKeywordSignatureErrors:
             def capture_calls(*args, **kwargs):
                 call_args_captured.append((args, kwargs))
                 if args[0] == "SeleniumLibrary.Set Selenium Implicit Wait":
-                    return None
+                    # P0-1 fix: Set Selenium Implicit Wait returns previous value
+                    return "10 seconds"
                 elif args[0] == "SeleniumLibrary.Get WebElements":
                     mock_element = MagicMock()
                     return [mock_element]
@@ -1064,8 +1067,8 @@ class TestKeywordSignatureErrors:
             assert len(wait_calls[0][0]) == 2
             timeout_arg = wait_calls[0][0][1]
             assert timeout_arg == "5.0s"
-            # Second call should restore to default (10s)
-            assert wait_calls[1][0][1] == "10s"
+            # Second call should restore to captured previous value (P0-1 fix)
+            assert wait_calls[1][0][1] == "10 seconds"
 
     def test_selenium_execute_javascript_argument_order(self, executor):
         """Verify Execute JavaScript receives (js_code, element) in correct order."""
