@@ -549,6 +549,21 @@ class RobotFrameworkNativeContextManager:
         2. Direct method lookup on the actual library Python instances
         3. BuiltIn.run_keyword() — ultimate fallback
         """
+        # Normalize Windows absolute paths using RF's ${/} variable to avoid
+        # de-escaping of sequences like \t, \r, \b in file paths.
+        # RF resolves ${/} to os.sep at keyword execution time, producing
+        # native separators on every OS without double-escaping.
+        import re as _re_norm
+        def _normalize_arg(a: Any) -> Any:
+            try:
+                if isinstance(a, str):
+                    if _re_norm.match(r'^[A-Za-z]:\\', a):
+                        return a.replace('\\', '${/}')
+            except Exception:
+                pass
+            return a
+        arguments = [_normalize_arg(arg) for arg in arguments]
+
         try:
             # ── 1. RF-native resolution via Namespace.get_runner() ──────────
             # get_runner() is the correct API in RF 7.x (get_keyword() does not exist)
@@ -889,23 +904,7 @@ class RobotFrameworkNativeContextManager:
                 # IMPORTANT: Do not pre-split name=value here. Let RF resolve named args
                 # based on the keyword's real signature to avoid passing unexpected kwargs
                 # (e.g., BuiltIn.Set Variable should treat 'token=${auth}' as positional text).
-                # Normalize Windows absolute paths using RF's ${/} variable to avoid
-                # de-escaping of sequences like \t, \r, \b in file paths.
-                # RF resolves ${/} to os.sep at keyword execution time, producing
-                # native separators on every OS without double-escaping.
-                def _normalize_arg(a: Any) -> Any:
-                    try:
-                        import re
-                        if isinstance(a, str):
-                            # Match Windows absolute paths like C:\folder\file
-                            # regardless of os.name (covers WSL/MSYS2/cross-platform)
-                            if re.match(r'^[A-Za-z]:\\', a):
-                                return a.replace('\\', '${/}')
-                    except Exception:
-                        pass
-                    return a
-
-                pos_args: list[Any] = [_normalize_arg(arg) for arg in list(arguments)]
+                pos_args: list[Any] = list(arguments)
                 named_args: dict[str, object] = {}
                 # Build running/data and result keyword models
                 data_kw = RunKeyword(
