@@ -200,11 +200,11 @@ class TestP1_OpenBrowserOverrideFix:
         assert result["success"] is False
 
     @pytest.mark.asyncio
-    async def test_both_libraries_imported_rejects_open_browser(self, browser_plugin):
-        """When both Browser and SeleniumLibrary are imported, Open Browser is rejected.
+    async def test_both_libraries_imported_allows_open_browser(self, browser_plugin):
+        """When both Browser and SeleniumLibrary are imported, Open Browser is allowed.
 
-        This shouldn't normally happen (mutual exclusion), but if it does,
-        Browser Library's override takes precedence.
+        P11 fix: SeleniumLibrary being imported signals user intent — let RF
+        namespace resolution determine which library handles the call.
         """
         session = self._make_session(
             imported_libraries=["Browser", "SeleniumLibrary", "BuiltIn"],
@@ -214,9 +214,8 @@ class TestP1_OpenBrowserOverrideFix:
         result = await browser_plugin._override_open_browser(
             session, "Open Browser", ["https://example.com", "chrome"]
         )
-        # has_selenium=True AND has_browser=True → override is NOT skipped
-        assert result is not None
-        assert result["success"] is False
+        # P11: has_selenium=True → allowed through (user imported SeleniumLibrary)
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_no_web_library_allows_open_browser(self, browser_plugin):
@@ -421,3 +420,342 @@ class TestIntegration:
             "wait_for_elements_state", arguments, 5000, session
         )
         assert "timeout=5000ms" in result
+
+
+# ============================================================
+# P6: Click Link pre-validation skip for link= locators
+# ============================================================
+class TestP6_LinkLocatorPreValidationSkip:
+    """Verify that link= and partial link= locators skip pre-validation.
+
+    SeleniumLibrary's Click Link uses Selenium's internal By.LINK_TEXT
+    matching which handles embedded child elements (SVG icons, badge
+    spans) correctly.  Our JS-based pre-validation uses Get WebElements
+    which cannot replicate this matching — the element text includes
+    children's text and whitespace, causing false 'not found' failures.
+    """
+
+    def test_link_locator_skipped(self, executor):
+        """link= locator should return None from _extract_locator_from_args."""
+        result = executor._extract_locator_from_args("Click Link", ["link=Cart"])
+        assert result is None
+
+    def test_link_locator_case_insensitive(self, executor):
+        """LINK= (uppercase) should also be skipped."""
+        result = executor._extract_locator_from_args("Click Link", ["LINK=Products"])
+        assert result is None
+
+    def test_link_locator_mixed_case(self, executor):
+        """Link= (mixed case) should also be skipped."""
+        result = executor._extract_locator_from_args("Click Link", ["Link=Home"])
+        assert result is None
+
+    def test_partial_link_locator_skipped(self, executor):
+        """partial link= locator should return None."""
+        result = executor._extract_locator_from_args("Click Link", ["partial link=Car"])
+        assert result is None
+
+    def test_partial_link_uppercase_skipped(self, executor):
+        """PARTIAL LINK= should also be skipped."""
+        result = executor._extract_locator_from_args("Click Link", ["PARTIAL LINK=Pro"])
+        assert result is None
+
+    def test_link_colon_locator_skipped(self, executor):
+        """link: locator (SeleniumLibrary alias) should be skipped."""
+        result = executor._extract_locator_from_args("Click Link", ["link:Cart"])
+        assert result is None
+
+    def test_css_locator_not_skipped(self, executor):
+        """css= locator should NOT be skipped — it works fine with pre-validation."""
+        result = executor._extract_locator_from_args("Click Element", ["css=a.nav-link"])
+        assert result == "css=a.nav-link"
+
+    def test_xpath_locator_not_skipped(self, executor):
+        """xpath= locator should NOT be skipped."""
+        result = executor._extract_locator_from_args("Click Element", ["xpath=//a[@href='/cart']"])
+        assert result == "xpath=//a[@href='/cart']"
+
+    def test_id_locator_not_skipped(self, executor):
+        """id= locator should NOT be skipped."""
+        result = executor._extract_locator_from_args("Click Element", ["id=submit-btn"])
+        assert result == "id=submit-btn"
+
+    def test_no_arguments_returns_none(self, executor):
+        """Empty arguments should return None."""
+        result = executor._extract_locator_from_args("Click Link", [])
+        assert result is None
+
+    def test_non_string_argument_returns_none(self, executor):
+        """Non-string first argument should return None."""
+        result = executor._extract_locator_from_args("Click Element", [123])
+        assert result is None
+
+    def test_link_locator_with_spaces_in_text(self, executor):
+        """link= with spaces in link text should be skipped."""
+        result = executor._extract_locator_from_args("Click Link", ["link=My Account"])
+        assert result is None
+
+    def test_link_locator_with_special_chars(self, executor):
+        """link= with special characters should be skipped."""
+        result = executor._extract_locator_from_args("Click Link", ["link=Cart (2)"])
+        assert result is None
+
+    def test_skip_prefix_tuple_is_lowercase(self, executor):
+        """The prefix tuple entries should all be lowercase for case-insensitive matching."""
+        for prefix in executor._SKIP_PRE_VALIDATION_LOCATOR_PREFIXES:
+            assert prefix == prefix.lower(), f"Prefix '{prefix}' is not lowercase"
+
+    def test_click_element_with_link_locator_also_skipped(self, executor):
+        """Click Element with link= locator should also skip pre-validation."""
+        result = executor._extract_locator_from_args("Click Element", ["link=Products"])
+        assert result is None
+
+    def test_regular_text_not_starting_with_link_not_skipped(self, executor):
+        """A locator like 'linkedin-btn' should NOT be skipped."""
+        result = executor._extract_locator_from_args("Click Element", ["linkedin-btn"])
+        assert result == "linkedin-btn"
+
+
+# ── P7: Shared keyword routing block when explicit_library_preference set ─────
+
+class TestP7_SharedKeywordRoutingBlock:
+    """P7: Keywords that exist in BOTH Browser Library and SeleniumLibrary
+    were incorrectly blocked when analyze_scenario sets
+    explicit_library_preference='SeleniumLibrary'.
+
+    Root cause: Browser Library plugin's get_keyword_library_map() registers
+    shared keywords as "Browser" keywords. The SeleniumLibrary plugin's
+    validate_keyword_for_session() then blocks them because it sees
+    keyword_source_library="Browser" + session preference="SeleniumLibrary".
+
+    Fix: Added _SHARED_KEYWORDS frozenset (18 keywords, programmatically
+    verified) to both SeleniumLibraryPlugin and BrowserLibraryPlugin.
+    Keywords in this set are allowed through validation even when the
+    keyword map says they belong to the other library.
+    """
+
+    # All 18 programmatically verified shared keywords
+    ALL_SHARED = frozenset({
+        "add cookie", "close browser", "delete all cookies", "drag and drop",
+        "get browser ids", "get cookie", "get cookies", "get element count",
+        "get property", "get text", "get title", "go back", "go to",
+        "open browser", "press keys", "register keyword to run on failure",
+        "switch browser", "wait for condition",
+    })
+
+    @pytest.fixture
+    def sel_plugin(self):
+        from robotmcp.plugins.builtin.selenium_plugin import SeleniumLibraryPlugin
+        return SeleniumLibraryPlugin()
+
+    @pytest.fixture
+    def browser_plugin(self):
+        from robotmcp.plugins.builtin.browser_plugin import BrowserLibraryPlugin
+        return BrowserLibraryPlugin()
+
+    @pytest.fixture
+    def selenium_session(self):
+        session = MagicMock(spec=ExecutionSession)
+        session.explicit_library_preference = "SeleniumLibrary"
+        return session
+
+    @pytest.fixture
+    def browser_session(self):
+        session = MagicMock(spec=ExecutionSession)
+        session.explicit_library_preference = "Browser"
+        return session
+
+    # ── SeleniumLibrary plugin: all 18 shared keywords MUST be allowed ──
+
+    @pytest.mark.parametrize("keyword", [
+        "Open Browser", "Close Browser", "Get Title",
+        "Add Cookie", "Delete All Cookies", "Drag And Drop",
+        "Get Browser Ids", "Get Cookie", "Get Cookies",
+        "Get Element Count", "Get Property", "Get Text",
+        "Go Back", "Go To", "Press Keys",
+        "Register Keyword To Run On Failure",
+        "Switch Browser", "Wait For Condition",
+    ])
+    def test_selenium_allows_all_shared_keywords(self, sel_plugin, selenium_session, keyword):
+        """All 18 shared keywords must NOT be blocked in SeleniumLibrary sessions."""
+        result = sel_plugin.validate_keyword_for_session(
+            selenium_session, keyword, "Browser"
+        )
+        assert result is None, f"Shared keyword '{keyword}' was incorrectly blocked"
+
+    def test_shared_keyword_case_insensitive(self, sel_plugin, selenium_session):
+        """Shared keyword check should be case-insensitive."""
+        result = sel_plugin.validate_keyword_for_session(
+            selenium_session, "OPEN BROWSER", "Browser"
+        )
+        assert result is None
+
+    def test_shared_keyword_mixed_case(self, sel_plugin, selenium_session):
+        """Shared keyword with mixed case name."""
+        result = sel_plugin.validate_keyword_for_session(
+            selenium_session, "get element count", "Browser"
+        )
+        assert result is None
+
+    # ── Browser-ONLY keywords MUST still be blocked in SeleniumLibrary sessions ──
+
+    @pytest.mark.parametrize("keyword", [
+        "New Browser", "New Page", "Fill Text", "Click",
+        "Get Page Source", "Wait For Elements State", "New Context",
+    ])
+    def test_browser_only_still_blocked(self, sel_plugin, selenium_session, keyword):
+        """Browser-only keywords must be blocked in SeleniumLibrary sessions."""
+        result = sel_plugin.validate_keyword_for_session(
+            selenium_session, keyword, "Browser"
+        )
+        assert result is not None
+        assert result["success"] is False
+
+    # ── Non-Browser keywords should pass through ──
+
+    def test_non_browser_keyword_allowed(self, sel_plugin, selenium_session):
+        """Keywords not from Browser Library should not be blocked."""
+        result = sel_plugin.validate_keyword_for_session(
+            selenium_session, "Log", "BuiltIn"
+        )
+        assert result is None
+
+    def test_none_source_library_allowed(self, sel_plugin, selenium_session):
+        """Keywords with no source library should not be blocked."""
+        result = sel_plugin.validate_keyword_for_session(
+            selenium_session, "Custom Keyword", None
+        )
+        assert result is None
+
+    # ── Non-SeleniumLibrary sessions should pass through ──
+
+    def test_non_selenium_session_skips_validation(self, sel_plugin):
+        """Non-SeleniumLibrary sessions should skip all validation."""
+        session = MagicMock(spec=ExecutionSession)
+        session.explicit_library_preference = "Browser"
+        result = sel_plugin.validate_keyword_for_session(
+            session, "Open Browser", "Browser"
+        )
+        assert result is None
+
+    def test_no_preference_skips_validation(self, sel_plugin):
+        """Sessions without explicit_library_preference skip validation."""
+        session = MagicMock(spec=ExecutionSession)
+        session.explicit_library_preference = None
+        result = sel_plugin.validate_keyword_for_session(
+            session, "Open Browser", "Browser"
+        )
+        assert result is None
+
+    # ── _SHARED_KEYWORDS frozenset properties (SeleniumLibrary plugin) ──
+
+    def test_selenium_shared_keywords_is_frozenset(self, sel_plugin):
+        """_SHARED_KEYWORDS should be a frozenset for immutability."""
+        assert isinstance(sel_plugin._SHARED_KEYWORDS, frozenset)
+
+    def test_selenium_shared_keywords_all_lowercase(self, sel_plugin):
+        """All entries in _SHARED_KEYWORDS should be lowercase."""
+        for kw in sel_plugin._SHARED_KEYWORDS:
+            assert kw == kw.lower(), f"Keyword '{kw}' is not lowercase"
+
+    def test_selenium_shared_keywords_count(self, sel_plugin):
+        """_SHARED_KEYWORDS should contain exactly 18 shared keywords."""
+        assert len(sel_plugin._SHARED_KEYWORDS) == 18
+
+    def test_selenium_shared_keywords_matches_verified(self, sel_plugin):
+        """_SHARED_KEYWORDS should match the programmatically verified set."""
+        assert sel_plugin._SHARED_KEYWORDS == self.ALL_SHARED
+
+    # ── Self-referential KEYWORD_ALTERNATIVES removed ──
+
+    def test_selenium_no_self_referential_alternatives(self, sel_plugin):
+        """KEYWORD_ALTERNATIVES should not contain entries that map to same name."""
+        for key, info in sel_plugin.KEYWORD_ALTERNATIVES.items():
+            alt = info.get("alternative", "").lower().replace(" ", "")
+            key_norm = key.lower().replace(" ", "")
+            assert alt != key_norm, (
+                f"Self-referential alternative: '{key}' → '{info['alternative']}'"
+            )
+
+    # ── Browser Library plugin: _SHARED_KEYWORDS defense-in-depth ──
+
+    def test_browser_shared_keywords_is_frozenset(self, browser_plugin):
+        """Browser plugin _SHARED_KEYWORDS should be a frozenset."""
+        assert isinstance(browser_plugin._SHARED_KEYWORDS, frozenset)
+
+    def test_browser_shared_keywords_matches_selenium(self, sel_plugin, browser_plugin):
+        """Both plugins should have identical _SHARED_KEYWORDS sets."""
+        assert sel_plugin._SHARED_KEYWORDS == browser_plugin._SHARED_KEYWORDS
+
+    @pytest.mark.parametrize("keyword", [
+        "Close Browser", "Go To", "Get Text", "Go Back",
+        "Get Element Count", "Add Cookie", "Get Title",
+    ])
+    def test_browser_allows_shared_keywords(self, browser_plugin, browser_session, keyword):
+        """Shared keywords must NOT be blocked in Browser Library sessions."""
+        result = browser_plugin.validate_keyword_for_session(
+            browser_session, keyword, "SeleniumLibrary"
+        )
+        assert result is None, f"Shared keyword '{keyword}' was incorrectly blocked"
+
+    @pytest.mark.parametrize("keyword", [
+        "Input Text", "Click Element", "Click Button",
+        "Get Source", "Element Should Be Visible",
+    ])
+    def test_browser_blocks_selenium_only(self, browser_plugin, browser_session, keyword):
+        """Selenium-only keywords must be blocked in Browser Library sessions."""
+        result = browser_plugin.validate_keyword_for_session(
+            browser_session, keyword, "SeleniumLibrary"
+        )
+        assert result is not None
+        assert result["success"] is False
+
+    def test_browser_no_self_referential_alternatives(self, browser_plugin):
+        """KEYWORD_ALTERNATIVES should not contain entries that map to same name."""
+        for key, info in browser_plugin.KEYWORD_ALTERNATIVES.items():
+            alt = info.get("alternative", "").lower().replace(" ", "")
+            key_norm = key.lower().replace(" ", "")
+            assert alt != key_norm, (
+                f"Self-referential alternative: '{key}' → '{info['alternative']}'"
+            )
+
+    # ── Integration: plugin_manager full chain ──
+
+    def test_keyword_map_triggers_validation(self, selenium_session):
+        """Verify the full chain: keyword map → validate → allow shared."""
+        from robotmcp.plugins.manager import LibraryPluginManager
+        from robotmcp.plugins.builtin.selenium_plugin import SeleniumLibraryPlugin
+        from robotmcp.plugins.builtin.browser_plugin import BrowserLibraryPlugin
+
+        mgr = LibraryPluginManager()
+        mgr.register_plugin(BrowserLibraryPlugin())
+        mgr.register_plugin(SeleniumLibraryPlugin())
+
+        # Browser plugin maps "open browser" → "Browser"
+        source = mgr.get_library_for_keyword("open browser")
+        assert source == "Browser"
+
+        # But SeleniumLibrary validation should ALLOW it (shared keyword)
+        result = mgr.validate_keyword_for_session(
+            "SeleniumLibrary", selenium_session, "Open Browser", source
+        )
+        assert result is None  # Not blocked
+
+    def test_keyword_map_blocks_browser_only(self, selenium_session):
+        """Browser-only keywords should still be blocked through the full chain."""
+        from robotmcp.plugins.manager import LibraryPluginManager
+        from robotmcp.plugins.builtin.selenium_plugin import SeleniumLibraryPlugin
+        from robotmcp.plugins.builtin.browser_plugin import BrowserLibraryPlugin
+
+        mgr = LibraryPluginManager()
+        mgr.register_plugin(BrowserLibraryPlugin())
+        mgr.register_plugin(SeleniumLibraryPlugin())
+
+        source = mgr.get_library_for_keyword("new browser")
+        assert source == "Browser"
+
+        result = mgr.validate_keyword_for_session(
+            "SeleniumLibrary", selenium_session, "New Browser", source
+        )
+        assert result is not None
+        assert result["success"] is False

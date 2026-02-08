@@ -24,6 +24,7 @@ from robotmcp.components.execution.keyword_executor import KeywordExecutor
 from robotmcp.models.config_models import ExecutionConfig
 from robotmcp.models.session_models import ExecutionSession
 from robotmcp.models.browser_models import BrowserState
+from tests.unit.helpers.rf_context_mock import rf_context_with_owner
 
 
 @pytest.fixture
@@ -140,11 +141,12 @@ class TestP0_2_AppiumActiveLibraryDetection:
 
     @pytest.mark.asyncio
     async def test_appium_detected_from_imported_libraries(self, executor, mock_session):
-        """When AppiumLibrary is imported and active_library is None, should detect appium."""
+        """When AppiumLibrary is imported and RF resolves to AppiumLibrary, should use appium."""
         mock_session.browser_state.active_library = None
         mock_session.imported_libraries = ["AppiumLibrary", "BuiltIn"]
 
-        with patch.object(executor, '_pre_validate_appium_element',
+        with rf_context_with_owner("AppiumLibrary"), \
+             patch.object(executor, '_pre_validate_appium_element',
                           new_callable=AsyncMock, return_value={"valid": True, "states": ["visible"], "missing": [], "error": None}):
             is_valid, error, details = await executor._pre_validate_element(
                 "id=btn", mock_session, "Click Element", timeout_ms=500
@@ -347,11 +349,12 @@ class TestP1_2_DevserverCaseSensitivity:
 
     @pytest.mark.asyncio
     async def test_uppercase_active_library_normalized(self, executor, mock_session):
-        """'Browser' (uppercase) should be normalized to 'browser' for routing."""
+        """RF namespace resolution determines routing (active_library case is irrelevant)."""
         mock_session.browser_state.active_library = "Browser"
         mock_session.imported_libraries = ["Browser", "BuiltIn"]
 
-        with patch.object(executor, '_pre_validate_browser_element',
+        with rf_context_with_owner("Browser"), \
+             patch.object(executor, '_pre_validate_browser_element',
                           new_callable=AsyncMock, return_value={"valid": True, "states": ["visible"], "missing": [], "error": None}):
             is_valid, error, details = await executor._pre_validate_element(
                 "id=btn", mock_session, "Click", timeout_ms=500
@@ -362,11 +365,12 @@ class TestP1_2_DevserverCaseSensitivity:
 
     @pytest.mark.asyncio
     async def test_selenium_uppercase_normalized(self, executor, mock_session):
-        """'Selenium' should be normalized to 'selenium'."""
+        """RF namespace resolution determines routing (active_library case is irrelevant)."""
         mock_session.browser_state.active_library = "Selenium"
         mock_session.imported_libraries = ["SeleniumLibrary", "BuiltIn"]
 
-        with patch.object(executor, '_pre_validate_selenium_element',
+        with rf_context_with_owner("SeleniumLibrary"), \
+             patch.object(executor, '_pre_validate_selenium_element',
                           new_callable=AsyncMock, return_value={"valid": True, "states": ["visible"], "missing": [], "error": None}):
             is_valid, error, details = await executor._pre_validate_element(
                 "id=btn", mock_session, "Click Element", timeout_ms=500
@@ -397,7 +401,8 @@ class TestP1_3_TimeoutPropagation:
         mock_session.browser_state.active_library = "browser"
         mock_session.imported_libraries = ["Browser", "BuiltIn"]
 
-        with patch.object(executor, '_pre_validate_browser_element',
+        with rf_context_with_owner("Browser"), \
+             patch.object(executor, '_pre_validate_browser_element',
                           new_callable=AsyncMock, return_value={"valid": True, "states": ["visible"], "missing": [], "error": None}) as mock_preval:
 
             # User provides 200ms — less than default 500ms
@@ -412,7 +417,8 @@ class TestP1_3_TimeoutPropagation:
         mock_session.browser_state.active_library = "browser"
         mock_session.imported_libraries = ["Browser", "BuiltIn"]
 
-        with patch.object(executor, '_pre_validate_browser_element',
+        with rf_context_with_owner("Browser"), \
+             patch.object(executor, '_pre_validate_browser_element',
                           new_callable=AsyncMock, return_value={"valid": True, "states": ["visible"], "missing": [], "error": None}) as mock_preval:
 
             # When passed directly, _pre_validate_element uses the value as-is
@@ -439,7 +445,8 @@ class TestP1_3_TimeoutPropagation:
         mock_session.browser_state.active_library = "browser"
         mock_session.imported_libraries = ["Browser", "BuiltIn"]
 
-        with patch.object(executor, '_pre_validate_browser_element',
+        with rf_context_with_owner("Browser"), \
+             patch.object(executor, '_pre_validate_browser_element',
                           new_callable=AsyncMock, return_value={"valid": True, "states": ["visible"], "missing": [], "error": None}) as mock_preval:
 
             await executor._pre_validate_element("id=btn", mock_session, "Click", timeout_ms=None)
@@ -652,16 +659,18 @@ class TestP2_5_StrictModeTimeout:
 # =============================================================================
 
 class TestCaseNormalization:
-    """active_library case normalization in _pre_validate_element."""
+    """With S5a, routing is via RF namespace resolution, not active_library case.
+    These tests verify that RF owner name determines the correct routing."""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("case", ["browser", "Browser", "BROWSER"])
     async def test_all_cases_route_to_browser(self, executor, mock_session, case):
-        """All case variants of 'browser' should route to browser pre-validation."""
+        """Regardless of active_library case, RF owner determines routing."""
         mock_session.browser_state.active_library = case
         mock_session.imported_libraries = ["Browser", "BuiltIn"]
 
-        with patch.object(executor, '_pre_validate_browser_element',
+        with rf_context_with_owner("Browser"), \
+             patch.object(executor, '_pre_validate_browser_element',
                           new_callable=AsyncMock, return_value={"valid": True, "states": ["visible"], "missing": [], "error": None}):
             is_valid, _, _ = await executor._pre_validate_element(
                 "id=btn", mock_session, "Click", timeout_ms=500
@@ -672,11 +681,12 @@ class TestCaseNormalization:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("case", ["selenium", "Selenium", "SELENIUM"])
     async def test_all_cases_route_to_selenium(self, executor, mock_session, case):
-        """All case variants of 'selenium' should route to selenium pre-validation."""
+        """Regardless of active_library case, RF owner determines routing."""
         mock_session.browser_state.active_library = case
         mock_session.imported_libraries = ["SeleniumLibrary", "BuiltIn"]
 
-        with patch.object(executor, '_pre_validate_selenium_element',
+        with rf_context_with_owner("SeleniumLibrary"), \
+             patch.object(executor, '_pre_validate_selenium_element',
                           new_callable=AsyncMock, return_value={"valid": True, "states": ["visible"], "missing": [], "error": None}):
             is_valid, _, _ = await executor._pre_validate_element(
                 "id=btn", mock_session, "Click Element", timeout_ms=500
@@ -694,11 +704,12 @@ class TestBackwardCompatibility:
 
     @pytest.mark.asyncio
     async def test_browser_lowercase_still_works(self, executor, mock_session):
-        """The standard lowercase 'browser' from browser_library_manager still works."""
+        """Browser Library keyword routes to browser pre-validation via RF resolution."""
         mock_session.browser_state.active_library = "browser"
         mock_session.imported_libraries = ["Browser", "BuiltIn"]
 
-        with patch.object(executor, '_pre_validate_browser_element',
+        with rf_context_with_owner("Browser"), \
+             patch.object(executor, '_pre_validate_browser_element',
                           new_callable=AsyncMock, return_value={"valid": True, "states": ["visible"], "missing": [], "error": None}):
             is_valid, _, _ = await executor._pre_validate_element(
                 "id=btn", mock_session, "Click", timeout_ms=500
@@ -707,11 +718,12 @@ class TestBackwardCompatibility:
 
     @pytest.mark.asyncio
     async def test_selenium_lowercase_still_works(self, executor, mock_session):
-        """The standard lowercase 'selenium' still works."""
+        """SeleniumLibrary keyword routes to selenium pre-validation via RF resolution."""
         mock_session.browser_state.active_library = "selenium"
         mock_session.imported_libraries = ["SeleniumLibrary", "BuiltIn"]
 
-        with patch.object(executor, '_pre_validate_selenium_element',
+        with rf_context_with_owner("SeleniumLibrary"), \
+             patch.object(executor, '_pre_validate_selenium_element',
                           new_callable=AsyncMock, return_value={"valid": True, "states": ["visible"], "missing": [], "error": None}):
             is_valid, _, _ = await executor._pre_validate_element(
                 "id=btn", mock_session, "Click Element", timeout_ms=500

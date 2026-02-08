@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from robotmcp.components.execution.keyword_executor import KeywordExecutor
 from robotmcp.models.config_models import ExecutionConfig
 from robotmcp.models.session_models import ExecutionSession, BrowserState
+from tests.unit.helpers.rf_context_mock import rf_context_with_owner, no_rf_context
 
 
 @pytest.fixture
@@ -161,9 +162,8 @@ class TestPreValidationBrowserLibrary:
     @pytest.mark.asyncio
     async def test_pre_validate_passes_for_visible_enabled_element(self, executor, mock_session):
         """Pre-validation should pass when element has required states."""
-        with patch.object(executor, '_run_browser_get_states') as mock_get_states:
-            # Simulate Browser Library returning visible and enabled states
-            # Return tuple (result, error_info) - new signature
+        with rf_context_with_owner("Browser"), \
+             patch.object(executor, '_run_browser_get_states') as mock_get_states:
             mock_get_states.return_value = (["ElementState.visible", "ElementState.enabled"], None)
 
             is_valid, error, details = await executor._pre_validate_element(
@@ -178,9 +178,8 @@ class TestPreValidationBrowserLibrary:
     @pytest.mark.asyncio
     async def test_pre_validate_fails_for_hidden_element(self, executor, mock_session):
         """Pre-validation should fail when element is hidden."""
-        with patch.object(executor, '_run_browser_get_states') as mock_get_states:
-            # Simulate hidden element (only attached, not visible)
-            # Return tuple (result, error_info) - new signature
+        with rf_context_with_owner("Browser"), \
+             patch.object(executor, '_run_browser_get_states') as mock_get_states:
             mock_get_states.return_value = (["ElementState.attached", "ElementState.enabled"], None)
 
             is_valid, error, details = await executor._pre_validate_element(
@@ -194,9 +193,8 @@ class TestPreValidationBrowserLibrary:
     @pytest.mark.asyncio
     async def test_pre_validate_fails_for_disabled_element(self, executor, mock_session):
         """Pre-validation should fail when element is disabled."""
-        with patch.object(executor, '_run_browser_get_states') as mock_get_states:
-            # Simulate visible but disabled element
-            # Return tuple (result, error_info) - new signature
+        with rf_context_with_owner("Browser"), \
+             patch.object(executor, '_run_browser_get_states') as mock_get_states:
             mock_get_states.return_value = (["ElementState.visible", "ElementState.disabled"], None)
 
             is_valid, error, details = await executor._pre_validate_element(
@@ -210,8 +208,8 @@ class TestPreValidationBrowserLibrary:
     @pytest.mark.asyncio
     async def test_pre_validate_fails_for_not_found_element(self, executor, mock_session):
         """Pre-validation should fail when element is not found."""
-        with patch.object(executor, '_run_browser_get_states') as mock_get_states:
-            # Simulate element not found - return tuple (None, error_message)
+        with rf_context_with_owner("Browser"), \
+             patch.object(executor, '_run_browser_get_states') as mock_get_states:
             mock_get_states.return_value = (None, "Element not found: css=#non-existent")
 
             is_valid, error, details = await executor._pre_validate_element(
@@ -224,8 +222,8 @@ class TestPreValidationBrowserLibrary:
     @pytest.mark.asyncio
     async def test_pre_validate_handles_multiple_elements_strict_mode(self, executor, mock_session):
         """Pre-validation should report multiple elements error instead of 'not found'."""
-        with patch.object(executor, '_run_browser_get_states') as mock_get_states:
-            # Simulate strict mode violation - multiple elements found
+        with rf_context_with_owner("Browser"), \
+             patch.object(executor, '_run_browser_get_states') as mock_get_states:
             mock_get_states.return_value = (
                 None,
                 "Multiple elements found for 'id=nav_automobile'. "
@@ -238,7 +236,6 @@ class TestPreValidationBrowserLibrary:
             )
 
             assert is_valid is False
-            # Should contain "Multiple elements" instead of generic "not found"
             assert "multiple elements" in error.lower()
             assert "strict mode" in error.lower()
 
@@ -280,15 +277,14 @@ class TestPreValidationTimeout:
     @pytest.mark.asyncio
     async def test_custom_timeout_passed_to_browser_get_states(self, executor, mock_session):
         """Custom timeout should be passed to Browser Library."""
-        with patch.object(executor, '_run_browser_get_states') as mock_get_states:
-            # Return tuple (result, error_info) - new signature
+        with rf_context_with_owner("Browser"), \
+             patch.object(executor, '_run_browser_get_states') as mock_get_states:
             mock_get_states.return_value = (["ElementState.visible", "ElementState.enabled"], None)
 
             await executor._pre_validate_element(
                 "css=#button", mock_session, "click", timeout_ms=1000
             )
 
-            # Check the timeout was passed correctly
             mock_get_states.assert_called_once()
             call_args = mock_get_states.call_args
             assert "1000ms" in call_args[0]

@@ -218,12 +218,33 @@ class KeywordExecutor:
             return "scroll"
         return "click"
 
+    # Locator strategies that rely on Selenium's internal link-text matching.
+    # Pre-validation uses Get WebElements + JS visibility checks which don't
+    # handle link text with embedded child elements (SVG icons, badge spans)
+    # correctly — the text content includes children's text and whitespace,
+    # causing false "not found" failures.  Skip pre-validation for these.
+    _SKIP_PRE_VALIDATION_LOCATOR_PREFIXES = ("link=", "partial link=", "link:")
+
     def _extract_locator_from_args(self, keyword: str, arguments: List[Any]) -> Optional[str]:
-        """Extract the element locator from keyword arguments."""
+        """Extract the element locator from keyword arguments.
+
+        Returns None (skip pre-validation) for link-text locators since
+        SeleniumLibrary's Click Link has its own robust text matching that
+        handles embedded child elements (SVGs, badges) which our JS-based
+        pre-validation cannot replicate.
+        """
         if not arguments:
             return None
         first_arg = arguments[0]
-        return first_arg if isinstance(first_arg, str) else None
+        if not isinstance(first_arg, str):
+            return None
+        # Skip pre-validation for link-text locators
+        if first_arg.lower().startswith(self._SKIP_PRE_VALIDATION_LOCATOR_PREFIXES):
+            logger.debug(
+                f"Skipping pre-validation for link-text locator: {first_arg}"
+            )
+            return None
+        return first_arg
 
     async def _pre_validate_element(
         self,
@@ -270,38 +291,25 @@ class KeywordExecutor:
             except Exception:
                 pass
 
-            active_library = session.browser_state.active_library
-            # Normalize case for matching (devserver sets "Browser", manager sets "browser")
-            if active_library:
-                active_library = active_library.lower()
-
-            # Validate active_library against session imports to prevent
-            # misrouting (e.g., active_library stuck on "browser" when only
-            # SeleniumLibrary is imported).  When the claimed library is NOT
-            # imported, detect the correct one from actual imports.
-            imported = {lib.lower() for lib in (session.imported_libraries or [])}
-            if active_library == "browser" and "browser" not in imported:
-                if "seleniumlibrary" in imported:
-                    active_library = "selenium"
-                elif "appiumlibrary" in imported:
-                    active_library = "appium"
-                else:
-                    active_library = None
-            elif active_library == "selenium" and "seleniumlibrary" not in imported:
-                if "browser" in imported:
-                    active_library = "browser"
-                elif "appiumlibrary" in imported:
-                    active_library = "appium"
-                else:
-                    active_library = None
-
-            # Fallback: detect library from session imports when active_library
-            # is not set.  Only handles Appium — Browser/Selenium set
-            # active_library via browser_library_manager, so None means no
-            # browser is open yet (pre-validation will be skipped below).
-            if not active_library:
-                if "appiumlibrary" in imported:
-                    active_library = "appium"
+            # Determine owning library directly from RF namespace resolution.
+            # This is authoritative: it uses the same resolution RF will use
+            # to execute the keyword, respecting search order and library
+            # imports.  Replaces fragile active_library / pattern matching.
+            active_library = None
+            try:
+                if _ctx:
+                    _runner = _ctx.namespace.get_runner(keyword)
+                    _owner = getattr(getattr(_runner, 'keyword', None), 'owner', None)
+                    _owner_name = getattr(_owner, 'name', None)
+                    if _owner_name == "Browser":
+                        active_library = "browser"
+                    elif _owner_name == "SeleniumLibrary":
+                        active_library = "selenium"
+                    elif _owner_name == "AppiumLibrary":
+                        active_library = "appium"
+                    # BuiltIn, Collections, etc. → None → skip pre-validation
+            except Exception:
+                pass  # No RF context → skip pre-validation
 
             if active_library == "browser":
                 result = await self._pre_validate_browser_element(locator, required_states, timeout_ms)
@@ -947,7 +955,10 @@ class KeywordExecutor:
                                 "arguments": arguments,
                                 "status": "fail",
                                 "execution_time": step.execution_time,
-                                "session_variables": dict(session.variables),
+                                "session_variables": {
+                                    k: self.response_serializer.serialize_for_response(v)
+                                    for k, v in session.variables.items()
+                                },
                                 "hints": hints,
                             }
                         else:
@@ -1172,7 +1183,10 @@ class KeywordExecutor:
                 "arguments": arguments,
                 "status": "fail",
                 "execution_time": step.execution_time,
-                "session_variables": dict(session.variables),
+                "session_variables": {
+                    k: self.response_serializer.serialize_for_response(v)
+                    for k, v in session.variables.items()
+                },
                 "hints": hints,
             }
 
@@ -1447,36 +1461,67 @@ class KeywordExecutor:
             # signature: (locator, timeout=None, error=None)  → timeout at idx 1
             "wait_until_page_contains_element": 1,
             "wait_until_page_does_not_contain_element": 1,
+            # signature: (condition, timeout=None, error=None)  → timeout at idx 1
+            # Shared with Browser Library — owner detection routes correctly.
+            "wait_for_condition": 1,
         }
 
         # Convert timeout to seconds (most RF libraries use seconds)
         timeout_seconds = timeout_ms / 1000.0
 
-        # Check Browser Library keywords
-        if keyword_lower in browser_library_timeout_keywords:
-            # Browser Library uses milliseconds string format like "5s" or "5000ms"
+        # Determine the ACTUAL owning library via RF namespace resolution.
+        # Shared keywords (e.g. Wait For Condition) exist in both Browser
+        # Library and SeleniumLibrary with different timeout formats.  The
+        # static keyword maps below can't distinguish which library will
+        # execute the keyword, so we ask the RF namespace directly.
+        owner_library = None
+        try:
+            from robot.running.namespace import EXECUTION_CONTEXTS as _EC  # noqa: N811
+            _ctx = _EC.current
+            if _ctx:
+                _runner = _ctx.namespace.get_runner(keyword)
+                _owner = getattr(getattr(_runner, 'keyword', None), 'owner', None)
+                owner_library = getattr(_owner, 'name', None)
+        except Exception:
+            pass
+
+        # Route to the correct timeout map based on authoritative owner.
+        # When owner_library is known, skip the other library's map entirely
+        # to avoid format mismatches on shared keywords.
+        if owner_library == "Browser" and keyword_lower in browser_library_timeout_keywords:
             timeout_arg = f"timeout={timeout_ms}ms"
             logger.debug(f"Injecting Browser Library timeout: {timeout_arg} for {keyword}")
             return list(arguments) + [timeout_arg]
 
-        # Check SeleniumLibrary keywords
-        if keyword_lower in selenium_library_timeout_keywords:
-            # Check if timeout is already provided as a positional argument.
-            # SeleniumLibrary wait keywords accept timeout positionally (e.g.,
-            # Wait Until Element Is Visible    locator    5).  Injecting
-            # timeout= on top of that causes "got multiple values for argument
-            # 'timeout'" error.
+        if owner_library == "SeleniumLibrary" and keyword_lower in selenium_library_timeout_keywords:
             timeout_pos_idx = selenium_library_timeout_keywords[keyword_lower]
             if len(arguments) > timeout_pos_idx:
                 logger.debug(
                     f"Timeout already provided as positional arg at index {timeout_pos_idx} for {keyword}"
                 )
                 return arguments
-
-            # SeleniumLibrary uses seconds
             timeout_arg = f"timeout={timeout_seconds}"
             logger.debug(f"Injecting SeleniumLibrary timeout: {timeout_arg} for {keyword}")
             return list(arguments) + [timeout_arg]
+
+        # Fallback when RF context is unavailable (e.g. bridge mode):
+        # check Browser Library map first, then SeleniumLibrary map.
+        if owner_library is None:
+            if keyword_lower in browser_library_timeout_keywords:
+                timeout_arg = f"timeout={timeout_ms}ms"
+                logger.debug(f"Injecting Browser Library timeout (fallback): {timeout_arg} for {keyword}")
+                return list(arguments) + [timeout_arg]
+
+            if keyword_lower in selenium_library_timeout_keywords:
+                timeout_pos_idx = selenium_library_timeout_keywords[keyword_lower]
+                if len(arguments) > timeout_pos_idx:
+                    logger.debug(
+                        f"Timeout already provided as positional arg at index {timeout_pos_idx} for {keyword}"
+                    )
+                    return arguments
+                timeout_arg = f"timeout={timeout_seconds}"
+                logger.debug(f"Injecting SeleniumLibrary timeout (fallback): {timeout_arg} for {keyword}")
+                return list(arguments) + [timeout_arg]
 
         # For navigation keywords, no timeout injection needed as they have implicit timeouts
         # For other keywords, return original arguments
@@ -1876,49 +1921,26 @@ class KeywordExecutor:
             # Bridge RF-context browser state back to session for downstream services
             try:
                 if result.get("success") and browser_library_manager is not None:
-                    from robotmcp.utils.library_detector import (
-                        detect_library_type_from_keyword,
-                    )
-
-                    detected = detect_library_type_from_keyword(keyword)
+                    # Detect owning library from RF namespace (authoritative).
+                    # Replaces pattern-based detect_library_type_from_keyword()
+                    # which returned wrong results for shared keywords like
+                    # "Get Text" (exists in both Browser and SeleniumLibrary).
                     lib_type = None
-                    if detected in ("browser", "selenium"):
-                        lib_type = detected
-                    if not lib_type and "." in keyword:
-                        prefix = keyword.split(".", 1)[0].strip().lower()
-                        if prefix == "browser":
-                            lib_type = "browser"
-                        elif prefix in ("seleniumlibrary", "selenium"):
-                            lib_type = "selenium"
-                    if not lib_type or lib_type == "auto":
-                        keyword_lower = keyword.strip().lower()
-                        browser_aliases = {
-                            "new browser",
-                            "new context",
-                            "new page",
-                            "go to",
-                            "click",
-                            "fill text",
-                            "type text",
-                            "press keys",
-                            "get text",
-                            "wait for elements state",
-                            "get url",
-                            "close browser",
-                        }
-                        selenium_aliases = {
-                            "open browser",
-                            "go to",
-                            "click element",
-                            "input text",
-                            "press keys",
-                            "get text",
-                            "get location",
-                        }
-                        if session.browser_state.active_library == "browser" or keyword_lower in browser_aliases:
-                            lib_type = "browser"
-                        elif session.browser_state.active_library == "selenium" or keyword_lower in selenium_aliases:
-                            lib_type = "selenium"
+                    try:
+                        from robot.running.context import EXECUTION_CONTEXTS as _EC
+                        _post_ctx = _EC.current
+                        if _post_ctx:
+                            _runner = _post_ctx.namespace.get_runner(keyword)
+                            _owner = getattr(getattr(_runner, 'keyword', None), 'owner', None)
+                            _owner_name = getattr(_owner, 'name', None)
+                            if _owner_name == "Browser":
+                                lib_type = "browser"
+                            elif _owner_name == "SeleniumLibrary":
+                                lib_type = "selenium"
+                            elif _owner_name == "AppiumLibrary":
+                                lib_type = "appium"
+                    except Exception:
+                        pass  # No RF context → lib_type stays None
 
                     if lib_type:
                         browser_library_manager.set_active_library(session, lib_type)

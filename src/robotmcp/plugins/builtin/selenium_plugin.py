@@ -73,6 +73,31 @@ class SeleniumStateProvider(LibraryStateProvider):
 class SeleniumLibraryPlugin(StaticLibraryPlugin):
     """Builtin SeleniumLibrary plugin with reciprocal Browser Library validation."""
 
+    # Keywords that exist in BOTH Browser Library and SeleniumLibrary with
+    # the same name.  These must NOT be blocked when the session uses
+    # SeleniumLibrary, because SeleniumLibrary has its own implementation.
+    # Programmatically verified against Browser Library 18.x and SeleniumLibrary 6.x.
+    _SHARED_KEYWORDS = frozenset({
+        "add cookie",
+        "close browser",
+        "delete all cookies",
+        "drag and drop",
+        "get browser ids",
+        "get cookie",
+        "get cookies",
+        "get element count",
+        "get property",
+        "get text",
+        "get title",
+        "go back",
+        "go to",
+        "open browser",
+        "press keys",
+        "register keyword to run on failure",
+        "switch browser",
+        "wait for condition",
+    })
+
     # Mapping of Browser Library keywords to SeleniumLibrary alternatives
     KEYWORD_ALTERNATIVES = {
         "new browser": {
@@ -90,11 +115,6 @@ class SeleniumLibraryPlugin(StaticLibraryPlugin):
             "example": "Open Browser    https://example.com    chrome    options=add_argument(\"--window-size=1280,720\")",
             "explanation": "SeleniumLibrary doesn't have contexts - configure browser in Open Browser",
         },
-        "close browser": {
-            "alternative": "Close Browser",
-            "example": "Close Browser",
-            "explanation": "Same keyword name, works in SeleniumLibrary",
-        },
         "fill text": {
             "alternative": "Input Text",
             "example": "Input Text    id=username    myuser",
@@ -104,11 +124,6 @@ class SeleniumLibraryPlugin(StaticLibraryPlugin):
             "alternative": "Click Element",
             "example": "Click Element    id=submit",
             "explanation": "SeleniumLibrary uses Click Element instead of Click",
-        },
-        "get text": {
-            "alternative": "Get Text",
-            "example": "Get Text    id=message",
-            "explanation": "Same keyword available in SeleniumLibrary",
         },
         "wait for elements state": {
             "alternative": "Wait Until Element Is Visible",
@@ -184,6 +199,11 @@ class SeleniumLibraryPlugin(StaticLibraryPlugin):
             # Check if keyword is from Browser Library
             if keyword_source_library and keyword_source_library.lower() == "browser":
                 keyword_lower = keyword_name.lower()
+
+                # Allow keywords that exist in BOTH libraries (same name)
+                if keyword_lower in self._SHARED_KEYWORDS:
+                    return None
+
                 alternative_info = self.KEYWORD_ALTERNATIVES.get(keyword_lower, {})
 
                 error_msg = (

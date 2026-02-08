@@ -3052,6 +3052,14 @@ async def execute_step(
     session = execution_engine.session_manager.get_or_create_session(session_id)
     session_library_preference = getattr(session, "explicit_library_preference", None)
 
+    # Infer library preference from imported_libraries when no explicit preference
+    if not session_library_preference:
+        _imported = getattr(session, "imported_libraries", []) or []
+        if "Browser" in _imported and "SeleniumLibrary" not in _imported:
+            session_library_preference = "Browser"
+        elif "SeleniumLibrary" in _imported and "Browser" not in _imported:
+            session_library_preference = "SeleniumLibrary"
+
     if session_library_preference and keyword_to_run != "Evaluate":
         try:
             # Try to find the keyword's source library

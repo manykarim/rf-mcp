@@ -49,23 +49,23 @@ class TestBrowserPluginValidation:
         assert open_browser["alternative"] == "New Browser + New Page"
 
     def test_validate_keyword_for_browser_session_rejects_selenium_keyword(self):
-        """Browser session should reject SeleniumLibrary keywords."""
+        """Browser session should reject SeleniumLibrary-only keywords."""
         plugin = BrowserLibraryPlugin()
 
         # Create a session with Browser preference
         session = ExecutionSession(session_id="browser-test")
         session.explicit_library_preference = "Browser"
 
-        # Validate a SeleniumLibrary keyword
+        # Validate a SeleniumLibrary-only keyword (not shared)
         result = plugin.validate_keyword_for_session(
-            session, "Open Browser", "SeleniumLibrary"
+            session, "Input Text", "SeleniumLibrary"
         )
 
         assert result is not None
         assert result["success"] is False
         assert "SeleniumLibrary" in result["error"]
         assert "Browser Library" in result["error"]
-        assert result["alternative"] == "New Browser + New Page"
+        assert result["alternative"] == "Fill Text"
 
     def test_validate_keyword_for_browser_session_accepts_browser_keyword(self):
         """Browser session should accept Browser Library keywords."""
@@ -221,8 +221,9 @@ class TestPluginManagerValidation:
         session = ExecutionSession(session_id="browser-test")
         session.explicit_library_preference = "Browser"
 
+        # Use a Selenium-only keyword (not shared between libraries)
         result = manager.validate_keyword_for_session(
-            "Browser", session, "Open Browser", "SeleniumLibrary"
+            "Browser", session, "Input Text", "SeleniumLibrary"
         )
 
         assert result is not None

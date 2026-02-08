@@ -255,14 +255,27 @@ class BrowserLibraryManager:
             bool: True if successfully set, False otherwise
         """
         if library_type == "browser" and self.browser_lib:
+            # Guard: only set if Browser was actually loaded for this session.
+            # Prevents pattern-based detection from corrupting a SeleniumLibrary
+            # session's imported_libraries via force import.
+            if "Browser" not in session.loaded_libraries:
+                logger.debug(
+                    f"Browser not in session.loaded_libraries "
+                    f"({session.loaded_libraries}), skipping set_active_library"
+                )
+                return False
             session.browser_state.active_library = "browser"
-            # Only import if not already present to avoid overwriting session configuration
             if "Browser" not in session.imported_libraries:
                 session.import_library("Browser", force=True)
             return True
         elif library_type == "selenium" and self.selenium_lib:
+            if "SeleniumLibrary" not in session.loaded_libraries:
+                logger.debug(
+                    f"SeleniumLibrary not in session.loaded_libraries "
+                    f"({session.loaded_libraries}), skipping set_active_library"
+                )
+                return False
             session.browser_state.active_library = "selenium"
-            # Only import if not already present to avoid overwriting session configuration
             if "SeleniumLibrary" not in session.imported_libraries:
                 session.import_library("SeleniumLibrary", force=True)
             return True
