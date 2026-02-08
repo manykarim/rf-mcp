@@ -1186,7 +1186,7 @@ class ExecutionSession:
         # Validate that all libraries are loaded or loadable
         valid_libraries = []
         for lib in libraries:
-            if lib in self.loaded_libraries or self.should_load_library(lib):
+            if lib in self.loaded_libraries or lib in self.imported_libraries or self.should_load_library(lib):
                 valid_libraries.append(lib)
             else:
                 logger.warning(

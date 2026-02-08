@@ -315,7 +315,7 @@ class TestP2_InitVariablesTracking:
         )
 
         import asyncio
-        rf_text = asyncio.get_event_loop().run_until_complete(
+        rf_text = asyncio.run(
             builder._generate_rf_text(suite)
         )
 
@@ -343,7 +343,7 @@ class TestP2_InitVariablesTracking:
         )
 
         import asyncio
-        rf_text = asyncio.get_event_loop().run_until_complete(
+        rf_text = asyncio.run(
             builder._generate_rf_text(suite)
         )
 

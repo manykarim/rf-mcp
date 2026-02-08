@@ -9,6 +9,7 @@ from robotmcp.plugins.base import StaticLibraryPlugin
 from robotmcp.plugins.contracts import (
     KeywordOverrideHandler,
     LibraryCapabilities,
+    LibraryHints,
     LibraryMetadata,
     LibraryStateProvider,
 )
@@ -215,7 +216,29 @@ class BrowserLibraryPlugin(StaticLibraryPlugin):
             requires_type_conversion=True,
             supports_async=True,
         )
-        super().__init__(metadata=metadata, capabilities=capabilities)
+        hints = LibraryHints(
+            standard_keywords=[
+                "New Browser", "New Page", "Close Browser", "Close Page",
+                "Go To", "Get Url", "Get Title", "Get Text",
+                "Click", "Fill Text", "Check Checkbox", "Select Options By",
+                "Wait For Elements State", "Get Element Count",
+                "Take Screenshot", "Get Page Source",
+                "HTTP", "Wait For Response",
+            ],
+            error_hints=[
+                "Browser Library uses Playwright — use 'New Browser' + 'New Page' instead of 'Open Browser'",
+                "Use 'Fill Text' instead of 'Input Text'",
+                "Use 'Click' instead of 'Click Element' or 'Click Button'",
+            ],
+            usage_examples=[
+                "New Browser    browser=chromium    headless=${True}",
+                "New Page    https://example.com",
+                "Click    text=Submit",
+                "Fill Text    css=input#username    myuser",
+                "Get Text    css=h1    ==    Expected Title",
+            ],
+        )
+        super().__init__(metadata=metadata, capabilities=capabilities, hints=hints)
         self._provider = BrowserStateProvider()
 
     def get_state_provider(self) -> LibraryStateProvider:

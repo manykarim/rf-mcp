@@ -250,9 +250,10 @@ class TestPreValidationSkip:
         # Ensure imported_libraries doesn't contain any UI library
         mock_session.imported_libraries = ["BuiltIn", "Collections"]
 
-        is_valid, error, details = await executor._pre_validate_element(
-            "css=#button", mock_session, "click"
-        )
+        with no_rf_context():
+            is_valid, error, details = await executor._pre_validate_element(
+                "css=#button", mock_session, "click"
+            )
 
         assert is_valid is True
         assert error is None
