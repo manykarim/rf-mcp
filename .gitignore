@@ -217,3 +217,23 @@ playwright*.txt
 # Files in root folder
 /test_*.py
 /debug_*.py
+
+tests/e2e/**/*.json
+
+/*.robot
+
+resources/
+
+notes/
+
+tests/experiments
+tests/*.robot
+
+.claude/
+.claude-flow/
+.swarm/
+.vscode/
+
+/*.py
+
+/*.xml
