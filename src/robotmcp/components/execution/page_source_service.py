@@ -23,7 +23,49 @@ except ImportError:
 
 class PageSourceService:
     """Manages page source retrieval, filtering, and context extraction for web and mobile."""
-    
+
+    # Library-to-keyword mappings — verified against libdoc catalogs.
+    # Browser Library (Playwright), SeleniumLibrary (Selenium), AppiumLibrary (Appium).
+    _SOURCE_KEYWORDS: Dict[str, str] = {
+        "Browser": "Get Page Source",
+        "SeleniumLibrary": "Get Source",
+        "AppiumLibrary": "Get Source",
+    }
+    _URL_KEYWORDS: Dict[str, str] = {
+        "Browser": "Get Url",
+        "SeleniumLibrary": "Get Location",
+        "AppiumLibrary": "Get Window Url",
+    }
+    _TITLE_KEYWORDS: Dict[str, str] = {
+        "Browser": "Get Title",
+        "SeleniumLibrary": "Get Title",
+        "AppiumLibrary": "Get Window Title",
+    }
+
+    @staticmethod
+    def _keyword_candidates(
+        mapping: Dict[str, str],
+        imported: list,
+    ) -> tuple:
+        """Return an ordered tuple of keyword candidates based on imported libraries.
+
+        Picks only keywords whose library is actually imported, avoiding
+        ERROR-level log noise from attempting keywords that don't exist in
+        the session.  Falls back to the full candidate list when no library
+        match is found (backwards compatibility).
+        """
+        candidates: list = []
+        seen: set = set()
+        for lib in imported:
+            kw = mapping.get(lib)
+            if kw and kw not in seen:
+                candidates.append(kw)
+                seen.add(kw)
+        if candidates:
+            return tuple(candidates)
+        # Fallback: return all unique keywords from the mapping
+        return tuple(dict.fromkeys(mapping.values()))
+
     def __init__(self, config: Optional[ExecutionConfig] = None):
         self.config = config or ExecutionConfig()
 
@@ -36,7 +78,10 @@ class PageSourceService:
             )
 
             rf_mgr = get_rf_native_context_manager()
-            for kw in ("Get Page Source", "Get Source"):
+            # Select library-appropriate keywords to avoid log noise
+            imported = getattr(session, "imported_libraries", []) or []
+
+            for kw in self._keyword_candidates(self._SOURCE_KEYWORDS, imported):
                 res = rf_mgr.execute_keyword_with_context(
                     session_id=session.session_id,
                     keyword_name=kw,
@@ -52,27 +97,31 @@ class PageSourceService:
                         break
 
             # Update URL and title where possible
-            try:
-                res = rf_mgr.execute_keyword_with_context(
-                    session_id=session.session_id,
-                    keyword_name="Get Url",
-                    arguments=[],
-                )
-                if res and res.get("success") and res.get("output"):
-                    session.browser_state.current_url = res.get("output")
-            except Exception:
-                pass
+            for url_kw in self._keyword_candidates(self._URL_KEYWORDS, imported):
+                try:
+                    res = rf_mgr.execute_keyword_with_context(
+                        session_id=session.session_id,
+                        keyword_name=url_kw,
+                        arguments=[],
+                    )
+                    if res and res.get("success") and res.get("output"):
+                        session.browser_state.current_url = res.get("output")
+                        break
+                except Exception:
+                    pass
 
-            try:
-                res = rf_mgr.execute_keyword_with_context(
-                    session_id=session.session_id,
-                    keyword_name="Get Title",
-                    arguments=[],
-                )
-                if res and res.get("success") and res.get("output"):
-                    session.browser_state.page_title = res.get("output")
-            except Exception:
-                pass
+            for title_kw in self._keyword_candidates(self._TITLE_KEYWORDS, imported):
+                try:
+                    res = rf_mgr.execute_keyword_with_context(
+                        session_id=session.session_id,
+                        keyword_name=title_kw,
+                        arguments=[],
+                    )
+                    if res and res.get("success") and res.get("output"):
+                        session.browser_state.page_title = res.get("output")
+                        break
+                except Exception:
+                    pass
         except Exception as exc:
             logger.debug("RF-context page source retrieval failed: %s", exc)
             page_source = session.browser_state.page_source or ""
@@ -467,8 +516,9 @@ class PageSourceService:
             )
 
             mgr = get_rf_native_context_manager()
-            # Try Browser first, then Selenium variants using the RF session
-            for kw in ("Get Page Source", "Get Source"):
+            imported = getattr(session, "imported_libraries", []) or []
+
+            for kw in self._keyword_candidates(self._SOURCE_KEYWORDS, imported):
                 res = mgr.execute_keyword_with_context(
                     session_id=session.session_id,
                     keyword_name=kw,
@@ -486,7 +536,7 @@ class PageSourceService:
             logger.debug(f"RF-context page source retrieval not available: {rf_fallback_err}")
 
         return None
-    
+
     async def _get_current_url(self, session: ExecutionSession, browser_library_manager: Any) -> Optional[str]:
         """Get current URL using RF context in the session."""
         try:
@@ -495,7 +545,8 @@ class PageSourceService:
             )
 
             mgr = get_rf_native_context_manager()
-            for kw in ("Get Url", "Get Location"):
+            imported = getattr(session, "imported_libraries", []) or []
+            for kw in self._keyword_candidates(self._URL_KEYWORDS, imported):
                 res = mgr.execute_keyword_with_context(
                     session_id=session.session_id,
                     keyword_name=kw,
@@ -515,13 +566,15 @@ class PageSourceService:
             )
 
             mgr = get_rf_native_context_manager()
-            res = mgr.execute_keyword_with_context(
-                session_id=session.session_id,
-                keyword_name="Get Title",
-                arguments=[],
-            )
-            if res and res.get("success") and res.get("output"):
-                return res["output"]
+            imported = getattr(session, "imported_libraries", []) or []
+            for kw in self._keyword_candidates(self._TITLE_KEYWORDS, imported):
+                res = mgr.execute_keyword_with_context(
+                    session_id=session.session_id,
+                    keyword_name=kw,
+                    arguments=[],
+                )
+                if res and res.get("success") and res.get("output"):
+                    return res["output"]
         except Exception as e:
             logger.debug(f"Could not get page title: {e}")
         return None
