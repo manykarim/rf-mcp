@@ -889,19 +889,18 @@ class RobotFrameworkNativeContextManager:
                 # IMPORTANT: Do not pre-split name=value here. Let RF resolve named args
                 # based on the keyword's real signature to avoid passing unexpected kwargs
                 # (e.g., BuiltIn.Set Variable should treat 'token=${auth}' as positional text).
-                # Normalize Windows absolute paths to use forward slashes to avoid RF de-escaping
-                # of sequences like \t, \r, \b in file paths.
+                # Normalize Windows absolute paths using RF's ${/} variable to avoid
+                # de-escaping of sequences like \t, \r, \b in file paths.
+                # RF resolves ${/} to os.sep at keyword execution time, producing
+                # native separators on every OS without double-escaping.
                 def _normalize_arg(a: Any) -> Any:
                     try:
-                        import os, re
-                        if isinstance(a, str) and os.name == 'nt':
+                        import re
+                        if isinstance(a, str):
                             # Match Windows absolute paths like C:\folder\file
+                            # regardless of os.name (covers WSL/MSYS2/cross-platform)
                             if re.match(r'^[A-Za-z]:\\', a):
-                                from pathlib import Path
-                                try:
-                                    return Path(a).as_posix()
-                                except Exception:
-                                    return a.replace('\\\\', '/')
+                                return a.replace('\\', '${/}')
                     except Exception:
                         pass
                     return a
