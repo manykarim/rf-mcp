@@ -223,28 +223,155 @@ class KeywordExecutor:
     # handle link text with embedded child elements (SVG icons, badge spans)
     # correctly — the text content includes children's text and whitespace,
     # causing false "not found" failures.  Skip pre-validation for these.
-    _SKIP_PRE_VALIDATION_LOCATOR_PREFIXES = ("link=", "partial link=", "link:")
+    # Note: SeleniumLibrary accepts both ":" and "=" as prefix separators.
+    _SKIP_PRE_VALIDATION_LOCATOR_PREFIXES = (
+        "link=", "partial link=", "link:", "partial link:",
+    )
+
+    # Keywords that use keyword-specific locator resolution (tag-constrained
+    # default strategy with extended key_attrs) which pre-validation's generic
+    # Get WebElements cannot replicate.  For these keywords, bare-text locators
+    # (no explicit prefix like id=, css=, xpath=) are skipped from pre-validation.
+    _KEYWORD_SPECIFIC_LOCATOR_KEYWORDS = frozenset({
+        "click link", "click image", "click button",
+    })
+
+    # Generic locator prefixes that Get WebElements understands — if one of
+    # these is present, pre-validation CAN run even for Click Link/Click Image.
+    _GENERIC_LOCATOR_PREFIXES = (
+        "id=", "id:", "css=", "css:", "xpath=", "xpath:",
+        "name=", "name:", "class=", "class:", "tag=", "tag:",
+        "dom=", "dom:", "jquery=", "jquery:", "sizzle=", "sizzle:",
+        "data=", "data:", "identifier=", "identifier:",
+        "//",   # implicit xpath
+    )
 
     def _extract_locator_from_args(self, keyword: str, arguments: List[Any]) -> Optional[str]:
         """Extract the element locator from keyword arguments.
 
-        Returns None (skip pre-validation) for link-text locators since
-        SeleniumLibrary's Click Link has its own robust text matching that
-        handles embedded child elements (SVGs, badges) which our JS-based
-        pre-validation cannot replicate.
+        Returns None (skip pre-validation) when the locator uses a strategy
+        that pre-validation's generic element lookup cannot replicate:
+
+        1. Explicit link-text prefixes (link=, link:, partial link=, partial link:)
+        2. Click Link / Click Image / Click Button with bare text (no prefix) —
+           these keywords use tag-constrained default strategies (searching
+           @href, @src, @alt, @value, normalize-space text) that
+           Get WebElements (tag=None, key_attrs=[@id, @name]) does not support.
         """
         if not arguments:
             return None
         first_arg = arguments[0]
         if not isinstance(first_arg, str):
             return None
-        # Skip pre-validation for link-text locators
+        # Skip pre-validation for link-text locator prefixes
         if first_arg.lower().startswith(self._SKIP_PRE_VALIDATION_LOCATOR_PREFIXES):
             logger.debug(
                 f"Skipping pre-validation for link-text locator: {first_arg}"
             )
             return None
+        # Click Link / Click Image / Click Button: bare text (no generic prefix)
+        # uses keyword-specific resolution with tag-constrained key_attrs
+        # (e.g. tag="a" → @href/text, tag="button" → @value/text,
+        # tag="img" → @src/@alt).  Pre-validation's Get WebElements (tag=None)
+        # only searches @id/@name, so it would false-reject valid locators.
+        # Let SeleniumLibrary handle these natively for correct error messages.
+        if keyword.lower() in self._KEYWORD_SPECIFIC_LOCATOR_KEYWORDS:
+            if not first_arg.lower().startswith(self._GENERIC_LOCATOR_PREFIXES):
+                logger.debug(
+                    f"Skipping pre-validation for {keyword} bare-text locator: "
+                    f"{first_arg}"
+                )
+                return None
         return first_arg
+
+    def _add_link_image_locator_guidance(
+        self,
+        keyword: str,
+        arguments: List[Any],
+        hints: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Add locator guidance hints when Click Link/Image/Button fails.
+
+        SeleniumLibrary keywords use tag-specific locator strategies that
+        differ from the generic ``Get WebElements`` default (which only
+        checks ``@id`` and ``@name``).  When bare-text locators fail,
+        these hints guide users toward working alternatives.
+
+        Returns the hints list (possibly extended).
+        """
+        keyword_lower = keyword.lower()
+        if keyword_lower not in self._KEYWORD_SPECIFIC_LOCATOR_KEYWORDS:
+            return hints
+        if not arguments:
+            return hints
+        locator = arguments[0]
+        if not isinstance(locator, str):
+            return hints
+        # Only add guidance for bare-text locators (no explicit prefix).
+        # Locators with prefixes (css:, id=, xpath:, link:, etc.) already
+        # indicate the user knows which strategy to use.
+        if locator.lower().startswith(
+            self._GENERIC_LOCATOR_PREFIXES
+            + self._SKIP_PRE_VALIDATION_LOCATOR_PREFIXES
+        ):
+            return hints
+
+        if keyword_lower == "click link":
+            hints = list(hints)  # copy to avoid mutating caller's list
+            hints.append({
+                "type": "link_locator_guidance",
+                "message": (
+                    "Click Link with bare text uses SeleniumLibrary's default "
+                    "XPath strategy which can fail on links containing embedded "
+                    "child elements (SVGs, badge spans, icons)"
+                ),
+                "suggestion": (
+                    f"Try 'partial link:{locator}' for substring text match, "
+                    f"or use a css/xpath locator targeting the href attribute"
+                ),
+                "alternatives": [
+                    f"partial link:{locator}",
+                    "css:a[href='/your-path']",
+                ],
+            })
+        elif keyword_lower == "click image":
+            hints = list(hints)
+            hints.append({
+                "type": "image_locator_guidance",
+                "message": (
+                    "Click Image with bare text uses SeleniumLibrary's default "
+                    "XPath strategy searching @id, @name, @src, @alt which may "
+                    "not match dynamically loaded or lazily-rendered images"
+                ),
+                "suggestion": (
+                    f"Try a css or xpath locator targeting the image's src or "
+                    f"alt attribute directly"
+                ),
+                "alternatives": [
+                    f"css:img[alt='{locator}']",
+                    f"xpath://img[contains(@src, '{locator}')]",
+                ],
+            })
+        elif keyword_lower == "click button":
+            hints = list(hints)
+            hints.append({
+                "type": "button_locator_guidance",
+                "message": (
+                    "Click Button with bare text searches <input> by "
+                    "id/name/value then <button> by id/name/value/text. "
+                    "If the button has no id, name, or value attributes, "
+                    "use a css or xpath locator targeting it directly"
+                ),
+                "suggestion": (
+                    f"Try 'xpath://button[normalize-space()=\"{locator}\"]' "
+                    f"or a css selector like 'css:button[type=submit]'"
+                ),
+                "alternatives": [
+                    f"xpath://button[normalize-space()='{locator}']",
+                    "css:button[type=submit]",
+                ],
+            })
+        return hints
 
     async def _pre_validate_element(
         self,
@@ -2649,6 +2776,14 @@ class KeywordExecutor:
                     hints = generate_hints(hctx)
                 except Exception:
                     hints = []
+            # Click Link / Click Image guidance: when bare-text locator fails,
+            # suggest robust alternatives.  SeleniumLibrary's default strategy
+            # uses normalize-space(descendant-or-self::text()) which fails on
+            # <a>/<img> elements with embedded children (SVGs, badges, icons)
+            # because XPath 1.0 evaluates only the first text node.
+            hints = self._add_link_image_locator_guidance(
+                keyword, arguments, hints
+            )
             base_response["hints"] = hints
 
         if detail_level == "minimal":

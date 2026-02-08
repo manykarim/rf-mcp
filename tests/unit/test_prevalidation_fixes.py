@@ -749,3 +749,540 @@ class TestBackwardCompatibility:
         ]
         for kw in non_interaction:
             assert not executor._requires_pre_validation(kw), f"Non-interaction keyword '{kw}' unexpectedly triggers pre-validation"
+
+
+# =============================================================================
+# P14 Fix 1: "partial link:" colon variant in skip list
+# =============================================================================
+
+class TestP14Fix1_PartialLinkColonSkip:
+    """Fix 1: Both colon and equals variants of partial link skip pre-validation."""
+
+    def test_partial_link_colon_skips_prevalidation(self, executor):
+        """partial link:Cart should skip pre-validation (returns None)."""
+        result = executor._extract_locator_from_args("Click Link", ["partial link:Cart"])
+        assert result is None
+
+    def test_partial_link_equals_skips_prevalidation(self, executor):
+        """partial link=Cart should skip pre-validation (existing behavior)."""
+        result = executor._extract_locator_from_args("Click Link", ["partial link=Cart"])
+        assert result is None
+
+    def test_link_colon_skips_prevalidation(self, executor):
+        """link:Cart should skip pre-validation (existing behavior)."""
+        result = executor._extract_locator_from_args("Click Link", ["link:Cart"])
+        assert result is None
+
+    def test_link_equals_skips_prevalidation(self, executor):
+        """link=Cart should skip pre-validation (existing behavior)."""
+        result = executor._extract_locator_from_args("Click Link", ["link=Cart"])
+        assert result is None
+
+    def test_partial_link_colon_case_insensitive(self, executor):
+        """Partial Link: prefix should be case-insensitive."""
+        result = executor._extract_locator_from_args("Click Link", ["Partial Link:Cart"])
+        assert result is None
+
+    def test_partial_link_colon_with_generic_keyword(self, executor):
+        """partial link: should also skip for non-Click Link keywords."""
+        result = executor._extract_locator_from_args("Click Element", ["partial link:Cart"])
+        assert result is None
+
+    def test_partial_link_colon_skip_list_membership(self, executor):
+        """Verify partial link: is in the skip prefixes tuple."""
+        assert "partial link:" in executor._SKIP_PRE_VALIDATION_LOCATOR_PREFIXES
+
+
+# =============================================================================
+# P14 Fix 3: Click Link / Click Image bare-text pre-validation skip
+# =============================================================================
+
+class TestP14Fix3_BareTextPrevalidationSkip:
+    """Fix 3: Click Link/Image with bare text (no prefix) skips pre-validation."""
+
+    # --- Click Link bare text ---
+
+    def test_click_link_bare_text_skips(self, executor):
+        """Click Link with bare 'Cart' should skip pre-validation."""
+        result = executor._extract_locator_from_args("Click Link", ["Cart"])
+        assert result is None
+
+    def test_click_link_bare_text_with_spaces_skips(self, executor):
+        """Click Link with bare 'Add to Cart' should skip pre-validation."""
+        result = executor._extract_locator_from_args("Click Link", ["Add to Cart"])
+        assert result is None
+
+    def test_click_link_bare_text_href_path_skips(self, executor):
+        """Click Link with '/cart' (href path, no prefix) should skip."""
+        result = executor._extract_locator_from_args("Click Link", ["/cart"])
+        assert result is None
+
+    def test_click_link_bare_text_url_skips(self, executor):
+        """Click Link with 'https://example.com' should skip (no generic prefix)."""
+        result = executor._extract_locator_from_args("Click Link", ["https://example.com"])
+        assert result is None
+
+    # --- Click Link with generic prefix still runs pre-validation ---
+
+    def test_click_link_css_still_prevalidates(self, executor):
+        """Click Link with css: prefix should still run pre-validation."""
+        result = executor._extract_locator_from_args("Click Link", ["css:a.nav-link"])
+        assert result == "css:a.nav-link"
+
+    def test_click_link_id_equals_still_prevalidates(self, executor):
+        """Click Link with id= prefix should still run pre-validation."""
+        result = executor._extract_locator_from_args("Click Link", ["id=cart-link"])
+        assert result == "id=cart-link"
+
+    def test_click_link_xpath_still_prevalidates(self, executor):
+        """Click Link with xpath: prefix should still run pre-validation."""
+        result = executor._extract_locator_from_args("Click Link", ["xpath://a[@href='/cart']"])
+        assert result == "xpath://a[@href='/cart']"
+
+    def test_click_link_implicit_xpath_still_prevalidates(self, executor):
+        """Click Link with // (implicit xpath) should still run pre-validation."""
+        result = executor._extract_locator_from_args("Click Link", ["//a[@href='/cart']"])
+        assert result == "//a[@href='/cart']"
+
+    def test_click_link_name_still_prevalidates(self, executor):
+        """Click Link with name= prefix should still run pre-validation."""
+        result = executor._extract_locator_from_args("Click Link", ["name=cart"])
+        assert result == "name=cart"
+
+    def test_click_link_data_still_prevalidates(self, executor):
+        """Click Link with data: prefix should still run pre-validation."""
+        result = executor._extract_locator_from_args("Click Link", ["data:testid:cart"])
+        assert result == "data:testid:cart"
+
+    # --- Click Image bare text ---
+
+    def test_click_image_bare_text_skips(self, executor):
+        """Click Image with bare 'logo.png' should skip pre-validation."""
+        result = executor._extract_locator_from_args("Click Image", ["logo.png"])
+        assert result is None
+
+    def test_click_image_bare_alt_text_skips(self, executor):
+        """Click Image with bare alt text should skip pre-validation."""
+        result = executor._extract_locator_from_args("Click Image", ["Company Logo"])
+        assert result is None
+
+    def test_click_image_css_still_prevalidates(self, executor):
+        """Click Image with css: prefix should still run pre-validation."""
+        result = executor._extract_locator_from_args("Click Image", ["css:img.logo"])
+        assert result == "css:img.logo"
+
+    def test_click_image_id_still_prevalidates(self, executor):
+        """Click Image with id= prefix should still run pre-validation."""
+        result = executor._extract_locator_from_args("Click Image", ["id=main-logo"])
+        assert result == "id=main-logo"
+
+    # --- Other keywords should NOT skip bare text ---
+
+    def test_click_element_bare_text_still_prevalidates(self, executor):
+        """Click Element with bare text should still run pre-validation."""
+        result = executor._extract_locator_from_args("Click Element", ["submit-btn"])
+        assert result == "submit-btn"
+
+    def test_click_button_bare_text_now_skips(self, executor):
+        """Click Button with bare text should now skip pre-validation (P15)."""
+        result = executor._extract_locator_from_args("Click Button", ["Submit"])
+        assert result is None
+
+    def test_input_text_bare_text_still_prevalidates(self, executor):
+        """Input Text with bare text should still run pre-validation."""
+        result = executor._extract_locator_from_args("Input Text", ["username"])
+        assert result == "username"
+
+    # --- Edge cases ---
+
+    def test_click_link_empty_args_returns_none(self, executor):
+        """Click Link with no arguments should return None."""
+        result = executor._extract_locator_from_args("Click Link", [])
+        assert result is None
+
+    def test_click_link_non_string_arg_returns_none(self, executor):
+        """Click Link with non-string argument should return None."""
+        result = executor._extract_locator_from_args("Click Link", [42])
+        assert result is None
+
+    def test_click_link_case_insensitive_keyword(self, executor):
+        """Keyword matching should be case-insensitive."""
+        result = executor._extract_locator_from_args("CLICK LINK", ["Cart"])
+        assert result is None
+
+    def test_keyword_specific_set_membership(self, executor):
+        """Verify Click Link and Click Image are in the keyword-specific set."""
+        assert "click link" in executor._KEYWORD_SPECIFIC_LOCATOR_KEYWORDS
+        assert "click image" in executor._KEYWORD_SPECIFIC_LOCATOR_KEYWORDS
+
+
+# =============================================================================
+# P14 Fix 2: Click Link / Click Image guidance hints
+# =============================================================================
+
+class TestP14Fix2_LinkImageLocatorGuidance:
+    """Fix 2: Guidance hints when Click Link/Image fails with bare text."""
+
+    def test_click_link_bare_text_adds_guidance(self, executor):
+        """Click Link failure with bare text should add link_locator_guidance hint."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Link", ["Cart"], []
+        )
+        assert len(hints) == 1
+        assert hints[0]["type"] == "link_locator_guidance"
+        assert "partial link:Cart" in hints[0]["suggestion"]
+        assert "partial link:Cart" in hints[0]["alternatives"]
+
+    def test_click_link_preserves_existing_hints(self, executor):
+        """Guidance should append to existing hints, not replace them."""
+        existing = [{"type": "some_hint", "message": "existing"}]
+        hints = executor._add_link_image_locator_guidance(
+            "Click Link", ["Cart"], existing
+        )
+        assert len(hints) == 2
+        assert hints[0]["type"] == "some_hint"
+        assert hints[1]["type"] == "link_locator_guidance"
+
+    def test_click_link_does_not_mutate_original(self, executor):
+        """Guidance should not mutate the original hints list."""
+        original = [{"type": "existing"}]
+        result = executor._add_link_image_locator_guidance(
+            "Click Link", ["Cart"], original
+        )
+        assert len(original) == 1  # original unchanged
+        assert len(result) == 2
+
+    def test_click_link_css_prefix_no_guidance(self, executor):
+        """Click Link with css: prefix should NOT add guidance."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Link", ["css:a.nav"], []
+        )
+        assert len(hints) == 0
+
+    def test_click_link_link_prefix_no_guidance(self, executor):
+        """Click Link with link: prefix should NOT add guidance."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Link", ["link:Cart"], []
+        )
+        assert len(hints) == 0
+
+    def test_click_link_partial_link_prefix_no_guidance(self, executor):
+        """Click Link with partial link: prefix should NOT add guidance."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Link", ["partial link:Cart"], []
+        )
+        assert len(hints) == 0
+
+    def test_click_link_xpath_prefix_no_guidance(self, executor):
+        """Click Link with // xpath prefix should NOT add guidance."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Link", ["//a[@href='/cart']"], []
+        )
+        assert len(hints) == 0
+
+    def test_click_image_bare_text_adds_guidance(self, executor):
+        """Click Image failure with bare text should add image_locator_guidance hint."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Image", ["logo.png"], []
+        )
+        assert len(hints) == 1
+        assert hints[0]["type"] == "image_locator_guidance"
+        assert "css:img[alt='logo.png']" in hints[0]["alternatives"]
+
+    def test_click_image_css_prefix_no_guidance(self, executor):
+        """Click Image with css: prefix should NOT add guidance."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Image", ["css:img.logo"], []
+        )
+        assert len(hints) == 0
+
+    def test_click_element_no_guidance(self, executor):
+        """Click Element should NOT trigger link/image guidance."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Element", ["submit"], []
+        )
+        assert len(hints) == 0
+
+    def test_click_button_bare_text_adds_guidance(self, executor):
+        """Click Button with bare text should add button_locator_guidance hint."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Button", ["Submit"], []
+        )
+        assert len(hints) == 1
+        assert hints[0]["type"] == "button_locator_guidance"
+
+    def test_no_arguments_no_guidance(self, executor):
+        """No arguments should return hints unchanged."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Link", [], [{"existing": True}]
+        )
+        assert len(hints) == 1
+        assert hints[0] == {"existing": True}
+
+    def test_non_string_argument_no_guidance(self, executor):
+        """Non-string argument should return hints unchanged."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Link", [42], []
+        )
+        assert len(hints) == 0
+
+    def test_guidance_includes_locator_in_suggestion(self, executor):
+        """Guidance suggestion should include the actual locator text."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Link", ["My Products"], []
+        )
+        assert "partial link:My Products" in hints[0]["suggestion"]
+
+
+# =============================================================================
+# P15 Fix 1: Click Button bare-text pre-validation skip
+# =============================================================================
+
+class TestP15Fix1_ClickButtonBareTextSkip:
+    """P15 Fix 1: Click Button with bare text (no prefix) skips pre-validation.
+
+    Root cause: Get WebElements (tag=None) uses _key_attrs[None] = [@id, @name]
+    which has NO text matching.  Click Button does a two-step lookup:
+    find_element(tag="input") then find_element(tag="button"), where the button
+    strategy includes normalize-space(descendant-or-self::text()).
+    Pre-validation would false-reject bare text that Click Button resolves.
+    """
+
+    # --- Click Button bare text skips ---
+
+    def test_click_button_bare_text_skips(self, executor):
+        """Click Button with bare 'Place order' should skip pre-validation."""
+        result = executor._extract_locator_from_args("Click Button", ["Place order"])
+        assert result is None
+
+    def test_click_button_bare_single_word_skips(self, executor):
+        """Click Button with bare 'Submit' should skip pre-validation."""
+        result = executor._extract_locator_from_args("Click Button", ["Submit"])
+        assert result is None
+
+    def test_click_button_bare_text_login_skips(self, executor):
+        """Click Button with bare 'Log in' should skip pre-validation."""
+        result = executor._extract_locator_from_args("Click Button", ["Log in"])
+        assert result is None
+
+    def test_click_button_bare_text_case_preserving(self, executor):
+        """Click Button keyword match should be case-insensitive."""
+        result = executor._extract_locator_from_args("CLICK BUTTON", ["Submit"])
+        assert result is None
+
+    def test_click_button_bare_text_mixed_case(self, executor):
+        """Click Button keyword match should work with mixed case."""
+        result = executor._extract_locator_from_args("click button", ["Submit"])
+        assert result is None
+
+    # --- Click Button with generic prefix still runs pre-validation ---
+
+    def test_click_button_id_prefix_prevalidates(self, executor):
+        """Click Button with id= prefix should still pre-validate."""
+        result = executor._extract_locator_from_args("Click Button", ["id=submit-btn"])
+        assert result == "id=submit-btn"
+
+    def test_click_button_id_colon_prevalidates(self, executor):
+        """Click Button with id: prefix should still pre-validate."""
+        result = executor._extract_locator_from_args("Click Button", ["id:submit-btn"])
+        assert result == "id:submit-btn"
+
+    def test_click_button_css_prefix_prevalidates(self, executor):
+        """Click Button with css: prefix should still pre-validate."""
+        result = executor._extract_locator_from_args(
+            "Click Button", ["css:button[type=submit]"]
+        )
+        assert result == "css:button[type=submit]"
+
+    def test_click_button_xpath_prefix_prevalidates(self, executor):
+        """Click Button with xpath: prefix should still pre-validate."""
+        result = executor._extract_locator_from_args(
+            "Click Button", ["xpath://button[@class='primary']"]
+        )
+        assert result == "xpath://button[@class='primary']"
+
+    def test_click_button_implicit_xpath_prevalidates(self, executor):
+        """Click Button with // implicit xpath should still pre-validate."""
+        result = executor._extract_locator_from_args(
+            "Click Button", ["//button[@type='submit']"]
+        )
+        assert result == "//button[@type='submit']"
+
+    def test_click_button_name_prefix_prevalidates(self, executor):
+        """Click Button with name= prefix should still pre-validate."""
+        result = executor._extract_locator_from_args("Click Button", ["name=submit"])
+        assert result == "name=submit"
+
+    # --- Other keywords are NOT affected ---
+
+    def test_click_element_bare_text_prevalidates(self, executor):
+        """Click Element with bare text should still pre-validate (not in skip set)."""
+        result = executor._extract_locator_from_args("Click Element", ["Submit"])
+        assert result == "Submit"
+
+    def test_input_text_bare_text_prevalidates(self, executor):
+        """Input Text with bare text should still pre-validate."""
+        result = executor._extract_locator_from_args("Input Text", ["email"])
+        assert result == "email"
+
+    def test_get_text_bare_text_prevalidates(self, executor):
+        """Get Text with bare text should still pre-validate."""
+        result = executor._extract_locator_from_args("Get Text", ["price"])
+        assert result == "price"
+
+    def test_submit_form_bare_text_prevalidates(self, executor):
+        """Submit Form with bare text should still pre-validate."""
+        result = executor._extract_locator_from_args("Submit Form", ["login-form"])
+        assert result == "login-form"
+
+    # --- Edge cases ---
+
+    def test_click_button_empty_args_returns_none(self, executor):
+        """Click Button with no arguments should return None."""
+        result = executor._extract_locator_from_args("Click Button", [])
+        assert result is None
+
+    def test_click_button_non_string_arg_returns_none(self, executor):
+        """Click Button with non-string argument should return None."""
+        result = executor._extract_locator_from_args("Click Button", [42])
+        assert result is None
+
+    def test_click_button_in_keyword_set(self, executor):
+        """Verify 'click button' is in _KEYWORD_SPECIFIC_LOCATOR_KEYWORDS."""
+        assert "click button" in executor._KEYWORD_SPECIFIC_LOCATOR_KEYWORDS
+
+    def test_keyword_set_has_three_members(self, executor):
+        """The keyword-specific set should have exactly 3 members."""
+        assert len(executor._KEYWORD_SPECIFIC_LOCATOR_KEYWORDS) == 3
+        assert "click link" in executor._KEYWORD_SPECIFIC_LOCATOR_KEYWORDS
+        assert "click image" in executor._KEYWORD_SPECIFIC_LOCATOR_KEYWORDS
+        assert "click button" in executor._KEYWORD_SPECIFIC_LOCATOR_KEYWORDS
+
+
+# =============================================================================
+# P15 Fix 2: Click Button guidance hints
+# =============================================================================
+
+class TestP15Fix2_ClickButtonLocatorGuidance:
+    """P15 Fix 2: Guidance hints when Click Button fails with bare text.
+
+    Click Button searches <input> by id/name/value then <button> by
+    id/name/value/text.  When bare text fails, guidance suggests xpath
+    or css alternatives targeting the button directly.
+    """
+
+    def test_click_button_bare_text_adds_guidance(self, executor):
+        """Click Button failure with bare text should add button_locator_guidance."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Button", ["Place order"], []
+        )
+        assert len(hints) == 1
+        assert hints[0]["type"] == "button_locator_guidance"
+
+    def test_guidance_includes_xpath_alternative(self, executor):
+        """Guidance should include xpath://button[normalize-space()='X'] alternative."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Button", ["Place order"], []
+        )
+        assert any(
+            "normalize-space()" in alt
+            for alt in hints[0]["alternatives"]
+        )
+        assert "xpath://button[normalize-space()='Place order']" in hints[0]["alternatives"]
+
+    def test_guidance_includes_css_alternative(self, executor):
+        """Guidance should include css:button[type=submit] alternative."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Button", ["Place order"], []
+        )
+        assert "css:button[type=submit]" in hints[0]["alternatives"]
+
+    def test_guidance_suggestion_includes_locator(self, executor):
+        """Guidance suggestion should include the actual locator text."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Button", ["Log in"], []
+        )
+        assert "Log in" in hints[0]["suggestion"]
+
+    def test_guidance_message_explains_two_step_lookup(self, executor):
+        """Guidance message should explain Click Button's two-step lookup."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Button", ["Submit"], []
+        )
+        assert "<input>" in hints[0]["message"]
+        assert "<button>" in hints[0]["message"]
+
+    def test_click_button_css_prefix_no_guidance(self, executor):
+        """Click Button with css: prefix should NOT add guidance."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Button", ["css:button.primary"], []
+        )
+        assert len(hints) == 0
+
+    def test_click_button_id_prefix_no_guidance(self, executor):
+        """Click Button with id= prefix should NOT add guidance."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Button", ["id=submit-btn"], []
+        )
+        assert len(hints) == 0
+
+    def test_click_button_xpath_prefix_no_guidance(self, executor):
+        """Click Button with xpath: prefix should NOT add guidance."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Button", ["xpath://button"], []
+        )
+        assert len(hints) == 0
+
+    def test_click_button_implicit_xpath_no_guidance(self, executor):
+        """Click Button with // xpath should NOT add guidance."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Button", ["//button[@type='submit']"], []
+        )
+        assert len(hints) == 0
+
+    def test_click_button_preserves_existing_hints(self, executor):
+        """Guidance should append to existing hints."""
+        existing = [{"type": "pre_validation_failure", "message": "not found"}]
+        hints = executor._add_link_image_locator_guidance(
+            "Click Button", ["Submit"], existing
+        )
+        assert len(hints) == 2
+        assert hints[0]["type"] == "pre_validation_failure"
+        assert hints[1]["type"] == "button_locator_guidance"
+
+    def test_click_button_does_not_mutate_original(self, executor):
+        """Guidance should not mutate the original hints list."""
+        original = [{"type": "existing"}]
+        result = executor._add_link_image_locator_guidance(
+            "Click Button", ["Submit"], original
+        )
+        assert len(original) == 1
+        assert len(result) == 2
+
+    def test_click_button_no_args_no_guidance(self, executor):
+        """Click Button with no arguments should not add guidance."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Button", [], []
+        )
+        assert len(hints) == 0
+
+    def test_click_button_non_string_arg_no_guidance(self, executor):
+        """Click Button with non-string argument should not add guidance."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Button", [42], []
+        )
+        assert len(hints) == 0
+
+    def test_click_element_still_no_guidance(self, executor):
+        """Click Element should still NOT trigger any guidance."""
+        hints = executor._add_link_image_locator_guidance(
+            "Click Element", ["Submit"], []
+        )
+        assert len(hints) == 0
+
+    def test_input_text_still_no_guidance(self, executor):
+        """Input Text should still NOT trigger any guidance."""
+        hints = executor._add_link_image_locator_guidance(
+            "Input Text", ["email"], []
+        )
+        assert len(hints) == 0
