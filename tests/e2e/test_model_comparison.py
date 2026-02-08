@@ -5,7 +5,7 @@ import pytest
 import pytest_asyncio
 from pathlib import Path
 
-from tests.e2e.fixtures import mcp_client, metrics_collector
+from tests.e2e.fixtures import mcp_client, mcp_server, metrics_collector
 from tests.e2e.model_comparison import ModelComparator
 from tests.e2e.test_agent_tool_discovery import load_scenario
 
@@ -33,7 +33,7 @@ def get_comparison_models() -> list[str]:
     not should_run_comparison(),
     reason="Requires RUN_MODEL_COMPARISON=true and OPENAI_API_KEY",
 )
-async def test_model_comparison_simple_scenario(mcp_client):
+async def test_model_comparison_simple_scenario(mcp_server):
     """Compare models on a simple test scenario."""
     from tests.e2e.models import Scenario, ExpectedToolCall
 
@@ -63,8 +63,8 @@ Use the MCP tools to accomplish this.""",
     models = get_comparison_models()
     print(f"\nComparing models: {models}")
 
-    # Create comparator
-    comparator = ModelComparator(mcp_client)
+    # Create comparator - pass FastMCP server for MCPAgentIntegration
+    comparator = ModelComparator(mcp_server)
 
     # Run comparison
     result = await comparator.compare_models_on_scenario(scenario, models)
@@ -94,7 +94,7 @@ Use the MCP tools to accomplish this.""",
     not should_run_comparison(),
     reason="Requires RUN_MODEL_COMPARISON=true and OPENAI_API_KEY",
 )
-async def test_model_comparison_with_real_scenario(mcp_client):
+async def test_model_comparison_with_real_scenario(mcp_server):
     """Compare models on a real scenario from scenarios directory."""
     # Load XML testing scenario (simpler than web scenarios)
     scenario_file = Path(__file__).parent / "scenarios" / "xml_testing.yaml"
@@ -108,8 +108,8 @@ async def test_model_comparison_with_real_scenario(mcp_client):
     models = get_comparison_models()
     print(f"\nComparing models on '{scenario.name}': {models}")
 
-    # Create comparator
-    comparator = ModelComparator(mcp_client)
+    # Create comparator - pass FastMCP server for MCPAgentIntegration
+    comparator = ModelComparator(mcp_server)
 
     # Run comparison
     result = await comparator.compare_models_on_scenario(scenario, models)
@@ -131,7 +131,7 @@ async def test_model_comparison_with_real_scenario(mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_allowed_models_validation(mcp_client):
+async def test_allowed_models_validation(mcp_server):
     """Test that only allowed models can be used."""
     from tests.e2e.models import Scenario, ExpectedToolCall
 
@@ -147,7 +147,7 @@ async def test_allowed_models_validation(mcp_client):
         tags=["test"],
     )
 
-    comparator = ModelComparator(mcp_client)
+    comparator = ModelComparator(mcp_server)
 
     # Should reject invalid model
     with pytest.raises(ValueError, match="not in allowed list"):
@@ -157,7 +157,7 @@ async def test_allowed_models_validation(mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_comparison_report_generation(mcp_client):
+async def test_comparison_report_generation(mcp_server):
     """Test report generation functionality."""
     from tests.e2e.models import Scenario, ExpectedToolCall, ScenarioResult, ToolCallRecord
     from tests.e2e.model_comparison import ModelComparisonResult
@@ -217,7 +217,7 @@ async def test_comparison_report_generation(mcp_client):
         },
     )
 
-    comparator = ModelComparator(mcp_client)
+    comparator = ModelComparator(mcp_server)
     report = comparator.generate_comparison_report(comparison_result)
 
     # Verify report contains key information

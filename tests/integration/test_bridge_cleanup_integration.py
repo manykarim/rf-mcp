@@ -127,11 +127,15 @@ class TestStartupCleanupIntegration:
 
         from robotmcp.server import _get_external_client_if_configured
 
-        # Verify client can be created
-        client = _get_external_client_if_configured()
-        assert client is not None
-        assert client.host == "127.0.0.1"
-        assert client.port == 7317
+        # Mock is_reachable() because no bridge is actually running on port 7317
+        with patch(
+            "robotmcp.components.execution.external_rf_client.ExternalRFClient.is_reachable",
+            return_value=True,
+        ):
+            client = _get_external_client_if_configured()
+            assert client is not None
+            assert client.host == "127.0.0.1"
+            assert client.port == 7317
 
     def test_startup_cleans_when_bridge_active(
         self, clean_env, mock_external_client, mock_session_manager

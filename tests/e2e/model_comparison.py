@@ -10,7 +10,7 @@ from datetime import datetime
 from tests.e2e.models import Scenario, ScenarioResult
 from tests.e2e.agent_integration import MCPAgentIntegration
 from tests.e2e.metrics_collector import MetricsCollector
-from fastmcp import Client
+from fastmcp import Client, FastMCP
 
 
 @dataclass
@@ -45,13 +45,14 @@ class ModelComparator:
         "gpt-5.1",
     ]
 
-    def __init__(self, mcp_client: Client):
+    def __init__(self, mcp_server_or_client):
         """Initialize model comparator.
 
         Args:
-            mcp_client: FastMCP client instance
+            mcp_server_or_client: FastMCP server instance or Client instance.
+                MCPAgentIntegration requires a FastMCP server for FastMCPToolset.
         """
-        self.mcp_client = mcp_client
+        self.mcp_server_or_client = mcp_server_or_client
 
     async def compare_models_on_scenario(
         self,
@@ -88,7 +89,7 @@ class ModelComparator:
 
             # Create new metrics collector for this model
             metrics_collector = MetricsCollector()
-            integration = MCPAgentIntegration(self.mcp_client, metrics_collector)
+            integration = MCPAgentIntegration(self.mcp_server_or_client, metrics_collector)
 
             # Create agent with this model
             agent = integration.create_agent_with_mcp_tools(
