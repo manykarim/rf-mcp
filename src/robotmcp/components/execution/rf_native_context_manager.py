@@ -562,12 +562,17 @@ class RobotFrameworkNativeContextManager:
                     logger.debug("Could not restore search order: %s", so_err)
 
             # Use RF's native argument resolution.
-            # Suppress stdout to prevent RF console output from corrupting
-            # the MCP stdio transport (runner.run writes test progress to fd 1).
-            with _suppress_stdout():
-                result = self._execute_with_native_resolution(
-                    session_id, keyword_name, arguments, namespace, variables, assign_to
-                )
+            # NOTE: _suppress_stdout() was previously used here to prevent RF
+            # console output from corrupting the MCP stdio transport.  However,
+            # with console='none' in RobotSettings, runner.run() produces zero
+            # bytes on fd 1.  The fd-level redirect (os.dup2) is process-global
+            # and caused a race condition: when thread B enters _suppress_stdout
+            # before the event loop writes thread A's MCP response to fd 1, the
+            # response ends up on stderr and the client never receives it.
+            # Removed _suppress_stdout() here — console='none' is sufficient.
+            result = self._execute_with_native_resolution(
+                session_id, keyword_name, arguments, namespace, variables, assign_to
+            )
             
             # Update session variables from RF variables
             context_info["variables"] = variables

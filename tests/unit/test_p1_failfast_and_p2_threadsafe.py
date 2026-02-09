@@ -643,3 +643,117 @@ class TestP1P2Integration:
         # Refcount should be clean
         with mod._stdout_redirect_lock:
             assert mod._stdout_redirect_count == 0
+
+
+# ---------------------------------------------------------------------------
+# P16-Issue1 fix invariant: runner.run() with console='none' writes zero
+# bytes to fd 1.  This is the safety guarantee that allows removing
+# _suppress_stdout() from the keyword execution path.
+# ---------------------------------------------------------------------------
+
+
+class TestConsoleNoneNoFd1Output:
+    """Verify RF keyword execution writes nothing to fd 1 with console='none'."""
+
+    def _make_rf_context(self):
+        """Create a minimal RF context with console='none'."""
+        import tempfile
+        from pathlib import Path
+        from robot.running.model import TestSuite
+        from robot.running.namespace import Namespace
+        from robot.conf.settings import RobotSettings
+        from robot.variables.scopes import VariableScopes
+        from robot.running.resourcemodel import ResourceFile
+        from robot.output import Output
+        from robot.running.context import EXECUTION_CONTEXTS
+
+        try:
+            from robot.conf.languages import Languages
+        except ImportError:
+            from robot.languages import Languages
+
+        variables = VariableScopes(RobotSettings())
+        suite = TestSuite(name="FD1Test")
+        suite.source = Path("FD1Test.robot")
+        suite.resource = ResourceFile(source=suite.source)
+        namespace = Namespace(variables, suite, suite.resource, Languages())
+
+        temp_dir = tempfile.mkdtemp(prefix="rf_mcp_fd1test_")
+        settings = RobotSettings(outputdir=temp_dir, output=None, console="none")
+        output = Output(settings)
+        namespace.import_library("BuiltIn")
+        ctx = EXECUTION_CONTEXTS.start_suite(suite, namespace, output, dry_run=False)
+        namespace.start_suite()
+        namespace.start_test()
+        return namespace, ctx
+
+    def _capture_fd1(self, func):
+        """Run *func* while capturing everything written to fd 1."""
+        import fcntl
+
+        read_fd, write_fd = os.pipe()
+        saved = os.dup(1)
+        os.dup2(write_fd, 1)
+        os.close(write_fd)
+        try:
+            func()
+        finally:
+            os.dup2(saved, 1)
+            os.close(saved)
+        flags = fcntl.fcntl(read_fd, fcntl.F_GETFL)
+        fcntl.fcntl(read_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+        try:
+            data = os.read(read_fd, 65536)
+        except BlockingIOError:
+            data = b""
+        os.close(read_fd)
+        return data
+
+    def test_runner_run_success_no_fd1_output(self):
+        """runner.run() for a passing keyword writes nothing to fd 1."""
+        from robot.running.model import Keyword as RunKW
+        from robot.result.model import Keyword as ResKW
+
+        namespace, ctx = self._make_rf_context()
+
+        def run():
+            runner = namespace.get_runner("Should Be Equal")
+            runner.run(RunKW(name="Should Be Equal", args=("a", "a")), ResKW(name="Should Be Equal", args=("a", "a")), ctx)
+
+        captured = self._capture_fd1(run)
+        assert captured == b"", f"runner.run() wrote {len(captured)} bytes to fd 1: {captured!r}"
+
+    def test_runner_run_failure_no_fd1_output(self):
+        """runner.run() for a failing keyword writes nothing to fd 1."""
+        from robot.running.model import Keyword as RunKW
+        from robot.result.model import Keyword as ResKW
+        from robot.errors import ExecutionFailed
+
+        namespace, ctx = self._make_rf_context()
+
+        def run():
+            runner = namespace.get_runner("Should Be Equal")
+            try:
+                runner.run(RunKW(name="Should Be Equal", args=("a", "b")), ResKW(name="Should Be Equal", args=("a", "b")), ctx)
+            except ExecutionFailed:
+                pass  # Expected
+
+        captured = self._capture_fd1(run)
+        assert captured == b"", f"runner.run() wrote {len(captured)} bytes to fd 1: {captured!r}"
+
+    def test_runner_run_wrong_args_no_fd1_output(self):
+        """runner.run() with wrong argument count writes nothing to fd 1."""
+        from robot.running.model import Keyword as RunKW
+        from robot.result.model import Keyword as ResKW
+
+        namespace, ctx = self._make_rf_context()
+
+        def run():
+            runner = namespace.get_runner("Length Should Be")
+            try:
+                runner.run(RunKW(name="Length Should Be", args=("abc",)), ResKW(name="Length Should Be", args=("abc",)), ctx)
+            except Exception:
+                pass
+
+        captured = self._capture_fd1(run)
+        assert captured == b"", f"runner.run() wrote {len(captured)} bytes to fd 1: {captured!r}"
