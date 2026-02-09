@@ -2376,6 +2376,28 @@ async def manage_session(
         result = _call_attach_tool_with_fallback(
             "import_custom_library", _external_call, _local_call
         )
+
+        # ── Sync the session model with the RF namespace import ─────
+        # import_library_for_session() imports into the RF Namespace but
+        # does NOT update session.imported_libraries / loaded_libraries /
+        # search_order.  Without this sync, set_library_search_order()
+        # will reject the library because the session model doesn't know
+        # about it (P16 fix).
+        if result.get("success"):
+            try:
+                session.import_library(library_name, force=True)
+                session.loaded_libraries.add(library_name)
+            except Exception as sync_err:
+                logger.debug(
+                    "Session model sync after import_library failed: %s", sync_err
+                )
+                # Best-effort: the RF namespace import succeeded, so at
+                # minimum ensure imported_libraries tracks the library.
+                if library_name not in session.imported_libraries:
+                    session.imported_libraries.append(library_name)
+                if library_name not in session.search_order:
+                    session.search_order.append(library_name)
+
         result.update({"action": "import_library", "session_id": session_id})
         return result
 

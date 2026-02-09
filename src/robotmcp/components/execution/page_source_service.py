@@ -70,7 +70,13 @@ class PageSourceService:
         self.config = config or ExecutionConfig()
 
     def _get_page_source_via_rf_context(self, session: ExecutionSession) -> str:
-        """Attempt to fetch page source through the Robot Framework native context."""
+        """Attempt to fetch page source through the Robot Framework native context.
+
+        IMPORTANT: This is a blocking call that enters _suppress_stdout().
+        Callers from async code MUST use asyncio.to_thread() to avoid:
+        1. Blocking the asyncio event loop
+        2. Racing with concurrent _suppress_stdout() usage (fd 1 redirect)
+        """
         page_source = ""
         try:
             from robotmcp.components.execution.rf_native_context_manager import (
@@ -80,8 +86,13 @@ class PageSourceService:
             rf_mgr = get_rf_native_context_manager()
             # Select library-appropriate keywords to avoid log noise
             imported = getattr(session, "imported_libraries", []) or []
+            candidates = self._keyword_candidates(self._SOURCE_KEYWORDS, imported)
+            logger.info(
+                "Page source retrieval for session %s: imported=%s, candidates=%s",
+                session.session_id, imported, candidates,
+            )
 
-            for kw in self._keyword_candidates(self._SOURCE_KEYWORDS, imported):
+            for kw in candidates:
                 res = rf_mgr.execute_keyword_with_context(
                     session_id=session.session_id,
                     keyword_name=kw,
@@ -95,6 +106,20 @@ class PageSourceService:
                         page_source = out
                         session.browser_state.page_source = out
                         break
+                    else:
+                        logger.warning(
+                            "Page source keyword '%s' succeeded but returned "
+                            "empty/non-string output: type=%s, output=%r, result=%r",
+                            kw, type(res.get("result")).__name__,
+                            str(res.get("output", ""))[:100],
+                            str(res.get("result", ""))[:100],
+                        )
+                else:
+                    logger.warning(
+                        "Page source keyword '%s' failed for session %s: %s",
+                        kw, session.session_id,
+                        res.get("error", "unknown") if res else "no response",
+                    )
 
             # Update URL and title where possible
             for url_kw in self._keyword_candidates(self._URL_KEYWORDS, imported):
@@ -123,7 +148,7 @@ class PageSourceService:
                 except Exception:
                     pass
         except Exception as exc:
-            logger.debug("RF-context page source retrieval failed: %s", exc)
+            logger.warning("RF-context page source retrieval failed: %s", exc)
             page_source = session.browser_state.page_source or ""
 
         return page_source
@@ -348,8 +373,13 @@ class PageSourceService:
                     session, full_source, filtered, filtering_level
                 )
 
-            # RF-context fallback when no plugin handles the library
-            page_source = self._get_page_source_via_rf_context(session)
+            # RF-context fallback when no plugin handles the library.
+            # Run in a worker thread to avoid blocking the event loop and
+            # to prevent _suppress_stdout() fd-redirect races.
+            import asyncio as _asyncio
+            page_source = await _asyncio.to_thread(
+                self._get_page_source_via_rf_context, session
+            )
 
             if not page_source:
                 return {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, Optional
 
@@ -38,7 +39,11 @@ class BrowserStateProvider(LibraryStateProvider):
             return None
 
         try:
-            page_source = service._get_page_source_via_rf_context(session)  # type: ignore[attr-defined]
+            # Run the blocking RF context call in a worker thread to avoid
+            # blocking the event loop and racing with _suppress_stdout().
+            page_source = await asyncio.to_thread(
+                service._get_page_source_via_rf_context, session  # type: ignore[attr-defined]
+            )
         except AttributeError:
             logger.debug("PageSourceService helper not available for Browser provider.")
             return None

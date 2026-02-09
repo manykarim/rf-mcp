@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -31,7 +32,14 @@ class SeleniumStateProvider(LibraryStateProvider):
         if service is None:
             return None
 
-        page_source = service._get_page_source_via_rf_context(session)  # type: ignore[attr-defined]
+        # Run the blocking RF context call in a worker thread to avoid:
+        # 1. Blocking the asyncio event loop
+        # 2. Racing with _suppress_stdout() fd redirect from concurrent
+        #    keyword execution threads (which would cause the MCP response
+        #    to be written to stderr instead of stdout)
+        page_source = await asyncio.to_thread(
+            service._get_page_source_via_rf_context, session  # type: ignore[attr-defined]
+        )
         if not page_source:
             return {"success": False, "error": "No page source available for this session"}
 

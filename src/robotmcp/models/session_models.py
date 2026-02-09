@@ -863,6 +863,12 @@ class ExecutionSession:
         allowed.update(profile.optional_libraries)
         # Always allow BuiltIn
         allowed.add("BuiltIn")
+        # Always allow the explicitly preferred library (P16 fix: when
+        # explicit_library_preference is "SeleniumLibrary" but the default
+        # WEB_AUTOMATION profile only lists "Browser", the preference must
+        # still be allowed through validation).
+        if self.explicit_library_preference:
+            allowed.add(self.explicit_library_preference)
         return allowed
 
     def get_excluded_libraries_for_session(self) -> Set[str]:

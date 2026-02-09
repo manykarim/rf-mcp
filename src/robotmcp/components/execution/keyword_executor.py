@@ -177,6 +177,12 @@ class KeywordExecutor:
         # a lock, concurrent pre-validations in different threads could see
         # the 500ms pre-validation timeout instead of the action timeout.
         self._browser_timeout_lock = threading.Lock()
+        # Global asyncio lock to serialize keyword execution.
+        # Prevents concurrent asyncio.to_thread() dispatches which cause
+        # _suppress_stdout() reference counting to keep fd 1 redirected
+        # to stderr while FastMCP writes JSON-RPC responses → lost responses.
+        # Also prevents concurrent Selenium WebDriver access (not thread-safe).
+        self._execution_lock = asyncio.Lock()
 
     def _requires_pre_validation(self, keyword: str) -> bool:
         """Check if a keyword requires element pre-validation."""
@@ -900,6 +906,31 @@ class KeywordExecutor:
             Execution result with status, output, and state
         """
 
+        # Serialize keyword execution globally to prevent concurrent
+        # asyncio.to_thread() dispatches.  When two threads are inside
+        # _suppress_stdout() simultaneously, the reference-counted fd 1
+        # redirect stays active while FastMCP writes the first response,
+        # causing it to go to stderr instead of the MCP transport.
+        # The lock also prevents concurrent Selenium WebDriver access.
+        async with self._execution_lock:
+            return await self._execute_keyword_serialized(
+                session, keyword, arguments, browser_library_manager,
+                detail_level, library_prefix, assign_to, use_context, timeout_ms,
+            )
+
+    async def _execute_keyword_serialized(
+        self,
+        session: ExecutionSession,
+        keyword: str,
+        arguments: List[str],
+        browser_library_manager: Any,
+        detail_level: str = "minimal",
+        library_prefix: str = None,
+        assign_to: Union[str, List[str]] = None,
+        use_context: bool = False,
+        timeout_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Inner keyword execution, called under _execution_lock."""
         try:
             # PHASE 1.2: Pre-execution Library Registration
             # Ensure required library is registered before keyword execution
@@ -2025,6 +2056,18 @@ class KeywordExecutor:
                 logger.info(
                     f"Created RF native context for session {session_id} with libraries: {libraries}"
                 )
+
+            # Sync session search order into the stored RF context so the
+            # per-execution search-order restore in execute_keyword_with_context
+            # uses the most up-to-date library priority for this session.
+            try:
+                ctx_info = self.rf_native_context._session_contexts.get(session_id)
+                if ctx_info is not None:
+                    session_order = getattr(session, "search_order", None)
+                    if session_order:
+                        ctx_info["imported_libraries"] = list(session_order)
+            except Exception:
+                pass
 
             # Execute keyword using RF native context with session variables
             result = await asyncio.to_thread(

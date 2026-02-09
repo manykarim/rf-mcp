@@ -224,8 +224,10 @@ class RobotFrameworkNativeContextManager:
                 # Ensure BuiltIn is available for user keywords and variable ops
                 try:
                     namespace.import_library("BuiltIn")
+                    _builtin_ok = True
                 except Exception:
-                    pass
+                    _builtin_ok = False
+                    logger.warning("BuiltIn library import failed during context creation")
 
                 # Start execution context (must not be dry_run to actually execute keywords)
                 # Wrap in _suppress_stdout() to prevent RF console output from
@@ -251,14 +253,23 @@ class RobotFrameworkNativeContextManager:
             else:
                 logger.info(f"RF context already exists, reusing for session {session_id}")
                 ctx = EXECUTION_CONTEXTS.current
-                variables = ctx.variables  
+                variables = ctx.variables
                 namespace = ctx.namespace
                 output = getattr(ctx, 'output', None)
                 suite = ctx.suite
-                
+                # Ensure BuiltIn is available in the reused context (P16-Issue7)
+                try:
+                    _kw_store = getattr(namespace, '_kw_store', None)
+                    if _kw_store and "BuiltIn" not in getattr(_kw_store, 'libraries', {}):
+                        namespace.import_library("BuiltIn")
+                        logger.info("Imported BuiltIn into reused context for session %s", session_id)
+                except Exception:
+                    pass
+                _builtin_ok = True
+
             # BuiltIn context access: avoid setting internal attributes in RF7+.
             # BuiltIn will operate correctly when an execution context is active.
-            
+
             # Import libraries into the RF namespace
             imported_libraries = []
             failed_imports: Dict[str, str] = {}  # H2: track failed imports for diagnostics
@@ -352,6 +363,10 @@ class RobotFrameworkNativeContextManager:
             except Exception:
                 result_suite = None
                 result_test = None
+
+            # Ensure BuiltIn is always tracked in imported_libraries (P16-Issue7)
+            if "BuiltIn" not in imported_libraries:
+                imported_libraries.insert(0, "BuiltIn")
 
             self._session_contexts[session_id] = {
                 "context": ctx,
@@ -514,7 +529,38 @@ class RobotFrameworkNativeContextManager:
             if EXECUTION_CONTEXTS.current != ctx:
                 logger.warning(f"Context mismatch for session {session_id}, fixing...")
                 # Note: We may need to handle context switching differently
-            
+
+            # ── Ensure BuiltIn is always available (P16-Issue7) ───────────
+            # BuiltIn must always be in the namespace's keyword store so that
+            # keywords like Should Be Equal, Log, etc. are always resolvable.
+            # This can fail silently during context creation (line 226) or when
+            # contexts are reused across sessions.
+            try:
+                _kw_store = getattr(namespace, '_kw_store', None)
+                if _kw_store and "BuiltIn" not in getattr(_kw_store, 'libraries', {}):
+                    namespace.import_library("BuiltIn")
+                    logger.info("Re-imported BuiltIn into namespace for session %s", session_id)
+            except Exception as bi_err:
+                logger.debug("BuiltIn re-import attempt: %s", bi_err)
+
+            # ── Re-set RF namespace search order for this session ──────────
+            # The RF context is process-global.  When multiple sessions share
+            # the same EXECUTION_CONTEXTS.current, whichever session last
+            # called set_search_order() determines keyword resolution order
+            # for ALL sessions.  Re-apply this session's library list before
+            # every keyword execution so that ambiguous keywords like
+            # "Open Browser" resolve to the correct library.
+            session_libs = context_info.get("imported_libraries") or context_info.get("libraries") or []
+            if session_libs:
+                try:
+                    namespace.set_search_order(session_libs)
+                    logger.debug(
+                        "Restored RF search order for session %s: %s",
+                        session_id, session_libs,
+                    )
+                except Exception as so_err:
+                    logger.debug("Could not restore search order: %s", so_err)
+
             # Use RF's native argument resolution.
             # Suppress stdout to prevent RF console output from corrupting
             # the MCP stdio transport (runner.run writes test progress to fd 1).

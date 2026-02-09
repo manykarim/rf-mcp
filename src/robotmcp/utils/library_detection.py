@@ -23,6 +23,7 @@ class LibraryDetector:
             (r'\b(use|using|with|via|through)\s+(selenium|seleniumlibrary|selenium\s*library)\b', 10),
             (r'\btest\s+automation\s+with\s+selenium\b', 8),
             (r'\bseleniumlibrary\b', 9),
+            (r'\bselenium\b', 6),  # Standalone mention — catches "Selenium test", "run Selenium", etc.
             (r'\bwebdriver\b', 6),
             (r'\bselenium\s+grid\b', 8),
             (r'\bselenium\s+standalone\b', 7),

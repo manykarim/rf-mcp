@@ -622,3 +622,110 @@ class TestVariableAssignmentAndRetrieval:
             {"keyword": "Log", "arguments": ["${GREETING} ${TARGET}"], "session_id": sid},
         )
         assert step.data["success"] is True
+
+
+# =============================================================================
+# P16-Issue7: BuiltIn available after analyze+recommend+import_library flow
+# =============================================================================
+
+
+class TestBuiltInAfterAnalyzeRecommendImport:
+    """Verify BuiltIn keywords work after the analyze→recommend→import flow.
+
+    Reproduces the exact scenario from P16-Issue7 where BuiltIn keywords like
+    'Should Be Equal' failed with 'No keyword with name found' after
+    analyze_scenario → recommend_libraries → manage_session(import_library).
+    """
+
+    @pytest.mark.asyncio
+    async def test_builtin_after_analyze_recommend_import(self, mcp_client):
+        """analyze_scenario → recommend_libraries → import_library → Should Be Equal works."""
+        # 1. analyze_scenario (creates session)
+        analyze = await mcp_client.call_tool(
+            "analyze_scenario",
+            {"scenario": "Web UI test: verify text on page", "context": "web"},
+        )
+        assert analyze.data["success"] is True
+        sid = analyze.data["session_id"]
+
+        # 2. recommend_libraries (auto-imports non-BuiltIn libraries)
+        rec = await mcp_client.call_tool(
+            "recommend_libraries",
+            {"scenario": "Web UI test: verify text on page", "session_id": sid,
+             "check_availability": True, "apply_search_order": True},
+        )
+        assert rec.data["success"] is True
+
+        # 3. import_library for OperatingSystem (extra library)
+        imp = await mcp_client.call_tool(
+            "manage_session",
+            {"session_id": sid, "action": "import_library", "library_name": "OperatingSystem"},
+        )
+        assert imp.data["success"] is True
+
+        # 4. BuiltIn keywords MUST work after the above flow
+        step = await mcp_client.call_tool(
+            "execute_step",
+            {"keyword": "Should Be Equal", "arguments": ["hello", "hello"], "session_id": sid},
+        )
+        assert step.data["success"] is True, (
+            f"BuiltIn keyword 'Should Be Equal' failed: {step.data.get('error')}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_builtin_after_import_library_without_analyze(self, mcp_client):
+        """manage_session(init) → import_library(Collections) → Should Be Equal works."""
+        sid = _sid("bi-imp")
+        init = await mcp_client.call_tool(
+            "manage_session",
+            {"session_id": sid, "action": "init"},
+        )
+        assert init.data["success"] is True
+
+        # Import a non-BuiltIn library
+        imp = await mcp_client.call_tool(
+            "manage_session",
+            {"session_id": sid, "action": "import_library", "library_name": "Collections"},
+        )
+        assert imp.data["success"] is True
+
+        # BuiltIn keywords MUST still work
+        step = await mcp_client.call_tool(
+            "execute_step",
+            {"keyword": "Should Be Equal", "arguments": ["42", "42"], "session_id": sid},
+        )
+        assert step.data["success"] is True, (
+            f"BuiltIn keyword 'Should Be Equal' failed: {step.data.get('error')}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_builtin_log_after_multiple_import_library(self, mcp_client):
+        """Multiple import_library calls don't break BuiltIn."""
+        sid = _sid("bi-multi")
+        init = await mcp_client.call_tool(
+            "manage_session",
+            {"session_id": sid, "action": "init"},
+        )
+        assert init.data["success"] is True
+
+        # Import multiple libraries
+        for lib in ["Collections", "String", "OperatingSystem"]:
+            imp = await mcp_client.call_tool(
+                "manage_session",
+                {"session_id": sid, "action": "import_library", "library_name": lib},
+            )
+            assert imp.data["success"] is True
+
+        # BuiltIn keywords MUST still work
+        for kw, args in [
+            ("Log", ["Still working"]),
+            ("Should Be Equal", ["a", "a"]),
+            ("Set Variable", ["test_value"]),
+        ]:
+            step = await mcp_client.call_tool(
+                "execute_step",
+                {"keyword": kw, "arguments": args, "session_id": sid},
+            )
+            assert step.data["success"] is True, (
+                f"BuiltIn keyword '{kw}' failed: {step.data.get('error')}"
+            )
