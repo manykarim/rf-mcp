@@ -114,10 +114,14 @@ class TestBrowserPreValidation:
     """Validate pre-validation with real Browser Library against live page."""
 
     async def test_visible_element_passes(self, browser_session):
-        """Pre-validation should pass for a visible element (h1 on example.com)."""
+        """Pre-validation should pass for a visible element (h1 on example.com).
+
+        Uses 'hover' action because h1 is non-interactive (not 'enabled'),
+        so 'click' would fail since it requires {visible, enabled}.
+        """
         session, executor, _ = browser_session
         is_valid, error, details = await executor._pre_validate_element(
-            "css=h1", session, "click"
+            "css=h1", session, "hover"
         )
         assert is_valid is True, f"Expected valid, got error: {error}"
         assert error is None
