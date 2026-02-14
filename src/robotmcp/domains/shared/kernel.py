@@ -9,6 +9,7 @@ As per ADR-001, this shared kernel is kept minimal to reduce coupling.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from enum import Enum
@@ -393,3 +394,74 @@ ValidationLevel = Annotated[
     Literal["minimal", "standard", "strict"],
     BeforeValidator(_normalize_str),
 ]
+
+
+# ============================================================
+# ADR-010: Small LLM Resilience — Array Coercion & Guided Recovery
+# ============================================================
+
+
+def _coerce_string_to_list(v: Any) -> Any:
+    """Coerce stringified JSON arrays and comma-separated strings to lists.
+
+    Handles three LLM output patterns:
+    1. JSON array string:  '["Browser", "BuiltIn"]' -> ["Browser", "BuiltIn"]
+    2. Comma-separated:    'Browser,BuiltIn'        -> ["Browser", "BuiltIn"]
+    3. Single value:       'Browser'                 -> ["Browser"]
+
+    Non-string inputs (list, None, int, etc.) pass through unchanged.
+    Schema-transparent: produces identical JSON Schema to List[str].
+    """
+    if isinstance(v, list):
+        return v
+    if isinstance(v, str):
+        v_stripped = v.strip()
+        # Path 1: JSON parse '[...]'
+        if v_stripped.startswith("["):
+            try:
+                parsed = json.loads(v_stripped)
+                if isinstance(parsed, list):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+        # Path 2: Comma split 'A,B,C'
+        if "," in v_stripped:
+            return [item.strip() for item in v_stripped.split(",") if item.strip()]
+        # Path 3: Single value 'Browser'
+        if v_stripped:
+            return [v_stripped]
+    return v
+
+
+CoercedStringList = Annotated[List[str], BeforeValidator(_coerce_string_to_list)]
+OptionalCoercedStringList = Annotated[
+    Optional[List[str]], BeforeValidator(_coerce_string_to_list)
+]
+
+
+# ── ADR-010 I4: Deprecated keyword aliases ────────────────────
+
+DEPRECATED_KEYWORD_ALIASES: Dict[str, str] = {
+    "get": "GET On Session",
+    "post": "POST On Session",
+    "put": "PUT On Session",
+    "delete": "DELETE On Session",
+    "patch": "PATCH On Session",
+    "head": "HEAD On Session",
+    "options": "OPTIONS On Session",
+}
+
+
+def extract_deprecation_suggestion(error_msg: str) -> str | None:
+    """Extract suggested replacement from deprecation warning text."""
+    pattern = re.compile(
+        r"(?:use|Use|favor of)\s+['\"]?(\w[\w\s]*?)['\"]?\s*(?:\.|instead|$)",
+        re.IGNORECASE,
+    )
+    match = pattern.search(error_msg)
+    return match.group(1).strip() if match else None
+
+
+def resolve_deprecated_alias(keyword: str) -> str | None:
+    """Return modern replacement for deprecated keyword, or None."""
+    return DEPRECATED_KEYWORD_ALIASES.get(keyword.lower().strip())

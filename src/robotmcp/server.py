@@ -29,6 +29,8 @@ from robotmcp.domains.instruction import FastMCPInstructionAdapter
 from robotmcp.domains.shared.kernel import (
     AttachAction,
     AutomationContext,
+    CoercedStringList,
+    DEPRECATED_KEYWORD_ALIASES,
     DetailLevel,
     ExecutionMode,
     FilteringLevel,
@@ -36,6 +38,7 @@ from robotmcp.domains.shared.kernel import (
     IntentVerb,
     KeywordStrategy,
     ModelTierLiteral,
+    OptionalCoercedStringList,
     PluginAction,
     RecommendMode,
     SessionAction,
@@ -43,6 +46,8 @@ from robotmcp.domains.shared.kernel import (
     TestStatus,
     ToolProfileName,
     ValidationLevel,
+    extract_deprecation_suggestion,
+    resolve_deprecated_alias,
 )
 from robotmcp.models.session_models import PlatformType
 from robotmcp.optimization.instruction_hooks import InstructionLearningHooks
@@ -2185,6 +2190,15 @@ async def find_keywords(
         if excluded:
             result["excluded_keywords"] = excluded
             result["session_library"] = session_library_preference
+
+        # ADR-010 I3: Hint when catalog returns empty without active session
+        if not catalog and not session_id:
+            result["hint"] = (
+                "Catalog is empty because no session with libraries is active. "
+                "Create a session first with manage_session(action='init', "
+                "libraries=[...]), or use strategy='semantic' which works "
+                "without a session."
+            )
         # Track for instruction learning
         if session_id:
             _track_tool_result(
@@ -2234,19 +2248,19 @@ async def discover_keywords(
 @mcp.tool
 async def manage_session(
     action: SessionAction,
-    session_id: str,
-    libraries: List[str] | None = None,
+    session_id: str = "",
+    libraries: OptionalCoercedStringList = None,
     variables: Dict[str, Any] | List[str] | None = None,
     resource_path: str | None = None,
     library_name: str | None = None,
-    args: List[str] | None = None,
+    args: OptionalCoercedStringList = None,
     alias: str | None = None,
     scope: Literal["test", "suite", "global"] = "suite",
     variable_file_path: str | None = None,
     # ADR-005: Multi-test parameters
     test_name: str | None = None,
     test_documentation: str = "",
-    test_tags: List[str] | None = None,
+    test_tags: OptionalCoercedStringList = None,
     test_setup: Dict[str, Any] | None = None,
     test_teardown: Dict[str, Any] | None = None,
     test_status: TestStatus = "pass",
@@ -2347,6 +2361,11 @@ async def manage_session(
     """
 
     action_norm = (action or "").strip().lower()
+
+    # ADR-010 I5: Auto-generate session_id when empty/missing for init action
+    if not session_id and action_norm in {"init", "initialize", "bootstrap"}:
+        session_id = execution_engine.session_manager.create_session_id()
+
     session = execution_engine.session_manager.get_or_create_session(session_id)
 
     if action_norm in {"init", "initialize", "bootstrap"}:
@@ -2434,6 +2453,8 @@ async def manage_session(
             "variables_set": set_vars,
             "import_issues": problems,
             "note": "Context mode is managed via session namespace; use execute_step(use_context=True) when needed.",
+            # ADR-010 I6: Prominent session_id guidance for small LLMs
+            "next_step": f"Use session_id='{session_id}' in all subsequent tool calls.",
         }
 
         # ── ADR-006: Auto-activate tool profile (params > env vars) ──
@@ -3000,9 +3021,9 @@ async def execute_flow(
 @mcp.tool
 async def get_session_state(
     session_id: str,
-    sections: List[str] | None = None,
+    sections: OptionalCoercedStringList = None,
     state_type: str = "all",
-    elements_of_interest: List[str] | None = None,
+    elements_of_interest: OptionalCoercedStringList = None,
     page_source_filtered: bool = False,
     page_source_filtering_level: FilteringLevel = "standard",
     include_reduced_dom: bool = True,
@@ -3102,7 +3123,7 @@ async def get_session_state(
 @mcp.tool
 async def execute_step(
     keyword: str,
-    arguments: List[str] = None,
+    arguments: CoercedStringList = None,
     session_id: str = "default",
     raise_on_failure: bool = True,
     detail_level: DetailLevel = "minimal",
@@ -3331,8 +3352,21 @@ async def execute_step(
     if not result.get("success", False) and raise_on_failure:
         error_msg = result.get("error", f"Step '{keyword}' failed")
 
+        # ADR-010 I4: Extract deprecation suggestion from error
+        alias = resolve_deprecated_alias(keyword)
+        if alias:
+            result["suggested_keyword"] = alias
+            result["hint"] = f"'{keyword}' is deprecated. Use '{alias}' instead."
+        elif "deprecated" in error_msg.lower():
+            suggested = extract_deprecation_suggestion(error_msg)
+            if suggested:
+                result["suggested_keyword"] = suggested
+                result["hint"] = f"'{keyword}' is deprecated. Use '{suggested}' instead."
+
         # Create detailed error message including suggestions if available
         detailed_error = f"Step execution failed: {error_msg}"
+        if result.get("suggested_keyword"):
+            detailed_error += f"\nUse '{result['suggested_keyword']}' instead."
         if "suggestions" in result:
             detailed_error += f"\nSuggestions: {', '.join(result['suggestions'])}"
         # Include structured hints for better guidance
@@ -3468,7 +3502,7 @@ async def suggest_next_step(
 async def build_test_suite(
     test_name: str,
     session_id: str = "",
-    tags: List[str] = None,
+    tags: OptionalCoercedStringList = None,
     documentation: str = "",
     remove_library_prefixes: bool = True,
 ) -> Dict[str, Any]:
@@ -4514,7 +4548,7 @@ async def validate_test_readiness(session_id: str = "default") -> Dict[str, Any]
 
 @mcp.tool
 async def set_library_search_order(
-    libraries: List[str], session_id: str = "default"
+    libraries: CoercedStringList, session_id: str = "default"
 ) -> Dict[str, Any]:
     """Set explicit library search order for keyword resolution.
 
