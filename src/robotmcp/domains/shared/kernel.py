@@ -12,7 +12,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
+
+from pydantic import BeforeValidator
 
 
 @dataclass(frozen=True)
@@ -280,3 +282,114 @@ class ModelTier(Enum):
             return cls.STANDARD
         else:
             return cls.LARGE_CONTEXT
+
+
+# ============================================================
+# ADR-009: Type-Constrained Tool Parameters
+# ============================================================
+#
+# Literal type aliases with BeforeValidator for case-insensitive
+# normalization.  Produces flat {"enum": [...]} in JSON Schema
+# while accepting wrong-case input at runtime.
+# ============================================================
+
+
+def _normalize_str(v: Any) -> Any:
+    """Normalize string input: strip whitespace, lowercase."""
+    return v.strip().lower() if isinstance(v, str) else v
+
+
+# ── Tier 1: Action dispatchers (HIGH impact) ──────────────────
+
+SessionAction = Annotated[
+    Literal[
+        "init", "import_library", "import_resource",
+        "set_variables", "import_variables",
+        "start_test", "end_test", "list_tests",
+        "set_suite_setup", "set_suite_teardown",
+        "set_tool_profile",
+    ],
+    BeforeValidator(_normalize_str),
+]
+
+TestStatus = Annotated[
+    Literal["pass", "fail"],
+    BeforeValidator(_normalize_str),
+]
+
+ToolProfileName = Annotated[
+    Literal["browser_exec", "api_exec", "discovery", "minimal_exec", "full"],
+    BeforeValidator(_normalize_str),
+]
+
+ModelTierLiteral = Annotated[
+    Literal["small_context", "standard", "large_context"],
+    BeforeValidator(_normalize_str),
+]
+
+PluginAction = Annotated[
+    Literal["list", "reload", "diagnose"],
+    BeforeValidator(_normalize_str),
+]
+
+AttachAction = Annotated[
+    Literal["status", "stop", "cleanup", "reset", "disconnect_all"],
+    BeforeValidator(_normalize_str),
+]
+
+IntentVerb = Annotated[
+    Literal[
+        "navigate", "click", "fill", "hover",
+        "select", "assert_visible", "extract_text", "wait_for",
+    ],
+    BeforeValidator(_normalize_str),
+]
+
+# ── Tier 2: Mode/Strategy selectors (MEDIUM impact) ──────────
+
+KeywordStrategy = Annotated[
+    Literal["semantic", "pattern", "catalog", "session"],
+    BeforeValidator(_normalize_str),
+]
+
+AutomationContext = Annotated[
+    Literal["web", "mobile", "api", "desktop"],
+    BeforeValidator(_normalize_str),
+]
+
+RecommendMode = Annotated[
+    Literal["direct", "sampling_prompt", "merge_samples"],
+    BeforeValidator(_normalize_str),
+]
+
+FlowStructure = Annotated[
+    Literal["if", "for", "try"],
+    BeforeValidator(_normalize_str),
+]
+
+ExecutionMode = Annotated[
+    Literal["keyword", "evaluate"],
+    BeforeValidator(_normalize_str),
+]
+
+# ── Tier 3: Verbosity/Level selectors (LOW impact) ───────────
+
+DetailLevel = Annotated[
+    Literal["minimal", "standard", "full"],
+    BeforeValidator(_normalize_str),
+]
+
+FilteringLevel = Annotated[
+    Literal["standard", "aggressive"],
+    BeforeValidator(_normalize_str),
+]
+
+SuiteRunMode = Annotated[
+    Literal["dry", "validate", "full"],
+    BeforeValidator(_normalize_str),
+]
+
+ValidationLevel = Annotated[
+    Literal["minimal", "standard", "strict"],
+    BeforeValidator(_normalize_str),
+]

@@ -26,6 +26,24 @@ from robotmcp.components.state_manager import StateManager
 from robotmcp.components.test_builder import TestBuilder
 from robotmcp.config import library_registry
 from robotmcp.domains.instruction import FastMCPInstructionAdapter
+from robotmcp.domains.shared.kernel import (
+    AttachAction,
+    AutomationContext,
+    DetailLevel,
+    ExecutionMode,
+    FilteringLevel,
+    FlowStructure,
+    IntentVerb,
+    KeywordStrategy,
+    ModelTierLiteral,
+    PluginAction,
+    RecommendMode,
+    SessionAction,
+    SuiteRunMode,
+    TestStatus,
+    ToolProfileName,
+    ValidationLevel,
+)
 from robotmcp.models.session_models import PlatformType
 from robotmcp.optimization.instruction_hooks import InstructionLearningHooks
 from robotmcp.plugins import get_library_plugin_manager
@@ -159,6 +177,7 @@ async def _initialize_adr_006_007_008() -> None:
 
         # Tool Profile (ADR-006)
         _tool_manager_adapter = ToolManagerAdapter(mcp)
+        await _tool_manager_adapter.initialize()  # Snapshot all tools for restore
         descriptor_registry = _build_tool_descriptor_registry()
         _tool_profile_manager = ToolProfileManager(
             tool_manager=_tool_manager_adapter,
@@ -1165,7 +1184,7 @@ async def diagnose_library_plugin(plugin_name: str) -> Dict[str, Any]:
 
 @mcp.tool
 async def manage_library_plugins(
-    action: str = "list", plugin_name: str | None = None
+    action: PluginAction = "list", plugin_name: str | None = None
 ) -> Dict[str, Any]:
     """Inspect or reload library plugins.
 
@@ -1325,12 +1344,12 @@ Respond with ONLY a JSON array of library names, like: ["Browser", "BuiltIn", "C
 @mcp.tool
 async def recommend_libraries(
     scenario: str,
-    context: str = "web",
+    context: AutomationContext = "web",
     session_id: str | None = None,
     max_recommendations: int = 5,
     check_availability: bool = True,
     apply_search_order: bool = True,
-    mode: str = "direct",
+    mode: RecommendMode = "direct",
     samples: List[Dict[str, Any]] | None = None,
     k: int | None = None,
     available_libraries: List[Dict[str, Any]] | None = None,
@@ -1672,7 +1691,7 @@ async def recommend_libraries(
 
 @mcp.tool
 async def analyze_scenario(
-    scenario: str, context: str = "web", session_id: str = None, ctx: Context = None
+    scenario: str, context: AutomationContext = "web", session_id: str = None, ctx: Context = None
 ) -> Dict[str, Any]:
     """Analyze a natural-language scenario into structured intent and create a session.
 
@@ -1986,8 +2005,8 @@ def _filter_keywords_by_session_library(
 @mcp.tool
 async def find_keywords(
     query: str,
-    strategy: str = "semantic",
-    context: str = "web",
+    strategy: KeywordStrategy = "semantic",
+    context: AutomationContext = "web",
     session_id: str | None = None,
     library_name: str | None = None,
     current_state: Dict[str, Any] | None = None,
@@ -2214,7 +2233,7 @@ async def discover_keywords(
 
 @mcp.tool
 async def manage_session(
-    action: str,
+    action: SessionAction,
     session_id: str,
     libraries: List[str] | None = None,
     variables: Dict[str, Any] | List[str] | None = None,
@@ -2230,14 +2249,14 @@ async def manage_session(
     test_tags: List[str] | None = None,
     test_setup: Dict[str, Any] | None = None,
     test_teardown: Dict[str, Any] | None = None,
-    test_status: str = "pass",
+    test_status: TestStatus = "pass",
     test_message: str = "",
     keyword: str | None = None,
     # ADR-006: Tool profile parameters
-    tool_profile: str | None = None,
-    model_tier: str | None = None,
+    tool_profile: ToolProfileName | None = None,
+    model_tier: ModelTierLiteral | None = None,
     scenario: str | None = None,
-    profile: str | None = None,
+    profile: ToolProfileName | None = None,
 ) -> Dict[str, Any]:
     """Manage session lifecycle: initialize, configure libraries/variables, and organize tests.
 
@@ -2903,7 +2922,7 @@ def _chunk_string(value: str, size: int) -> List[str]:
 
 @mcp.tool
 async def execute_flow(
-    structure: str,
+    structure: FlowStructure,
     session_id: str,
     condition: str | None = None,
     then_steps: List[Dict[str, Any]] | None = None,
@@ -2985,7 +3004,7 @@ async def get_session_state(
     state_type: str = "all",
     elements_of_interest: List[str] | None = None,
     page_source_filtered: bool = False,
-    page_source_filtering_level: str = "standard",
+    page_source_filtering_level: FilteringLevel = "standard",
     include_reduced_dom: bool = True,
     include_dom_stream: bool = False,
     dom_chunk_size: int = 65536,
@@ -3086,11 +3105,11 @@ async def execute_step(
     arguments: List[str] = None,
     session_id: str = "default",
     raise_on_failure: bool = True,
-    detail_level: str = "minimal",
+    detail_level: DetailLevel = "minimal",
     scenario_hint: str = None,
     assign_to: Optional[Union[str, List[str]]] = None,
     use_context: bool | None = None,
-    mode: str = "keyword",
+    mode: ExecutionMode = "keyword",
     expression: str | None = None,
     timeout_ms: int | None = None,
 ) -> Dict[str, Any]:
@@ -5093,8 +5112,8 @@ async def run_test_suite_dry(
 async def run_test_suite(
     session_id: str = "",
     suite_file_path: str = None,
-    mode: str = "full",
-    validation_level: str = "standard",
+    mode: SuiteRunMode = "full",
+    validation_level: ValidationLevel = "standard",
     include_warnings: bool = True,
     execution_options: Dict[str, Any] = None,
     output_level: str = "standard",
@@ -5255,7 +5274,7 @@ async def diagnose_rf_context(session_id: str) -> Dict[str, Any]:
 
 
 @mcp.tool
-async def manage_attach(action: str = "status") -> Dict[str, Any]:
+async def manage_attach(action: AttachAction = "status") -> Dict[str, Any]:
     """Inspect or control attach bridge configuration.
 
     Args:
@@ -5456,13 +5475,13 @@ async def manage_attach(action: str = "status") -> Dict[str, Any]:
 
 @mcp.tool
 async def intent_action(
-    intent: str,
+    intent: IntentVerb,
     target: str | None = None,
     value: str | None = None,
     session_id: str | None = None,
     options: Dict[str, str] | None = None,
     assign_to: str | None = None,
-    detail_level: str = "normal",
+    detail_level: DetailLevel = "standard",
 ) -> Dict[str, Any]:
     """Execute a high-level intent that auto-resolves to the correct library keyword.
 
