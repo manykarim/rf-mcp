@@ -46,11 +46,15 @@ _TYPE_ALIASES = {
     "SessionAction": (
         SessionAction,
         [
-            "init", "import_library", "import_resource",
-            "set_variables", "import_variables",
-            "start_test", "end_test", "list_tests",
+            "init", "initialize", "bootstrap",
+            "import_library", "library",
+            "import_resource", "resource",
+            "set_variables", "variables",
+            "import_variables", "load_variables",
+            "start_test", "end_test", "start_task", "end_task",
+            "list_tests",
             "set_suite_setup", "set_suite_teardown",
-            "set_tool_profile",
+            "set_tool_profile", "tool_profile",
         ],
     ),
     "TestStatus": (
@@ -71,7 +75,11 @@ _TYPE_ALIASES = {
     ),
     "AttachAction": (
         AttachAction,
-        ["status", "stop", "cleanup", "reset", "disconnect_all"],
+        [
+            "status", "info", "stop", "shutdown",
+            "cleanup", "clean", "reset", "reconnect",
+            "disconnect_all", "terminate", "force_stop",
+        ],
     ),
     "IntentVerb": (
         IntentVerb,
@@ -86,11 +94,11 @@ _TYPE_ALIASES = {
     ),
     "AutomationContext": (
         AutomationContext,
-        ["web", "mobile", "api", "desktop"],
+        ["web", "mobile", "api", "desktop", "generic", "database"],
     ),
     "RecommendMode": (
         RecommendMode,
-        ["direct", "sampling_prompt", "merge_samples"],
+        ["direct", "sampling_prompt", "sampling", "merge_samples", "merge"],
     ),
     "FlowStructure": (
         FlowStructure,
@@ -479,23 +487,27 @@ class TestOptionalVariants:
 class TestSessionActionSpecifics:
     """Targeted tests for SessionAction (most values of any alias)."""
 
-    def test_all_11_actions_accepted(self):
+    def test_all_session_actions_accepted(self):
         ta = TypeAdapter(SessionAction)
         actions = [
-            "init", "import_library", "import_resource",
-            "set_variables", "import_variables",
-            "start_test", "end_test", "list_tests",
+            "init", "initialize", "bootstrap",
+            "import_library", "library",
+            "import_resource", "resource",
+            "set_variables", "variables",
+            "import_variables", "load_variables",
+            "start_test", "end_test", "start_task", "end_task",
+            "list_tests",
             "set_suite_setup", "set_suite_teardown",
-            "set_tool_profile",
+            "set_tool_profile", "tool_profile",
         ]
         for action in actions:
             assert ta.validate_python(action) == action
 
     def test_session_action_count(self):
-        """SessionAction should have exactly 11 allowed values."""
+        """SessionAction should have exactly 20 allowed values (with aliases)."""
         ta = TypeAdapter(SessionAction)
         schema = ta.json_schema()
-        assert len(schema["enum"]) == 11
+        assert len(schema["enum"]) == 20
 
     def test_session_action_init_case_variants(self):
         ta = TypeAdapter(SessionAction)

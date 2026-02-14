@@ -21,7 +21,7 @@ class ToolManagerAdapter:
     FastMCP's ToolManager provides:
     - remove_tool(name: str)       -> synchronous, removes by name
     - add_tool(tool: Tool)         -> async, registers a Tool object
-    - has_tool(name: str) -> bool  -> synchronous check
+    - has_tool(name: str) -> bool  -> async check
     - get_tools() -> list[Tool]    -> async, returns all registered tools
 
     FastMCP does NOT have enable/disable per-tool. Dynamic profiles
@@ -81,7 +81,7 @@ class ToolManagerAdapter:
         Args:
             tool_name: Name of the tool to remove.
         """
-        if self._server._tool_manager.has_tool(tool_name):
+        if await self._server._tool_manager.has_tool(tool_name):
             self._server._tool_manager.remove_tool(tool_name)
             logger.debug(f"Removed tool: {tool_name}")
         else:
@@ -105,12 +105,12 @@ class ToolManagerAdapter:
             logger.warning(f"No original tool found for '{tool_name}', cannot add")
             return
 
-        if not self._server._tool_manager.has_tool(tool_name):
+        if not await self._server._tool_manager.has_tool(tool_name):
             # Create a modified copy with the desired description
             modified_tool = self._clone_tool_with_description(
                 original, description, schema
             )
-            await self._server._tool_manager.add_tool(modified_tool)
+            self._server._tool_manager.add_tool(modified_tool)
             logger.debug(f"Added tool: {tool_name} (mode-specific description)")
 
     async def swap_tool_description(
@@ -142,10 +142,15 @@ class ToolManagerAdapter:
         return frozenset(t.name for t in tools)
 
     async def restore_all(self) -> None:
-        """Restore all original tools (used when switching to full profile)."""
+        """Restore all original tools (used when switching to full profile).
+
+        Forcefully replaces any modified tools (e.g., swapped descriptions)
+        to ensure original schemas are intact.
+        """
         for name, tool in self._original_tools.items():
-            if not self._server._tool_manager.has_tool(name):
-                await self._server._tool_manager.add_tool(tool)
+            if await self._server._tool_manager.has_tool(name):
+                self._server._tool_manager.remove_tool(name)
+            self._server._tool_manager.add_tool(tool)
         logger.info("All original tools restored")
 
     def _clone_tool_with_description(

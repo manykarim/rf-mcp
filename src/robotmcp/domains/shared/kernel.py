@@ -304,11 +304,15 @@ def _normalize_str(v: Any) -> Any:
 
 SessionAction = Annotated[
     Literal[
-        "init", "import_library", "import_resource",
-        "set_variables", "import_variables",
-        "start_test", "end_test", "list_tests",
+        "init", "initialize", "bootstrap",
+        "import_library", "library",
+        "import_resource", "resource",
+        "set_variables", "variables",
+        "import_variables", "load_variables",
+        "start_test", "end_test", "start_task", "end_task",
+        "list_tests",
         "set_suite_setup", "set_suite_teardown",
-        "set_tool_profile",
+        "set_tool_profile", "tool_profile",
     ],
     BeforeValidator(_normalize_str),
 ]
@@ -334,7 +338,11 @@ PluginAction = Annotated[
 ]
 
 AttachAction = Annotated[
-    Literal["status", "stop", "cleanup", "reset", "disconnect_all"],
+    Literal[
+        "status", "info", "stop", "shutdown",
+        "cleanup", "clean", "reset", "reconnect",
+        "disconnect_all", "terminate", "force_stop",
+    ],
     BeforeValidator(_normalize_str),
 ]
 
@@ -354,12 +362,12 @@ KeywordStrategy = Annotated[
 ]
 
 AutomationContext = Annotated[
-    Literal["web", "mobile", "api", "desktop"],
+    Literal["web", "mobile", "api", "desktop", "generic", "database"],
     BeforeValidator(_normalize_str),
 ]
 
 RecommendMode = Annotated[
-    Literal["direct", "sampling_prompt", "merge_samples"],
+    Literal["direct", "sampling_prompt", "sampling", "merge_samples", "merge"],
     BeforeValidator(_normalize_str),
 ]
 

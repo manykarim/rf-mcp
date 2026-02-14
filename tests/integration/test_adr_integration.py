@@ -16,6 +16,7 @@ import uuid
 import pytest
 import pytest_asyncio
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
 
 from robotmcp.server import mcp
 
@@ -28,13 +29,35 @@ def _sid(prefix: str = "adr") -> str:
 async def mcp_client():
     async with Client(mcp) as client:
         yield client
+        # Always restore full tool set when the client tears down.
+        # This prevents state leakage between tests when a profile
+        # switch removes tools from the process-global FastMCP server.
+        await _restore_full_profile_internal()
+
+
+async def _restore_full_profile_internal():
+    """Restore full profile at the Python level, bypassing MCP client.
+
+    Profile activation is process-global (FastMCP tool visibility).
+    When a small profile is activated, manage_session itself may be
+    removed, making MCP-level restore impossible. This function
+    restores directly via the ToolManagerAdapter.
+    """
+    from robotmcp import server as srv
+
+    try:
+        if srv._tool_manager_adapter is not None:
+            await srv._tool_manager_adapter.restore_all()
+        if srv._tool_profile_manager is not None:
+            srv._tool_profile_manager._active_profile = None
+    except Exception:
+        pass  # Best-effort restore
 
 
 async def _restore_full_profile(mcp_client):
     """Restore full profile after tests that switch profiles.
 
-    Profile activation is process-global (FastMCP tool visibility),
-    so tests that activate small profiles must restore afterwards.
+    Tries MCP-level restore first, falls back to internal restore.
     """
     try:
         await mcp_client.call_tool(
@@ -42,7 +65,7 @@ async def _restore_full_profile(mcp_client):
             {"action": "set_tool_profile", "session_id": "restore", "profile": "full"},
         )
     except Exception:
-        pass  # Best-effort restore
+        await _restore_full_profile_internal()
 
 
 # ============================================================
@@ -164,17 +187,19 @@ class TestIntentActionErrors:
 
     @pytest.mark.asyncio
     async def test_invalid_intent_returns_error(self, mcp_client):
+        """ADR-009 type constraints reject unknown intents at validation."""
         sid = _sid()
         await mcp_client.call_tool(
             "manage_session",
             {"action": "init", "session_id": sid, "libraries": ["BuiltIn"]},
         )
-        result = await mcp_client.call_tool(
-            "intent_action",
-            {"intent": "invalid_intent_xyz", "session_id": sid},
-        )
-        text = str(result)
-        assert "error" in text.lower() or "unknown" in text.lower()
+        with pytest.raises((Exception, ToolError)) as exc_info:
+            await mcp_client.call_tool(
+                "intent_action",
+                {"intent": "invalid_intent_xyz", "session_id": sid},
+            )
+        text = str(exc_info.value).lower()
+        assert "error" in text or "validation" in text or "literal" in text
 
     @pytest.mark.asyncio
     async def test_intent_without_session_returns_error(self, mcp_client):
@@ -295,17 +320,19 @@ class TestSetToolProfile:
 
     @pytest.mark.asyncio
     async def test_set_invalid_profile_returns_error(self, mcp_client):
+        """ADR-009 type constraints reject unknown profile names at validation."""
         sid = _sid()
         await mcp_client.call_tool(
             "manage_session",
             {"action": "init", "session_id": sid, "libraries": ["BuiltIn"]},
         )
-        result = await mcp_client.call_tool(
-            "manage_session",
-            {"action": "set_tool_profile", "session_id": sid, "profile": "nonexistent_xyz"},
-        )
-        text = str(result.data if hasattr(result, "data") else result)
-        assert "error" in text.lower() or "unknown" in text.lower() or "available" in text.lower()
+        with pytest.raises((Exception, ToolError)) as exc_info:
+            await mcp_client.call_tool(
+                "manage_session",
+                {"action": "set_tool_profile", "session_id": sid, "profile": "nonexistent_xyz"},
+            )
+        text = str(exc_info.value).lower()
+        assert "error" in text or "validation" in text or "literal" in text
 
 
 class TestToolListAfterProfileSwitch:

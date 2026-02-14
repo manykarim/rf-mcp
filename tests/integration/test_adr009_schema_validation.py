@@ -98,11 +98,15 @@ class TestManageSessionSchema:
         tool = _get_tool(tools, "manage_session")
         schema = _get_param_schema(tool, "action")
         expected = [
-            "init", "import_library", "import_resource",
-            "set_variables", "import_variables",
-            "start_test", "end_test", "list_tests",
+            "init", "initialize", "bootstrap",
+            "import_library", "library",
+            "import_resource", "resource",
+            "set_variables", "variables",
+            "import_variables", "load_variables",
+            "start_test", "end_test", "start_task", "end_task",
+            "list_tests",
             "set_suite_setup", "set_suite_teardown",
-            "set_tool_profile",
+            "set_tool_profile", "tool_profile",
         ]
         _assert_has_enum(schema, expected, "manage_session.action")
 
@@ -195,7 +199,7 @@ class TestFindKeywordsSchema:
         """find_keywords.context should have enum constraint."""
         tool = _get_tool(tools, "find_keywords")
         schema = _get_param_schema(tool, "context")
-        expected = ["web", "mobile", "api", "desktop"]
+        expected = ["web", "mobile", "api", "desktop", "generic", "database"]
         _assert_has_enum(schema, expected, "find_keywords.context")
 
 
@@ -316,7 +320,11 @@ class TestManageAttachSchema:
         """manage_attach.action should have enum constraint."""
         tool = _get_tool(tools, "manage_attach")
         schema = _get_param_schema(tool, "action")
-        expected = ["status", "stop", "cleanup", "reset", "disconnect_all"]
+        expected = [
+            "status", "info", "stop", "shutdown",
+            "cleanup", "clean", "reset", "reconnect",
+            "disconnect_all", "terminate", "force_stop",
+        ]
         _assert_has_enum(schema, expected, "manage_attach.action")
 
 
@@ -328,7 +336,7 @@ class TestRecommendLibrariesSchema:
         """recommend_libraries.context should have enum constraint."""
         tool = _get_tool(tools, "recommend_libraries")
         schema = _get_param_schema(tool, "context")
-        expected = ["web", "mobile", "api", "desktop"]
+        expected = ["web", "mobile", "api", "desktop", "generic", "database"]
         _assert_has_enum(schema, expected, "recommend_libraries.context")
 
     @pytest.mark.asyncio
@@ -336,7 +344,7 @@ class TestRecommendLibrariesSchema:
         """recommend_libraries.mode should have enum constraint."""
         tool = _get_tool(tools, "recommend_libraries")
         schema = _get_param_schema(tool, "mode")
-        expected = ["direct", "sampling_prompt", "merge_samples"]
+        expected = ["direct", "sampling_prompt", "sampling", "merge_samples", "merge"]
         _assert_has_enum(schema, expected, "recommend_libraries.mode")
 
 

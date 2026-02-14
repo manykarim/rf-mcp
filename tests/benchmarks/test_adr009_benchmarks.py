@@ -197,14 +197,18 @@ class TestValidationThroughput:
         assert avg_ms < 0.005, f"AutomationContext validation too slow: {avg_ms:.6f}ms"
 
     def test_bench_all_session_action_values(self, benchmark_reporter):
-        """Validating all 11 SessionAction values should be < 0.05ms per sweep."""
+        """Validating all 20 SessionAction values should be < 0.1ms per sweep."""
         ta = TypeAdapter(SessionAction)
         all_values = [
-            "init", "import_library", "import_resource",
-            "set_variables", "import_variables",
-            "start_test", "end_test", "list_tests",
+            "init", "initialize", "bootstrap",
+            "import_library", "library",
+            "import_resource", "resource",
+            "set_variables", "variables",
+            "import_variables", "load_variables",
+            "start_test", "end_test", "start_task", "end_task",
+            "list_tests",
             "set_suite_setup", "set_suite_teardown",
-            "set_tool_profile",
+            "set_tool_profile", "tool_profile",
         ]
         iterations = 5000
         t0 = time.perf_counter()
@@ -214,11 +218,11 @@ class TestValidationThroughput:
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
         benchmark_reporter.record_latency(
-            "SessionAction validate all 11 values sweep",
-            elapsed_ms, target_ms=0.05, iterations=iterations,
+            "SessionAction validate all 20 values sweep",
+            elapsed_ms, target_ms=0.1, iterations=iterations,
         )
         avg_ms = elapsed_ms / iterations
-        assert avg_ms < 0.05, f"All-values sweep too slow: {avg_ms:.4f}ms"
+        assert avg_ms < 0.1, f"All-values sweep too slow: {avg_ms:.4f}ms"
 
     def test_bench_all_intent_verb_values(self, benchmark_reporter):
         """Validating all 8 IntentVerb values should be < 0.04ms per sweep."""
@@ -372,7 +376,7 @@ class TestSchemaGeneration:
         )
         avg_ms = elapsed_ms / iterations
         assert "enum" in schema, "Schema must contain 'enum' key"
-        assert len(schema["enum"]) == 11, f"Expected 11 enum values, got {len(schema['enum'])}"
+        assert len(schema["enum"]) == 20, f"Expected 20 enum values, got {len(schema['enum'])}"
         assert avg_ms < 0.15, f"Schema generation too slow: {avg_ms:.4f}ms"
 
     def test_bench_intent_verb_schema_generation(self, benchmark_reporter):
@@ -425,7 +429,7 @@ class TestSchemaGeneration:
         )
         avg_ms = elapsed_ms / iterations
         assert "enum" in schema, "Schema must contain 'enum' key"
-        assert len(schema["enum"]) == 4, f"Expected 4 enum values, got {len(schema['enum'])}"
+        assert len(schema["enum"]) == 6, f"Expected 6 enum values, got {len(schema['enum'])}"
         assert avg_ms < 0.1, f"Schema generation too slow: {avg_ms:.4f}ms"
 
     def test_bench_all_types_schema_generation(self, benchmark_reporter):
@@ -835,11 +839,15 @@ class TestADR009Correctness:
         assert "enum" in schema, "Schema must have 'enum' key"
         assert "anyOf" not in schema, "Schema must NOT have 'anyOf' (flat enum)"
         assert schema["enum"] == [
-            "init", "import_library", "import_resource",
-            "set_variables", "import_variables",
-            "start_test", "end_test", "list_tests",
+            "init", "initialize", "bootstrap",
+            "import_library", "library",
+            "import_resource", "resource",
+            "set_variables", "variables",
+            "import_variables", "load_variables",
+            "start_test", "end_test", "start_task", "end_task",
+            "list_tests",
             "set_suite_setup", "set_suite_teardown",
-            "set_tool_profile",
+            "set_tool_profile", "tool_profile",
         ]
 
     def test_intent_verb_schema_has_flat_enum(self):
@@ -864,17 +872,21 @@ class TestADR009Correctness:
         schema = TypeAdapter(AutomationContext).json_schema()
         assert "enum" in schema
         assert "anyOf" not in schema
-        assert schema["enum"] == ["web", "mobile", "api", "desktop"]
+        assert schema["enum"] == ["web", "mobile", "api", "desktop", "generic", "database"]
 
     def test_normalization_preserves_valid_values(self):
         """All valid values survive normalization round-trip."""
         ta = TypeAdapter(SessionAction)
         for value in [
-            "init", "import_library", "import_resource",
-            "set_variables", "import_variables",
-            "start_test", "end_test", "list_tests",
+            "init", "initialize", "bootstrap",
+            "import_library", "library",
+            "import_resource", "resource",
+            "set_variables", "variables",
+            "import_variables", "load_variables",
+            "start_test", "end_test", "start_task", "end_task",
+            "list_tests",
             "set_suite_setup", "set_suite_teardown",
-            "set_tool_profile",
+            "set_tool_profile", "tool_profile",
         ]:
             assert ta.validate_python(value) == value
             assert ta.validate_python(value.upper()) == value
