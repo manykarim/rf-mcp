@@ -36,6 +36,14 @@ logger = logging.getLogger(__name__)
 # Initialize instruction learning hooks singleton
 _instruction_hooks: Optional[InstructionLearningHooks] = None
 
+# ADR-006/007/008 singletons (initialized lazily)
+_tool_manager_adapter = None
+_tool_profile_manager = None
+_intent_registry = None
+_intent_resolver = None
+_intent_action_adapter = None
+_response_optimization_configs: Dict[str, Any] = {}  # session_id -> ResponseOptimizationConfig
+
 
 def _get_instruction_hooks() -> InstructionLearningHooks:
     """Get or initialize the instruction learning hooks.
@@ -75,6 +83,106 @@ def _track_tool_result(
 
 if TYPE_CHECKING:
     from robotmcp.frontend.controller import FrontendServerController
+
+
+# ── ADR-006/007/008 initialization ─────────────────────────────────
+
+
+def _build_tool_descriptor_registry() -> Dict[str, Any]:
+    """Build ToolDescriptor registry for all MCP tools.
+
+    Returns a dict mapping tool_name -> ToolDescriptor with tag
+    classification and description variants for each tool.
+    """
+    from robotmcp.domains.tool_profile.entities import ToolDescriptor
+    from robotmcp.domains.tool_profile.value_objects import ToolTag
+
+    tag_map = {
+        "manage_session": frozenset({ToolTag.CORE}),
+        "execute_step": frozenset({ToolTag.CORE, ToolTag.EXECUTION}),
+        "execute_flow": frozenset({ToolTag.EXECUTION}),
+        "get_session_state": frozenset({ToolTag.CORE}),
+        "find_keywords": frozenset({ToolTag.CORE, ToolTag.DISCOVERY}),
+        "get_keyword_info": frozenset({ToolTag.DISCOVERY}),
+        "recommend_libraries": frozenset({ToolTag.DISCOVERY}),
+        "analyze_scenario": frozenset({ToolTag.DISCOVERY}),
+        "check_library_availability": frozenset({ToolTag.DISCOVERY}),
+        "build_test_suite": frozenset({ToolTag.ADVANCED}),
+        "run_test_suite": frozenset({ToolTag.ADVANCED}),
+        "get_locator_guidance": frozenset({ToolTag.CORE}),
+        "set_library_search_order": frozenset({ToolTag.ADVANCED}),
+        "manage_library_plugins": frozenset({ToolTag.ADVANCED}),
+        "manage_attach": frozenset({ToolTag.ADVANCED}),
+        "intent_action": frozenset({ToolTag.CORE, ToolTag.EXECUTION}),
+    }
+
+    descriptors: Dict[str, ToolDescriptor] = {}
+    for tool_name, tags in tag_map.items():
+        descriptors[tool_name] = ToolDescriptor(
+            tool_name=tool_name,
+            tags=tags,
+            description_full=f"Full description of {tool_name}",
+            description_compact=f"{tool_name} (compact)",
+            description_minimal=tool_name,
+            schema_full={"type": "object"},
+            token_estimate_full=400,
+            token_estimate_compact=120,
+            token_estimate_minimal=50,
+        )
+    return descriptors
+
+
+async def _initialize_adr_006_007_008() -> None:
+    """Initialize ADR-006/007/008 singletons.
+
+    Idempotent -- safe to call multiple times (lazy init fallback).
+    """
+    global _tool_manager_adapter, _tool_profile_manager
+    global _intent_registry, _intent_resolver, _intent_action_adapter
+    if _intent_action_adapter is not None:
+        return  # Already initialized
+
+    try:
+        from robotmcp.domains.tool_profile.adapters.fastmcp_adapter import (
+            ToolManagerAdapter,
+        )
+        from robotmcp.domains.tool_profile.services import ToolProfileManager
+        from robotmcp.domains.intent.aggregates import IntentRegistry
+        from robotmcp.domains.intent.services import IntentResolver
+        from robotmcp.domains.intent.adapters.mcp_tool import IntentActionAdapter
+        from robotmcp.domains.intent.adapters.session_lookup_adapter import (
+            SessionLookupAdapter,
+        )
+        from robotmcp.domains.intent.adapters.locator_normalizer_adapter import (
+            LocatorNormalizerAdapter,
+        )
+
+        # Tool Profile (ADR-006)
+        _tool_manager_adapter = ToolManagerAdapter(mcp)
+        descriptor_registry = _build_tool_descriptor_registry()
+        _tool_profile_manager = ToolProfileManager(
+            tool_manager=_tool_manager_adapter,
+            descriptor_registry=descriptor_registry,
+            event_publisher=lambda evt: logger.debug("ADR event: %s", evt),
+        )
+
+        # Intent Layer (ADR-007)
+        _intent_registry = IntentRegistry.with_builtins()
+        session_lookup = SessionLookupAdapter(execution_engine.session_manager)
+        normalizer = LocatorNormalizerAdapter()
+        _intent_resolver = IntentResolver(
+            registry=_intent_registry,
+            session_lookup=session_lookup,
+            normalizer=normalizer,
+        )
+        _intent_action_adapter = IntentActionAdapter(resolver=_intent_resolver)
+
+        logger.info("ADR-006/007/008 initialized successfully")
+    except Exception as e:
+        logger.warning("ADR-006/007/008 initialization failed: %s", e)
+
+
+# ── End ADR-006/007/008 initialization ─────────────────────────────
 
 
 def _resolve_server_instructions() -> Optional[str]:
@@ -2125,6 +2233,11 @@ async def manage_session(
     test_status: str = "pass",
     test_message: str = "",
     keyword: str | None = None,
+    # ADR-006: Tool profile parameters
+    tool_profile: str | None = None,
+    model_tier: str | None = None,
+    scenario: str | None = None,
+    profile: str | None = None,
 ) -> Dict[str, Any]:
     """Manage session lifecycle: initialize, configure libraries/variables, and organize tests.
 
@@ -2303,6 +2416,42 @@ async def manage_session(
             "import_issues": problems,
             "note": "Context mode is managed via session namespace; use execute_step(use_context=True) when needed.",
         }
+
+        # ── ADR-006: Auto-activate tool profile (params > env vars) ──
+        effective_profile = tool_profile or os.environ.get("ROBOTMCP_TOOL_PROFILE")
+        effective_model_tier = model_tier or os.environ.get("ROBOTMCP_MODEL_TIER")
+        if effective_profile or effective_model_tier:
+            if _tool_profile_manager is None:
+                try:
+                    await _initialize_adr_006_007_008()
+                except Exception:
+                    pass
+            if _tool_profile_manager is not None:
+                try:
+                    if effective_profile:
+                        activated = await _tool_profile_manager.activate_profile(
+                            effective_profile
+                        )
+                        result["tool_profile"] = activated.name
+                    elif effective_model_tier:
+                        from robotmcp.domains.tool_profile.value_objects import (
+                            ModelTier,
+                        )
+
+                        tier = ModelTier(effective_model_tier)
+                        scenario_desc = scenario or " ".join(loaded) if loaded else ""
+                        suggested = _tool_profile_manager.suggest_profile(
+                            scenario_desc, tier
+                        )
+                        activated = await _tool_profile_manager.activate_profile(
+                            suggested.name
+                        )
+                        result["tool_profile"] = activated.name
+                        result["tool_profile_suggested_for"] = effective_model_tier
+                except Exception as e:
+                    logger.warning("Tool profile activation during init failed: %s", e)
+        # ── End ADR-006 ──────────────────────────────────────────────
+
         _track_tool_result(
             session_id,
             "manage_session",
@@ -2700,6 +2849,48 @@ async def manage_session(
         }
 
     # ── End ADR-005 ──────────────────────────────────────────────────
+
+    # ── ADR-006: set_tool_profile action ─────────────────────────────
+    if action_norm in {"set_tool_profile", "tool_profile"}:
+        profile_name = profile or ((libraries or [None])[0] if libraries else None)
+        if not profile_name:
+            return {
+                "success": False,
+                "error": (
+                    "Missing profile name. Pass the profile name as the "
+                    "first item in the 'libraries' parameter, e.g. "
+                    "libraries=['browser_exec']. Available: browser_exec, "
+                    "api_exec, discovery, minimal_exec, full"
+                ),
+            }
+        if _tool_profile_manager is None:
+            try:
+                await _initialize_adr_006_007_008()
+            except Exception:
+                pass
+        if _tool_profile_manager is None:
+            return {
+                "success": False,
+                "error": "Tool profile system not initialized",
+            }
+        try:
+            profile = await _tool_profile_manager.activate_profile(profile_name)
+            return {
+                "success": True,
+                "action": "set_tool_profile",
+                "session_id": session_id,
+                "active_profile": profile.name,
+                "tools_visible": sorted(profile.tool_names),
+                "tool_count": profile.tool_count,
+            }
+        except KeyError as e:
+            available = _tool_profile_manager.list_profiles()
+            return {
+                "success": False,
+                "error": str(e),
+                "available_profiles": available,
+            }
+    # ── End ADR-006 ──────────────────────────────────────────────────
 
     return {"success": False, "error": f"Unsupported action '{action}'"}
 
@@ -5258,6 +5449,130 @@ async def manage_attach(action: str = "status") -> Dict[str, Any]:
         "error": f"Unsupported action '{action}'",
         "action": action,
     }
+
+
+# ── ADR-007: intent_action MCP tool ───────────────────────────────
+
+
+@mcp.tool
+async def intent_action(
+    intent: str,
+    target: str | None = None,
+    value: str | None = None,
+    session_id: str | None = None,
+    options: Dict[str, str] | None = None,
+    assign_to: str | None = None,
+    detail_level: str = "normal",
+) -> Dict[str, Any]:
+    """Execute a high-level intent that auto-resolves to the correct library keyword.
+
+    Valid intents: navigate, click, fill, hover, select, assert_visible, extract_text, wait_for.
+    The intent is resolved based on the session's active library (Browser/SeleniumLibrary/AppiumLibrary).
+
+    Args:
+        intent: Action verb (e.g. "click", "navigate", "fill")
+        target: Locator or URL (e.g. "#submit", "text=Login", "https://example.com")
+        value: Value for fill/select intents
+        session_id: Session to execute against (uses default if not provided)
+        options: Additional options (e.g. {"timeout": "10s"})
+        assign_to: Variable name to capture result
+        detail_level: Response detail level
+    """
+    global _intent_action_adapter
+
+    # Lazy init fallback (lifespan may not fire in stdio mode)
+    if _intent_action_adapter is None:
+        try:
+            await _initialize_adr_006_007_008()
+        except Exception as e:
+            logger.warning("ADR lazy init failed: %s", e)
+    if _intent_action_adapter is None:
+        return {
+            "success": False,
+            "error": (
+                "Intent system not initialized. "
+                "Use execute_step for direct keyword access."
+            ),
+        }
+
+    effective_session_id = session_id or "default"
+
+    try:
+        from robotmcp.domains.intent.services import IntentResolutionError
+
+        # Resolve intent to keyword + arguments
+        resolution = _intent_action_adapter.resolve_intent(
+            intent=intent,
+            target=target,
+            value=value,
+            session_id=effective_session_id,
+            options=options,
+            assign_to=assign_to,
+        )
+
+        # Delegate to execute_step for actual execution.
+        # execute_step is a FunctionTool (via @mcp.tool decorator),
+        # so we call .fn to get the original async function.
+        result = await execute_step.fn(
+            keyword=resolution["keyword"],
+            arguments=resolution["arguments"],
+            session_id=effective_session_id,
+            assign_to=resolution.get("assign_to"),
+            detail_level=detail_level,
+        )
+
+        # Enrich result with intent metadata
+        if isinstance(result, dict):
+            result["intent_resolved"] = {
+                "intent": resolution["intent"],
+                "keyword": resolution["keyword"],
+                "library": resolution["library"],
+                "locator_normalized": resolution.get("locator_normalized", False),
+            }
+
+        # Track for instruction learning
+        _track_tool_result(
+            effective_session_id,
+            "intent_action",
+            {"intent": intent, "target": target, "value": value},
+            result if isinstance(result, dict) else {"success": True},
+        )
+
+        return result
+
+    except IntentResolutionError as e:
+        error_result = {
+            "success": False,
+            "error": str(e),
+            "hint": (
+                "Use execute_step for direct keyword access, or check "
+                "valid intents: navigate, click, fill, hover, select, "
+                "assert_visible, extract_text, wait_for"
+            ),
+        }
+        _track_tool_result(
+            effective_session_id,
+            "intent_action",
+            {"intent": intent, "target": target, "value": value},
+            error_result,
+        )
+        return error_result
+
+    except Exception as e:
+        error_result = {
+            "success": False,
+            "error": f"Intent execution failed: {str(e)}",
+        }
+        _track_tool_result(
+            effective_session_id,
+            "intent_action",
+            {"intent": intent, "target": target, "value": value},
+            error_result,
+        )
+        return error_result
+
+
+# ── End ADR-007 ────────────────────────────────────────────────────
 
 
 @mcp.tool(

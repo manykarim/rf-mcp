@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 
@@ -257,3 +258,25 @@ class AriaNodeIterator:
         # Add children in reverse order so leftmost is processed first
         self._stack.extend(reversed(node.children))
         return node
+
+
+class ModelTier(Enum):
+    """LLM context window capacity classification.
+
+    Used by Tool Profile (ADR-006) for profile selection and description mode,
+    Response Optimization (ADR-008) for token budget allocation,
+    and Instruction context for template selection.
+    """
+    SMALL_CONTEXT = "small_context"
+    STANDARD = "standard"
+    LARGE_CONTEXT = "large_context"
+
+    @classmethod
+    def from_context_window(cls, window_size: int) -> "ModelTier":
+        """Infer model tier from context window size in tokens."""
+        if window_size <= 16384:
+            return cls.SMALL_CONTEXT
+        elif window_size <= 65536:
+            return cls.STANDARD
+        else:
+            return cls.LARGE_CONTEXT
