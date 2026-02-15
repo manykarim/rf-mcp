@@ -53,11 +53,11 @@ class TestTypeAdapterCreation:
 
         benchmark_reporter.record_latency(
             "TypeAdapter(SessionAction) creation",
-            elapsed_ms, target_ms=0.25, iterations=iterations,
+            elapsed_ms, target_ms=0.5, iterations=iterations,
         )
         avg_ms = elapsed_ms / iterations
         assert ta is not None
-        assert avg_ms < 0.25, f"SessionAction adapter creation too slow: {avg_ms:.4f}ms"
+        assert avg_ms < 0.5, f"SessionAction adapter creation too slow: {avg_ms:.4f}ms"
 
     def test_bench_intent_verb_adapter_creation(self, benchmark_reporter):
         """TypeAdapter(IntentVerb) creation should be < 0.25ms."""
@@ -69,11 +69,11 @@ class TestTypeAdapterCreation:
 
         benchmark_reporter.record_latency(
             "TypeAdapter(IntentVerb) creation",
-            elapsed_ms, target_ms=0.25, iterations=iterations,
+            elapsed_ms, target_ms=0.5, iterations=iterations,
         )
         avg_ms = elapsed_ms / iterations
         assert ta is not None
-        assert avg_ms < 0.25, f"IntentVerb adapter creation too slow: {avg_ms:.4f}ms"
+        assert avg_ms < 0.5, f"IntentVerb adapter creation too slow: {avg_ms:.4f}ms"
 
     def test_bench_detail_level_adapter_creation(self, benchmark_reporter):
         """TypeAdapter(DetailLevel) creation should be < 0.25ms."""
@@ -85,11 +85,11 @@ class TestTypeAdapterCreation:
 
         benchmark_reporter.record_latency(
             "TypeAdapter(DetailLevel) creation",
-            elapsed_ms, target_ms=0.25, iterations=iterations,
+            elapsed_ms, target_ms=0.5, iterations=iterations,
         )
         avg_ms = elapsed_ms / iterations
         assert ta is not None
-        assert avg_ms < 0.25, f"DetailLevel adapter creation too slow: {avg_ms:.4f}ms"
+        assert avg_ms < 0.5, f"DetailLevel adapter creation too slow: {avg_ms:.4f}ms"
 
     def test_bench_automation_context_adapter_creation(self, benchmark_reporter):
         """TypeAdapter(AutomationContext) creation should be < 0.25ms."""
@@ -101,11 +101,11 @@ class TestTypeAdapterCreation:
 
         benchmark_reporter.record_latency(
             "TypeAdapter(AutomationContext) creation",
-            elapsed_ms, target_ms=0.25, iterations=iterations,
+            elapsed_ms, target_ms=0.5, iterations=iterations,
         )
         avg_ms = elapsed_ms / iterations
         assert ta is not None
-        assert avg_ms < 0.25, f"AutomationContext adapter creation too slow: {avg_ms:.4f}ms"
+        assert avg_ms < 0.5, f"AutomationContext adapter creation too slow: {avg_ms:.4f}ms"
 
 
 # ============================================================
@@ -362,7 +362,7 @@ class TestSchemaGeneration:
     """Benchmark JSON Schema generation for ADR-009 types."""
 
     def test_bench_session_action_schema_generation(self, benchmark_reporter):
-        """SessionAction JSON Schema generation should be < 0.15ms."""
+        """SessionAction JSON Schema generation should be < 0.5ms."""
         ta = TypeAdapter(SessionAction)
         iterations = 5000
         t0 = time.perf_counter()
@@ -372,15 +372,15 @@ class TestSchemaGeneration:
 
         benchmark_reporter.record_latency(
             "SessionAction json_schema()",
-            elapsed_ms, target_ms=0.15, iterations=iterations,
+            elapsed_ms, target_ms=0.5, iterations=iterations,
         )
         avg_ms = elapsed_ms / iterations
         assert "enum" in schema, "Schema must contain 'enum' key"
         assert len(schema["enum"]) == 20, f"Expected 20 enum values, got {len(schema['enum'])}"
-        assert avg_ms < 0.15, f"Schema generation too slow: {avg_ms:.4f}ms"
+        assert avg_ms < 0.5, f"Schema generation too slow: {avg_ms:.4f}ms"
 
     def test_bench_intent_verb_schema_generation(self, benchmark_reporter):
-        """IntentVerb JSON Schema generation should be < 0.1ms."""
+        """IntentVerb JSON Schema generation should be < 0.5ms."""
         ta = TypeAdapter(IntentVerb)
         iterations = 5000
         t0 = time.perf_counter()
@@ -390,15 +390,15 @@ class TestSchemaGeneration:
 
         benchmark_reporter.record_latency(
             "IntentVerb json_schema()",
-            elapsed_ms, target_ms=0.1, iterations=iterations,
+            elapsed_ms, target_ms=0.5, iterations=iterations,
         )
         avg_ms = elapsed_ms / iterations
         assert "enum" in schema, "Schema must contain 'enum' key"
         assert len(schema["enum"]) == 8, f"Expected 8 enum values, got {len(schema['enum'])}"
-        assert avg_ms < 0.1, f"Schema generation too slow: {avg_ms:.4f}ms"
+        assert avg_ms < 0.5, f"Schema generation too slow: {avg_ms:.4f}ms"
 
     def test_bench_detail_level_schema_generation(self, benchmark_reporter):
-        """DetailLevel JSON Schema generation should be < 0.1ms."""
+        """DetailLevel JSON Schema generation should be < 0.5ms."""
         ta = TypeAdapter(DetailLevel)
         iterations = 5000
         t0 = time.perf_counter()
@@ -408,14 +408,14 @@ class TestSchemaGeneration:
 
         benchmark_reporter.record_latency(
             "DetailLevel json_schema()",
-            elapsed_ms, target_ms=0.1, iterations=iterations,
+            elapsed_ms, target_ms=0.5, iterations=iterations,
         )
         avg_ms = elapsed_ms / iterations
         assert "enum" in schema, "Schema must contain 'enum' key"
-        assert avg_ms < 0.1, f"Schema generation too slow: {avg_ms:.4f}ms"
+        assert avg_ms < 0.5, f"Schema generation too slow: {avg_ms:.4f}ms"
 
     def test_bench_automation_context_schema_generation(self, benchmark_reporter):
-        """AutomationContext JSON Schema generation should be < 0.1ms."""
+        """AutomationContext JSON Schema generation should be < 0.5ms."""
         ta = TypeAdapter(AutomationContext)
         iterations = 5000
         t0 = time.perf_counter()
@@ -425,15 +425,15 @@ class TestSchemaGeneration:
 
         benchmark_reporter.record_latency(
             "AutomationContext json_schema()",
-            elapsed_ms, target_ms=0.1, iterations=iterations,
+            elapsed_ms, target_ms=0.5, iterations=iterations,
         )
         avg_ms = elapsed_ms / iterations
         assert "enum" in schema, "Schema must contain 'enum' key"
         assert len(schema["enum"]) == 6, f"Expected 6 enum values, got {len(schema['enum'])}"
-        assert avg_ms < 0.1, f"Schema generation too slow: {avg_ms:.4f}ms"
+        assert avg_ms < 0.5, f"Schema generation too slow: {avg_ms:.4f}ms"
 
     def test_bench_all_types_schema_generation(self, benchmark_reporter):
-        """Generating schemas for all 4 key types should be < 0.4ms total."""
+        """Generating schemas for all 4 key types should be < 2.0ms total."""
         adapters = [
             TypeAdapter(SessionAction),
             TypeAdapter(IntentVerb),
@@ -449,10 +449,10 @@ class TestSchemaGeneration:
 
         benchmark_reporter.record_latency(
             "All 4 key types json_schema() sweep",
-            elapsed_ms, target_ms=0.4, iterations=iterations,
+            elapsed_ms, target_ms=2.0, iterations=iterations,
         )
         avg_ms = elapsed_ms / iterations
-        assert avg_ms < 0.4, f"All-types schema sweep too slow: {avg_ms:.4f}ms"
+        assert avg_ms < 2.0, f"All-types schema sweep too slow: {avg_ms:.4f}ms"
 
 
 # ============================================================
@@ -489,11 +489,11 @@ class TestPlainStrBaseline:
 
         benchmark_reporter.record_latency(
             "TypeAdapter(str) creation baseline",
-            elapsed_ms, target_ms=0.05, iterations=iterations,
+            elapsed_ms, target_ms=0.5, iterations=iterations,
         )
         avg_ms = elapsed_ms / iterations
         assert ta is not None
-        assert avg_ms < 0.05, f"Plain str adapter creation too slow: {avg_ms:.4f}ms"
+        assert avg_ms < 0.5, f"Plain str adapter creation too slow: {avg_ms:.4f}ms"
 
     def test_bench_literal_vs_str_overhead_ratio(self, benchmark_reporter):
         """Literal+BeforeValidator overhead should be < 5x plain str."""

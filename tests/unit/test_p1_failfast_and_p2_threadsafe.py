@@ -652,6 +652,10 @@ class TestP1P2Integration:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="fd 1 capture uses fcntl (Unix-only); Windows has no fd-level pipe control",
+)
 class TestConsoleNoneNoFd1Output:
     """Verify RF keyword execution writes nothing to fd 1 with console='none'."""
 
