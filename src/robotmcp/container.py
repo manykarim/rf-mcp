@@ -26,6 +26,8 @@ if TYPE_CHECKING:
         PerformanceMetricsCollector,
         PageAnalyzer,
     )
+    from robotmcp.domains.recovery import RecoveryEngine
+    from robotmcp.domains.batch_execution.services import BatchStateManager
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,8 @@ class ServiceContainer:
     )
     _timeout_service: Optional["TimeoutService"] = field(default=None, repr=False)
     _page_analyzer: Optional["PageAnalyzer"] = field(default=None, repr=False)
+    _recovery_engine: Optional["RecoveryEngine"] = field(default=None, repr=False)
+    _batch_state_manager: Optional["BatchStateManager"] = field(default=None, repr=False)
 
     # Session-scoped registries
     _timeout_policies: Dict[str, "TimeoutPolicy"] = field(
@@ -100,6 +104,22 @@ class ServiceContainer:
             from robotmcp.optimization import PageAnalyzer
             self._page_analyzer = PageAnalyzer()
         return self._page_analyzer
+
+    @property
+    def recovery_engine(self) -> "RecoveryEngine":
+        """Get the recovery engine (singleton, pre-populated with defaults)."""
+        if self._recovery_engine is None:
+            from robotmcp.domains.recovery import RecoveryEngine
+            self._recovery_engine = RecoveryEngine.with_defaults()
+        return self._recovery_engine
+
+    @property
+    def batch_state_manager(self) -> "BatchStateManager":
+        """Get the batch state manager for resume_batch (singleton)."""
+        if self._batch_state_manager is None:
+            from robotmcp.domains.batch_execution.services import BatchStateManager
+            self._batch_state_manager = BatchStateManager()
+        return self._batch_state_manager
 
     def get_timeout_policy(self, session_id: str) -> "TimeoutPolicy":
         """Get or create a timeout policy for a session.

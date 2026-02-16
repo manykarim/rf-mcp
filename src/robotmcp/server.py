@@ -3853,6 +3853,272 @@ async def _run_steps_in_context(
     return results
 
 
+# =====================
+# Batch Execution (ADR-011)
+# =====================
+
+# Module-level batch singleton (lazy init)
+_batch_runner: Optional[Any] = None
+
+
+def _get_batch_runner() -> Any:
+    """Get or create the batch runner with all adapters wired."""
+    global _batch_runner
+    if _batch_runner is not None:
+        return _batch_runner
+
+    from robotmcp.domains.batch_execution.services import BatchRunner
+    from robotmcp.adapters.recovery_adapter import (
+        RecoveryServiceAdapter,
+        KeywordExecutorAdapter,
+    )
+    from robotmcp.adapters.page_state_adapter import (
+        PageStateCaptureAdapter,
+        EvidenceCollectorImpl,
+    )
+    from robotmcp.container import get_container
+
+    container = get_container()
+    kw_adapter = KeywordExecutorAdapter(execution_engine)
+    page_state = PageStateCaptureAdapter(execution_engine)
+    recovery_adapter = RecoveryServiceAdapter(
+        engine=container.recovery_engine,
+        keyword_runner=kw_adapter,
+        page_state=page_state,
+    )
+    evidence_collector = EvidenceCollectorImpl(execution_engine)
+
+    _batch_runner = BatchRunner(
+        keyword_executor=kw_adapter,
+        recovery_service=recovery_adapter,
+        evidence_collector=evidence_collector,
+    )
+    return _batch_runner
+
+
+@mcp.tool
+async def execute_batch(
+    session_id: str,
+    steps: List[Dict[str, Any]],
+    on_failure: str = "recover",
+    max_recovery_attempts: int = 2,
+    timeout_ms: int = 120000,
+) -> Dict[str, Any]:
+    """Execute multiple RF keywords in one call with recovery and variable chaining.
+
+    Reduces N MCP round-trips to 1. Steps run sequentially; each step's return
+    value is available to later steps via ${STEP_N} references in arguments.
+
+    Args:
+        session_id: Session to execute within (must exist or be auto-created).
+        steps: List of step dicts, each with:
+            - keyword (str, required): RF keyword name
+            - args (list[str], optional): Positional arguments, may contain ${STEP_N}
+            - label (str, optional): Human-readable label
+            - timeout (str, optional): Per-step RF timeout (e.g., "10s")
+            - assign_to (str, optional): Variable name to capture return value (e.g., "cart_count")
+        on_failure: Policy on step failure:
+            - "stop": abort immediately
+            - "retry": retry without recovery logic
+            - "recover" (default): attempt tiered recovery before giving up
+        max_recovery_attempts: Max recovery retries per failed step (1-10, default 2).
+        timeout_ms: Total batch time budget in milliseconds (1000-600000, default 120000).
+
+    Returns:
+        Dict with:
+            - status: "PASS" | "FAIL" | "RECOVERED" | "TIMEOUT"
+            - summary: human-readable result string
+            - total_time_ms: wall-clock execution time
+            - steps_executed / steps_total: counts
+            - steps: per-step results array
+            - failure: diagnostic detail (only on FAIL)
+            - batch_id: identifier for resume_batch (only on FAIL)
+    """
+    try:
+        from robotmcp.domains.batch_execution.aggregates import BatchExecution
+        from robotmcp.container import get_container
+
+        # Validate session exists
+        session = execution_engine.session_manager.get_or_create_session(session_id)
+
+        # Create batch aggregate
+        batch = BatchExecution.create(
+            session_id=session_id,
+            steps_data=steps,
+            on_failure=on_failure,
+            max_recovery_attempts=max_recovery_attempts,
+            timeout_ms=timeout_ms,
+        )
+
+        # Execute via BatchRunner
+        runner = _get_batch_runner()
+        batch = await runner.execute(batch)
+
+        # Store state for resume if failed
+        if batch.status and batch.status.value == "FAIL" and batch.failure:
+            from robotmcp.domains.batch_execution.aggregates import BatchState
+
+            container = get_container()
+            state = BatchState.from_execution(batch)
+            container.batch_state_manager.store(state)
+
+        response = batch.to_response_dict()
+
+        # Track for instruction learning
+        _track_tool_result(
+            session_id,
+            "execute_batch",
+            {"steps": steps, "on_failure": on_failure},
+            {"success": response.get("status") == "PASS", **response},
+        )
+
+        return response
+
+    except ValueError as e:
+        return {"success": False, "error": str(e), "session_id": session_id}
+    except Exception as e:
+        logger.error("execute_batch failed: %s", e, exc_info=True)
+        return {"success": False, "error": str(e), "session_id": session_id}
+
+
+@mcp.tool
+async def resume_batch(
+    batch_id: str,
+    fix_steps: List[Dict[str, Any]] | None = None,
+    timeout_ms: int | None = None,
+) -> Dict[str, Any]:
+    """Resume a failed batch from its failure point, optionally inserting fix steps.
+
+    After execute_batch returns status=FAIL with a batch_id, call this to:
+    1. Re-run the failed step (with optional fix_steps injected before it)
+    2. Continue executing remaining steps from the original batch
+
+    Args:
+        batch_id: The batch_id from a failed execute_batch response.
+        fix_steps: Optional steps to execute before retrying the failed step.
+            Same format as execute_batch steps.
+        timeout_ms: Override remaining timeout budget (uses original if omitted).
+
+    Returns:
+        Same format as execute_batch response.
+    """
+    try:
+        from robotmcp.domains.batch_execution.aggregates import (
+            BatchExecution,
+            BatchState,
+        )
+        from robotmcp.domains.batch_execution.entities import BatchStep
+        from robotmcp.domains.batch_execution.value_objects import (
+            BatchTimeout,
+            StepTimeout,
+            OnFailurePolicy,
+            RecoveryAttemptLimit,
+        )
+        from robotmcp.container import get_container
+
+        container = get_container()
+        state = container.batch_state_manager.get(batch_id)
+        if state is None:
+            return {
+                "success": False,
+                "error": f"No resumable batch found for '{batch_id}' (expired or not found)",
+            }
+
+        # Build the continuation steps
+        continuation_steps: List[BatchStep] = []
+        step_offset = 0
+
+        # Add fix steps first (if any)
+        if fix_steps:
+            for i, s in enumerate(fix_steps):
+                step_timeout = StepTimeout(s["timeout"]) if s.get("timeout") else None
+                continuation_steps.append(
+                    BatchStep(
+                        index=i,
+                        keyword=s["keyword"],
+                        args=list(s.get("args", [])),
+                        label=s.get("label", f"fix_step_{i}"),
+                        timeout=step_timeout,
+                        assign_to=s.get("assign_to"),
+                    )
+                )
+            step_offset = len(fix_steps)
+
+        # Add the failed step
+        failed = state.failed_step
+        if failed:
+            continuation_steps.append(
+                BatchStep(
+                    index=step_offset,
+                    keyword=failed.keyword,
+                    args=list(failed.args),
+                    label=failed.label,
+                    timeout=failed.timeout,
+                    assign_to=failed.assign_to,
+                )
+            )
+            step_offset += 1
+
+        # Add remaining steps
+        for s in state.remaining_steps:
+            continuation_steps.append(
+                BatchStep(
+                    index=step_offset,
+                    keyword=s.keyword,
+                    args=list(s.args),
+                    label=s.label,
+                    timeout=s.timeout,
+                    assign_to=s.assign_to,
+                )
+            )
+            step_offset += 1
+
+        if not continuation_steps:
+            container.batch_state_manager.remove(batch_id)
+            return {
+                "success": True,
+                "status": "PASS",
+                "summary": "No remaining steps to execute",
+                "steps": [],
+            }
+
+        # Determine timeout
+        remaining_ms = timeout_ms or int(state.remaining_timeout_ms)
+        remaining_ms = max(remaining_ms, 1000)  # At least 1s
+
+        # Create new batch from continuation steps
+        batch = BatchExecution(
+            batch_id=state.batch_id,
+            session_id=state.session_id,
+            steps=continuation_steps,
+            on_failure=state.on_failure,
+            max_recovery_attempts=state.max_recovery_attempts,
+            timeout=BatchTimeout(remaining_ms),
+            results=list(state.results),
+            results_map=dict(state.results_map),
+        )
+
+        # Execute
+        runner = _get_batch_runner()
+        batch = await runner.execute(batch)
+
+        # Clean up state
+        container.batch_state_manager.remove(batch_id)
+
+        # Store new state if failed again
+        if batch.status and batch.status.value == "FAIL" and batch.failure:
+            new_state = BatchState.from_execution(batch)
+            container.batch_state_manager.store(new_state)
+
+        return batch.to_response_dict()
+
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        logger.error("resume_batch failed: %s", e, exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
 @mcp.tool(enabled=False)
 async def evaluate_expression(
     session_id: str,
