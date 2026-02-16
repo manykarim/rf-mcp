@@ -763,5 +763,52 @@ class TestVariableHandlingEdgeCases:
         assert len(found_vars) == 0
 
 
+class TestEscapeRobotArgument:
+    """Test _escape_robot_argument handles literal newlines, tabs, carriage returns."""
+
+    def _builder(self):
+        from robotmcp.components.test_builder import TestBuilder
+        return TestBuilder(execution_engine=None)
+
+    def test_newline_escaped(self):
+        b = self._builder()
+        assert b._escape_robot_argument("123 Flow Street\nSan Francisco") == "123 Flow Street\\nSan Francisco"
+
+    def test_tab_escaped(self):
+        b = self._builder()
+        assert b._escape_robot_argument("col1\tcol2") == "col1\\tcol2"
+
+    def test_carriage_return_escaped(self):
+        b = self._builder()
+        assert b._escape_robot_argument("line1\r\nline2") == "line1\\r\\nline2"
+
+    def test_no_change_without_special_chars(self):
+        b = self._builder()
+        assert b._escape_robot_argument("plain text") == "plain text"
+
+    def test_hash_still_escaped(self):
+        b = self._builder()
+        assert b._escape_robot_argument("#comment") == "\\#comment"
+
+    def test_newline_and_hash_combined(self):
+        """Hash after newline is not at position 0, so only newline is escaped."""
+        b = self._builder()
+        assert b._escape_robot_argument("line1\n#line2") == "line1\\n#line2"
+
+    def test_hash_at_start_with_newline_later(self):
+        b = self._builder()
+        assert b._escape_robot_argument("#line1\nline2") == "\\#line1\\nline2"
+
+    def test_multiple_newlines(self):
+        b = self._builder()
+        assert b._escape_robot_argument("a\nb\nc") == "a\\nb\\nc"
+
+    def test_already_escaped_backslash_n_not_doubled(self):
+        """A literal backslash followed by 'n' (already escaped) should pass through."""
+        b = self._builder()
+        # Input is the two-character sequence \ n (not a newline)
+        assert b._escape_robot_argument("a\\nb") == "a\\nb"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

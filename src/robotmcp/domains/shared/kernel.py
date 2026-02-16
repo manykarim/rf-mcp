@@ -9,9 +9,13 @@ As per ADR-001, this shared kernel is kept minimal to reduce coupling.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from enum import Enum
+from typing import Annotated, Any, Dict, List, Literal, Optional
+
+from pydantic import BeforeValidator
 
 
 @dataclass(frozen=True)
@@ -257,3 +261,215 @@ class AriaNodeIterator:
         # Add children in reverse order so leftmost is processed first
         self._stack.extend(reversed(node.children))
         return node
+
+
+class ModelTier(Enum):
+    """LLM context window capacity classification.
+
+    Used by Tool Profile (ADR-006) for profile selection and description mode,
+    Response Optimization (ADR-008) for token budget allocation,
+    and Instruction context for template selection.
+    """
+    SMALL_CONTEXT = "small_context"
+    STANDARD = "standard"
+    LARGE_CONTEXT = "large_context"
+
+    @classmethod
+    def from_context_window(cls, window_size: int) -> "ModelTier":
+        """Infer model tier from context window size in tokens."""
+        if window_size <= 16384:
+            return cls.SMALL_CONTEXT
+        elif window_size <= 65536:
+            return cls.STANDARD
+        else:
+            return cls.LARGE_CONTEXT
+
+
+# ============================================================
+# ADR-009: Type-Constrained Tool Parameters
+# ============================================================
+#
+# Literal type aliases with BeforeValidator for case-insensitive
+# normalization.  Produces flat {"enum": [...]} in JSON Schema
+# while accepting wrong-case input at runtime.
+# ============================================================
+
+
+def _normalize_str(v: Any) -> Any:
+    """Normalize string input: strip whitespace, lowercase."""
+    return v.strip().lower() if isinstance(v, str) else v
+
+
+# ── Tier 1: Action dispatchers (HIGH impact) ──────────────────
+
+SessionAction = Annotated[
+    Literal[
+        "init", "initialize", "bootstrap",
+        "import_library", "library",
+        "import_resource", "resource",
+        "set_variables", "variables",
+        "import_variables", "load_variables",
+        "start_test", "end_test", "start_task", "end_task",
+        "list_tests",
+        "set_suite_setup", "set_suite_teardown",
+        "set_tool_profile", "tool_profile",
+    ],
+    BeforeValidator(_normalize_str),
+]
+
+TestStatus = Annotated[
+    Literal["pass", "fail"],
+    BeforeValidator(_normalize_str),
+]
+
+ToolProfileName = Annotated[
+    Literal["browser_exec", "api_exec", "discovery", "minimal_exec", "full"],
+    BeforeValidator(_normalize_str),
+]
+
+ModelTierLiteral = Annotated[
+    Literal["small_context", "standard", "large_context"],
+    BeforeValidator(_normalize_str),
+]
+
+PluginAction = Annotated[
+    Literal["list", "reload", "diagnose"],
+    BeforeValidator(_normalize_str),
+]
+
+AttachAction = Annotated[
+    Literal[
+        "status", "info", "stop", "shutdown",
+        "cleanup", "clean", "reset", "reconnect",
+        "disconnect_all", "terminate", "force_stop",
+    ],
+    BeforeValidator(_normalize_str),
+]
+
+IntentVerb = Annotated[
+    Literal[
+        "navigate", "click", "fill", "hover",
+        "select", "assert_visible", "extract_text", "wait_for",
+    ],
+    BeforeValidator(_normalize_str),
+]
+
+# ── Tier 2: Mode/Strategy selectors (MEDIUM impact) ──────────
+
+KeywordStrategy = Annotated[
+    Literal["semantic", "pattern", "catalog", "session"],
+    BeforeValidator(_normalize_str),
+]
+
+AutomationContext = Annotated[
+    Literal["web", "mobile", "api", "desktop", "generic", "database"],
+    BeforeValidator(_normalize_str),
+]
+
+RecommendMode = Annotated[
+    Literal["direct", "sampling_prompt", "sampling", "merge_samples", "merge"],
+    BeforeValidator(_normalize_str),
+]
+
+FlowStructure = Annotated[
+    Literal["if", "for", "try"],
+    BeforeValidator(_normalize_str),
+]
+
+ExecutionMode = Annotated[
+    Literal["keyword", "evaluate"],
+    BeforeValidator(_normalize_str),
+]
+
+# ── Tier 3: Verbosity/Level selectors (LOW impact) ───────────
+
+DetailLevel = Annotated[
+    Literal["minimal", "standard", "full"],
+    BeforeValidator(_normalize_str),
+]
+
+FilteringLevel = Annotated[
+    Literal["standard", "aggressive"],
+    BeforeValidator(_normalize_str),
+]
+
+SuiteRunMode = Annotated[
+    Literal["dry", "validate", "full"],
+    BeforeValidator(_normalize_str),
+]
+
+ValidationLevel = Annotated[
+    Literal["minimal", "standard", "strict"],
+    BeforeValidator(_normalize_str),
+]
+
+
+# ============================================================
+# ADR-010: Small LLM Resilience — Array Coercion & Guided Recovery
+# ============================================================
+
+
+def _coerce_string_to_list(v: Any) -> Any:
+    """Coerce stringified JSON arrays and comma-separated strings to lists.
+
+    Handles three LLM output patterns:
+    1. JSON array string:  '["Browser", "BuiltIn"]' -> ["Browser", "BuiltIn"]
+    2. Comma-separated:    'Browser,BuiltIn'        -> ["Browser", "BuiltIn"]
+    3. Single value:       'Browser'                 -> ["Browser"]
+
+    Non-string inputs (list, None, int, etc.) pass through unchanged.
+    Schema-transparent: produces identical JSON Schema to List[str].
+    """
+    if isinstance(v, list):
+        return v
+    if isinstance(v, str):
+        v_stripped = v.strip()
+        # Path 1: JSON parse '[...]'
+        if v_stripped.startswith("["):
+            try:
+                parsed = json.loads(v_stripped)
+                if isinstance(parsed, list):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+        # Path 2: Comma split 'A,B,C'
+        if "," in v_stripped:
+            return [item.strip() for item in v_stripped.split(",") if item.strip()]
+        # Path 3: Single value 'Browser'
+        if v_stripped:
+            return [v_stripped]
+    return v
+
+
+CoercedStringList = Annotated[List[str], BeforeValidator(_coerce_string_to_list)]
+OptionalCoercedStringList = Annotated[
+    Optional[List[str]], BeforeValidator(_coerce_string_to_list)
+]
+
+
+# ── ADR-010 I4: Deprecated keyword aliases ────────────────────
+
+DEPRECATED_KEYWORD_ALIASES: Dict[str, str] = {
+    "get": "GET On Session",
+    "post": "POST On Session",
+    "put": "PUT On Session",
+    "delete": "DELETE On Session",
+    "patch": "PATCH On Session",
+    "head": "HEAD On Session",
+    "options": "OPTIONS On Session",
+}
+
+
+def extract_deprecation_suggestion(error_msg: str) -> str | None:
+    """Extract suggested replacement from deprecation warning text."""
+    pattern = re.compile(
+        r"(?:use|Use|favor of)\s+['\"]?(\w[\w\s]*?)['\"]?\s*(?:\.|instead|$)",
+        re.IGNORECASE,
+    )
+    match = pattern.search(error_msg)
+    return match.group(1).strip() if match else None
+
+
+def resolve_deprecated_alias(keyword: str) -> str | None:
+    """Return modern replacement for deprecated keyword, or None."""
+    return DEPRECATED_KEYWORD_ALIASES.get(keyword.lower().strip())

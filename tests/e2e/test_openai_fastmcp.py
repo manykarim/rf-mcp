@@ -244,10 +244,13 @@ async def test_openai_driven_workflow(openai_client: OpenAI, openai_model: str, 
     try:
         parsed = json.loads(scenario_payload)
     except json.JSONDecodeError:
-        parsed = {"scenario": scenario_payload, "context": "process"}
+        parsed = {"scenario": scenario_payload, "context": "generic"}
 
     scenario_text = parsed.get("scenario", scenario_payload)
-    scenario_context = parsed.get("context", "process")
+    _valid_contexts = {"web", "mobile", "api", "desktop", "generic", "database"}
+    scenario_context = parsed.get("context", "generic")
+    if scenario_context not in _valid_contexts:
+        scenario_context = "generic"  # LLM may hallucinate invalid values
 
     analysis = await openai_mcp_client.call_tool(
         "analyze_scenario", {"scenario": scenario_text, "context": scenario_context}

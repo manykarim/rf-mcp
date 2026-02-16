@@ -2458,14 +2458,14 @@ class TestBuilder:
         # Fix malformed evaluation namespace expressions first
         arg = self._fix_malformed_evaluation_namespace(arg)
 
+        # Escape literal newlines/tabs so they don't break the .robot line structure.
+        # RF uses \n / \t as escape sequences, so we emit \\n / \\t in the text
+        # which RF interprets back as the literal characters at runtime.
+        arg = arg.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+
         # Escape arguments starting with # (treated as comments in RF)
         if arg.startswith("#"):
             return f"\\{arg}"
-
-        # Future escaping rules can be added here:
-        # - Arguments starting with $ or & (variables)
-        # - Arguments with spaces that need quoting
-        # - Arguments with special RF syntax
 
         return arg
 

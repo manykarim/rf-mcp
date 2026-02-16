@@ -221,7 +221,7 @@ class PatternStore:
             data = self.retrieve(namespace, key)
             if data:
                 stored_at = data.get("_stored_at", 0)
-                if current_time - stored_at > max_age_seconds:
+                if current_time - stored_at >= max_age_seconds:
                     if self.delete(namespace, key):
                         removed_count += 1
 
