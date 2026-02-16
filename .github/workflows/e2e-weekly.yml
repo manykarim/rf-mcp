@@ -168,3 +168,73 @@ jobs:
           name: Model Comparison Tests
           path: results/model-comparison-pytest.xml
           reporter: java-junit
+
+  opencode-e2e:
+    name: OpenCode E2E (Small LLMs via OpenRouter)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENCODE_MODELS: 'openrouter/qwen/qwen3-coder,openrouter/z-ai/glm-4.5-air'
+      RUN_INTENT_E2E: 'true'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install opencode CLI
+        run: npm install -g opencode-ai
+
+      - name: Verify opencode
+        run: opencode --version
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: 'latest'
+
+      - name: Setup Python 3.12 (via uv)
+        run: uv python install 3.12
+
+      - name: Install dependencies (dev)
+        run: uv sync --all-extras --group dev
+
+      - name: Create metrics directories
+        run: |
+          mkdir -p tests/e2e/metrics/intent_action
+          mkdir -p tests/e2e/metrics/realistic_e2e
+          mkdir -p results
+
+      - name: Run Intent Action E2E Tests (pytest)
+        run: |
+          uv run pytest tests/e2e/test_intent_action_models.py -v \
+            --junitxml=results/e2e-intent-action.xml
+        timeout-minutes: 20
+        continue-on-error: true
+
+      - name: Run Realistic E2E Tests (standalone)
+        run: uv run python tests/e2e/run_realistic_e2e.py
+        timeout-minutes: 50
+        continue-on-error: true
+
+      - name: Upload opencode E2E metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-e2e-metrics
+          path: |
+            tests/e2e/metrics/intent_action/**/*.json
+            tests/e2e/metrics/realistic_e2e/**/*.json
+
+      - name: Test Report
+        uses: dorny/test-reporter@main
+        if: success() || failure()
+        with:
+          name: OpenCode Intent Action E2E
+          path: results/e2e-intent-action.xml
+          reporter: java-junit
