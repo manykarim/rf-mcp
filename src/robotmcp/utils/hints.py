@@ -116,17 +116,30 @@ def _check_click_intercepted(ctx: HintContext, err: str) -> List[Hint]:
 
 
 def _check_strict_mode_violation(ctx: HintContext, err: str) -> List[Hint]:
-    if not re.search(r"strict mode violation.*resolved to \d+ elements", err, re.IGNORECASE):
+    if not re.search(r"strict mode violation|resolved to \d+ elements", err, re.IGNORECASE):
         return []
     if _detect_library(ctx) != "Browser":
         return []
     sel = _selector_arg(ctx)
+    # Extract the element count from the error for a concrete message
+    count_match = re.search(r"resolved to (\d+) elements", err, re.IGNORECASE)
+    count_str = count_match.group(1) if count_match else "multiple"
+    kw = ctx.keyword or "Click"
     return [Hint(
         title="Selector matches multiple elements",
-        message="The selector matched more than one element. Playwright requires exactly one match in strict mode. Use a more specific selector by adding text filters, nth index, or visibility constraints.",
+        message=(
+            f"The selector resolved to {count_str} elements but Playwright strict mode "
+            f"requires exactly one. Append >> nth=0 to pick the first match "
+            f"(nth is a zero-based index: 0=first, 1=second, etc.), "
+            f"or >> visible=true to filter to the visible one."
+        ),
         examples=[
-            {"keyword": "Click", "arguments": [f"{sel} >> visible=true"]},
-            {"keyword": "Click", "arguments": [f"{sel} >> nth=0"]},
+            {"keyword": kw, "arguments": [f"{sel} >> nth=0"],
+             "note": "Pick the first matching element (zero-based index)"},
+            {"keyword": kw, "arguments": [f"{sel} >> nth=1"],
+             "note": "Pick the second matching element"},
+            {"keyword": kw, "arguments": [f"{sel} >> visible=true"],
+             "note": "Filter to the single visible element"},
         ],
         relevance=90,
     )]

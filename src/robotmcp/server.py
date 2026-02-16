@@ -5549,6 +5549,7 @@ async def intent_action(
         }
 
     effective_session_id = session_id or "default"
+    resolution = None  # Hoisted for fallback access in except block
 
     try:
         from robotmcp.domains.intent.services import IntentResolutionError
@@ -5612,9 +5613,66 @@ async def intent_action(
         return error_result
 
     except Exception as e:
+        error_msg = str(e)
+
+        # Navigate fallback: if intent was "navigate" and error looks
+        # like no browser/page, try opening one before retrying.
+        if (
+            intent == "navigate"
+            and resolution is not None
+            and _intent_resolver is not None
+        ):
+            library = resolution.get("library", "")
+            fallback_steps = _intent_resolver.get_navigate_fallback(
+                library=library,
+                error_message=error_msg,
+                session_id=effective_session_id,
+            )
+            if fallback_steps:
+                try:
+                    for step in fallback_steps:
+                        fb_result = await execute_step.fn(
+                            keyword=step["keyword"],
+                            arguments=step["arguments"],
+                            session_id=effective_session_id,
+                        )
+                        if isinstance(fb_result, dict) and not fb_result.get(
+                            "success", True
+                        ):
+                            break
+                    else:
+                        # All fallback steps succeeded — retry navigate
+                        result = await execute_step.fn(
+                            keyword=resolution["keyword"],
+                            arguments=resolution["arguments"],
+                            session_id=effective_session_id,
+                            assign_to=resolution.get("assign_to"),
+                            detail_level=detail_level,
+                        )
+                        if isinstance(result, dict):
+                            result["intent_resolved"] = {
+                                "intent": resolution["intent"],
+                                "keyword": resolution["keyword"],
+                                "library": resolution["library"],
+                                "locator_normalized": resolution.get(
+                                    "locator_normalized", False
+                                ),
+                            }
+                            result["fallback_applied"] = True
+                            result["fallback_steps"] = len(fallback_steps)
+                        _track_tool_result(
+                            effective_session_id,
+                            "intent_action",
+                            {"intent": intent, "target": target, "value": value},
+                            result if isinstance(result, dict) else {"success": True},
+                        )
+                        return result
+                except Exception:
+                    pass  # Fallback failed — fall through to original error
+
         error_result = {
             "success": False,
-            "error": f"Intent execution failed: {str(e)}",
+            "error": f"Intent execution failed: {error_msg}",
         }
         _track_tool_result(
             effective_session_id,

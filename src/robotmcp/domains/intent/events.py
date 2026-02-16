@@ -27,13 +27,14 @@ class IntentResolved:
 
 @dataclass(frozen=True)
 class IntentFallbackUsed:
-    """Emitted when intent resolution falls back to execute_step.
+    """Emitted when intent execution fails and a fallback sequence is applied.
 
-    This happens when the LLM calls intent_action with an unmapped
-    verb but provides enough information for a direct keyword call.
+    Currently used for navigate intent recovery when no browser/page is open.
+    The fallback sequence opens the browser/page before retrying the original intent.
 
     Consumers:
-    - Learning system (identify intents that should be added)
+    - Learning system (track fallback frequency by library)
+    - Analytics (measure recovery success rate)
     """
     intent_verb: str
     fallback_keyword: str

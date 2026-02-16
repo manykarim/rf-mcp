@@ -9,7 +9,11 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
 from .entities import IntentMapping
-from .value_objects import IntentVerb
+from .value_objects import (
+    FallbackStep,
+    IntentVerb,
+    NavigateFallbackSequence,
+)
 
 
 @dataclass
@@ -37,6 +41,11 @@ class IntentRegistry:
 
     # Track which libraries have been registered
     _registered_libraries: Set[str] = field(default_factory=set)
+
+    # Navigate fallback sequences: library → list of sequences (order matters)
+    _navigate_fallbacks: Dict[str, List[NavigateFallbackSequence]] = field(
+        default_factory=dict
+    )
 
     def register(self, mapping: IntentMapping) -> None:
         """Register or override an intent mapping.
@@ -105,6 +114,28 @@ class IntentRegistry:
         """Get all registered mappings (for diagnostics)."""
         return list(self._mappings.values())
 
+    def register_navigate_fallback(
+        self, sequence: NavigateFallbackSequence
+    ) -> None:
+        """Register a navigate fallback sequence for a library."""
+        if sequence.library not in self._navigate_fallbacks:
+            self._navigate_fallbacks[sequence.library] = []
+        self._navigate_fallbacks[sequence.library].append(sequence)
+
+    def get_navigate_fallback(
+        self, library: str, error_message: str
+    ) -> Optional[NavigateFallbackSequence]:
+        """Find a fallback sequence matching the error for this library.
+
+        Returns the first matching sequence (order matters: more
+        specific patterns should be registered first).
+        """
+        sequences = self._navigate_fallbacks.get(library, [])
+        for seq in sequences:
+            if seq.matches_error(error_message):
+                return seq
+        return None
+
     @classmethod
     def with_builtins(cls) -> IntentRegistry:
         """Create a registry pre-populated with built-in mappings.
@@ -117,6 +148,8 @@ class IntentRegistry:
         registry.register_all(_builtin_browser_mappings())
         registry.register_all(_builtin_selenium_mappings())
         registry.register_all(_builtin_appium_mappings())
+        for seq in _builtin_navigate_fallbacks():
+            registry.register_navigate_fallback(seq)
         return registry
 
 
@@ -416,5 +449,62 @@ def _builtin_appium_mappings() -> List[IntentMapping]:
             requires_value=False,
             argument_transformer=_wait_for_selenium_transformer,  # same arg shape
             timeout_category="assertion",
+        ),
+    ]
+
+
+# ============================================================
+# Built-in navigate fallback sequences
+# ============================================================
+
+def _builtin_navigate_fallbacks() -> List[NavigateFallbackSequence]:
+    """Built-in fallback sequences for navigate intent recovery.
+
+    Order within each library matters: more specific patterns first.
+    """
+    return [
+        # Browser Library: no browser open → New Browser + New Page
+        NavigateFallbackSequence(
+            library="Browser",
+            error_pattern=r"no browser|browser.*not.*open|no open browser",
+            steps=(
+                FallbackStep(
+                    keyword="New Browser",
+                    arguments=("headless=False",),
+                    reason="Open browser first",
+                ),
+                FallbackStep(
+                    keyword="New Page",
+                    arguments=(),
+                    reason="Open a page/tab",
+                ),
+            ),
+            description="Open browser and page before navigating",
+        ),
+        # Browser Library: no page/tab → New Page only
+        NavigateFallbackSequence(
+            library="Browser",
+            error_pattern=r"target closed|page.*closed|no page|no context",
+            steps=(
+                FallbackStep(
+                    keyword="New Page",
+                    arguments=(),
+                    reason="Reopen page/tab",
+                ),
+            ),
+            description="Reopen page after target closed",
+        ),
+        # SeleniumLibrary: no browser open → Open Browser
+        NavigateFallbackSequence(
+            library="SeleniumLibrary",
+            error_pattern=r"No browser is open|invalid session id|Session.*not.*found",
+            steps=(
+                FallbackStep(
+                    keyword="Open Browser",
+                    arguments=("about:blank", "chrome"),
+                    reason="Open browser first",
+                ),
+            ),
+            description="Open browser before navigating",
         ),
     ]

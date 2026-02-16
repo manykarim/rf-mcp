@@ -9,7 +9,7 @@ intent into a concrete keyword invocation. It coordinates between:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol
 
 from .aggregates import IntentRegistry
 from .entities import IntentMapping
@@ -218,6 +218,34 @@ class IntentResolver:
         ))
 
         return resolved
+
+    def get_navigate_fallback(
+        self,
+        library: str,
+        error_message: str,
+        session_id: str,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Return fallback steps if error matches a navigate recovery pattern.
+
+        Returns list of dicts [{"keyword": str, "arguments": list}] or None.
+        Emits IntentFallbackUsed event if a match is found.
+        """
+        sequence = self.registry.get_navigate_fallback(library, error_message)
+        if sequence is None:
+            return None
+
+        self._publish(IntentFallbackUsed(
+            intent_verb="navigate",
+            fallback_keyword=sequence.steps[0].keyword,
+            library=library,
+            session_id=session_id,
+            reason=sequence.description,
+        ))
+
+        return [
+            {"keyword": s.keyword, "arguments": list(s.arguments)}
+            for s in sequence.steps
+        ]
 
     def _determine_library(
         self, session_id: str, intent_verb: IntentVerb

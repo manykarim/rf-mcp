@@ -156,6 +156,65 @@ class TestStrictModeViolationBrowser:
         combined = _all_example_text(hints) + " " + _all_message_text(hints)
         assert "visible" in combined or "nth=" in combined or "nth" in combined
 
+    def test_resolved_to_elements_without_strict_mode_prefix(self):
+        """'resolved to N elements' without 'strict mode violation' prefix should still trigger hint."""
+        ctx = _make_ctx(
+            error_text='locator("#btn") resolved to 5 elements',
+            search_order=["Browser"],
+        )
+        hints = generate_hints(ctx)
+        assert len(hints) >= 1
+        assert any("multiple elements" in h["title"].lower() for h in hints)
+
+    def test_hint_mentions_nth_zero_based(self):
+        ctx = _make_ctx(
+            error_text='strict mode violation: locator("button") resolved to 3 elements',
+            search_order=["Browser"],
+        )
+        hints = generate_hints(ctx)
+        msg = _all_message_text(hints)
+        assert "nth=0" in msg
+        assert "zero-based" in msg
+
+    def test_hint_examples_include_nth_0_and_nth_1(self):
+        ctx = _make_ctx(
+            error_text='strict mode violation: locator(".item") resolved to 4 elements',
+            search_order=["Browser"],
+        )
+        hints = generate_hints(ctx)
+        examples_text = _all_example_text(hints)
+        assert "nth=0" in examples_text
+        assert "nth=1" in examples_text
+
+    def test_hint_includes_element_count(self):
+        ctx = _make_ctx(
+            error_text='strict mode violation: locator("#x") resolved to 7 elements',
+            search_order=["Browser"],
+        )
+        hints = generate_hints(ctx)
+        msg = _all_message_text(hints)
+        assert "7" in msg
+
+    def test_hint_uses_actual_keyword_in_examples(self):
+        ctx = _make_ctx(
+            keyword="Fill Text",
+            error_text='strict mode violation: locator("input") resolved to 2 elements',
+            search_order=["Browser"],
+        )
+        hints = generate_hints(ctx)
+        examples_text = _all_example_text(hints)
+        assert "fill text" in examples_text
+
+    def test_not_triggered_for_selenium(self):
+        """Strict mode / nth= hint is Browser Library specific."""
+        ctx = _make_ctx(
+            error_text='strict mode violation: locator("#btn") resolved to 3 elements',
+            search_order=["SeleniumLibrary"],
+        )
+        hints = generate_hints(ctx)
+        titles = _titles(hints)
+        assert "selector matches multiple elements" not in titles
+
 
 # ===================================================================
 # 5. Invalid Selector

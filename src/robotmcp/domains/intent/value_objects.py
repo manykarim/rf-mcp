@@ -4,9 +4,10 @@ Immutable types that carry no identity. Equality is structural.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import ClassVar, Dict, List, Optional
+from typing import ClassVar, Dict, List, Optional, Tuple
 
 
 class IntentVerb(str, Enum):
@@ -144,3 +145,33 @@ class ResolvedIntent:
     intent_verb: IntentVerb
     normalized_locator: Optional[NormalizedLocator] = None
     metadata: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class FallbackStep:
+    """A single keyword execution in a fallback sequence."""
+    keyword: str
+    arguments: Tuple[str, ...]
+    reason: str
+
+
+@dataclass(frozen=True)
+class NavigateFallbackSequence:
+    """Ordered steps to recover from a navigate failure.
+
+    Attributes:
+        library: The library this fallback applies to
+        error_pattern: Regex pattern to match error messages
+        steps: Ordered tuple of FallbackStep to execute
+        description: Human-readable description for diagnostics
+    """
+    library: str
+    error_pattern: str
+    steps: Tuple[FallbackStep, ...]
+    description: str
+
+    def matches_error(self, error_message: str) -> bool:
+        """Check if this sequence handles the given error."""
+        if not error_message:
+            return False
+        return bool(re.search(self.error_pattern, error_message, re.IGNORECASE))

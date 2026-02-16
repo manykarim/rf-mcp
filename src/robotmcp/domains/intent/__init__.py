@@ -7,6 +7,7 @@ correct library-specific RF keywords with locator normalization.
 from .value_objects import (
     IntentVerb, LocatorStrategy, IntentTarget,
     NormalizedLocator, ResolvedIntent,
+    FallbackStep, NavigateFallbackSequence,
 )
 from .entities import IntentMapping, ArgumentTransformer
 from .aggregates import IntentRegistry
@@ -19,6 +20,7 @@ from .events import (
 __all__ = [
     "IntentVerb", "LocatorStrategy", "IntentTarget",
     "NormalizedLocator", "ResolvedIntent",
+    "FallbackStep", "NavigateFallbackSequence",
     "IntentMapping", "ArgumentTransformer",
     "IntentRegistry",
     "IntentResolver", "IntentResolutionError",
