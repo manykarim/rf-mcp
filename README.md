@@ -530,9 +530,10 @@ RobotMCP provides a comprehensive toolset organized by function. Highlights:
 
 ### Session & Execution
 
-- `manage_session` – Initialize sessions, import resources/libraries, or set variables via `action`.
+- `manage_session` – Initialize sessions, import resources/libraries, set variables, or switch tool profiles via `action`.
 - `execute_step` – Execute keywords or `mode="evaluate"` expressions with optional `assign_to`.
 - `execute_flow` – Build `if`/`for_each`/`try` control structures using RF context-first execution.
+- `intent_action` – Library-agnostic intent execution (e.g. `intent="click"`, `target="text=Login"`). Resolves to the correct keyword/locator for the session's active library. Supports 8 intents: `navigate`, `click`, `fill`, `hover`, `select`, `assert_visible`, `extract_text`, `wait_for`.
 
 ### Discovery & Documentation
 
@@ -554,6 +555,52 @@ RobotMCP provides a comprehensive toolset organized by function. Highlights:
 ### Locator Guidance
 
 - `get_locator_guidance` – Consolidated Browser/Selenium/Appium selector guidance with structured output.
+
+---
+
+## 🧠 Small LLM Optimization
+
+RobotMCP includes optimizations for small and medium-sized LLMs (8K-32K context windows) that reduce token overhead and improve tool call accuracy.
+
+### Dynamic Tool Profiles
+
+Control which tools are visible to the LLM based on the workflow phase. Smaller models see fewer, more compact tools:
+
+```
+manage_session(action="set_tool_profile", tool_profile="browser_exec")
+```
+
+Profiles: `browser_exec`, `api_exec`, `discovery`, `minimal_exec`, `full`. Reduces tool description overhead from ~7,000 to ~1,000 tokens.
+
+### Intent Action
+
+The `intent_action` tool provides a library-agnostic entry point for common test actions. Instead of requiring the LLM to know library-specific keyword names and locator syntax, it expresses intent:
+
+```
+intent_action(intent="click", target="text=Login", session_id="...")
+intent_action(intent="fill", target="#username", value="testuser", session_id="...")
+```
+
+The server resolves intent + target to the correct keyword and locator format for the session's active library (Browser, SeleniumLibrary, or AppiumLibrary).
+
+#### Navigate Fallback
+
+When `intent_action(intent="navigate")` fails because no browser or page is open, the server automatically opens the browser/page and retries. Small LLMs no longer need to handle "no browser open" errors, saving 2-4 tool calls per session.
+
+### Strict Mode Hints
+
+When a Browser Library keyword fails because the selector matches multiple elements (Playwright strict mode), the error response includes a hint suggesting `>> nth=0` (zero-based index) or `>> visible=true` selector chains, with concrete examples using the actual keyword name and element count.
+
+### Type-Constrained Parameters
+
+All action/mode/strategy parameters use `Literal` types, producing `enum` constraints in the JSON Schema. This eliminates hallucinated values (e.g., `action="setup"` instead of `action="init"`). All values accept case-insensitive input.
+
+### Automatic Parameter Coercion
+
+Common small LLM mistakes are corrected server-side:
+- JSON-stringified arrays (`"[\"Browser\"]"`) are parsed to native arrays
+- Comma-separated strings (`"Browser,BuiltIn"`) are split into lists
+- Deprecated keywords (`GET`) are mapped to current equivalents (`GET On Session`)
 
 ---
 
