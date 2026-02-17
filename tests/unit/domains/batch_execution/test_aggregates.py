@@ -173,7 +173,8 @@ class TestBatchExecutionClock:
     def test_start_clock(self):
         batch = _make_batch()
         batch.start_clock()
-        time.sleep(0.01)
+        # Manipulate _start_time directly to avoid Windows timer resolution flakes
+        batch._start_time = time.monotonic() - 0.05
         assert batch.elapsed_ms > 0
 
     def test_is_timed_out_false(self):
