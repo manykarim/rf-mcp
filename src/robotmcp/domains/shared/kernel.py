@@ -13,7 +13,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Annotated, Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BeforeValidator
 
@@ -444,6 +444,50 @@ def _coerce_string_to_list(v: Any) -> Any:
 CoercedStringList = Annotated[List[str], BeforeValidator(_coerce_string_to_list)]
 OptionalCoercedStringList = Annotated[
     Optional[List[str]], BeforeValidator(_coerce_string_to_list)
+]
+
+
+def _coerce_string_to_variables(v: Any) -> Any:
+    """Coerce stringified JSON dicts/arrays to proper dict or list.
+
+    Handles LLM output patterns where structured types are sent as strings:
+    1. JSON dict string:   '{"headless": "true"}'  -> {"headless": "true"}
+    2. JSON array string:  '["headless=true"]'      -> ["headless=true"]
+    3. Comma-separated:    'headless=true,TIMEOUT=30' -> ["headless=true", "TIMEOUT=30"]
+
+    Non-string inputs (dict, list, None) pass through unchanged.
+    """
+    if v is None or isinstance(v, (dict, list)):
+        return v
+    if isinstance(v, str):
+        v_stripped = v.strip()
+        if not v_stripped:
+            return v
+        # Path 1: JSON dict '{"key": "val"}'
+        if v_stripped.startswith("{"):
+            try:
+                parsed = json.loads(v_stripped)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+        # Path 2: JSON array '["key=val"]'
+        if v_stripped.startswith("["):
+            try:
+                parsed = json.loads(v_stripped)
+                if isinstance(parsed, list):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+        # Path 3: Comma-separated 'key=val,key2=val2'
+        if "=" in v_stripped:
+            return [item.strip() for item in v_stripped.split(",") if item.strip()]
+    return v
+
+
+CoercedVariables = Annotated[
+    Union[Dict[str, Any], List[str], None],
+    BeforeValidator(_coerce_string_to_variables),
 ]
 
 
