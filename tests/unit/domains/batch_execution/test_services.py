@@ -40,7 +40,7 @@ def _make_batch(steps_data=None, **kwargs):
 
 
 def _success_result(return_value=None):
-    return {"success": True, "return_value": return_value}
+    return {"success": True, "result": return_value, "return_value": return_value}
 
 
 def _fail_result(error="Error"):
@@ -126,6 +126,56 @@ class TestStepVariableResolver:
         resolver = StepVariableResolver()
         assert resolver.validate_references([]) == []
 
+    # ── 1-based indexing support ─────────────────────────────────────
+
+    def test_resolve_one_based_ref(self):
+        """${STEP_3} at step_index=3 → 1-based → resolves index 2."""
+        resolver = StepVariableResolver()
+        result = resolver.resolve(
+            ["${STEP_3}"], {0: "a", 1: "b", 2: "url"}, step_index=3,
+        )
+        assert result == ["url"]
+
+    def test_resolve_one_based_step_1(self):
+        """${STEP_1} at step_index=1 → 1-based → resolves index 0."""
+        resolver = StepVariableResolver()
+        result = resolver.resolve(["${STEP_1}"], {0: "first"}, step_index=1)
+        assert result == ["first"]
+
+    def test_resolve_zero_based_still_works(self):
+        """${STEP_0} at step_index=1 is already valid 0-based."""
+        resolver = StepVariableResolver()
+        result = resolver.resolve(["${STEP_0}"], {0: "first"}, step_index=1)
+        assert result == ["first"]
+
+    def test_resolve_step_0_self_ref_still_rejected(self):
+        """${STEP_0} at step 0 cannot be reinterpreted. Rejected."""
+        resolver = StepVariableResolver()
+        with pytest.raises(ValueError, match="Forward reference"):
+            resolver.resolve(["${STEP_0}"], {}, step_index=0)
+
+    def test_validate_one_based_ref_accepted(self):
+        """${STEP_2} at step index 2 is valid with 1-based interpretation."""
+        resolver = StepVariableResolver()
+        steps = [
+            BatchStep(index=0, keyword="A", args=["plain"]),
+            BatchStep(index=1, keyword="B", args=["plain"]),
+            BatchStep(index=2, keyword="C", args=["${STEP_2}"]),
+        ]
+        errors = resolver.validate_references(steps)
+        assert errors == []
+
+    def test_validate_true_forward_ref_still_rejected(self):
+        """${STEP_5} at step 1 is still a forward ref even with 1-based."""
+        resolver = StepVariableResolver()
+        steps = [
+            BatchStep(index=0, keyword="A", args=[]),
+            BatchStep(index=1, keyword="B", args=["${STEP_5}"]),
+        ]
+        errors = resolver.validate_references(steps)
+        assert len(errors) == 1
+        assert "forward reference" in errors[0]
+
 
 # ── BatchRunner ──────────────────────────────────────────────────────
 
@@ -162,6 +212,64 @@ class TestBatchRunnerAllPass:
         result = await runner.execute(batch)
         assert result.results_map[0] == "v0"
         assert result.results_map[1] == "v1"
+
+    @pytest.mark.asyncio
+    async def test_result_key_captures_return_value(self):
+        """execute_step returns 'result' key — verify it's captured for ${STEP_N}."""
+        executor = AsyncMock()
+        executor.execute_keyword = AsyncMock(
+            side_effect=[
+                {"success": True, "result": "https://example.com"},
+                {"success": True, "result": "ok"},
+            ]
+        )
+        runner = BatchRunner(keyword_executor=executor)
+        batch = _make_batch(steps_data=[
+            {"keyword": "Get Url", "args": []},
+            {"keyword": "Should Be Equal", "args": ["${STEP_0}", "https://example.com"]},
+        ])
+        result = await runner.execute(batch)
+        assert result.status == BatchStatus.PASS
+        assert result.results_map[0] == "https://example.com"
+        assert result.results[1].args_resolved == ["https://example.com", "https://example.com"]
+
+    @pytest.mark.asyncio
+    async def test_return_value_key_fallback(self):
+        """Legacy 'return_value' key should still work as fallback."""
+        executor = AsyncMock()
+        executor.execute_keyword = AsyncMock(
+            return_value={"success": True, "return_value": "legacy_val"}
+        )
+        runner = BatchRunner(keyword_executor=executor)
+        batch = _make_batch(steps_data=[{"keyword": "A", "args": []}])
+        result = await runner.execute(batch)
+        assert result.results_map[0] == "legacy_val"
+
+    @pytest.mark.asyncio
+    async def test_one_based_step_ref_with_real_result_key(self):
+        """End-to-end: 1-based ${STEP_3} resolves using 'result' key from step at index 2."""
+        executor = AsyncMock()
+        executor.execute_keyword = AsyncMock(
+            side_effect=[
+                {"success": True, "result": None},       # step 0: New Browser
+                {"success": True, "result": None},       # step 1: New Page
+                {"success": True, "result": "https://demoshop.makrocode.de/"},  # step 2: Get Url
+                {"success": True, "result": True},       # step 3: Should Be Equal
+            ]
+        )
+        runner = BatchRunner(keyword_executor=executor)
+        batch = _make_batch(steps_data=[
+            {"keyword": "New Browser", "args": ["chromium"]},
+            {"keyword": "New Page", "args": ["https://demoshop.makrocode.de/"]},
+            {"keyword": "Get Url", "args": []},
+            {"keyword": "Should Be Equal", "args": ["${STEP_3}", "https://demoshop.makrocode.de/"]},
+        ])
+        result = await runner.execute(batch)
+        assert result.status == BatchStatus.PASS
+        # Verify the 1-based ref resolved correctly
+        assert result.results[3].args_resolved == [
+            "https://demoshop.makrocode.de/", "https://demoshop.makrocode.de/"
+        ]
 
 
 class TestBatchRunnerFailStop:

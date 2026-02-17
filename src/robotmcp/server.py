@@ -30,6 +30,7 @@ from robotmcp.domains.shared.kernel import (
     AttachAction,
     AutomationContext,
     CoercedStringList,
+    CoercedVariables,
     DEPRECATED_KEYWORD_ALIASES,
     DetailLevel,
     ExecutionMode,
@@ -2250,7 +2251,7 @@ async def manage_session(
     action: SessionAction,
     session_id: str = "",
     libraries: OptionalCoercedStringList = None,
-    variables: Dict[str, Any] | List[str] | None = None,
+    variables: CoercedVariables = None,
     resource_path: str | None = None,
     library_name: str | None = None,
     args: OptionalCoercedStringList = None,
@@ -3908,12 +3909,15 @@ async def execute_batch(
 
     Reduces N MCP round-trips to 1. Steps run sequentially; each step's return
     value is available to later steps via ${STEP_N} references in arguments.
+    Both 0-based (${STEP_0} = first step) and 1-based (${STEP_1} = first step)
+    indexing are accepted. When ambiguous, 1-based is preferred.
 
     Args:
         session_id: Session to execute within (must exist or be auto-created).
         steps: List of step dicts, each with:
             - keyword (str, required): RF keyword name
             - args (list[str], optional): Positional arguments, may contain ${STEP_N}
+              (both 0-based and 1-based indexing supported)
             - label (str, optional): Human-readable label
             - timeout (str, optional): Per-step RF timeout (e.g., "10s")
             - assign_to (str, optional): Variable name to capture return value (e.g., "cart_count")

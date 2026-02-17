@@ -59,6 +59,7 @@ class StepVariableResolver:
                 step_index: int) -> List[str]:
         """Resolve ${STEP_N} references in args.
 
+        Supports both 0-based and 1-based step indexing.
         Raises ValueError for forward references or missing results.
         """
         resolved = []
@@ -66,22 +67,26 @@ class StepVariableResolver:
             refs = StepReference.find_all(str(arg))
             result = str(arg)
             for ref in refs:
-                if ref.index >= step_index:
+                idx = ref.index
+                if idx >= step_index and idx > 0 and (idx - 1) < step_index:
+                    idx = idx - 1
+                if idx >= step_index:
                     raise ValueError(
                         f"Forward reference {ref.raw} in step {step_index}"
                     )
-                if ref.index not in results_map:
+                if idx not in results_map:
                     raise ValueError(
                         f"Reference {ref.raw} not available "
-                        f"(step {ref.index} not completed)"
+                        f"(step {idx} not completed)"
                     )
-                result = result.replace(ref.raw, str(results_map[ref.index]))
+                result = result.replace(ref.raw, str(results_map[idx]))
             resolved.append(result)
         return resolved
 
     def validate_references(self, steps: List[BatchStep]) -> List[str]:
         """Validate all step references at batch creation time.
 
+        Supports both 0-based and 1-based step indexing.
         Returns list of error messages (empty = valid).
         """
         errors: List[str] = []
@@ -89,7 +94,10 @@ class StepVariableResolver:
             for arg in step.args:
                 refs = StepReference.find_all(str(arg))
                 for ref in refs:
-                    if ref.index >= step.index:
+                    idx = ref.index
+                    if idx >= step.index and idx > 0 and (idx - 1) < step.index:
+                        idx = idx - 1
+                    if idx >= step.index:
                         errors.append(
                             f"Step {step.index}: forward reference {ref.raw}"
                         )
@@ -149,7 +157,7 @@ class BatchRunner:
                 time_ms = int((time.monotonic() - step_start) * 1000)
 
                 if result.get("success", False):
-                    return_value = result.get("return_value")
+                    return_value = result.get("result") or result.get("return_value")
                     batch.record_success(step, resolved_args, return_value, time_ms)
                 else:
                     # Keyword executed but failed (ExecutionStatus)
@@ -231,7 +239,7 @@ class BatchRunner:
                 time_ms = int((time.monotonic() - step_start) * 1000)
 
                 if result.get("success", False):
-                    return_value = result.get("return_value")
+                    return_value = result.get("result") or result.get("return_value")
                     batch.record_recovery(
                         step, resolved_args, return_value, time_ms,
                         error_msg, recovery_log,

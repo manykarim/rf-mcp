@@ -11,16 +11,18 @@ from __future__ import annotations
 
 __test__ = True
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from robotmcp.domains.shared.kernel import (
     CoercedStringList,
+    CoercedVariables,
     DEPRECATED_KEYWORD_ALIASES,
     OptionalCoercedStringList,
     _coerce_string_to_list,
+    _coerce_string_to_variables,
     extract_deprecation_suggestion,
     resolve_deprecated_alias,
 )
@@ -342,6 +344,144 @@ class TestOptionalCoercedStringListTypeAdapter:
             f"Schema mismatch:\n"
             f"  OptionalCoercedStringList: {coerced_schema}\n"
             f"  Optional[List[str]]:       {plain_schema}"
+        )
+
+
+# ============================================================
+# 3b. _coerce_string_to_variables + CoercedVariables tests
+# ============================================================
+
+
+class TestCoerceStringToVariables:
+    """Validate _coerce_string_to_variables coercion function."""
+
+    def test_json_dict_string(self):
+        """JSON dict string should be parsed to dict."""
+        assert _coerce_string_to_variables('{"headless": "true"}') == {"headless": "true"}
+
+    def test_json_dict_string_multiple_keys(self):
+        """JSON dict string with multiple keys."""
+        result = _coerce_string_to_variables('{"headless": "true", "TIMEOUT": "30"}')
+        assert result == {"headless": "true", "TIMEOUT": "30"}
+
+    def test_json_array_string(self):
+        """JSON array string should be parsed to list."""
+        assert _coerce_string_to_variables('["headless=true"]') == ["headless=true"]
+
+    def test_json_array_string_multiple(self):
+        """JSON array with multiple items."""
+        result = _coerce_string_to_variables('["headless=true", "TIMEOUT=30"]')
+        assert result == ["headless=true", "TIMEOUT=30"]
+
+    def test_comma_separated_key_value(self):
+        """Comma-separated key=value pairs should be parsed to list."""
+        result = _coerce_string_to_variables("headless=true,TIMEOUT=30")
+        assert result == ["headless=true", "TIMEOUT=30"]
+
+    def test_single_key_value(self):
+        """Single key=value string should be parsed to list."""
+        assert _coerce_string_to_variables("headless=true") == ["headless=true"]
+
+    def test_dict_passthrough(self):
+        """Native dict should pass through unchanged."""
+        d = {"headless": "true"}
+        assert _coerce_string_to_variables(d) is d
+
+    def test_list_passthrough(self):
+        """Native list should pass through unchanged."""
+        lst = ["headless=true"]
+        assert _coerce_string_to_variables(lst) is lst
+
+    def test_none_passthrough(self):
+        """None should pass through unchanged."""
+        assert _coerce_string_to_variables(None) is None
+
+    def test_empty_string(self):
+        """Empty string should pass through (no coercion)."""
+        assert _coerce_string_to_variables("") == ""
+
+    def test_whitespace_string(self):
+        """Whitespace-only string should pass through."""
+        assert _coerce_string_to_variables("   ") == "   "
+
+    def test_json_dict_with_whitespace(self):
+        """JSON dict with surrounding whitespace."""
+        result = _coerce_string_to_variables('  {"key": "val"}  ')
+        assert result == {"key": "val"}
+
+    def test_invalid_json_string_with_equals(self):
+        """Malformed JSON that contains = should fall through to comma split."""
+        result = _coerce_string_to_variables("{broken=json")
+        # Has "=" so treated as comma-separated
+        assert result == ["{broken=json"]
+
+    def test_plain_string_no_equals(self):
+        """Plain string without = or JSON markers should pass through."""
+        result = _coerce_string_to_variables("just a string")
+        assert result == "just a string"
+
+
+class TestCoercedVariablesTypeAdapter:
+    """Validate CoercedVariables with Pydantic validation."""
+
+    def setup_method(self):
+        self.ta = TypeAdapter(CoercedVariables)
+
+    def test_none_passthrough(self):
+        assert self.ta.validate_python(None) is None
+
+    def test_dict_passthrough(self):
+        result = self.ta.validate_python({"headless": "true"})
+        assert result == {"headless": "true"}
+        assert isinstance(result, dict)
+
+    def test_list_passthrough(self):
+        result = self.ta.validate_python(["headless=true"])
+        assert result == ["headless=true"]
+        assert isinstance(result, list)
+
+    def test_json_dict_string_coercion(self):
+        """JSON dict string — the exact pattern GLM 4.5 Air sends."""
+        result = self.ta.validate_python('{"headless": "true"}')
+        assert result == {"headless": "true"}
+        assert isinstance(result, dict)
+
+    def test_json_array_string_coercion(self):
+        result = self.ta.validate_python('["headless=true"]')
+        assert result == ["headless=true"]
+        assert isinstance(result, list)
+
+    def test_comma_separated_coercion(self):
+        result = self.ta.validate_python("headless=true,TIMEOUT=30")
+        assert result == ["headless=true", "TIMEOUT=30"]
+        assert isinstance(result, list)
+
+    def test_single_kv_coercion(self):
+        result = self.ta.validate_python("headless=true")
+        assert result == ["headless=true"]
+        assert isinstance(result, list)
+
+    def test_empty_dict_passthrough(self):
+        result = self.ta.validate_python({})
+        assert result == {}
+
+    def test_empty_list_passthrough(self):
+        result = self.ta.validate_python([])
+        assert result == []
+
+    def test_dict_with_nested_values(self):
+        """Dict with non-string values should work (Dict[str, Any])."""
+        result = self.ta.validate_python({"COUNT": 5, "FLAG": True})
+        assert result == {"COUNT": 5, "FLAG": True}
+
+    def test_schema_matches_union(self):
+        """CoercedVariables schema must match Union[Dict[str, Any], List[str], None]."""
+        coerced_schema = self.ta.json_schema()
+        plain_schema = TypeAdapter(Union[Dict[str, Any], List[str], None]).json_schema()
+        assert coerced_schema == plain_schema, (
+            f"Schema mismatch:\n"
+            f"  CoercedVariables:                      {coerced_schema}\n"
+            f"  Union[Dict[str,Any],List[str],None]:   {plain_schema}"
         )
 
 

@@ -237,6 +237,68 @@ class TestBatchExecutionResolveArgs:
         step = _make_step(args=[])
         assert batch.resolve_args(step) == []
 
+    # ── 1-based indexing support ─────────────────────────────────────
+
+    def test_one_based_ref_auto_corrected(self):
+        """${STEP_3} at step index 3 is treated as 1-based → resolves index 2."""
+        batch = _make_batch()
+        batch.results_map[2] = "https://example.com"
+        step = _make_step(index=3, args=["${STEP_3}"])
+        result = batch.resolve_args(step)
+        assert result == ["https://example.com"]
+
+    def test_one_based_ref_in_should_be_equal(self):
+        """Reproduces the exact user-reported error: ${STEP_3} in step 3."""
+        batch = _make_batch()
+        batch.results_map[0] = None  # New Browser
+        batch.results_map[1] = None  # New Page
+        batch.results_map[2] = "https://demoshop.makrocode.de/"  # Get Url
+        step = _make_step(
+            index=3,
+            args=["${STEP_3}", "https://demoshop.makrocode.de/"],
+        )
+        result = batch.resolve_args(step)
+        assert result == ["https://demoshop.makrocode.de/", "https://demoshop.makrocode.de/"]
+
+    def test_one_based_ref_step_1_at_index_1(self):
+        """${STEP_1} at step 1 → 1-based = index 0 (the first step)."""
+        batch = _make_batch()
+        batch.results_map[0] = "first_result"
+        step = _make_step(index=1, args=["${STEP_1}"])
+        result = batch.resolve_args(step)
+        assert result == ["first_result"]
+
+    def test_zero_based_still_works(self):
+        """${STEP_0} at step 1 → already valid 0-based back reference."""
+        batch = _make_batch()
+        batch.results_map[0] = "first_result"
+        step = _make_step(index=1, args=["${STEP_0}"])
+        result = batch.resolve_args(step)
+        assert result == ["first_result"]
+
+    def test_step_0_self_ref_still_rejected(self):
+        """${STEP_0} at step 0 — cannot be 1-based (would be -1). Still rejected."""
+        batch = _make_batch()
+        step = _make_step(index=0, args=["${STEP_0}"])
+        with pytest.raises(ValueError, match="Forward reference"):
+            batch.resolve_args(step)
+
+    def test_true_forward_ref_still_rejected(self):
+        """${STEP_5} at step 2 — even 1-based (index 4) is still forward. Rejected."""
+        batch = _make_batch()
+        step = _make_step(index=2, args=["${STEP_5}"])
+        with pytest.raises(ValueError, match="Forward reference"):
+            batch.resolve_args(step)
+
+    def test_mixed_zero_and_one_based(self):
+        """${STEP_0} (0-based) and ${STEP_2} (1-based) in same step at index 2."""
+        batch = _make_batch()
+        batch.results_map[0] = "A"
+        batch.results_map[1] = "B"
+        step = _make_step(index=2, args=["${STEP_0}+${STEP_2}"])
+        result = batch.resolve_args(step)
+        assert result == ["A+B"]
+
 
 # ── Result recording ─────────────────────────────────────────────────
 

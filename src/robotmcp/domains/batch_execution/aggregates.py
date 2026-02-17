@@ -152,6 +152,12 @@ class BatchExecution:
     def resolve_args(self, step: BatchStep) -> List[str]:
         """Resolve ``${STEP_N}`` references in step args using results_map.
 
+        Supports both 0-based and 1-based step indexing.  LLMs naturally use
+        1-based references (``${STEP_3}`` = "result of the 3rd step" = index 2).
+        When a reference would be a forward/self-reference under 0-based
+        indexing but valid as 1-based, it is automatically interpreted as
+        1-based (N-1).
+
         Args:
             step: The step whose args should be resolved
 
@@ -166,17 +172,21 @@ class BatchExecution:
             refs = StepReference.find_all(str(arg))
             result = str(arg)
             for ref in refs:
-                if ref.index >= step.index:
+                idx = ref.index
+                if idx >= step.index and idx > 0 and (idx - 1) < step.index:
+                    # 1-based interpretation: ${STEP_3} means index 2
+                    idx = idx - 1
+                if idx >= step.index:
                     raise ValueError(
                         f"Forward reference {ref.raw} in step {step.index}"
                     )
-                if ref.index not in self.results_map:
+                if idx not in self.results_map:
                     raise ValueError(
                         f"Reference {ref.raw} not available "
-                        f"(step {ref.index} not completed)"
+                        f"(step {idx} not completed)"
                     )
                 result = result.replace(
-                    ref.raw, str(self.results_map[ref.index])
+                    ref.raw, str(self.results_map[idx])
                 )
             resolved.append(result)
         return resolved
