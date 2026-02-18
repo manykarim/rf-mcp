@@ -123,6 +123,19 @@ class LibraryDetector:
             (r'\bxml\s+(file|document|response|config)\b', 5),
             (r'\bxpath\s+(expression|query|selector)\b', 6),
         ],
+        'PlatynUI': [
+            (r'\bplatynui\b', 9),
+            (r'\b(use|using|with)\s+(platynui|platyn\s*ui)\b', 10),
+            (r'\bdesktop\s+(ui\s+)?(automation|testing|test)\b', 7),
+            (r'\bnative\s+(app|application|gui|desktop)\s+(test|automation)\b', 6),
+            (r'\b(windows?\s+)?(uia|ui\s*automation)\b', 5),
+            (r'\bat-?spi\b', 5),
+            (r'\baccessibility\s+(tree|api|testing)\b', 5),
+            (r'\bbaremetal\b', 8),
+            (r'\bpointer\s+(click|move|press|release)\b', 4),
+            (r'\bkeyboard\s+(type|press|release)\b', 4),
+            (r'\b(activate|maximize|minimize|restore)\s+window\b', 4),
+        ],
     }
 
     # Minimum score required for detection

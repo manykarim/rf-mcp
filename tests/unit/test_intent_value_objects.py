@@ -26,8 +26,8 @@ from robotmcp.domains.intent.value_objects import (
 class TestIntentVerb:
     """Test IntentVerb enum."""
 
-    def test_has_exactly_8_values(self):
-        assert len(IntentVerb) == 8
+    def test_has_exactly_15_values(self):
+        assert len(IntentVerb) == 15
 
     def test_navigate_value(self):
         assert IntentVerb.NAVIGATE.value == "navigate"
@@ -67,8 +67,8 @@ class TestIntentVerb:
 class TestLocatorStrategy:
     """Test LocatorStrategy enum."""
 
-    def test_has_exactly_9_values(self):
-        assert len(LocatorStrategy) == 9
+    def test_has_exactly_10_values(self):
+        assert len(LocatorStrategy) == 10
 
     def test_includes_auto(self):
         assert LocatorStrategy.AUTO.value == "auto"

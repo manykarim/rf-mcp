@@ -87,6 +87,7 @@ class SessionType(Enum):
     DATA_PROCESSING = "data_processing"
     SYSTEM_TESTING = "system_testing"
     MOBILE_TESTING = "mobile_testing"
+    DESKTOP_TESTING = "desktop_testing"
     DATABASE_TESTING = "database_testing"
     VISUAL_TESTING = "visual_testing"
     MIXED = "mixed"
@@ -222,6 +223,15 @@ class ExecutionSession:
     def is_web_session(self) -> bool:
         """Check if this is a web testing session."""
         return self.platform_type == PlatformType.WEB or self.is_browser_session()
+
+    def is_desktop_session(self) -> bool:
+        """Check if this is a desktop testing session."""
+        return (
+            self.platform_type == PlatformType.DESKTOP
+            or "PlatynUI.BareMetal" in self.imported_libraries
+            or "PlatynUI" in self.imported_libraries
+            or self.session_type == SessionType.DESKTOP_TESTING
+        )
 
     def set_mobile_config(self, config: MobileConfig) -> None:
         """Set mobile configuration for the session."""
@@ -511,6 +521,18 @@ class ExecutionSession:
                 ],
                 description="Mobile application testing with Appium",
             ),
+            SessionType.DESKTOP_TESTING: SessionProfile(
+                session_type=SessionType.DESKTOP_TESTING,
+                core_libraries=["BuiltIn", "PlatynUI.BareMetal", "Collections", "String"],
+                optional_libraries=["OperatingSystem", "DateTime", "Screenshot"],
+                search_order=["PlatynUI.BareMetal", "BuiltIn", "Collections", "String"],
+                keywords_patterns=[
+                    r"\b(pointer\s+click|keyboard\s+type|query|activate|focus)\b",
+                    r"\b(get\s+attribute|maximize|minimize|restore|close)\b",
+                    r"\b(highlight|take\s+screenshot|pointer\s+move)\b",
+                ],
+                description="Desktop UI automation testing with PlatynUI",
+            ),
             SessionType.DATABASE_TESTING: SessionProfile(
                 session_type=SessionType.DATABASE_TESTING,
                 core_libraries=["BuiltIn", "DatabaseLibrary", "Collections", "String"],
@@ -600,6 +622,7 @@ class ExecutionSession:
             (r"\b(xml|xpath)\b", "XML"),
             (r"\b(api|http|rest|request)\b", "RequestsLibrary"),
             (r"\b(mobile|android|ios|device|appium)\b", "AppiumLibrary"),
+            (r"\b(platynui|baremetal|desktop\s+automation)\b", "PlatynUI"),
             (r"\b(database|sql|mysql|postgresql)\b", "DatabaseLibrary"),
         ]
 
@@ -684,6 +707,19 @@ class ExecutionSession:
                 (r"\b(emulator|simulator|real\s+device)\b", 3),
                 (r"\b(APK|IPA|bundle\s+ID|package\s+name)\b", 3),
                 (r"\b(device\s+farm|BrowserStack|Sauce\s+Labs)\b", 3),
+            ],
+            SessionType.DESKTOP_TESTING: [
+                (r"\b(desktop)\b", 3),
+                (r"\bnative\s+(app|application|gui)\b", 4),
+                (r"\bplatynui\b", 10),
+                (r"\bbaremetal\b", 8),
+                (r"\b(uia|ui\s*automation)\b", 5),
+                (r"\bat-?spi\b", 6),
+                (r"\baccessibility\s+tree\b", 5),
+                (r"\bwindow\s+(management|automation)\b", 4),
+                (r"\bdesktop\s+(ui\s+)?(automation|testing|test)\b", 7),
+                (r"\bpointer\s+(click|move|press)\b", 3),
+                (r"\bkeyboard\s+(type|press|release)\b", 3),
             ],
             SessionType.DATABASE_TESTING: [
                 (r"\b(database|sql|query|table|record)\b", 3),
@@ -988,6 +1024,14 @@ class ExecutionSession:
             elif self.explicit_library_preference == "XML":
                 self.session_type = SessionType.XML_PROCESSING
                 return profiles[SessionType.XML_PROCESSING]
+
+            # Desktop testing libraries
+            elif self.explicit_library_preference in ("PlatynUI", "PlatynUI.BareMetal"):
+                self.session_type = SessionType.DESKTOP_TESTING
+                logger.info(
+                    f"Session type set to DESKTOP_TESTING based on explicit library preference: {self.explicit_library_preference}"
+                )
+                return profiles.get(SessionType.DESKTOP_TESTING)
 
         # Use standard profile for detected session type
         return profiles.get(self.session_type)

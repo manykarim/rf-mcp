@@ -273,8 +273,13 @@ class IntentResolver:
         if web_lib and self.registry.has_mapping(intent_verb, web_lib):
             return web_lib
 
-        # Check platform type for mobile
+        # Check platform type for desktop or mobile
         platform = self.session_lookup.get_platform_type(session_id)
+        if platform == "desktop":
+            imported = self.session_lookup.get_imported_libraries(session_id)
+            for lib_name in ("PlatynUI.BareMetal", "PlatynUI"):
+                if lib_name in imported and self.registry.has_mapping(intent_verb, "PlatynUI.BareMetal"):
+                    return "PlatynUI.BareMetal"
         if platform == "mobile":
             if self.registry.has_mapping(intent_verb, "AppiumLibrary"):
                 return "AppiumLibrary"
@@ -288,7 +293,7 @@ class IntentResolver:
             f"Cannot determine target library for intent "
             f"'{intent_verb.value}' in session '{session_id}'. "
             f"No imported library has a mapping for this intent. "
-            f"Ensure a web or mobile library is imported in the session."
+            f"Ensure a web, mobile, or desktop library is imported in the session."
         )
 
     def _publish(self, event: object) -> None:

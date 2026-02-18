@@ -91,6 +91,49 @@ READ_KEYWORDS: Set[str] = {
     "get_page_source",
 }
 
+# PlatynUI Desktop keywords mapped to CLICK action type (pointer interactions - 5s)
+PLATYNUI_POINTER_KEYWORDS: Set[str] = {
+    "pointer_click",
+    "pointer_multi_click",
+    "pointer_press",
+    "pointer_release",
+    "pointer_move_to",
+}
+
+# PlatynUI Desktop keywords mapped to FILL action type (keyboard input - 5s)
+PLATYNUI_KEYBOARD_KEYWORDS: Set[str] = {
+    "keyboard_type",
+    "keyboard_press",
+    "keyboard_release",
+}
+
+# PlatynUI Desktop keywords mapped to CLICK action type (window management - 5s)
+PLATYNUI_WINDOW_KEYWORDS: Set[str] = {
+    "activate",
+    "maximize",
+    "minimize",
+    "restore",
+    "focus",
+    "close",
+}
+
+# PlatynUI Desktop keywords mapped to GET_TEXT action type (read operations - 2s)
+PLATYNUI_READ_KEYWORDS: Set[str] = {
+    "get_attribute",
+    "query",
+    "get_pointer_position",
+}
+
+# PlatynUI Desktop keywords mapped to GET_TEXT action type (screenshot - 2s)
+PLATYNUI_SCREENSHOT_KEYWORDS: Set[str] = {
+    "take_screenshot",
+}
+
+# PlatynUI Desktop keywords mapped to GET_TEXT action type (visual - 2s)
+PLATYNUI_HIGHLIGHT_KEYWORDS: Set[str] = {
+    "highlight",
+}
+
 # Keywords mapped to WAIT_FOR_ELEMENT action type (wait/assertions - 10s default)
 WAIT_KEYWORDS: Set[str] = {
     "wait_for_elements_state",
@@ -128,6 +171,24 @@ def _build_keyword_mapping() -> None:
 
     for keyword in WAIT_KEYWORDS:
         _KEYWORD_TO_ACTION[keyword] = ActionType.WAIT_FOR_ELEMENT
+
+    for keyword in PLATYNUI_POINTER_KEYWORDS:
+        _KEYWORD_TO_ACTION[keyword] = ActionType.CLICK
+
+    for keyword in PLATYNUI_KEYBOARD_KEYWORDS:
+        _KEYWORD_TO_ACTION[keyword] = ActionType.FILL
+
+    for keyword in PLATYNUI_WINDOW_KEYWORDS:
+        _KEYWORD_TO_ACTION[keyword] = ActionType.CLICK
+
+    for keyword in PLATYNUI_READ_KEYWORDS:
+        _KEYWORD_TO_ACTION[keyword] = ActionType.GET_TEXT
+
+    for keyword in PLATYNUI_SCREENSHOT_KEYWORDS:
+        _KEYWORD_TO_ACTION[keyword] = ActionType.SCREENSHOT
+
+    for keyword in PLATYNUI_HIGHLIGHT_KEYWORDS:
+        _KEYWORD_TO_ACTION[keyword] = ActionType.GET_TEXT
 
 
 # Build mapping on module load

@@ -8,6 +8,7 @@ from robotmcp.plugins.base import StaticLibraryPlugin
 from robotmcp.plugins.contracts import InstallAction, LibraryCapabilities, LibraryMetadata
 
 from .browser_plugin import BrowserLibraryPlugin
+from .platynui_plugin import PlatynUIPlugin
 from .requests_plugin import RequestsLibraryPlugin
 from .selenium_plugin import SeleniumLibraryPlugin
 
@@ -96,6 +97,7 @@ def generate_builtin_plugins() -> List[StaticLibraryPlugin]:
             BrowserLibraryPlugin(),
             SeleniumLibraryPlugin(),
             RequestsLibraryPlugin(),
+            PlatynUIPlugin(),
         ]
     )
 

@@ -1559,6 +1559,9 @@ async def recommend_libraries(
             result["recommendations"] = recommendations
             result["recommended_libraries"] = recommended_names
 
+        # Normalise recommended library names before importing
+        recommended_names = [_normalize_library_name(n) for n in recommended_names]
+
         for lib in recommended_names:
             try:
                 session.import_library(lib, force=True)
@@ -1574,7 +1577,7 @@ async def recommend_libraries(
         rf_mgr = get_rf_native_context_manager()
         processed: set[str] = set()
         for entry in recommendations:
-            name = entry.get("library_name")
+            name = _normalize_library_name(entry.get("library_name", ""))
             if not name or name in processed:
                 continue
             processed.add(name)
@@ -2399,6 +2402,11 @@ async def manage_session(
                     for lib in libraries
                 ):
                     scenario_type = "mobile_testing"
+                elif any(
+                    "platynui" in lib.lower() or "desktop" in lib.lower()
+                    for lib in libraries
+                ):
+                    scenario_type = "desktop_automation"
 
             hooks.on_session_start(
                 session_id=session_id,
@@ -2412,6 +2420,8 @@ async def manage_session(
         problems: List[Dict[str, Any]] = []
 
         if libraries:
+            # Normalise library names (e.g. PlatynUI → PlatynUI.BareMetal)
+            libraries = [_normalize_library_name(lib) for lib in libraries]
             # Ensure BuiltIn is always included (standard RF behaviour)
             if "BuiltIn" not in libraries:
                 libraries = ["BuiltIn"] + list(libraries)
@@ -2430,6 +2440,33 @@ async def manage_session(
                 loaded.append("BuiltIn")
             except Exception as lib_error:
                 problems.append({"library": "BuiltIn", "error": str(lib_error)})
+
+        # ── Post-import placeholder detection ───────────────────────
+        # Warn when an imported library appears to be a stub/placeholder
+        # (e.g. the pip-installed ``PlatynUI`` has only ``Dummy Keyword``).
+        placeholder_warnings: List[Dict[str, str]] = []
+        for lib_name in loaded:
+            if lib_name == "BuiltIn":
+                continue
+            try:
+                kw_count = len(execution_engine.get_available_keywords(lib_name))
+                if kw_count <= 1:
+                    warn_msg = (
+                        f"Library '{lib_name}' only exposes {kw_count} keyword(s). "
+                        f"This is likely a placeholder/stub package. "
+                        f"Ensure the real library is installed (e.g. build from source)."
+                    )
+                    logger.warning(warn_msg)
+                    placeholder_warnings.append(
+                        {"library": lib_name, "warning": warn_msg}
+                    )
+            except Exception:
+                pass
+        if placeholder_warnings:
+            problems.extend(
+                {"library": w["library"], "error": w["warning"]}
+                for w in placeholder_warnings
+            )
 
         set_vars: List[str] = []
         if variables:
@@ -2561,6 +2598,9 @@ async def manage_session(
     if action_norm in {"import_library", "library"}:
         if not library_name:
             return {"success": False, "error": "library_name is required"}
+
+        # Normalise library name (e.g. PlatynUI → PlatynUI.BareMetal)
+        library_name = _normalize_library_name(library_name)
 
         def _local_call() -> Dict[str, Any]:
             mgr = get_rf_native_context_manager()
@@ -3027,6 +3067,53 @@ async def execute_flow(
     return {"success": False, "error": f"Unsupported flow structure '{structure}'"}
 
 
+def _is_desktop_session(session) -> bool:
+    """Check if a session targets desktop automation (PlatynUI).
+
+    Uses ``session.is_desktop_session()`` when available, otherwise
+    falls back to checking ``imported_libraries`` and ``platform_type``
+    for PlatynUI indicators.
+    """
+    if hasattr(session, "is_desktop_session"):
+        return session.is_desktop_session()
+    imported = getattr(session, "imported_libraries", None) or []
+    if "PlatynUI" in imported or "PlatynUI.BareMetal" in imported:
+        return True
+    platform = getattr(session, "platform_type", None)
+    if platform is not None and getattr(platform, "value", None) == "desktop":
+        return True
+    session_type = getattr(session, "session_type", None)
+    if session_type is not None and getattr(session_type, "value", None) == "desktop_testing":
+        return True
+    return False
+
+
+# Library name → correct RF import path mapping.
+# The pip-installable 'PlatynUI' package is a placeholder stub with only
+# ``Dummy Keyword``.  The real library is imported as ``PlatynUI.BareMetal``
+# (built from the robotframework-PlatynUI source).  We normalise the name
+# so that LLMs that specify bare ``PlatynUI`` silently get the right
+# import path.
+_LIBRARY_NAME_ALIASES: Dict[str, str] = {
+    "PlatynUI": "PlatynUI.BareMetal",
+}
+
+
+def _normalize_library_name(name: str) -> str:
+    """Resolve library name aliases to their correct RF import path.
+
+    Only applies explicit aliases (e.g. PlatynUI → PlatynUI.BareMetal).
+    Does NOT normalise standard RF builtins whose ``import_path`` differs
+    from their short name (e.g. BuiltIn → robot.libraries.BuiltIn) because
+    RF resolves those short names natively.
+    """
+    if name in _LIBRARY_NAME_ALIASES:
+        canonical = _LIBRARY_NAME_ALIASES[name]
+        logger.debug("Normalised library name '%s' → '%s'", name, canonical)
+        return canonical
+    return name
+
+
 @mcp.tool
 async def get_session_state(
     session_id: str,
@@ -3049,7 +3136,7 @@ async def get_session_state(
 
     Args:
         session_id: Active session identifier to inspect.
-        sections: Specific data blocks to include (e.g., summary, page_source, variables, application_state).
+        sections: Specific data blocks to include (e.g., summary, page_source, variables, application_state, ui_tree).
         state_type: Type of application state to fetch when requesting application_state (dom|api|database|all).
         elements_of_interest: Targeted element identifiers passed to application state collectors.
         page_source_filtered: When True, returns sanitized/filtered DOM text instead of the full source.
@@ -3122,6 +3209,46 @@ async def get_session_state(
     if "rf_context" in requested or "context" in requested:
         rf_context = await _diagnose_rf_context_payload(session_id)
         payload["sections"]["rf_context"] = rf_context
+
+    if "ui_tree" in requested:
+        # Retrieve accessibility tree for PlatynUI desktop sessions
+        ui_tree_result = None
+        session = execution_engine.session_manager.get_session(session_id)
+        if session is not None and _is_desktop_session(session):
+            try:
+                plugin_manager = get_library_plugin_manager()
+                state_provider = plugin_manager.get_state_provider("PlatynUI")
+                if state_provider and hasattr(state_provider, "get_ui_tree"):
+                    ui_tree_result = await state_provider.get_ui_tree(
+                        session, max_depth=3,
+                    )
+            except Exception as e:
+                logger.debug(
+                    "UI tree retrieval failed for session %s: %s",
+                    session_id, e,
+                )
+                ui_tree_result = {
+                    "success": False,
+                    "error": str(e),
+                    "guidance": (
+                        "Use 'Query //control:Window' to inspect elements "
+                        "manually"
+                    ),
+                }
+
+        if ui_tree_result is None:
+            ui_tree_result = {
+                "success": False,
+                "error": (
+                    "UI tree is only available for PlatynUI desktop sessions"
+                ),
+                "guidance": (
+                    "Initialize a desktop session with "
+                    "libraries=['PlatynUI.BareMetal']"
+                ),
+            }
+
+        payload["sections"]["ui_tree"] = ui_tree_result
 
     # Track for instruction learning
     _track_tool_result(session_id, "get_session_state", {"sections": sections}, payload)
@@ -3759,6 +3886,8 @@ async def check_library_availability(libraries: List[str]) -> Dict[str, Any]:
             - results: per-library availability/install guidance
             - error/guidance: present on failure
     """
+    # Normalise library names (e.g. PlatynUI → PlatynUI.BareMetal)
+    libraries = [_normalize_library_name(lib) for lib in libraries]
     result = execution_engine.check_library_requirements(libraries)
     if "success" not in result:
         result["success"] = not bool(result.get("error"))

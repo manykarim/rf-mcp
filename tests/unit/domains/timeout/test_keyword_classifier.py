@@ -132,11 +132,14 @@ class TestClassifyKeyword:
         "get_url",
         "is_visible",
         "is_enabled",
-        "take_screenshot",
     ])
     def test_read_keywords_return_get_text_action(self, keyword):
         """Test that read keywords return GET_TEXT ActionType."""
         assert classify_keyword(keyword) == ActionType.GET_TEXT
+
+    def test_take_screenshot_returns_screenshot_action(self):
+        """take_screenshot is overridden by PlatynUI SCREENSHOT mapping."""
+        assert classify_keyword("take_screenshot") == ActionType.SCREENSHOT
 
     @pytest.mark.parametrize("keyword", [
         "wait_for_elements_state",

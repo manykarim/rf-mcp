@@ -259,6 +259,26 @@ class ProfilePresets:
         )
 
     @classmethod
+    def desktop_exec(cls) -> ToolProfile:
+        """5-tool profile for desktop automation on small-context models.
+
+        Estimated ~1,400 tokens (compact descriptions).
+        """
+        return ToolProfile(
+            name="desktop_exec",
+            tool_names=frozenset({
+                "manage_session", "execute_step",
+                "get_session_state", "get_locator_guidance",
+                "find_keywords",
+            }),
+            description_mode=ToolDescriptionMode.COMPACT,
+            model_tier=ModelTier.SMALL_CONTEXT,
+            token_budget=TokenBudget.for_context_window(8192),
+            tags=frozenset({ToolTag.CORE, ToolTag.EXECUTION}),
+            description="Desktop automation for small-context LLMs",
+        )
+
+    @classmethod
     def full(cls) -> ToolProfile:
         """All 15 tools with full descriptions for large-context models."""
         return ToolProfile(

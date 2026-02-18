@@ -148,6 +148,7 @@ class IntentRegistry:
         registry.register_all(_builtin_browser_mappings())
         registry.register_all(_builtin_selenium_mappings())
         registry.register_all(_builtin_appium_mappings())
+        registry.register_all(_builtin_platynui_mappings())
         for seq in _builtin_navigate_fallbacks():
             registry.register_navigate_fallback(seq)
         return registry
@@ -236,6 +237,31 @@ def _wait_for_selenium_transformer(target, value, normalized_locator, options):
         args.append(target.locator)
     timeout = (options or {}).get("timeout", "10s")
     args.append(timeout)
+    return args
+
+
+def _extract_text_platynui_transformer(target, value, normalized_locator, options):
+    """PlatynUI: Get Attribute <descriptor> <attribute_name>.
+    Default attribute: 'Name'. Override with options['attribute_name'].
+    """
+    attr_name = (options or {}).get("attribute_name", "Name")
+    args = []
+    if normalized_locator:
+        args.append(normalized_locator.value)
+    elif target:
+        args.append(target.locator)
+    args.append(attr_name)
+    return args
+
+
+def _assert_visible_platynui_transformer(target, value, normalized_locator, options):
+    """PlatynUI: Get Attribute <descriptor> IsOffscreen == False."""
+    args = []
+    if normalized_locator:
+        args.append(normalized_locator.value)
+    elif target:
+        args.append(target.locator)
+    args.extend(["IsOffscreen", "==", "False"])
     return args
 
 
@@ -449,6 +475,113 @@ def _builtin_appium_mappings() -> List[IntentMapping]:
             requires_value=False,
             argument_transformer=_wait_for_selenium_transformer,  # same arg shape
             timeout_category="assertion",
+        ),
+    ]
+
+
+def _builtin_platynui_mappings() -> List[IntentMapping]:
+    """Built-in mappings for PlatynUI.BareMetal (desktop automation)."""
+    return [
+        IntentMapping(
+            intent_verb=IntentVerb.CLICK,
+            library="PlatynUI.BareMetal",
+            keyword="Pointer Click",
+            requires_target=True,
+            requires_value=False,
+            timeout_category="action",
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.FILL,
+            library="PlatynUI.BareMetal",
+            keyword="Keyboard Type",
+            requires_target=True,
+            requires_value=True,
+            timeout_category="action",
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.HOVER,
+            library="PlatynUI.BareMetal",
+            keyword="Pointer Move To",
+            requires_target=True,
+            requires_value=False,
+            timeout_category="action",
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.EXTRACT_TEXT,
+            library="PlatynUI.BareMetal",
+            keyword="Get Attribute",
+            requires_target=True,
+            requires_value=False,
+            argument_transformer=_extract_text_platynui_transformer,
+            timeout_category="read",
+            notes="Extracts Name attribute by default; pass attribute_name in options for others",
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.ASSERT_VISIBLE,
+            library="PlatynUI.BareMetal",
+            keyword="Get Attribute",
+            requires_target=True,
+            requires_value=False,
+            argument_transformer=_assert_visible_platynui_transformer,
+            timeout_category="assertion",
+            notes="Checks IsOffscreen==False via Get Attribute + assertion operator",
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.FOCUS,
+            library="PlatynUI.BareMetal",
+            keyword="Focus",
+            requires_target=True,
+            requires_value=False,
+            timeout_category="action",
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.ACTIVATE,
+            library="PlatynUI.BareMetal",
+            keyword="Activate",
+            requires_target=True,
+            requires_value=False,
+            timeout_category="action",
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.MAXIMIZE,
+            library="PlatynUI.BareMetal",
+            keyword="Maximize",
+            requires_target=True,
+            requires_value=False,
+            timeout_category="action",
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.MINIMIZE,
+            library="PlatynUI.BareMetal",
+            keyword="Minimize",
+            requires_target=True,
+            requires_value=False,
+            timeout_category="action",
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.CLOSE_WINDOW,
+            library="PlatynUI.BareMetal",
+            keyword="Close",
+            requires_target=True,
+            requires_value=False,
+            timeout_category="action",
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.RESTORE,
+            library="PlatynUI.BareMetal",
+            keyword="Restore",
+            requires_target=True,
+            requires_value=False,
+            timeout_category="action",
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.INSPECT,
+            library="PlatynUI.BareMetal",
+            keyword="Query",
+            requires_target=True,
+            requires_value=False,
+            timeout_category="read",
+            notes="XPath query against accessibility tree",
         ),
     ]
 

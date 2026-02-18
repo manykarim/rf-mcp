@@ -18,7 +18,7 @@ from robotmcp.components.variables.variable_resolver import VariableResolver
 from robotmcp.core.dynamic_keyword_orchestrator import get_keyword_discovery
 from robotmcp.models.config_models import ExecutionConfig
 from robotmcp.models.execution_models import ExecutionStep
-from robotmcp.models.session_models import ExecutionSession
+from robotmcp.models.session_models import ExecutionSession, SessionType
 from robotmcp.utils.argument_processor import ArgumentProcessor
 from robotmcp.utils.response_serializer import MCPResponseSerializer
 from robotmcp.utils.rf_native_type_converter import RobotFrameworkNativeConverter
@@ -1034,7 +1034,13 @@ class KeywordExecutor:
 
             # PRE-VALIDATION: Fast check for element actionability before execution
             # This detects "element not visible/enabled" in ~500ms instead of waiting 10s
-            if self.pre_validation_enabled and self._requires_pre_validation(keyword):
+            # Skip pre-validation entirely for desktop (PlatynUI) sessions — native
+            # accessibility XPath is not compatible with web-DOM element lookups.
+            _is_desktop = (
+                hasattr(session, "session_type")
+                and session.session_type == SessionType.DESKTOP_TESTING
+            )
+            if self.pre_validation_enabled and not _is_desktop and self._requires_pre_validation(keyword):
                 locator = self._extract_locator_from_args(keyword, arguments)
                 if locator:
                     # Derive pre-validation timeout from user's timeout_ms:
@@ -2011,10 +2017,19 @@ class KeywordExecutor:
                 f"RF NATIVE CONTEXT: Executing {keyword} with native RF context for session {session_id}"
             )
 
-            # Inject timeout into arguments for keywords that support it
-            arguments_with_timeout = self._inject_timeout_into_arguments(
-                keyword, list(arguments), timeout_ms, session
+            # Inject timeout into arguments for keywords that support it.
+            # Skip timeout injection for desktop (PlatynUI) sessions — native
+            # backend manages timeouts internally.
+            _is_desktop_ctx = (
+                hasattr(session, "session_type")
+                and session.session_type == SessionType.DESKTOP_TESTING
             )
+            if _is_desktop_ctx:
+                arguments_with_timeout = list(arguments)
+            else:
+                arguments_with_timeout = self._inject_timeout_into_arguments(
+                    keyword, list(arguments), timeout_ms, session
+                )
             if arguments_with_timeout != arguments:
                 logger.debug(f"Timeout injected into arguments: {arguments_with_timeout}")
 
