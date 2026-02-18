@@ -166,13 +166,23 @@ class TestHasMapping:
 class TestGetSupportedIntents:
     """Test intent enumeration per library."""
 
-    def test_browser_all_8(self, registry):
+    def test_browser_all_8_web_verbs(self, registry):
         intents = registry.get_supported_intents("Browser")
-        assert set(intents) == set(IntentVerb)
+        web_verbs = {
+            IntentVerb.NAVIGATE, IntentVerb.CLICK, IntentVerb.FILL,
+            IntentVerb.HOVER, IntentVerb.SELECT, IntentVerb.ASSERT_VISIBLE,
+            IntentVerb.EXTRACT_TEXT, IntentVerb.WAIT_FOR,
+        }
+        assert set(intents) == web_verbs
 
-    def test_selenium_all_8(self, registry):
+    def test_selenium_all_8_web_verbs(self, registry):
         intents = registry.get_supported_intents("SeleniumLibrary")
-        assert set(intents) == set(IntentVerb)
+        web_verbs = {
+            IntentVerb.NAVIGATE, IntentVerb.CLICK, IntentVerb.FILL,
+            IntentVerb.HOVER, IntentVerb.SELECT, IntentVerb.ASSERT_VISIBLE,
+            IntentVerb.EXTRACT_TEXT, IntentVerb.WAIT_FOR,
+        }
+        assert set(intents) == web_verbs
 
     def test_appium_6(self, registry):
         intents = registry.get_supported_intents("AppiumLibrary")
@@ -194,9 +204,9 @@ class TestGetSupportedIntents:
 class TestGetSupportedLibraries:
     """Test library enumeration."""
 
-    def test_returns_three_libraries(self, registry):
+    def test_returns_four_libraries(self, registry):
         libs = registry.get_supported_libraries()
-        assert libs == {"Browser", "SeleniumLibrary", "AppiumLibrary"}
+        assert libs == {"Browser", "SeleniumLibrary", "AppiumLibrary", "PlatynUI.BareMetal"}
 
 
 # =============================================================================

@@ -27,10 +27,14 @@ class IntentVerb(str, Enum):
     EXTRACT_TEXT = "extract_text"
     WAIT_FOR = "wait_for"
 
-    # Reserved for future expansion (not yet mapped)
-    # DRAG = "drag"
-    # SCROLL = "scroll"
-    # SCREENSHOT = "screenshot"
+    # Desktop-specific intents (ADR-012: PlatynUI)
+    ACTIVATE = "activate"
+    MAXIMIZE = "maximize"
+    MINIMIZE = "minimize"
+    RESTORE = "restore"
+    FOCUS = "focus"
+    CLOSE_WINDOW = "close_window"
+    INSPECT = "inspect"
 
 
 class LocatorStrategy(Enum):
@@ -48,6 +52,7 @@ class LocatorStrategy(Enum):
     PARTIAL_LINK = "partial_link"
     ACCESSIBILITY_ID = "accessibility_id"
     AUTO = "auto"   # Let resolver detect strategy from target string
+    PLATYNUI_XPATH = "platynui_xpath"  # //control:*, //item:*, //app:*, //native:*
 
 
 @dataclass(frozen=True)

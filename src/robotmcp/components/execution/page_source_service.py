@@ -26,20 +26,26 @@ class PageSourceService:
 
     # Library-to-keyword mappings — verified against libdoc catalogs.
     # Browser Library (Playwright), SeleniumLibrary (Selenium), AppiumLibrary (Appium).
-    _SOURCE_KEYWORDS: Dict[str, str] = {
+    _SOURCE_KEYWORDS: Dict[str, Optional[str]] = {
         "Browser": "Get Page Source",
         "SeleniumLibrary": "Get Source",
         "AppiumLibrary": "Get Source",
+        "PlatynUI": None,
+        "PlatynUI.BareMetal": None,
     }
-    _URL_KEYWORDS: Dict[str, str] = {
+    _URL_KEYWORDS: Dict[str, Optional[str]] = {
         "Browser": "Get Url",
         "SeleniumLibrary": "Get Location",
         "AppiumLibrary": "Get Window Url",
+        "PlatynUI": None,
+        "PlatynUI.BareMetal": None,
     }
-    _TITLE_KEYWORDS: Dict[str, str] = {
+    _TITLE_KEYWORDS: Dict[str, Optional[str]] = {
         "Browser": "Get Title",
         "SeleniumLibrary": "Get Title",
         "AppiumLibrary": "Get Window Title",
+        "PlatynUI": None,
+        "PlatynUI.BareMetal": None,
     }
 
     @staticmethod
@@ -63,8 +69,8 @@ class PageSourceService:
                 seen.add(kw)
         if candidates:
             return tuple(candidates)
-        # Fallback: return all unique keywords from the mapping
-        return tuple(dict.fromkeys(mapping.values()))
+        # Fallback: return all unique non-None keywords from the mapping
+        return tuple(dict.fromkeys(v for v in mapping.values() if v))
 
     def __init__(self, config: Optional[ExecutionConfig] = None):
         self.config = config or ExecutionConfig()
