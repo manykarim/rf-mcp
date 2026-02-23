@@ -303,7 +303,7 @@ class TestDisabledToolNamesConsistency:
             / "robotmcp"
             / "server.py"
         )
-        source = server_path.read_text()
+        source = server_path.read_text(encoding="utf-8")
 
         # Find the frozenset assignment
         assert "_DISABLED_TOOL_NAMES" in source
@@ -320,7 +320,7 @@ class TestDisabledToolNamesConsistency:
             / "robotmcp"
             / "server.py"
         )
-        source = server_path.read_text()
+        source = server_path.read_text(encoding="utf-8")
         tree = ast.parse(source)
 
         # Extract tool names from decorators using DISABLED_TOOL_KWARGS
