@@ -4,6 +4,9 @@ This adapter isolates the domain from FastMCP's async ToolManager API.
 It translates between the domain's ToolDescriptor model and FastMCP's
 Tool objects. This follows the same pattern as FastMCPInstructionAdapter
 in domains/instruction/adapters/fastmcp_adapter.py.
+
+Supports both fastmcp 2.x (_tool_manager private API) and 3.x
+(public enable/disable API) via ToolManagerCompat.
 """
 
 from __future__ import annotations
@@ -12,20 +15,17 @@ import copy
 import logging
 from typing import Any, Callable, Dict, FrozenSet, Optional
 
+from robotmcp.compat.fastmcp_compat import ToolManagerCompat
+
 logger = logging.getLogger(__name__)
 
 
 class ToolManagerAdapter:
     """Anti-Corruption Layer wrapping FastMCP's ToolManager.
 
-    FastMCP's ToolManager provides:
-    - remove_tool(name: str)       -> synchronous, removes by name
-    - add_tool(tool: Tool)         -> async, registers a Tool object
-    - has_tool(name: str) -> bool  -> async check
-    - get_tools() -> list[Tool]    -> async, returns all registered tools
-
-    FastMCP does NOT have enable/disable per-tool. Dynamic profiles
-    are achieved via remove_tool + add_tool (validated experimentally).
+    Uses ToolManagerCompat to abstract version-specific API differences:
+    - v2: _tool_manager.get_tools(), .has_tool(), .remove_tool(), .add_tool()
+    - v3: public server.disable()/enable() or equivalent
 
     After any add/remove, FastMCP automatically sends
     notifications/tools/list_changed to connected MCP clients.
@@ -36,6 +36,7 @@ class ToolManagerAdapter:
 
     Attributes:
         _server: The FastMCP server instance.
+        _compat: Version-aware tool manager wrapper.
         _event_publisher: Optional callback for infrastructure events.
         _original_tools: Cache of original Tool objects for restoration.
     """
@@ -52,6 +53,7 @@ class ToolManagerAdapter:
             event_publisher: Optional callback for infrastructure events.
         """
         self._server = fastmcp_server
+        self._compat = ToolManagerCompat(fastmcp_server)
         self._event_publisher = event_publisher
         # Cache original Tool objects so they can be re-added after removal.
         # Key: tool_name, Value: the original Tool object from FastMCP.
@@ -62,17 +64,24 @@ class ToolManagerAdapter:
 
         Must be called once at server startup, after all @mcp.tool
         decorators have been processed.
+
+        Only snapshots tools that are enabled (visible). Disabled tools
+        (e.g. from DISABLED_TOOL_KWARGS) are excluded to prevent the
+        profile system from accidentally re-enabling them.
         """
-        tools = await self._server._tool_manager.get_tools()
+        tools = await self._compat.get_tools()
         # FastMCP get_tools() returns dict[str, Tool] or list[Tool]
         if isinstance(tools, dict):
             for name, tool in tools.items():
-                self._original_tools[name] = tool
+                if getattr(tool, "enabled", True):
+                    self._original_tools[name] = tool
         else:
             for tool in tools:
-                self._original_tools[tool.name] = tool
+                if getattr(tool, "enabled", True):
+                    self._original_tools[tool.name] = tool
         logger.info(
-            f"ToolManagerAdapter initialized with {len(self._original_tools)} tools"
+            f"ToolManagerAdapter initialized with {len(self._original_tools)} tools "
+            f"(enabled only)"
         )
 
     async def remove_tool(self, tool_name: str) -> None:
@@ -81,8 +90,8 @@ class ToolManagerAdapter:
         Args:
             tool_name: Name of the tool to remove.
         """
-        if await self._server._tool_manager.has_tool(tool_name):
-            self._server._tool_manager.remove_tool(tool_name)
+        if await self._compat.has_tool(tool_name):
+            self._compat.remove_tool(tool_name)
             logger.debug(f"Removed tool: {tool_name}")
         else:
             logger.debug(f"Tool '{tool_name}' already not visible, skip remove")
@@ -105,12 +114,12 @@ class ToolManagerAdapter:
             logger.warning(f"No original tool found for '{tool_name}', cannot add")
             return
 
-        if not await self._server._tool_manager.has_tool(tool_name):
+        if not await self._compat.has_tool(tool_name):
             # Create a modified copy with the desired description
             modified_tool = self._clone_tool_with_description(
                 original, description, schema
             )
-            self._server._tool_manager.add_tool(modified_tool)
+            self._compat.add_tool(modified_tool)
             logger.debug(f"Added tool: {tool_name} (mode-specific description)")
 
     async def swap_tool_description(
@@ -131,26 +140,36 @@ class ToolManagerAdapter:
         await self.add_tool_with_description(tool_name, description, schema)
 
     async def get_visible_tool_names(self) -> FrozenSet[str]:
-        """Return the set of currently visible tool names.
+        """Return the set of currently visible (enabled) tool names.
+
+        Filters out disabled tools to prevent the profile system from
+        including permanently-hidden tools in its diff computation.
 
         Returns:
-            FrozenSet of tool name strings.
+            FrozenSet of enabled tool name strings.
         """
-        tools = await self._server._tool_manager.get_tools()
+        tools = await self._compat.get_tools()
         if isinstance(tools, dict):
-            return frozenset(tools.keys())
-        return frozenset(t.name for t in tools)
+            return frozenset(
+                name for name, tool in tools.items()
+                if getattr(tool, "enabled", True)
+            )
+        return frozenset(
+            t.name for t in tools
+            if getattr(t, "enabled", True)
+        )
 
     async def restore_all(self) -> None:
         """Restore all original tools (used when switching to full profile).
 
         Forcefully replaces any modified tools (e.g., swapped descriptions)
-        to ensure original schemas are intact.
+        to ensure original schemas are intact. Only restores tools that
+        were enabled at snapshot time.
         """
         for name, tool in self._original_tools.items():
-            if await self._server._tool_manager.has_tool(name):
-                self._server._tool_manager.remove_tool(name)
-            self._server._tool_manager.add_tool(tool)
+            if await self._compat.has_tool(name):
+                self._compat.remove_tool(name)
+            self._compat.add_tool(tool)
         logger.info("All original tools restored")
 
     def _clone_tool_with_description(

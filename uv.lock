@@ -3340,7 +3340,7 @@ wheels = [
 
 [[package]]
 name = "rf-mcp"
-version = "0.27.0"
+version = "0.30.0"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
@@ -3412,7 +3412,7 @@ requires-dist = [
     { name = "coverage", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=7.6.0" },
     { name = "django", marker = "extra == 'all'", specifier = ">=4.2,<5.0" },
     { name = "django", marker = "extra == 'frontend'", specifier = ">=4.2,<5.0" },
-    { name = "fastmcp", specifier = ">=2.0.0" },
+    { name = "fastmcp", specifier = ">=2.8.0" },
     { name = "invoke", marker = "extra == 'dev'", specifier = ">=2.2.0" },
     { name = "lxml", specifier = ">=4.9.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },

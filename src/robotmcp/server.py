@@ -11,6 +11,13 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, 
 
 from fastmcp import Context, FastMCP
 
+from robotmcp.compat.fastmcp_compat import (
+    DISABLED_TOOL_KWARGS,
+    finalize_disabled_tools,
+    get_tool_fn,
+    set_server_lifespan,
+)
+
 from robotmcp.components.execution import ExecutionCoordinator
 from robotmcp.components.execution.external_rf_client import ExternalRFClient
 from robotmcp.components.execution.mobile_capability_service import (
@@ -378,7 +385,7 @@ def _install_frontend_lifespan(config: "FrontendConfig") -> None:
         finally:
             await controller.stop()
 
-    mcp._mcp_server.lifespan = frontend_lifespan  # type: ignore[attr-defined]
+    set_server_lifespan(mcp, frontend_lifespan)
     _frontend_controller = controller
     logger.info(
         "Frontend enabled at http://%s:%s%s",
@@ -410,7 +417,8 @@ def _install_health_monitor_lifespan(
     _health_monitor = monitor
 
     # Capture existing lifespan (if any) to chain with it
-    existing_lifespan = getattr(mcp._mcp_server, "lifespan", None)
+    _inner = getattr(mcp, "_mcp_server", mcp)
+    existing_lifespan = getattr(_inner, "lifespan", None)
 
     @asynccontextmanager
     async def health_monitor_lifespan(server: FastMCP):  # type: ignore[override]
@@ -426,7 +434,7 @@ def _install_health_monitor_lifespan(
         finally:
             await monitor.stop()
 
-    mcp._mcp_server.lifespan = health_monitor_lifespan  # type: ignore[attr-defined]
+    set_server_lifespan(mcp, health_monitor_lifespan)
 
 
 def _log_attach_banner() -> None:
@@ -1064,7 +1072,7 @@ def learn(scenario: str) -> str:
 @mcp.tool(
     name="list_library_plugins",
     description="List discovered library plugins with basic metadata.",
-    enabled=False,
+    **DISABLED_TOOL_KWARGS,
 )
 async def list_library_plugins() -> Dict[str, Any]:
     """Return a summary of every loaded library plugin."""
@@ -1095,7 +1103,7 @@ async def list_library_plugins() -> Dict[str, Any]:
 @mcp.tool(
     name="reload_library_plugins",
     description="Reload library plugins from builtin definitions, entry points, and manifests.",
-    enabled=False,
+    **DISABLED_TOOL_KWARGS,
 )
 async def reload_library_plugins_tool(
     manifest_paths: Optional[List[str]] = None,
@@ -1113,7 +1121,7 @@ async def reload_library_plugins_tool(
 @mcp.tool(
     name="diagnose_library_plugin",
     description="Inspect metadata, capabilities, and hooks for a specific library plugin.",
-    enabled=False,
+    **DISABLED_TOOL_KWARGS,
 )
 async def diagnose_library_plugin(plugin_name: str) -> Dict[str, Any]:
     """Return detailed information about a specific library plugin."""
@@ -2228,7 +2236,7 @@ async def find_keywords(
     return {"success": False, "error": f"Unsupported strategy '{strategy}'"}
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def discover_keywords(
     action_description: str, context: str = "web", current_state: Dict[str, Any] = None
 ) -> Dict[str, Any]:
@@ -3457,7 +3465,7 @@ async def _get_application_state_payload(
     )
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def get_application_state(
     state_type: str = "all",
     elements_of_interest: List[str] = None,
@@ -3477,7 +3485,7 @@ async def get_application_state(
     )
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def suggest_next_step(
     current_state: Dict[str, Any],
     test_objective: str,
@@ -3576,7 +3584,7 @@ async def build_test_suite(
     return result
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def validate_scenario(
     parsed_scenario: Dict[str, Any], available_libraries: List[str] = None
 ) -> Dict[str, Any]:
@@ -3717,7 +3725,7 @@ async def _get_page_source_payload(
     )
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def get_page_source(
     session_id: str = "default",
     full_source: bool = False,
@@ -3757,7 +3765,7 @@ async def check_library_availability(libraries: List[str]) -> Dict[str, Any]:
     return result
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def get_library_status(library_name: str) -> Dict[str, Any]:
     """Get detailed installation status for a specific library.
 
@@ -3770,7 +3778,7 @@ async def get_library_status(library_name: str) -> Dict[str, Any]:
     return execution_engine.get_installation_status(library_name)
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def get_available_keywords(library_name: str = None) -> List[Dict[str, Any]]:
     """List available RF keywords with minimal metadata.
 
@@ -3789,7 +3797,7 @@ async def get_available_keywords(library_name: str = None) -> List[Dict[str, Any
     return execution_engine.get_available_keywords(library_name)
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def search_keywords(pattern: str) -> List[Dict[str, Any]]:
     """Search for Robot Framework keywords matching a pattern using native RF libdoc.
 
@@ -4123,7 +4131,7 @@ async def resume_batch(
         return {"success": False, "error": str(e)}
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def evaluate_expression(
     session_id: str,
     expression: str,
@@ -4145,7 +4153,7 @@ async def evaluate_expression(
     return res
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def set_variables(
     session_id: str,
     variables: Dict[str, Any] | List[str],
@@ -4415,7 +4423,7 @@ async def _execute_try_except_impl(
     return result
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def execute_if(
     session_id: str,
     condition: str,
@@ -4432,7 +4440,7 @@ async def execute_if(
     )
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def execute_for_each(
     session_id: str,
     items: List[Any] | None,
@@ -4451,7 +4459,7 @@ async def execute_for_each(
     )
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def execute_try_except(
     session_id: str,
     try_steps: List[Dict[str, Any]],
@@ -4543,7 +4551,7 @@ async def _get_keyword_documentation_payload(
     return execution_engine.get_keyword_documentation(keyword_name, library_name)
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def get_keyword_documentation(
     keyword_name: str, library_name: str = None
 ) -> Dict[str, Any]:
@@ -4577,7 +4585,7 @@ async def _get_library_documentation_payload(library_name: str) -> Dict[str, Any
     return execution_engine.get_library_documentation(library_name)
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def get_library_documentation(library_name: str) -> Dict[str, Any]:
     """Get full documentation for a Robot Framework library using native RF libdoc.
 
@@ -4660,7 +4668,7 @@ async def _debug_parse_keyword_arguments_payload(
         return {"success": False, "error": str(e)}
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def debug_parse_keyword_arguments(
     keyword_name: str,
     arguments: List[str],
@@ -4800,7 +4808,7 @@ async def _get_session_validation_status_payload(
     return result
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def validate_test_readiness(session_id: str = "default") -> Dict[str, Any]:
     """Check if session is ready for test suite generation.
 
@@ -4857,7 +4865,7 @@ async def set_library_search_order(
         return {"success": False, "error": str(e), "session_id": session_id}
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def initialize_context(
     session_id: str, libraries: List[str] = None, variables: Dict[str, Any] = None
 ) -> Dict[str, Any]:
@@ -5039,7 +5047,7 @@ async def _get_context_variables_payload(session_id: str) -> Dict[str, Any]:
         return {"success": False, "error": str(e), "session_id": session_id}
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def get_context_variables(session_id: str) -> Dict[str, Any]:
     """Get all variables from a session."""
     return await _get_context_variables_payload(session_id)
@@ -5109,7 +5117,7 @@ async def _get_session_info_payload(session_id: str = "default") -> Dict[str, An
         return {"success": False, "error": str(e), "session_id": session_id}
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def get_session_info(session_id: str = "default") -> Dict[str, Any]:
     """Get comprehensive information about a session's configuration and state."""
     return await _get_session_info_payload(session_id)
@@ -5165,7 +5173,7 @@ async def get_locator_guidance(
     }
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def get_selenium_locator_guidance(
     error_message: str = None, keyword_name: str = None
 ) -> Dict[str, Any]:
@@ -5202,7 +5210,7 @@ async def get_selenium_locator_guidance(
     return converter.get_selenium_locator_guidance(error_message, keyword_name)
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def get_browser_locator_guidance(
     error_message: str = None, keyword_name: str = None
 ) -> Dict[str, Any]:
@@ -5246,7 +5254,7 @@ async def get_browser_locator_guidance(
     return converter.get_browser_locator_guidance(error_message, keyword_name)
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def get_appium_locator_guidance(
     error_message: str = None, keyword_name: str = None
 ) -> Dict[str, Any]:
@@ -5318,13 +5326,13 @@ async def _get_loaded_libraries_payload() -> Dict[str, Any]:
     return execution_engine.get_library_status()
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def get_loaded_libraries() -> Dict[str, Any]:
     """Get status of all loaded Robot Framework libraries using both libdoc and inspection methods."""
     return await _get_loaded_libraries_payload()
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def run_test_suite_dry(
     session_id: str = "",
     suite_file_path: str = None,
@@ -5523,7 +5531,7 @@ async def run_test_suite(
     return result
 
 
-@mcp.tool(enabled=False)
+@mcp.tool(**DISABLED_TOOL_KWARGS)
 async def get_session_validation_status(session_id: str = "") -> Dict[str, Any]:
     """Get validation status of all steps in a session with intelligent session resolution."""
     return await _get_session_validation_status_payload(session_id)
@@ -5571,7 +5579,7 @@ async def _diagnose_rf_context_payload(session_id: str) -> Dict[str, Any]:
 @mcp.tool(
     name="diagnose_rf_context",
     description="Inspect RF context state for a session: libraries, search order, and variables count.",
-    enabled=False,
+    **DISABLED_TOOL_KWARGS,
 )
 async def diagnose_rf_context(session_id: str) -> Dict[str, Any]:
     return await _diagnose_rf_context_payload(session_id)
@@ -5837,7 +5845,7 @@ async def intent_action(
         # Delegate to execute_step for actual execution.
         # execute_step is a FunctionTool (via @mcp.tool decorator),
         # so we call .fn to get the original async function.
-        result = await execute_step.fn(
+        result = await get_tool_fn(execute_step)(
             keyword=resolution["keyword"],
             arguments=resolution["arguments"],
             session_id=effective_session_id,
@@ -5901,7 +5909,7 @@ async def intent_action(
             if fallback_steps:
                 try:
                     for step in fallback_steps:
-                        fb_result = await execute_step.fn(
+                        fb_result = await get_tool_fn(execute_step)(
                             keyword=step["keyword"],
                             arguments=step["arguments"],
                             session_id=effective_session_id,
@@ -5912,7 +5920,7 @@ async def intent_action(
                             break
                     else:
                         # All fallback steps succeeded — retry navigate
-                        result = await execute_step.fn(
+                        result = await get_tool_fn(execute_step)(
                             keyword=resolution["keyword"],
                             arguments=resolution["arguments"],
                             session_id=effective_session_id,
@@ -5959,7 +5967,7 @@ async def intent_action(
 @mcp.tool(
     name="attach_status",
     description="Report attach-mode configuration and bridge health. Indicates whether execute_step(use_context=true) will route externally.",
-    enabled=False,
+    **DISABLED_TOOL_KWARGS,
 )
 async def attach_status() -> Dict[str, Any]:
     try:
@@ -5997,7 +6005,7 @@ async def attach_status() -> Dict[str, Any]:
 @mcp.tool(
     name="attach_stop_bridge",
     description="Send a stop command to the external attach bridge (McpAttach) to exit MCP Serve in the debugged suite.",
-    enabled=False,
+    **DISABLED_TOOL_KWARGS,
 )
 async def attach_stop_bridge() -> Dict[str, Any]:
     try:
@@ -6021,7 +6029,7 @@ async def attach_stop_bridge() -> Dict[str, Any]:
 @mcp.tool(
     name="import_resource",
     description="Import a Robot Framework resource file into the session RF Namespace.",
-    enabled=False,
+    **DISABLED_TOOL_KWARGS,
 )
 async def import_resource(session_id: str, path: str) -> Dict[str, Any]:
     def _local_call() -> Dict[str, Any]:
@@ -6039,7 +6047,7 @@ async def import_resource(session_id: str, path: str) -> Dict[str, Any]:
 @mcp.tool(
     name="import_custom_library",
     description="Import a custom Robot Framework library (module name or file path) into the session RF Namespace.",
-    enabled=False,
+    **DISABLED_TOOL_KWARGS,
 )
 async def import_custom_library(
     session_id: str,
@@ -6064,7 +6072,7 @@ async def import_custom_library(
 @mcp.tool(
     name="list_available_keywords",
     description="List available keywords from imported libraries and resources in the session RF Namespace.",
-    enabled=False,
+    **DISABLED_TOOL_KWARGS,
 )
 async def list_available_keywords(session_id: str) -> Dict[str, Any]:
     def _local_call() -> Dict[str, Any]:
@@ -6118,7 +6126,7 @@ async def _get_session_keyword_documentation_payload(
 @mcp.tool(
     name="get_session_keyword_documentation",
     description="Get documentation for a keyword (library or resource) available in the session RF Namespace.",
-    enabled=False,
+    **DISABLED_TOOL_KWARGS,
 )
 async def get_session_keyword_documentation(
     session_id: str, keyword_name: str
@@ -6305,6 +6313,50 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Log level for the MCP server (e.g., INFO, DEBUG).",
     )
     return parser
+
+
+# ── Finalize disabled tools for fastmcp v3 compatibility ──────────
+# On v2: enabled=False already handled at decorator time (no-op here).
+# On v3: calls mcp.disable(names=...) to hide these superseded tools.
+_DISABLED_TOOL_NAMES: frozenset[str] = frozenset({
+    "attach_status",
+    "attach_stop_bridge",
+    "debug_parse_keyword_arguments",
+    "diagnose_library_plugin",
+    "diagnose_rf_context",
+    "discover_keywords",
+    "evaluate_expression",
+    "execute_for_each",
+    "execute_if",
+    "execute_try_except",
+    "get_appium_locator_guidance",
+    "get_application_state",
+    "get_available_keywords",
+    "get_browser_locator_guidance",
+    "get_context_variables",
+    "get_keyword_documentation",
+    "get_library_documentation",
+    "get_library_status",
+    "get_loaded_libraries",
+    "get_page_source",
+    "get_selenium_locator_guidance",
+    "get_session_info",
+    "get_session_keyword_documentation",
+    "get_session_validation_status",
+    "import_custom_library",
+    "import_resource",
+    "initialize_context",
+    "list_available_keywords",
+    "list_library_plugins",
+    "reload_library_plugins",
+    "run_test_suite_dry",
+    "search_keywords",
+    "set_variables",
+    "suggest_next_step",
+    "validate_scenario",
+    "validate_test_readiness",
+})
+finalize_disabled_tools(mcp, _DISABLED_TOOL_NAMES)
 
 
 def main(argv: List[str] | None = None) -> None:
