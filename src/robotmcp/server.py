@@ -1850,6 +1850,13 @@ async def analyze_scenario(
         logger.info(
             f"Initialized mobile session for platform: {session.mobile_config.platform_name if session.mobile_config else 'Unknown'}"
         )
+    elif context == "desktop":
+        # Explicit desktop context → force DESKTOP_TESTING session type
+        from robotmcp.models.session_models import SessionType
+        session.configure_from_scenario(scenario)
+        session.session_type = SessionType.DESKTOP_TESTING
+        session._apply_session_configuration()
+        logger.info("Forced DESKTOP_TESTING session type from explicit context='desktop'")
     else:
         # Auto-configure session based on scenario (existing web flow)
         session.configure_from_scenario(scenario)

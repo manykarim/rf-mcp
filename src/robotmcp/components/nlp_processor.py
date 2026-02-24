@@ -682,7 +682,22 @@ class NaturalLanguageProcessor:
         return None
     
     def _detect_session_type(self, scenario: str, context: str) -> str:
-        """Detect session type using centralized session models detection."""
+        """Detect session type using centralized session models detection.
+
+        If an explicit context is provided (e.g. "desktop"), it takes
+        priority over NLP-based detection to ensure the caller's intent
+        is honored.
+        """
+        # Explicit context mapping takes priority
+        _context_to_session_type = {
+            "desktop": "desktop_testing",
+            "web": "web_automation",
+            "api": "api_testing",
+            "mobile": "mobile_testing",
+        }
+        if context and context in _context_to_session_type:
+            return _context_to_session_type[context]
+
         try:
             from robotmcp.models.session_models import ExecutionSession
             temp_session = ExecutionSession(session_id="__nlp_detect__")
