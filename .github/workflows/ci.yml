@@ -251,6 +251,94 @@ jobs:
           path: results/e2e-*.xml
           reporter: java-junit
 
+  desktop-e2e:
+    name: Desktop E2E (PlatynUI)
+    runs-on: ubuntu-latest
+    continue-on-error: true  # Desktop AT-SPI in CI is fragile; don't block PRs
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: 'latest'
+
+      - name: Setup Python 3.12 (via uv)
+        run: uv python install 3.12
+
+      - name: Install dependencies (dev)
+        run: uv sync --all-extras --group dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: /tmp/platynui/packages/native
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev \
+            libfontconfig-dev clang pkg-config libssl-dev \
+            dbus-x11 at-spi2-core libatk-adaptor openbox \
+            gnome-calculator x11-utils imagemagick \
+            gsettings-desktop-schemas
+
+      - name: Clone and build platynui_native
+        run: |
+          git clone --branch new_core --depth 1 \
+            https://github.com/imbus/robotframework-PlatynUI.git /tmp/platynui
+          cd /tmp/platynui/packages/native
+          uv run maturin develop
+
+      - name: Prepare results directory
+        run: mkdir -p results screenshots
+
+      - name: Run PlatynUI desktop tests
+        timeout-minutes: 10
+        env:
+          ATSPI_DBUS_IMPLEMENTATION: dbus-daemon
+          GDK_BACKEND: x11
+          GTK_MODULES: 'gail:atk-bridge'
+          GNOME_ACCESSIBILITY: '1'
+          RUN_PLATYNUI_LIVE: 'true'
+        run: |
+          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+            dbus-run-session -- bash -c '
+              # Start a window manager for focus/coordinates
+              openbox &
+              sleep 1
+              uv run pytest tests/e2e/test_platynui_live_interaction.py \
+                -v --junitxml=results/desktop-e2e.xml
+            '
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-e2e-screenshots
+          path: screenshots/
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-e2e-results
+          path: results/desktop-e2e.xml
+
+      - name: Test Report
+        uses: dorny/test-reporter@main
+        if: success() || failure()
+        with:
+          name: Desktop E2E Tests
+          path: results/desktop-e2e.xml
+          reporter: java-junit
+
   optional-matrix:
     name: Optional Dependency Matrix
     runs-on: ubuntu-latest
