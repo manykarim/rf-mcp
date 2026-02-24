@@ -274,11 +274,6 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: /tmp/platynui/packages/native
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -293,11 +288,11 @@ jobs:
         run: |
           git clone --branch new_core --depth 1 \
             https://github.com/imbus/robotframework-PlatynUI.git /tmp/platynui
-          # Install maturin and build platynui_native into the project venv
+          # Install maturin into project venv, then build native module into it
           uv pip install maturin
           VENV_PYTHON="$(uv run which python)"
           cd /tmp/platynui/packages/native
-          maturin develop --interpreter "$VENV_PYTHON"
+          uv run maturin develop --interpreter "$VENV_PYTHON"
 
       - name: Prepare results directory
         run: mkdir -p results screenshots
