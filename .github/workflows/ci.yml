@@ -288,11 +288,11 @@ jobs:
         run: |
           git clone --branch new_core --depth 1 \
             https://github.com/imbus/robotframework-PlatynUI.git /tmp/platynui
-          # Install maturin into project venv, then build native module into it
+          # Build and install platynui_native into the project venv
           uv pip install maturin
-          VENV_PYTHON="$(uv run which python)"
-          cd /tmp/platynui/packages/native
-          uv run maturin develop --interpreter "$VENV_PYTHON"
+          uv pip install /tmp/platynui/packages/native
+          # Verify import works
+          uv run python -c "import platynui_native; print('platynui_native OK')"
 
       - name: Prepare results directory
         run: mkdir -p results screenshots
