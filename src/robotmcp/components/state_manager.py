@@ -733,8 +733,8 @@ class StateManager:
     async def _convert_browser_state_to_page_state(self, browser_state: Dict[str, Any], execution_engine=None, session_id: str = None) -> PageState:
         """Convert Browser Library state to PageState format."""
         try:
-            url = browser_state.get("current_url", "about:blank")
-            title = browser_state.get("page_title", "Untitled")
+            url = browser_state.get("current_url") or "about:blank"
+            title = browser_state.get("page_title") or "Untitled"
             
             # Create elements based on Browser Library state
             elements = []

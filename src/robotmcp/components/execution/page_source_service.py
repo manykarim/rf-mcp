@@ -59,16 +59,28 @@ class PageSourceService:
         ERROR-level log noise from attempting keywords that don't exist in
         the session.  Falls back to the full candidate list when no library
         match is found (backwards compatibility).
+
+        If an imported library is explicitly mapped to ``None`` (e.g.
+        PlatynUI — no web page source), the fallback is suppressed and an
+        empty tuple is returned so that desktop sessions never attempt
+        web-only keywords.
         """
         candidates: list = []
         seen: set = set()
+        has_mapping_hit = False  # True when any imported lib is in the mapping
         for lib in imported:
-            kw = mapping.get(lib)
-            if kw and kw not in seen:
-                candidates.append(kw)
-                seen.add(kw)
+            if lib in mapping:
+                has_mapping_hit = True
+                kw = mapping[lib]
+                if kw and kw not in seen:
+                    candidates.append(kw)
+                    seen.add(kw)
         if candidates:
             return tuple(candidates)
+        # If an imported library was found in the mapping (even mapped to
+        # None), that library intentionally has no keyword — return empty.
+        if has_mapping_hit:
+            return ()
         # Fallback: return all unique non-None keywords from the mapping
         return tuple(dict.fromkeys(v for v in mapping.values() if v))
 
@@ -356,6 +368,18 @@ class PageSourceService:
             include_reduced_dom: When True, attempts to capture Browser Library reduced DOM (aria snapshot).
         """
         try:
+            # Desktop sessions (PlatynUI) have no web page source, URL, or
+            # title.  Return early to avoid noisy keyword-not-found errors.
+            if hasattr(session, "is_desktop_session") and session.is_desktop_session():
+                return {
+                    "success": True,
+                    "session_id": session.session_id,
+                    "page_source_length": 0,
+                    "note": "Desktop session — no web page source available. "
+                            "Use get_session_state with sections=['ui_tree'] "
+                            "to inspect the accessibility tree instead.",
+                }
+
             plugin_result = await self._get_page_source_from_plugin(
                 session,
                 browser_library_manager=browser_library_manager,
