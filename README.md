@@ -1,8 +1,8 @@
 # 🤖 RobotMCP - AI-Powered Test Automation Bridge
 
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://python.org)
-[![Robot Framework](https://img.shields.io/badge/robot%20framework-6.0+-green.svg)](https://robotframework.org)
-[![FastMCP](https://img.shields.io/badge/fastmcp-2.0+-orange.svg)](https://github.com/jlowin/fastmcp)
+[![Robot Framework](https://img.shields.io/badge/robot%20framework-7.0+-green.svg)](https://robotframework.org)
+[![FastMCP](https://img.shields.io/badge/fastmcp-2.8+-orange.svg)](https://github.com/jlowin/fastmcp)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 **Transform natural language into production-ready Robot Framework tests using AI agents and MCP protocol.**
@@ -90,6 +90,7 @@ https://github.com/user-attachments/assets/8448cb70-6fb3-4f04-9742-a8a8453a9c7f
 
 - Python 3.10+
 - Robot Framework 7.0+
+- FastMCP 2.8+ (compatible with both 2.x and 3.x)
 
 `rf-mcp` comes with minimal dependencies by default. To use specific libraries (e.g., Browser, Selenium, Appium), install the corresponding extras or libraries separately.
 
@@ -106,7 +107,7 @@ uv pip install rf-mcp[mobile]    # AppiumLibrary
 uv pip install rf-mcp[api]       # RequestsLibrary
 uv pip install rf-mcp[database]  # DatabaseLibrary
 uv pip install rf-mcp[frontend]  # Django-based web frontend dashboard
-pip install rf-mcp[all]       # All optional Robot Framework libraries
+uv pip install rf-mcp[all]       # All optional Robot Framework libraries
 
 # Alternatively, add to an existing uv project
 uv init
@@ -138,7 +139,7 @@ rfbrowser init
 python -m Browser.entry install
 ```
 
-Prefer installing individual Robot Framework libraries instead?  
+Prefer installing individual Robot Framework libraries instead?
 Just install `rf-mcp` and add your desired libraries manually.
 
 ### Method 3: Development Installation
@@ -238,7 +239,7 @@ docker build -f docker/Dockerfile.vnc -t robotmcp-vnc .
 
 ### Hint: When using a venv
 
-If you are using a virtual environment (venv) for your project, I recommend to install the `rf-mcp` package within the same venv.
+If you are using a virtual environment (venv) for your project, I recommend to install the `rf-mcp` package within the same venv. When starting the MCP server, make sure to use the Python interpreter from that venv.
 
 ---
 
@@ -250,7 +251,6 @@ Extend RobotMCP with custom libraries via the plugin system. Two discovery modes
 - **Manifest files** (JSON) under `.robotmcp/plugins/` for workspace overrides.
 
 See the [Library Plugin Authoring Guide](docs/library-plugin-authoring.md) for detailed instructions and explore the sample plugin in [`examples/plugins/sample_plugin`](examples/plugins/sample_plugin/) to get started quickly.
-When starting the MCP server, make sure to use the Python interpreter from that venv.
 
 ---
 
@@ -277,15 +277,31 @@ To disable the dashboard for a given run, either omit the flag or pass `--withou
 
 ---
 
-## 🔧 MCP Integration
+## 📋 Instruction Templates
 
-### VS Code (GitHub Copilot)
+RobotMCP sends server-level instructions to LLMs via the MCP `initialize` response, guiding them to discover keywords before executing them. This significantly reduces failed tool calls and wasted tokens, especially for smaller LLMs.
 
-`.vscode/mcp.json`
+### Configuration
 
-**STDIO** with `uv`
+Three environment variables control instruction behavior:
 
-**Using UV**
+| Variable | Values | Default |
+|----------|--------|---------|
+| `ROBOTMCP_INSTRUCTIONS` | `off` / `default` / `custom` | `default` |
+| `ROBOTMCP_INSTRUCTIONS_TEMPLATE` | `minimal` / `standard` / `detailed` / `browser-focused` / `api-focused` | `standard` |
+| `ROBOTMCP_INSTRUCTIONS_FILE` | Path to `.txt` or `.md` file | *(none, required when mode=custom)* |
+
+### Built-in Templates
+
+| Template | ~Tokens | Best For |
+|----------|---------|----------|
+| `minimal` | ~40 | Capable LLMs (Claude Opus, GPT-4) — brief reminder only |
+| `standard` | ~400 | Mid-range LLMs (Claude Sonnet, GPT-4o) — balanced workflow guide |
+| `detailed` | ~600 | Smaller LLMs (Claude Haiku, GPT-4o-mini) — step-by-step with examples |
+| `browser-focused` | ~350 | Web-only testing scenarios |
+| `api-focused` | ~300 | API-only testing scenarios |
+
+### Example
 
 ```json
 {
@@ -293,58 +309,23 @@ To disable the dashboard for a given run, either omit the flag or pass `--withou
     "robotmcp": {
       "type": "stdio",
       "command": "uv",
-      "args": ["run", "-m", "robotmcp.server"]
+      "args": ["run", "-m", "robotmcp.server"],
+      "env": {
+        "ROBOTMCP_INSTRUCTIONS": "default",
+        "ROBOTMCP_INSTRUCTIONS_TEMPLATE": "detailed"
+      }
     }
   }
 }
 ```
 
-**STDIO** with `python`
+### Custom Instructions
 
-```json
-{
-  "servers": {
-    "robotmcp": {
-      "type": "stdio",
-      "command": "python",
-      "args": ["-m", "robotmcp.server"]
-    }
-  }
-}
-```
+Set `ROBOTMCP_INSTRUCTIONS=custom` and provide a file via `ROBOTMCP_INSTRUCTIONS_FILE`. Custom files support `{available_tools}` placeholder substitution. Allowed extensions: `.txt`, `.md`, `.instruction`, `.instructions`. If the file is missing or fails validation, the server falls back to the `standard` template automatically.
 
-**Hint:**
-If you set up a virtual environment, make sure to also use the python executable from that venv to start the server.
+See [docs/INSTRUCTION_TEMPLATES_GUIDE.md](docs/INSTRUCTION_TEMPLATES_GUIDE.md) for the full guide.
 
-**Using Docker**
-
-```json
-{
-  "servers": {
-    "robotmcp": {
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "ghcr.io/manykarim/rf-mcp:latest", "uv", "run", "robotmcp"]
-    }
-  }
-}
-```
-
-**HTTP mode**
-
-```json
-{
-  "servers": {
-    "robotmcp": {
-      "type": "http",
-      "url": "http://localhost:8000/mcp"
-    }
-  }
-}
-```
-
-### Other AI Agents
-
-RobotMCP works with any MCP-compatible AI agent. Use the stdio configuration above.
+---
 
 ## 🪝 Debug Attach Bridge
 
@@ -525,31 +506,33 @@ RobotMCP provides a comprehensive toolset organized by function. Highlights:
 ### Planning & Orchestration
 
 - `analyze_scenario` – Convert natural language to structured test intent and spawn sessions.
-- `recommend_libraries` – Suggest libraries (`mode="direct"`, `"sampling_prompt"`, or `"merge_samples"`).
+- `recommend_libraries` – Suggest libraries (`mode="direct"`, `"sampling_prompt"`, or `"merge_samples"`). Includes confidence filtering, negation support ("not using Selenium"), and conflict prevention (Browser and SeleniumLibrary are never recommended together).
 - `manage_library_plugins` – List, reload, or diagnose library plugins from a single endpoint.
 
 ### Session & Execution
 
-- `manage_session` – Initialize sessions, import resources/libraries, set variables, or switch tool profiles via `action`.
-- `execute_step` – Execute keywords or `mode="evaluate"` expressions with optional `assign_to`.
+- `manage_session` – Initialize sessions, import resources/libraries, set variables, manage multi-test suites, or switch tool profiles via `action`. Key actions include `init`, `import_library`, `set_variable`, `start_test`, `end_test`, `list_tests`, `set_suite_setup`, `set_suite_teardown`, `set_tool_profile`.
+- `execute_step` – Execute keywords or `mode="evaluate"` expressions with optional `assign_to` and `timeout_ms`. Includes automatic timeout tuning by keyword type and element pre-validation for faster error feedback.
 - `execute_flow` – Build `if`/`for_each`/`try` control structures using RF context-first execution.
+- `execute_batch` – Execute multiple keywords in a single MCP call with variable chaining (`${STEP_N}` references), automatic recovery on failure, and configurable failure policies (`stop`, `retry`, `recover`). Reduces N tool round-trips to 1.
+- `resume_batch` – Resume a failed batch from its failure point, optionally inserting fix steps before retrying.
 - `intent_action` – Library-agnostic intent execution (e.g. `intent="click"`, `target="text=Login"`). Resolves to the correct keyword/locator for the session's active library. Supports 8 intents: `navigate`, `click`, `fill`, `hover`, `select`, `assert_visible`, `extract_text`, `wait_for`.
 
 ### Discovery & Documentation
 
-- `find_keywords` – Unified keyword discovery (semantic, pattern, catalog, or session scopes).
+- `find_keywords` – Unified keyword discovery (`strategy="semantic"`, `"pattern"`, `"catalog"`, or `"session"`).
 - `get_keyword_info` – Retrieve keyword/library documentation or parse argument signatures (`mode="keyword"|"library"|"session"|"parse"`).
 
 ### Observability & Diagnostics
 
-- `get_session_state` – Aggregate session insight (`summary`, `variables`, `page_source`, `application_state`, `validation`, `libraries`, `rf_context`).
+- `get_session_state` – Aggregate session insight (`summary`, `variables`, `page_source`, `application_state`, `validation`, `libraries`, `rf_context`). Supports `detail_level="minimal"|"standard"|"full"` for controlling response verbosity.
 - `check_library_availability` – Verify availability/install guidance for specific libraries (always includes `success`).
 - `set_library_search_order` – Control keyword resolution precedence.
 - `manage_attach` – Inspect or stop the attach bridge.
 
 ### Suite Lifecycle
 
-- `build_test_suite` – Generate Robot Framework test files from validated steps.
+- `build_test_suite` – Generate Robot Framework test files from validated steps. Supports multi-test suites with per-test tags, setup, and teardown.
 - `run_test_suite` – Validate (`mode="dry"`) or execute (`mode="full"`) suites.
 
 ### Locator Guidance
@@ -570,7 +553,17 @@ Control which tools are visible to the LLM based on the workflow phase. Smaller 
 manage_session(action="set_tool_profile", tool_profile="browser_exec")
 ```
 
-Profiles: `browser_exec`, `api_exec`, `discovery`, `minimal_exec`, `full`. Reduces tool description overhead from ~7,000 to ~1,000 tokens.
+Profiles: `browser_exec`, `api_exec`, `discovery`, `minimal_exec`, `full`. Reduces tool description overhead from ~7,000 to ~1,000 tokens. Can also be set via the `ROBOTMCP_TOOL_PROFILE` environment variable.
+
+### Response Verbosity
+
+Control response detail level to reduce token consumption. Available on most tools via the `detail_level` parameter:
+
+- `minimal` – Essential output only (60-80% token reduction)
+- `standard` – Balanced output (default)
+- `full` – Complete detailed output
+
+Set a default via `ROBOTMCP_OUTPUT_VERBOSITY=compact|standard|verbose`.
 
 ### Intent Action
 
@@ -585,7 +578,25 @@ The server resolves intent + target to the correct keyword and locator format fo
 
 #### Navigate Fallback
 
-When `intent_action(intent="navigate")` fails because no browser or page is open, the server automatically opens the browser/page and retries. Small LLMs no longer need to handle "no browser open" errors, saving 2-4 tool calls per session.
+When `intent_action(intent="navigate")` fails because no browser or page is open, the server automatically opens the browser/page and retries:
+- **Browser Library**: executes `New Browser` + `New Page` (or just `New Page` if browser exists)
+- **SeleniumLibrary**: executes `Open Browser about:blank chrome`
+
+The response includes `fallback_applied: true` and `fallback_steps` count. Saves 2-4 tool calls per session.
+
+### Batch Execution
+
+The `execute_batch` tool executes multiple keywords in a single MCP call, reducing N round-trips to 1. Steps can reference results from earlier steps via `${STEP_N}` variables:
+
+```
+execute_batch(session_id="...", steps=[
+    {"keyword": "Go To", "args": ["https://example.com"]},
+    {"keyword": "Get Title", "assign_to": "title"},
+    {"keyword": "Should Be Equal", "args": ["${STEP_2}", "Example Domain"]}
+], on_failure="recover")
+```
+
+If a step fails, `resume_batch` lets you insert fix steps and retry from the failure point.
 
 ### Strict Mode Hints
 
@@ -602,6 +613,47 @@ Common small LLM mistakes are corrected server-side:
 - Comma-separated strings (`"Browser,BuiltIn"`) are split into lists
 - Deprecated keywords (`GET`) are mapped to current equivalents (`GET On Session`)
 
+### Instruction Templates
+
+Configurable server-level instructions guide LLMs to follow the "discover-then-act" pattern. Choose a template sized for your LLM's capability — from `minimal` (~40 tokens) for Claude Opus to `detailed` (~600 tokens) for Claude Haiku. See [Instruction Templates](#-instruction-templates) above.
+
+---
+
+## ⚙️ Environment Variables Reference
+
+### Core Configuration
+
+| Variable | Values | Default | Description |
+|----------|--------|---------|-------------|
+| `ROBOTMCP_INSTRUCTIONS` | `off` / `default` / `custom` | `default` | Instruction mode |
+| `ROBOTMCP_INSTRUCTIONS_TEMPLATE` | `minimal` / `standard` / `detailed` / `browser-focused` / `api-focused` | `standard` | Template selection (default mode only) |
+| `ROBOTMCP_INSTRUCTIONS_FILE` | File path | *(none)* | Custom instructions file (custom mode only) |
+| `ROBOTMCP_TOOL_PROFILE` | `browser_exec` / `api_exec` / `discovery` / `minimal_exec` / `full` | *(auto)* | Default tool profile |
+| `ROBOTMCP_OUTPUT_VERBOSITY` | `compact` / `standard` / `verbose` | `standard` | Response detail level |
+| `ROBOTMCP_USE_SAMPLING` | `true` / `1` / `yes` | *(disabled)* | Enable LLM-powered scenario analysis |
+| `ROBOTMCP_PRE_VALIDATION` | `0` / `1` | `1` | Enable element pre-validation before actions |
+| `ROBOTMCP_STARTUP_CLEANUP` | `auto` / `on` / `off` | `auto` | Session cleanup on server start |
+
+### Debug Attach Bridge
+
+| Variable | Values | Default | Description |
+|----------|--------|---------|-------------|
+| `ROBOTMCP_ATTACH_HOST` | hostname/IP | *(none)* | Attach bridge host (enables attach mode) |
+| `ROBOTMCP_ATTACH_PORT` | integer | `7317` | Attach bridge port |
+| `ROBOTMCP_ATTACH_TOKEN` | string | `change-me` | Shared auth token |
+| `ROBOTMCP_ATTACH_DEFAULT` | `auto` / `force` / `off` | `auto` | Attach routing mode |
+| `ROBOTMCP_ATTACH_STRICT` | `0` / `1` | `0` | Fail if bridge unreachable |
+
+### Frontend Dashboard
+
+| Variable | Values | Default | Description |
+|----------|--------|---------|-------------|
+| `ROBOTMCP_ENABLE_FRONTEND` | `0` / `1` | `0` | Enable dashboard |
+| `ROBOTMCP_FRONTEND_HOST` | hostname/IP | `localhost` | Dashboard host |
+| `ROBOTMCP_FRONTEND_PORT` | integer | `8001` | Dashboard port |
+| `ROBOTMCP_FRONTEND_BASE_PATH` | URL path | `/` | URL base path prefix |
+| `ROBOTMCP_FRONTEND_DEBUG` | `0` / `1` | `1` | Django debug mode |
+
 ---
 
 ## 🤝 Contributing
@@ -615,6 +667,12 @@ We welcome contributions! Here's how to get started:
 5. **Add** comprehensive tests for new functionality
 6. **Run** tests: `uv run pytest tests/`
 7. **Submit** a pull request
+
+## 📝 Changelog
+
+- [v0.30.1](docs/RELEASE_NOTES_v0.30.1.md) – FastMCP 3.x compatibility layer
+- [v0.30.0](docs/RELEASE_NOTES_v0.30.0.md) – Small LLM optimization (tool profiles, intent action, response optimization, type constraints)
+- [v0.29.0](docs/RELEASE_NOTES_v0.29.0.md) – Instruction templates, multi-test sessions, batch execution, smart timeouts
 
 ## 📄 License
 
