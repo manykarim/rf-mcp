@@ -6,7 +6,7 @@
       "args": ["run", "-m", "robotmcp.server"],
       "env": {
         "ROBOTMCP_TOKENIZER": "auto",
-        "ROBOTMCP_OUTPUT_MODE": "file",
+        "ROBOTMCP_OUTPUT_MODE": "auto",
         "ROBOTMCP_MAX_INLINE_TOKENS": "300",
         "ROBOTMCP_ARTIFACT_TTL": "3600"
       }
