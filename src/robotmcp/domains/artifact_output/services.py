@@ -13,10 +13,12 @@ from .aggregates import ArtifactStore
 from .entities import Artifact, ArtifactSlice
 from .events import LargeFieldExternalized
 from .value_objects import (
+    FETCH_ARTIFACT_SUMMARY_TEMPLATE,
     ArtifactPolicy,
     ExternalizationResult,
     ExternalizationRule,
     OutputMode,
+    is_fetch_artifact_enabled,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,9 +78,20 @@ class ArtifactExternalizationService:
     ) -> None:
         self._store = store
         self._mode = output_mode or OutputMode.from_env()
+        base_rules = rules or DEFAULT_RULES
+        # When fetch_artifact is enabled, override summary templates
+        if is_fetch_artifact_enabled():
+            base_rules = [
+                ExternalizationRule(
+                    tool_name=r.tool_name,
+                    field_path=r.field_path,
+                    summary_template=FETCH_ARTIFACT_SUMMARY_TEMPLATE,
+                )
+                for r in base_rules
+            ]
         self._rules = {
             (r.tool_name, r.field_path): r
-            for r in (rules or DEFAULT_RULES)
+            for r in base_rules
         }
 
     @property
@@ -132,6 +145,7 @@ class ArtifactExternalizationService:
                 artifact_id=str(artifact.id),
                 byte_size=artifact.reference.byte_size,
                 token_estimate=artifact.reference.token_estimate,
+                file_path=artifact.reference.file_path,
             )
 
             self._set_nested(response, field_path, summary)

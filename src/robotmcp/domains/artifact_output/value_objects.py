@@ -107,13 +107,14 @@ class ArtifactPolicy:
     @classmethod
     def from_env(cls) -> "ArtifactPolicy":
         """Build policy from environment variables."""
+        artifact_dir = os.getenv("ROBOTMCP_ARTIFACT_DIR", "")
+        if not artifact_dir:
+            artifact_dir = ".robotmcp_artifacts"
         return cls(
             max_inline_tokens=int(
                 os.getenv("ROBOTMCP_MAX_INLINE_TOKENS", "500")
             ),
-            artifact_dir=os.getenv(
-                "ROBOTMCP_ARTIFACT_DIR", ".robotmcp_artifacts"
-            ),
+            artifact_dir=artifact_dir,
             retention_ttl_seconds=int(
                 os.getenv("ROBOTMCP_ARTIFACT_TTL", "3600")
             ),
@@ -124,17 +125,34 @@ class ArtifactPolicy:
         return len(content) / self.CHARS_PER_TOKEN > self.max_inline_tokens
 
 
+def is_fetch_artifact_enabled() -> bool:
+    """Check if fetch_artifact tool is enabled via ROBOTMCP_FETCH_ARTIFACT env var."""
+    return os.getenv("ROBOTMCP_FETCH_ARTIFACT", "false").lower() in (
+        "true", "1", "yes",
+    )
+
+
+# Summary template when fetch_artifact is enabled (includes tool hint)
+FETCH_ARTIFACT_SUMMARY_TEMPLATE: str = (
+    "Content externalized to artifact {artifact_id} "
+    "({byte_size} bytes, ~{token_estimate} tokens). "
+    "File: {file_path}. Use fetch_artifact to retrieve full content."
+)
+
+# Default summary template (file path only, no fetch_artifact hint)
+FILE_PATH_SUMMARY_TEMPLATE: str = (
+    "Content saved to {file_path} "
+    "({byte_size} bytes, ~{token_estimate} tokens)."
+)
+
+
 @dataclass(frozen=True)
 class ExternalizationRule:
     """Maps a tool+field to externalization behavior."""
 
     tool_name: str
     field_path: str
-    summary_template: str = (
-        "Content externalized to artifact {artifact_id} "
-        "({byte_size} bytes, ~{token_estimate} tokens). "
-        "Use fetch_artifact to retrieve."
-    )
+    summary_template: str = FILE_PATH_SUMMARY_TEMPLATE
 
     def __post_init__(self) -> None:
         if not self.tool_name:

@@ -6,6 +6,8 @@ Root aggregate for artifact lifecycle management.
 from __future__ import annotations
 
 import hashlib
+import logging
+import pathlib
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -14,6 +16,15 @@ from typing import Dict, List, Optional
 from .entities import Artifact, ArtifactSlice
 from .events import ArtifactCreated, ArtifactExpired
 from .value_objects import ArtifactId, ArtifactPolicy, ArtifactReference
+
+logger = logging.getLogger(__name__)
+
+_MIME_TO_EXT: Dict[str, str] = {
+    "text/html": ".html",
+    "application/json": ".json",
+    "text/x-robot": ".robot",
+    "text/plain": ".txt",
+}
 
 
 @dataclass
@@ -30,7 +41,18 @@ class ArtifactStore:
     @classmethod
     def create(cls, policy: Optional[ArtifactPolicy] = None) -> "ArtifactStore":
         """Factory with optional custom policy."""
-        return cls(policy=policy or ArtifactPolicy())
+        policy = policy or ArtifactPolicy()
+        # Resolve relative artifact_dir to absolute path
+        art_dir = pathlib.Path(policy.artifact_dir)
+        if not art_dir.is_absolute():
+            art_dir = pathlib.Path.cwd() / art_dir
+        policy = ArtifactPolicy(
+            max_inline_tokens=policy.max_inline_tokens,
+            artifact_dir=str(art_dir),
+            retention_ttl_seconds=policy.retention_ttl_seconds,
+            max_artifacts=policy.max_artifacts,
+        )
+        return cls(policy=policy)
 
     def create_artifact(
         self,
@@ -44,9 +66,11 @@ class ArtifactStore:
         self._evict_if_full()
         art_id = ArtifactId.generate()
         content_hash = hashlib.sha256(content.encode()).hexdigest()
+        ext = _MIME_TO_EXT.get(mime_type, ".txt")
+        file_path_str = f"{self.policy.artifact_dir}/{art_id.value}{ext}"
         ref = ArtifactReference(
             artifact_id=str(art_id),
-            file_path=f"{self.policy.artifact_dir}/{art_id.value}",
+            file_path=file_path_str,
             content_hash=content_hash,
             byte_size=len(content.encode()),
             token_estimate=len(content) // 4,
@@ -61,6 +85,8 @@ class ArtifactStore:
         )
         self._artifacts[str(art_id)] = (artifact, content)
         self._session_index.setdefault(session_id, []).append(str(art_id))
+        # Write content to disk so agents can read via file path
+        self._write_to_disk(file_path_str, content)
         self._pending_events.append(
             ArtifactCreated(
                 artifact_id=str(art_id),
@@ -124,7 +150,10 @@ class ArtifactStore:
         """Remove all artifacts for a session, return count removed."""
         aids = self._session_index.pop(session_id, [])
         for aid in aids:
-            self._artifacts.pop(aid, None)
+            entry = self._artifacts.pop(aid, None)
+            if entry:
+                artifact, _ = entry
+                self._delete_from_disk(artifact.reference.file_path)
         return len(aids)
 
     def list_artifacts(
@@ -151,6 +180,7 @@ class ArtifactStore:
         entry = self._artifacts.pop(artifact_id, None)
         if entry:
             artifact, _ = entry
+            self._delete_from_disk(artifact.reference.file_path)
             for aids in self._session_index.values():
                 if artifact_id in aids:
                     aids.remove(artifact_id)
@@ -164,6 +194,26 @@ class ArtifactStore:
                     ).total_seconds(),
                 )
             )
+
+    @staticmethod
+    def _write_to_disk(file_path: str, content: str) -> None:
+        """Write artifact content to disk. Never raises."""
+        try:
+            p = pathlib.Path(file_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content, encoding="utf-8")
+        except Exception as exc:
+            logger.debug("Failed to write artifact to %s: %s", file_path, exc)
+
+    @staticmethod
+    def _delete_from_disk(file_path: str) -> None:
+        """Delete artifact file from disk. Never raises."""
+        try:
+            p = pathlib.Path(file_path)
+            if p.exists():
+                p.unlink(missing_ok=True)
+        except Exception as exc:
+            logger.debug("Failed to delete artifact %s: %s", file_path, exc)
 
     def drain_events(self) -> List:
         """Return and clear all pending domain events."""

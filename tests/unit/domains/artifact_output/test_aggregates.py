@@ -3,6 +3,7 @@ from __future__ import annotations
 
 __test__ = True
 
+import pathlib
 from datetime import datetime, timedelta
 
 import pytest
@@ -398,3 +399,89 @@ class TestArtifactExpiredEvent:
         events = store.drain_events()
         expired_events = [e for e in events if isinstance(e, ArtifactExpired)]
         assert len(expired_events) == 1
+
+
+# ---------------------------------------------------------------------------
+# Disk write/delete
+# ---------------------------------------------------------------------------
+
+
+class TestDiskWrite:
+    """Tests for artifact disk persistence."""
+
+    def test_create_artifact_writes_to_disk(self, tmp_path):
+        policy = ArtifactPolicy(artifact_dir=str(tmp_path / "arts"))
+        store = ArtifactStore.create(policy)
+        art = store.create_artifact("hello disk", "tool", "field", "sess-1")
+        fp = pathlib.Path(art.reference.file_path)
+        assert fp.exists()
+        assert fp.read_text(encoding="utf-8") == "hello disk"
+
+    def test_file_extension_txt_for_plain(self, tmp_path):
+        policy = ArtifactPolicy(artifact_dir=str(tmp_path / "arts"))
+        store = ArtifactStore.create(policy)
+        art = store.create_artifact("data", "t", "f", "s", mime_type="text/plain")
+        assert art.reference.file_path.endswith(".txt")
+
+    def test_file_extension_json(self, tmp_path):
+        policy = ArtifactPolicy(artifact_dir=str(tmp_path / "arts"))
+        store = ArtifactStore.create(policy)
+        art = store.create_artifact("{}", "t", "f", "s", mime_type="application/json")
+        assert art.reference.file_path.endswith(".json")
+
+    def test_file_extension_html(self, tmp_path):
+        policy = ArtifactPolicy(artifact_dir=str(tmp_path / "arts"))
+        store = ArtifactStore.create(policy)
+        art = store.create_artifact("<html/>", "t", "f", "s", mime_type="text/html")
+        assert art.reference.file_path.endswith(".html")
+
+    def test_file_extension_robot(self, tmp_path):
+        policy = ArtifactPolicy(artifact_dir=str(tmp_path / "arts"))
+        store = ArtifactStore.create(policy)
+        art = store.create_artifact("***", "t", "f", "s", mime_type="text/x-robot")
+        assert art.reference.file_path.endswith(".robot")
+
+    def test_file_extension_unknown_defaults_to_txt(self, tmp_path):
+        policy = ArtifactPolicy(artifact_dir=str(tmp_path / "arts"))
+        store = ArtifactStore.create(policy)
+        art = store.create_artifact("data", "t", "f", "s", mime_type="application/octet-stream")
+        assert art.reference.file_path.endswith(".txt")
+
+    def test_remove_artifact_deletes_from_disk(self, tmp_path):
+        policy = ArtifactPolicy(artifact_dir=str(tmp_path / "arts"))
+        store = ArtifactStore.create(policy)
+        art = store.create_artifact("data", "t", "f", "s")
+        fp = pathlib.Path(art.reference.file_path)
+        assert fp.exists()
+        store._remove_artifact(str(art.id))
+        assert not fp.exists()
+
+    def test_cleanup_session_deletes_files(self, tmp_path):
+        policy = ArtifactPolicy(artifact_dir=str(tmp_path / "arts"))
+        store = ArtifactStore.create(policy)
+        art1 = store.create_artifact("a", "t", "f", "s1")
+        art2 = store.create_artifact("b", "t", "f", "s1")
+        fp1 = pathlib.Path(art1.reference.file_path)
+        fp2 = pathlib.Path(art2.reference.file_path)
+        assert fp1.exists() and fp2.exists()
+        store.cleanup_session("s1")
+        assert not fp1.exists() and not fp2.exists()
+
+    def test_eviction_deletes_oldest_file(self, tmp_path):
+        policy = ArtifactPolicy(artifact_dir=str(tmp_path / "arts"), max_artifacts=1)
+        store = ArtifactStore.create(policy)
+        art1 = store.create_artifact("first", "t", "f", "s")
+        fp1 = pathlib.Path(art1.reference.file_path)
+        assert fp1.exists()
+        store.create_artifact("second", "t", "f", "s")
+        assert not fp1.exists()
+
+    def test_create_factory_resolves_relative_path(self):
+        policy = ArtifactPolicy(artifact_dir=".robotmcp_artifacts")
+        store = ArtifactStore.create(policy)
+        assert pathlib.Path(store.policy.artifact_dir).is_absolute()
+
+    def test_create_factory_preserves_absolute_path(self, tmp_path):
+        policy = ArtifactPolicy(artifact_dir=str(tmp_path))
+        store = ArtifactStore.create(policy)
+        assert store.policy.artifact_dir == str(tmp_path)

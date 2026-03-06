@@ -12,10 +12,14 @@ from robotmcp.domains.artifact_output.services import (
     ArtifactExternalizationService,
     ArtifactRetrievalService,
 )
+from unittest.mock import patch
+
 from robotmcp.domains.artifact_output.value_objects import (
     ArtifactPolicy,
     ExternalizationResult,
     ExternalizationRule,
+    FETCH_ARTIFACT_SUMMARY_TEMPLATE,
+    FILE_PATH_SUMMARY_TEMPLATE,
     OutputMode,
 )
 
@@ -433,3 +437,60 @@ class TestRetrievalListArtifacts:
         svc = ArtifactRetrievalService(store)
         arts = svc.list_artifacts()
         assert len(arts) == 2
+
+
+# ===========================================================================
+# Template selection based on ROBOTMCP_FETCH_ARTIFACT env var
+# ===========================================================================
+
+
+class TestTemplateSelection:
+    """Tests that service selects correct summary template based on env var."""
+
+    def test_default_uses_file_path_template(self):
+        """Without ROBOTMCP_FETCH_ARTIFACT, summaries should NOT mention fetch_artifact."""
+        import os
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ROBOTMCP_FETCH_ARTIFACT", None)
+            store = _make_store()
+            svc = ArtifactExternalizationService(
+                store=store, output_mode=OutputMode.FILE,
+            )
+            response = {"output": "x" * 500}
+            rules = [ExternalizationRule(tool_name="execute_step", field_path="output")]
+            svc = ArtifactExternalizationService(
+                store=store, output_mode=OutputMode.FILE, rules=rules,
+            )
+            result, results = svc.externalize("execute_step", response, "s1")
+            assert len(results) == 1
+            assert "Content saved to" in result["output"]
+            assert "fetch_artifact" not in result["output"]
+
+    def test_fetch_artifact_enabled_uses_fetch_template(self):
+        """With ROBOTMCP_FETCH_ARTIFACT=true, summaries SHOULD mention fetch_artifact."""
+        import os
+        with patch.dict(os.environ, {"ROBOTMCP_FETCH_ARTIFACT": "true"}):
+            store = _make_store()
+            rules = [ExternalizationRule(tool_name="execute_step", field_path="output")]
+            svc = ArtifactExternalizationService(
+                store=store, output_mode=OutputMode.FILE, rules=rules,
+            )
+            response = {"output": "x" * 500}
+            result, results = svc.externalize("execute_step", response, "s1")
+            assert len(results) == 1
+            assert "fetch_artifact" in result["output"]
+
+    def test_summary_contains_file_path(self):
+        """File path summary should contain actual artifact file path."""
+        import os
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ROBOTMCP_FETCH_ARTIFACT", None)
+            store = _make_store()
+            rules = [ExternalizationRule(tool_name="execute_step", field_path="output")]
+            svc = ArtifactExternalizationService(
+                store=store, output_mode=OutputMode.FILE, rules=rules,
+            )
+            response = {"output": "x" * 500}
+            result, results = svc.externalize("execute_step", response, "s1")
+            assert ".robotmcp_artifacts" in result["output"] or "/tmp" in result["output"]
+            assert ".txt" in result["output"]

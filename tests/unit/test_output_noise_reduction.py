@@ -1019,8 +1019,8 @@ class TestExternalizationWiring:
         # context should be replaced with summary text
         ctx = result["sections"]["page_source"]["context"]
         assert isinstance(ctx, str)
-        assert "fetch_artifact" in ctx
-        assert "art_" in ctx
+        assert "Content saved to" in ctx
+        assert ".robotmcp_artifacts" in ctx
         # In file mode, ALL matching rules fire (even small fields)
         assert len(results) == 3  # context + aria_snapshot + page_source_preview
 
@@ -1044,7 +1044,7 @@ class TestExternalizationWiring:
         result, results = svc.externalize("get_session_state", response, "s1")
         aria = result["sections"]["page_source"]["aria_snapshot"]
         assert isinstance(aria, str)
-        assert "fetch_artifact" in aria
+        assert "Content saved to" in aria
 
     def test_get_session_state_page_source_preview_externalized(self):
         """Large page_source_preview should be externalized."""
@@ -1062,7 +1062,7 @@ class TestExternalizationWiring:
         result, results = svc.externalize("get_session_state", response, "s1")
         preview = result["sections"]["page_source"]["page_source_preview"]
         assert isinstance(preview, str)
-        assert "fetch_artifact" in preview
+        assert "Content saved to" in preview
 
     def test_inline_mode_skips_externalization(self):
         """OutputMode.INLINE should never externalize."""
@@ -1107,7 +1107,7 @@ class TestExternalizationWiring:
         result, results = svc.externalize("get_session_state", response, "s1")
         ctx = result["sections"]["page_source"]["context"]
         assert isinstance(ctx, str)
-        assert "fetch_artifact" in ctx
+        assert "Content saved to" in ctx
 
     def test_dict_serialized_as_json(self):
         """Dict values should be serialized as JSON, not Python repr."""
@@ -1164,6 +1164,6 @@ class TestExternalizationWiring:
         # All 3 fields should be externalized
         assert len(results) == 3
         ps = result["sections"]["page_source"]
-        assert isinstance(ps["context"], str) and "fetch_artifact" in ps["context"]
-        assert isinstance(ps["aria_snapshot"], str) and "fetch_artifact" in ps["aria_snapshot"]
-        assert isinstance(ps["page_source_preview"], str) and "fetch_artifact" in ps["page_source_preview"]
+        assert isinstance(ps["context"], str) and "Content saved to" in ps["context"]
+        assert isinstance(ps["aria_snapshot"], str) and "Content saved to" in ps["aria_snapshot"]
+        assert isinstance(ps["page_source_preview"], str) and "Content saved to" in ps["page_source_preview"]

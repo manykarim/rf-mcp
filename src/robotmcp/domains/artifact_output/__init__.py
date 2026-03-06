@@ -18,12 +18,15 @@ from .services import (
     ArtifactRetrievalService,
 )
 from .value_objects import (
+    FETCH_ARTIFACT_SUMMARY_TEMPLATE,
+    FILE_PATH_SUMMARY_TEMPLATE,
     ArtifactId,
     ArtifactPolicy,
     ArtifactReference,
     ExternalizationResult,
     ExternalizationRule,
     OutputMode,
+    is_fetch_artifact_enabled,
 )
 
 __all__ = [
@@ -33,6 +36,9 @@ __all__ = [
     "ArtifactPolicy",
     "ExternalizationRule",
     "ExternalizationResult",
+    "is_fetch_artifact_enabled",
+    "FETCH_ARTIFACT_SUMMARY_TEMPLATE",
+    "FILE_PATH_SUMMARY_TEMPLATE",
     "Artifact",
     "ArtifactSlice",
     "ArtifactStore",

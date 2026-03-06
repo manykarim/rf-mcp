@@ -6353,12 +6353,18 @@ async def get_session_keyword_documentation(
 
 
 def _fetch_artifact_enabled() -> dict:
-    """Return @mcp.tool kwargs for fetch_artifact based on output mode."""
-    from robotmcp.domains.artifact_output.value_objects import OutputMode
+    """Return @mcp.tool kwargs for fetch_artifact based on env config.
+
+    fetch_artifact is only enabled when BOTH conditions are met:
+    1. Output mode is not INLINE (externalization is active)
+    2. ROBOTMCP_FETCH_ARTIFACT=true (opt-in, disabled by default)
+    """
+    from robotmcp.domains.artifact_output.value_objects import (
+        OutputMode, is_fetch_artifact_enabled,
+    )
     mode = OutputMode.from_env()
-    if mode == OutputMode.INLINE:
-        return DISABLED_TOOL_KWARGS  # hidden when no externalization
-    # Enabled: externalization is active, LLM needs this tool
+    if mode == OutputMode.INLINE or not is_fetch_artifact_enabled():
+        return DISABLED_TOOL_KWARGS
     return {} if FASTMCP_V3 else {"enabled": True}
 
 
@@ -6612,11 +6618,13 @@ _DISABLED_TOOL_NAMES_BASE: frozenset[str] = frozenset({
     "validate_test_readiness",
 })
 
-# ADR-015: Enable fetch_artifact when output externalization is active
+# ADR-015: Enable fetch_artifact only when explicitly opted-in
 def _compute_disabled_tools() -> frozenset:
-    from robotmcp.domains.artifact_output.value_objects import OutputMode
+    from robotmcp.domains.artifact_output.value_objects import (
+        OutputMode, is_fetch_artifact_enabled,
+    )
     mode = OutputMode.from_env()
-    if mode != OutputMode.INLINE:
+    if mode != OutputMode.INLINE and is_fetch_artifact_enabled():
         return _DISABLED_TOOL_NAMES_BASE - {"fetch_artifact"}
     return _DISABLED_TOOL_NAMES_BASE
 

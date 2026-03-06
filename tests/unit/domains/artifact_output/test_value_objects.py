@@ -271,7 +271,7 @@ class TestExternalizationRule:
         r = ExternalizationRule(tool_name="my_tool", field_path="output")
         assert r.tool_name == "my_tool"
         assert r.field_path == "output"
-        assert "artifact" in r.summary_template.lower() or "{artifact_id}" in r.summary_template
+        assert "{file_path}" in r.summary_template
 
     def test_custom_template(self):
         r = ExternalizationRule(tool_name="t", field_path="f", summary_template="custom {artifact_id}")
@@ -337,3 +337,87 @@ class TestExternalizationResult:
         r = ExternalizationResult(summary="s", artifact_ref=None, original_token_estimate=10, saved_tokens=0)
         with pytest.raises(AttributeError):
             r.summary = "x"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# is_fetch_artifact_enabled
+# ---------------------------------------------------------------------------
+
+
+class TestIsFetchArtifactEnabled:
+    """Tests for is_fetch_artifact_enabled() env var helper."""
+
+    def test_default_is_false(self):
+        from robotmcp.domains.artifact_output.value_objects import is_fetch_artifact_enabled
+        with patch.dict(os.environ, {}, clear=True):
+            os.environ.pop("ROBOTMCP_FETCH_ARTIFACT", None)
+            assert is_fetch_artifact_enabled() is False
+
+    def test_true_string(self):
+        from robotmcp.domains.artifact_output.value_objects import is_fetch_artifact_enabled
+        with patch.dict(os.environ, {"ROBOTMCP_FETCH_ARTIFACT": "true"}):
+            assert is_fetch_artifact_enabled() is True
+
+    def test_one_string(self):
+        from robotmcp.domains.artifact_output.value_objects import is_fetch_artifact_enabled
+        with patch.dict(os.environ, {"ROBOTMCP_FETCH_ARTIFACT": "1"}):
+            assert is_fetch_artifact_enabled() is True
+
+    def test_yes_string(self):
+        from robotmcp.domains.artifact_output.value_objects import is_fetch_artifact_enabled
+        with patch.dict(os.environ, {"ROBOTMCP_FETCH_ARTIFACT": "yes"}):
+            assert is_fetch_artifact_enabled() is True
+
+    def test_false_string(self):
+        from robotmcp.domains.artifact_output.value_objects import is_fetch_artifact_enabled
+        with patch.dict(os.environ, {"ROBOTMCP_FETCH_ARTIFACT": "false"}):
+            assert is_fetch_artifact_enabled() is False
+
+    def test_random_string_is_false(self):
+        from robotmcp.domains.artifact_output.value_objects import is_fetch_artifact_enabled
+        with patch.dict(os.environ, {"ROBOTMCP_FETCH_ARTIFACT": "maybe"}):
+            assert is_fetch_artifact_enabled() is False
+
+    def test_case_insensitive(self):
+        from robotmcp.domains.artifact_output.value_objects import is_fetch_artifact_enabled
+        with patch.dict(os.environ, {"ROBOTMCP_FETCH_ARTIFACT": "TRUE"}):
+            assert is_fetch_artifact_enabled() is True
+
+
+# ---------------------------------------------------------------------------
+# Summary templates
+# ---------------------------------------------------------------------------
+
+
+class TestSummaryTemplates:
+    """Tests for FILE_PATH and FETCH_ARTIFACT summary templates."""
+
+    def test_file_path_template_has_file_path_placeholder(self):
+        from robotmcp.domains.artifact_output.value_objects import FILE_PATH_SUMMARY_TEMPLATE
+        assert "{file_path}" in FILE_PATH_SUMMARY_TEMPLATE
+        assert "fetch_artifact" not in FILE_PATH_SUMMARY_TEMPLATE
+
+    def test_fetch_artifact_template_has_fetch_hint(self):
+        from robotmcp.domains.artifact_output.value_objects import FETCH_ARTIFACT_SUMMARY_TEMPLATE
+        assert "{file_path}" in FETCH_ARTIFACT_SUMMARY_TEMPLATE
+        assert "fetch_artifact" in FETCH_ARTIFACT_SUMMARY_TEMPLATE
+
+    def test_file_path_template_formats_correctly(self):
+        from robotmcp.domains.artifact_output.value_objects import FILE_PATH_SUMMARY_TEMPLATE
+        result = FILE_PATH_SUMMARY_TEMPLATE.format(
+            artifact_id="art_aabbccddeeff",
+            byte_size=1024,
+            token_estimate=256,
+            file_path="/tmp/artifacts/art_aabbccddeeff.txt",
+        )
+        assert "/tmp/artifacts/art_aabbccddeeff.txt" in result
+        assert "1024 bytes" in result
+        assert "~256 tokens" in result
+        assert "fetch_artifact" not in result
+
+    def test_default_rule_uses_file_path_template(self):
+        from robotmcp.domains.artifact_output.value_objects import (
+            FILE_PATH_SUMMARY_TEMPLATE,
+        )
+        r = ExternalizationRule(tool_name="t", field_path="f")
+        assert r.summary_template == FILE_PATH_SUMMARY_TEMPLATE
