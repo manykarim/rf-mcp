@@ -154,7 +154,8 @@ class ServiceContainer:
         """Get the artifact store (ADR-015)."""
         if self._artifact_store is None:
             from robotmcp.domains.artifact_output.aggregates import ArtifactStore
-            self._artifact_store = ArtifactStore.create()
+            from robotmcp.domains.artifact_output.value_objects import ArtifactPolicy
+            self._artifact_store = ArtifactStore.create(policy=ArtifactPolicy.from_env())
         return self._artifact_store
 
     @property

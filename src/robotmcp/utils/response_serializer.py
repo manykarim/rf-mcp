@@ -284,73 +284,58 @@ class MCPResponseSerializer:
 
     def _serialize_requests_response(self, response) -> Dict[str, Any]:
         """
-        Serialize requests.Response object with key information preserved.
-        
-        This provides a serialized representation suitable for MCP responses
-        while preserving important attributes for debugging and analysis.
+        Serialize requests.Response object with compact, non-duplicating format.
+
+        Returns status_code, ok, content_type, and parsed JSON body (or text
+        preview).  Headers, encoding, and cookies are omitted to reduce token
+        cost — callers can use detail_level='full' via the enhanced serializer
+        for those fields.
         """
         try:
-            # Extract key information from the Response object
-            result = {
+            result: Dict[str, Any] = {
                 "_type": "requests_response",
-                "_original_type": "Response",
                 "status_code": response.status_code,
-                "reason": response.reason,
-                "url": str(response.url),
-                "headers": dict(response.headers),
-                "encoding": response.encoding,
-                "apparent_encoding": response.apparent_encoding,
+                "ok": response.ok,
             }
-            
-            # Try to get JSON content safely
+
+            # Content-Type is almost always useful
+            ct = ""
+            if hasattr(response, "headers"):
+                ct = response.headers.get("Content-Type", "")
+                if ct:
+                    result["content_type"] = ct.split(";")[0].strip()
+
+            # Include body: JSON XOR text — never both
             try:
-                json_content = response.json()
-                # Limit JSON size for performance
-                json_str = json.dumps(json_content)
-                if len(json_str) > 1000:
-                    result["json_preview"] = json_str[:1000] + "..."
-                    result["json_truncated"] = True
+                if "json" in ct.lower() or "javascript" in ct.lower():
+                    json_content = response.json()
+                    json_str = json.dumps(json_content)
+                    if len(json_str) > 2000:
+                        result["json_preview"] = json_str[:2000] + "..."
+                        result["json_truncated"] = True
+                    else:
+                        result["json"] = json_content
                 else:
-                    result["json"] = json_content
-            except Exception as e:
-                result["json_error"] = f"Could not parse JSON: {e}"
-            
-            # Add text content preview
-            try:
-                text_content = response.text
-                if len(text_content) > 500:
-                    result["text_preview"] = text_content[:500] + "..."
-                    result["text_truncated"] = True
-                    result["text_length"] = len(text_content)
-                else:
-                    result["text"] = text_content
-            except Exception as e:
-                result["text_error"] = f"Could not get text content: {e}"
-                
-            # Add content info
-            if hasattr(response, 'content'):
-                result["content_length"] = len(response.content) if response.content else 0
-                
-            # Add timing info if available
-            if hasattr(response, 'elapsed'):
-                result["elapsed_seconds"] = response.elapsed.total_seconds()
-                
-            # Add cookies info if available
-            if hasattr(response, 'cookies') and response.cookies:
-                result["cookies"] = dict(response.cookies)
-                
+                    text_content = response.text
+                    if len(text_content) > 500:
+                        result["text_preview"] = text_content[:500] + "..."
+                        result["text_truncated"] = True
+                        result["body_size"] = len(text_content)
+                    elif text_content:
+                        result["text"] = text_content
+            except Exception:
+                # Body not readable — just report size
+                if hasattr(response, "content") and response.content:
+                    result["body_size"] = len(response.content)
+
             return result
-            
+
         except Exception as e:
             logger.warning(f"Failed to serialize requests.Response: {e}")
-            # Fallback to basic info
             return {
                 "_type": "requests_response_error",
-                "_original_type": "Response", 
+                "status_code": getattr(response, "status_code", "unknown"),
                 "_error": str(e),
-                "_string_repr": str(response)[:100],
-                "status_code": getattr(response, 'status_code', 'unknown'),
-                "url": str(getattr(response, 'url', 'unknown'))
             }
 
     def _serialize_object_with_dict(self, obj: Any, depth: int) -> Dict[str, Any]:

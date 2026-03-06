@@ -49,6 +49,13 @@ class DeltaStateService:
         self._caches[session_id] = cache
         return cache
 
+    def has_version(self, session_id: str) -> bool:
+        """Check if any versioned state exists for a session."""
+        if session_id not in self._caches:
+            return False
+        cache = self._caches[session_id]
+        return len(cache._versions) > 0
+
     def record_full_state(
         self,
         session_id: str,

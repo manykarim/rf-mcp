@@ -652,14 +652,16 @@ class TestVariableReferenceScanner:
         assert len(found_vars) == 0
 
     def test_check_untracked_variables_returns_warnings(self, test_builder, suite_with_variable_references):
-        """Test that untracked variables generate warnings."""
+        """Test that untracked variables generate grouped warnings."""
         warnings = test_builder._check_untracked_variables(suite_with_variable_references, "test-session")
-        # BASE_URL is defined, but USER_NAME and PASSWORD are not
-        assert len(warnings) == 2
-        warning_vars = {w["variable"] for w in warnings}
-        assert "USER_NAME" in warning_vars
-        assert "PASSWORD" in warning_vars
-        assert "BASE_URL" not in warning_vars  # This one is defined
+        # BASE_URL is defined, but USER_NAME and PASSWORD are not — grouped into 1 warning
+        assert len(warnings) == 1
+        w = warnings[0]
+        assert w["type"] == "untracked_variables"
+        assert w["count"] == 2
+        assert "USER_NAME" in w["variables"]
+        assert "PASSWORD" in w["variables"]
+        assert "BASE_URL" not in w["variables"]  # This one is defined
 
     def test_check_untracked_variables_empty_when_all_defined(self, test_builder):
         """Test that no warnings when all variables are defined."""
@@ -680,15 +682,16 @@ class TestVariableReferenceScanner:
         warnings = test_builder._check_untracked_variables(suite, "test-session")
         assert len(warnings) == 0
 
-    def test_warning_message_contains_helpful_info(self, test_builder, suite_with_variable_references):
-        """Test that warning messages are helpful."""
+    def test_warning_contains_helpful_info(self, test_builder, suite_with_variable_references):
+        """Test that grouped warning contains fix guidance."""
         warnings = test_builder._check_untracked_variables(suite_with_variable_references, "test-session")
-        for warning in warnings:
-            assert warning["type"] == "untracked_variable"
-            assert "variable" in warning
-            assert "message" in warning
-            assert "manage_session" in warning["message"]
-            assert "set_variables" in warning["message"]
+        assert len(warnings) == 1
+        w = warnings[0]
+        assert w["type"] == "untracked_variables"
+        assert "variables" in w
+        assert "fix" in w
+        assert "manage_session" in w["fix"]
+        assert "set_variables" in w["fix"]
 
 
 class TestVariableHandlingEdgeCases:

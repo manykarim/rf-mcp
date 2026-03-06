@@ -5,6 +5,7 @@ Application services for externalization and retrieval of artifacts.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -20,20 +21,47 @@ from .value_objects import (
 
 logger = logging.getLogger(__name__)
 
-# Default rules for tools with large outputs
+# Default rules for tools with large outputs.
+# Field paths use dot-notation matching the actual response structure.
 DEFAULT_RULES: List[ExternalizationRule] = [
+    # get_session_state: page_source section contains the heaviest fields
+    ExternalizationRule(
+        tool_name="get_session_state",
+        field_path="sections.page_source.context",
+    ),
+    ExternalizationRule(
+        tool_name="get_session_state",
+        field_path="sections.page_source.aria_snapshot",
+    ),
+    ExternalizationRule(
+        tool_name="get_session_state",
+        field_path="sections.page_source.page_source_preview",
+    ),
+    ExternalizationRule(
+        tool_name="get_session_state",
+        field_path="sections.page_source.page_source",
+    ),
+    # build_test_suite
     ExternalizationRule(tool_name="build_test_suite", field_path="rf_text"),
-    ExternalizationRule(
-        tool_name="get_session_state", field_path="page_source"
-    ),
-    ExternalizationRule(
-        tool_name="get_session_state", field_path="aria_snapshot"
-    ),
+    ExternalizationRule(tool_name="build_test_suite", field_path="warnings"),
+    ExternalizationRule(tool_name="build_test_suite", field_path="suite"),
+    # run_test_suite
     ExternalizationRule(
         tool_name="run_test_suite", field_path="execution_details"
     ),
+    ExternalizationRule(
+        tool_name="run_test_suite", field_path="output_files"
+    ),
+    # execute_batch
     ExternalizationRule(tool_name="execute_batch", field_path="steps"),
+    # find_keywords
     ExternalizationRule(tool_name="find_keywords", field_path="result"),
+    # execute_step
+    ExternalizationRule(
+        tool_name="execute_step", field_path="session_variables"
+    ),
+    ExternalizationRule(tool_name="execute_step", field_path="output"),
+    ExternalizationRule(tool_name="execute_step", field_path="hints"),
 ]
 
 
@@ -82,7 +110,13 @@ class ArtifactExternalizationService:
             value = self._get_nested(response, field_path)
             if value is None:
                 continue
-            content = value if isinstance(value, str) else str(value)
+            if isinstance(value, str):
+                content = value
+            else:
+                try:
+                    content = json.dumps(value, default=str, ensure_ascii=False)
+                except (TypeError, ValueError):
+                    content = str(value)
             original_tokens = len(content) // 4
 
             if self._mode == OutputMode.AUTO and not self._store.policy.should_externalize(content):

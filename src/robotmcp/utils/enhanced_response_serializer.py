@@ -433,45 +433,57 @@ class MCPResponseSerializer:
         self, response, detail_level: str
     ) -> Dict[str, Any]:
         """
-        Serialize a requests.Response object with appropriate detail level.
+        Serialize a requests.Response with detail-level-aware compaction.
 
-        For minimal detail level, only include basic info like status code and URL.
-        For standard detail level, include headers but not content.
-        For full detail level, include all details.
+        minimal: status_code, ok, content_type, body_size
+        standard: + json_preview or text_preview (no headers)
+        full: + full headers, full body
         """
-        # Basic info for all detail levels
-        result = {
+        import json as _json
+
+        result: Dict[str, Any] = {
             "_type": "requests_response",
             "status_code": response.status_code,
-            "url": response.url,
-            "reason": response.reason,
-            "elapsed": str(response.elapsed),
+            "ok": response.ok,
         }
 
-        # Add headers for standard and full detail levels
-        if detail_level in ["standard", "full"]:
-            result["headers"] = dict(response.headers)
+        ct = ""
+        if hasattr(response, "headers"):
+            ct = response.headers.get("Content-Type", "")
+            if ct:
+                result["content_type"] = ct.split(";")[0].strip()
 
-        # Add content for full detail level only
-        if detail_level == "full":
-            try:
-                if "application/json" in response.headers.get("Content-Type", ""):
-                    result["json"] = response.json()
+        if detail_level == "minimal":
+            # Just status + content_type + body_size
+            if hasattr(response, "content") and response.content:
+                result["body_size"] = len(response.content)
+            return result
+
+        # standard and full: include body content
+        try:
+            if "json" in ct.lower() or "javascript" in ct.lower():
+                json_content = response.json()
+                json_str = _json.dumps(json_content)
+                if detail_level == "standard" and len(json_str) > 2000:
+                    result["json_preview"] = json_str[:2000] + "..."
+                    result["json_truncated"] = True
                 else:
-                    # Try to decode text
-                    try:
-                        content = response.text
-                        if len(content) > 1000:
-                            result["text"] = content[:1000] + "..."
-                            result["text_truncated"] = True
-                            result["content_length"] = len(content)
-                        else:
-                            result["text"] = content
-                    except Exception:
-                        # Fallback to content length only
-                        result["content_length"] = len(response.content)
-            except Exception as e:
-                result["content_error"] = str(e)
+                    result["json"] = json_content
+            else:
+                content = response.text
+                if len(content) > 1000:
+                    result["text_preview"] = content[:1000] + "..."
+                    result["text_truncated"] = True
+                    result["body_size"] = len(content)
+                elif content:
+                    result["text"] = content
+        except Exception:
+            if hasattr(response, "content") and response.content:
+                result["body_size"] = len(response.content)
+
+        # full only: add headers
+        if detail_level == "full":
+            result["headers"] = dict(response.headers)
 
         return result
 

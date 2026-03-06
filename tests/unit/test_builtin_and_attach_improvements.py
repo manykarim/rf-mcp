@@ -367,8 +367,7 @@ class TestServerAttachImprovements:
         result = await analyze_fn(scenario="Open browser to example.com", context="web")
 
         # The result should indicate attach bridge was active
-        assert result["session_info"]["attach_bridge_active"] is True
-        assert "attach_note" in result["session_info"]
+        assert result.get("attach_bridge_active") is True
         # Diagnostics must have been called
         mock_client.diagnostics.assert_called()
 
