@@ -28,6 +28,7 @@ frontend = ["django>=4.2,<5.0", "uvicorn[standard]>=0.24"]
 mobile = ["robotframework-appiumlibrary"]
 api = ["robotframework-requests"]
 database = ["robotframework-databaselibrary"]
+memory = ["sqlite-vec>=0.1.6", "model2vec>=0.4.0"]
 all = [
     "robotframework-browser",
     "robotframework-seleniumlibrary",
@@ -36,6 +37,8 @@ all = [
     "robotframework-databaselibrary",
     "django>=4.2,<5.0",
     "uvicorn[standard]>=0.24",
+    "sqlite-vec>=0.1.6",
+    "model2vec>=0.4.0",
 ]
 dev = [
     "pytest>=7.0.0",
