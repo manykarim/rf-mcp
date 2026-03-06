@@ -122,7 +122,7 @@ class TestManageSessionSchema:
         """manage_session.tool_profile should have enum with Optional support."""
         tool = _get_tool(tools, "manage_session")
         schema = _get_param_schema(tool, "tool_profile")
-        expected = ["browser_exec", "api_exec", "discovery", "minimal_exec", "full"]
+        expected = ["browser_exec", "api_exec", "discovery", "minimal_exec", "desktop_exec", "slim_exec", "full"]
         _assert_has_enum(schema, expected, "manage_session.tool_profile")
 
     @pytest.mark.asyncio
@@ -130,7 +130,7 @@ class TestManageSessionSchema:
         """manage_session.model_tier should have enum with Optional support."""
         tool = _get_tool(tools, "manage_session")
         schema = _get_param_schema(tool, "model_tier")
-        expected = ["small_context", "standard", "large_context"]
+        expected = ["small_7b", "small_context", "medium_13b", "standard", "large_context", "hosted"]
         _assert_has_enum(schema, expected, "manage_session.model_tier")
 
     @pytest.mark.asyncio
@@ -138,7 +138,7 @@ class TestManageSessionSchema:
         """manage_session.profile should have enum with Optional support."""
         tool = _get_tool(tools, "manage_session")
         schema = _get_param_schema(tool, "profile")
-        expected = ["browser_exec", "api_exec", "discovery", "minimal_exec", "full"]
+        expected = ["browser_exec", "api_exec", "discovery", "minimal_exec", "desktop_exec", "slim_exec", "full"]
         _assert_has_enum(schema, expected, "manage_session.profile")
 
     @pytest.mark.asyncio

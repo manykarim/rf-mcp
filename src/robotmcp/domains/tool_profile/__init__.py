@@ -33,11 +33,14 @@ For more details, see:
 
 # Value Objects
 from .value_objects import (
+    AutoProfileSelection,
     ModelTier,
+    ProfileTransition,
+    SchemaMode,
+    SlimToolSchema,
+    TokenBudget,
     ToolDescriptionMode,
     ToolTag,
-    TokenBudget,
-    ProfileTransition,
 )
 
 # Entities
@@ -55,6 +58,7 @@ from .aggregates import (
 from .events import (
     ProfileActivated,
     ProfileTransitioned,
+    SchemaSimplified,
     ToolsHidden,
     ToolsRevealed,
     TokenBudgetExceeded,
@@ -79,11 +83,14 @@ from .adapters import (
 
 __all__ = [
     # Value Objects
+    "AutoProfileSelection",
     "ModelTier",
+    "ProfileTransition",
+    "SchemaMode",
+    "SlimToolSchema",
+    "TokenBudget",
     "ToolDescriptionMode",
     "ToolTag",
-    "TokenBudget",
-    "ProfileTransition",
     # Entities
     "ToolDescriptor",
     # Aggregates
@@ -92,6 +99,7 @@ __all__ = [
     # Domain Events
     "ProfileActivated",
     "ProfileTransitioned",
+    "SchemaSimplified",
     "ToolsHidden",
     "ToolsRevealed",
     "TokenBudgetExceeded",

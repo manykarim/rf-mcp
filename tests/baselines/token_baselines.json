@@ -1,0 +1,37 @@
+{
+  "schema_baselines": {
+    "full": 233,
+    "browser_exec": 118,
+    "slim_exec": 110
+  },
+  "response_baselines": {
+    "execute_step_minimal": 64,
+    "execute_step_standard": 73,
+    "execute_step_standard_with_changed_vars": 85,
+    "execute_step_full": 423,
+    "build_test_suite_standard": 200,
+    "get_session_state_full": 900,
+    "get_session_state_delta": 240,
+    "execute_batch_standard": 80,
+    "analyze_scenario_standard": 30,
+    "manage_session_init_standard": 38,
+    "find_keywords_standard": 120,
+    "grouped_warnings_5vars": 51,
+    "http_response_compact": 45,
+    "http_response_minimal": 29,
+    "error_1hint": 74,
+    "error_3hints": 110
+  },
+  "budgets": {
+    "execute_step_minimal": 80,
+    "execute_step_standard": 100,
+    "execute_step_full": 500,
+    "get_session_state_full": 900,
+    "get_session_state_delta": 300,
+    "build_test_suite_standard": 250,
+    "execute_batch_standard": 80,
+    "analyze_scenario_standard": 80,
+    "manage_session_init_standard": 60,
+    "find_keywords_standard": 120
+  }
+}

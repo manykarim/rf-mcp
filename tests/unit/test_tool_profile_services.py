@@ -108,9 +108,9 @@ def manager(mock_tool_manager, sample_descriptors, event_log):
 class TestListProfiles:
     """Test listing registered profiles."""
 
-    def test_list_returns_5_builtin_profiles(self, manager):
+    def test_list_returns_7_builtin_profiles(self, manager):
         profiles = manager.list_profiles()
-        assert len(profiles) == 5
+        assert len(profiles) == 7
 
     def test_list_returns_sorted_names(self, manager):
         profiles = manager.list_profiles()
@@ -123,6 +123,8 @@ class TestListProfiles:
         assert "discovery" in profiles
         assert "minimal_exec" in profiles
         assert "full" in profiles
+        assert "desktop_exec" in profiles
+        assert "slim_exec" in profiles
 
 
 # =============================================================================
@@ -188,7 +190,7 @@ class TestRegisterProfile:
         )
         manager.register_profile(custom)
         assert "custom" in manager.list_profiles()
-        assert len(manager.list_profiles()) == 6
+        assert len(manager.list_profiles()) == 8
 
 
 # =============================================================================
@@ -216,10 +218,10 @@ class TestActivateProfile:
 
     @pytest.mark.asyncio
     async def test_activate_removes_extra_tools(self, manager, mock_tool_manager):
-        """When going from full (15 tools) to browser_exec (5 tools), 10 should be removed."""
+        """When going from full (17 tools) to browser_exec (6 tools), 11 should be removed."""
         await manager.activate_profile("browser_exec")
-        # browser_exec has 6 tools, full has 16, so 10 removals
-        assert len(mock_tool_manager.removed) == 10
+        # browser_exec has 6 tools, full has 17, so 11 removals
+        assert len(mock_tool_manager.removed) == 11
 
     @pytest.mark.asyncio
     async def test_activate_adds_missing_tools(self, manager, mock_tool_manager):
@@ -230,7 +232,7 @@ class TestActivateProfile:
         mock_tool_manager.added.clear()
         # Now go to full
         await manager.activate_profile("full")
-        assert len(mock_tool_manager.added) == 10
+        assert len(mock_tool_manager.added) == 11
 
     @pytest.mark.asyncio
     async def test_activate_publishes_profile_activated_event(
@@ -249,7 +251,7 @@ class TestActivateProfile:
         await manager.activate_profile("browser_exec")
         hidden_events = [e for e in event_log if isinstance(e, ToolsHidden)]
         assert len(hidden_events) == 1
-        assert len(hidden_events[0].tool_names) == 10
+        assert len(hidden_events[0].tool_names) == 11
 
     @pytest.mark.asyncio
     async def test_activate_transition_publishes_profile_transitioned(
@@ -354,7 +356,8 @@ class TestPinnedManageSession:
     ):
         """After activating any preset, manage_session is still visible."""
         for profile_name in ("browser_exec", "api_exec", "discovery",
-                             "minimal_exec", "full"):
+                             "minimal_exec", "full", "desktop_exec",
+                             "slim_exec"):
             await manager.activate_profile(profile_name)
             visible = await mock_tool_manager.get_visible_tool_names()
             assert "manage_session" in visible, (

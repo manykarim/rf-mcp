@@ -190,3 +190,38 @@ class TokenBudgetExceeded:
             "suggested_action": self.suggested_action,
             "timestamp": self.timestamp.isoformat(),
         }
+
+
+@dataclass
+class SchemaSimplified:
+    """Emitted when a tool schema is structurally simplified (ADR-016).
+
+    Tracks which properties were removed and the resulting token savings
+    when converting a full schema to a slim schema for small models.
+
+    Attributes:
+        tool_name: The tool whose schema was simplified.
+        profile_name: The profile context in which simplification occurred.
+        schema_mode: The SchemaMode applied (e.g. "minimal").
+        properties_removed: Set of property names that were removed.
+        token_reduction: Number of tokens saved by simplification.
+        timestamp: When the simplification occurred.
+    """
+    tool_name: str
+    profile_name: str
+    schema_mode: str
+    properties_removed: FrozenSet[str]
+    token_reduction: int
+    timestamp: datetime = field(default_factory=datetime.now)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation."""
+        return {
+            "event_type": "SchemaSimplified",
+            "tool": self.tool_name,
+            "profile": self.profile_name,
+            "schema_mode": self.schema_mode,
+            "removed": sorted(self.properties_removed),
+            "saved_tokens": self.token_reduction,
+            "ts": self.timestamp.isoformat(),
+        }

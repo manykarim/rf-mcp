@@ -80,25 +80,28 @@ class TestExclusionGroupEnforcement:
 
     @pytest.mark.asyncio
     async def test_selenium_preference_excludes_browser(self, mcp_client):
-        """Test that explicit SeleniumLibrary preference excludes Browser."""
+        """Test that explicit SeleniumLibrary preference is detected and Browser excluded."""
         result = await mcp_client.call_tool(
             "analyze_scenario",
             {"scenario": "Use SeleniumLibrary for web automation", "context": "web"},
         )
         assert result.data["success"] is True
 
-        session_info = result.data.get("session_info", {})
-        recommended_libs = session_info.get("recommended_libraries", [])
+        # analyze_scenario detects preference in analysis dict
+        analysis = result.data.get("analysis", {})
+        assert analysis.get("explicit_library_preference") == "SeleniumLibrary"
+
+        # Verify session was configured — get_session_state to check search order
+        session_id = result.data["session_id"]
+        state = await mcp_client.call_tool(
+            "get_session_state",
+            {"session_id": session_id, "sections": ["summary"]},
+        )
+        summary = state.data.get("sections", {}).get("summary", {})
+        session_info = summary.get("session_info", {})
         search_order = session_info.get("search_order", [])
 
-        # SeleniumLibrary should be included
-        assert "SeleniumLibrary" in recommended_libs or "SeleniumLibrary" in search_order
-
-        # Browser should NOT be included when SeleniumLibrary is explicitly requested
-        assert "Browser" not in recommended_libs, (
-            f"Browser should not be in recommended_libraries when SeleniumLibrary is requested, "
-            f"got: {recommended_libs}"
-        )
+        # Browser should NOT be in search_order when SeleniumLibrary is explicitly requested
         assert "Browser" not in search_order, (
             f"Browser should not be in search_order when SeleniumLibrary is requested, "
             f"got: {search_order}"
@@ -106,25 +109,28 @@ class TestExclusionGroupEnforcement:
 
     @pytest.mark.asyncio
     async def test_browser_preference_excludes_selenium(self, mcp_client):
-        """Test that explicit Browser preference excludes SeleniumLibrary."""
+        """Test that explicit Browser preference is detected and SeleniumLibrary excluded."""
         result = await mcp_client.call_tool(
             "analyze_scenario",
             {"scenario": "Use Browser Library for modern web testing", "context": "web"},
         )
         assert result.data["success"] is True
 
-        session_info = result.data.get("session_info", {})
-        recommended_libs = session_info.get("recommended_libraries", [])
+        # analyze_scenario detects preference in analysis dict
+        analysis = result.data.get("analysis", {})
+        assert analysis.get("explicit_library_preference") == "Browser"
+
+        # Verify session was configured — get_session_state to check search order
+        session_id = result.data["session_id"]
+        state = await mcp_client.call_tool(
+            "get_session_state",
+            {"session_id": session_id, "sections": ["summary"]},
+        )
+        summary = state.data.get("sections", {}).get("summary", {})
+        session_info = summary.get("session_info", {})
         search_order = session_info.get("search_order", [])
 
-        # Browser should be included
-        assert "Browser" in recommended_libs or "Browser" in search_order
-
-        # SeleniumLibrary should NOT be included when Browser is explicitly requested
-        assert "SeleniumLibrary" not in recommended_libs, (
-            f"SeleniumLibrary should not be in recommended_libraries when Browser is requested, "
-            f"got: {recommended_libs}"
-        )
+        # SeleniumLibrary should NOT be in search_order when Browser is explicitly requested
         assert "SeleniumLibrary" not in search_order, (
             f"SeleniumLibrary should not be in search_order when Browser is requested, "
             f"got: {search_order}"

@@ -13,6 +13,7 @@ from fastmcp import Context, FastMCP
 
 from robotmcp.compat.fastmcp_compat import (
     DISABLED_TOOL_KWARGS,
+    FASTMCP_V3,
     finalize_disabled_tools,
     get_tool_fn,
     set_server_lifespan,
@@ -177,6 +178,40 @@ async def _augment_with_memory(
         )
     except Exception:
         return result
+
+
+def _externalize_response(
+    tool_name: str,
+    session_id: str,
+    response: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Apply artifact externalization to a tool response (ADR-015).
+
+    Replaces large fields matching externalization rules with compact
+    artifact references.  The caller can then use ``fetch_artifact``
+    to retrieve the full content.
+
+    Returns the (possibly modified) response.  Never raises.
+    """
+    try:
+        from robotmcp.container import get_container
+
+        svc = get_container().artifact_externalization_service
+        from robotmcp.domains.artifact_output.value_objects import OutputMode
+
+        if svc.mode == OutputMode.INLINE:
+            return response
+        response, results = svc.externalize(tool_name, response, session_id)
+        if results:
+            logger.debug(
+                "Externalized %d field(s) for %s, saved ~%d tokens",
+                len(results),
+                tool_name,
+                sum(r.saved_tokens for r in results),
+            )
+    except Exception as e:
+        logger.debug("Artifact externalization skipped: %s", e)
+    return response
 
 
 if TYPE_CHECKING:
@@ -1946,33 +1981,11 @@ async def analyze_scenario(
         except Exception as e:
             logger.debug(f"LLM session config enhancement failed: {e}")
 
-    # Enhanced session info with guidance
-    result["session_info"] = {
-        "session_id": session_id,
-        "auto_configured": session.auto_configured,
-        "session_type": session.session_type.value,
-        "explicit_library_preference": session.explicit_library_preference,
-        "recommended_libraries": session.get_libraries_to_load(),
-        "search_order": session.get_search_order(),
-        "libraries_loaded": list(session.loaded_libraries),
-        "next_step_guidance": f"Use session_id='{session_id}' in all subsequent tool calls",
-        "status": "active",
-        "ready_for_execution": True,
-        "attach_bridge_active": attach_bridge_active,
-    }
+    # Compact session info — verbose guidance removed to reduce token cost
+    result["session_type"] = session.session_type.value
+    result["libraries_loaded"] = list(session.loaded_libraries)
     if attach_bridge_active:
-        result["session_info"]["attach_note"] = (
-            "Session was pre-populated from the live RF process via Debug Attach Bridge. "
-            "Libraries and variables reflect the actual RF runtime state."
-        )
-    result["session_info"]["recommended_tools"] = [
-        {
-            "order": idx,
-            "tool": tool,
-            "description": description,
-        }
-        for idx, (tool, description) in enumerate(AUTOMATION_TOOL_GUIDE, start=1)
-    ]
+        result["attach_bridge_active"] = True
 
     logger.info(
         f"Session '{session_id}' configured: type={session.session_type.value}, preference={session.explicit_library_preference}"
@@ -2197,6 +2210,9 @@ async def find_keywords(
         if excluded:
             result["excluded_keywords"] = excluded
             result["session_library"] = session_library_preference
+        # ADR-015: Externalize large fields to artifacts
+        if session_id:
+            result = _externalize_response("find_keywords", session_id, result)
         # Track for instruction learning
         if session_id:
             _track_tool_result(
@@ -2221,15 +2237,22 @@ async def find_keywords(
         if limit_value is not None:
             matches = matches[:limit_value]
 
+        # Add compact top_matches summary for LLM (full results may be externalized)
+        top_names = [m.get("name", "") for m in matches[:5]]
         result = {
             "success": True,
             "strategy": "pattern",
             "query": query,
+            "match_count": len(matches),
+            "top_matches": top_names,
             "results": matches,
         }
         if excluded:
             result["excluded_keywords"] = excluded
             result["session_library"] = session_library_preference
+        # ADR-015: Externalize large fields to artifacts
+        if session_id:
+            result = _externalize_response("find_keywords", session_id, result)
         # Track for instruction learning
         if session_id:
             _track_tool_result(
@@ -2262,11 +2285,15 @@ async def find_keywords(
         if limit_value is not None:
             catalog = catalog[:limit_value]
 
+        # Add compact top_matches summary for LLM (full results may be externalized)
+        top_names = [c.get("name", "") for c in catalog[:5]]
         result = {
             "success": True,
             "strategy": "catalog",
             "query": query,
             "library": library_name,
+            "match_count": len(catalog),
+            "top_matches": top_names,
             "results": catalog,
         }
         if excluded:
@@ -2281,6 +2308,9 @@ async def find_keywords(
                 "libraries=[...]), or use strategy='semantic' which works "
                 "without a session."
             )
+        # ADR-015: Externalize large fields to artifacts
+        if session_id:
+            result = _externalize_response("find_keywords", session_id, result)
         # Track for instruction learning
         if session_id:
             _track_tool_result(
@@ -2300,6 +2330,8 @@ async def find_keywords(
         mgr = get_rf_native_context_manager()
         payload = mgr.list_available_keywords(session_id)
         payload.update({"strategy": "session", "query": query})
+        # ADR-015: Externalize large fields to artifacts
+        payload = _externalize_response("find_keywords", session_id, payload)
         # Track for instruction learning
         _track_tool_result(
             session_id, "find_keywords", {"query": query, "strategy": strategy}, payload
@@ -2353,6 +2385,8 @@ async def manage_session(
     model_tier: ModelTierLiteral | None = None,
     scenario: str | None = None,
     profile: ToolProfileName | None = None,
+    # ADR-016: Auto-detect model tier from model name
+    model_name: str | None = None,
 ) -> Dict[str, Any]:
     """Manage session lifecycle: initialize, configure libraries/variables, and organize tests.
 
@@ -2539,9 +2573,20 @@ async def manage_session(
             "next_step": f"Use session_id='{session_id}' in all subsequent tool calls.",
         }
 
-        # ── ADR-006: Auto-activate tool profile (params > env vars) ──
+        # ── ADR-006/ADR-016: Auto-activate tool profile (params > env vars) ──
         effective_profile = tool_profile or os.environ.get("ROBOTMCP_TOOL_PROFILE")
         effective_model_tier = model_tier or os.environ.get("ROBOTMCP_MODEL_TIER")
+        # ADR-016: Auto-detect tier from model_name when no explicit tier given
+        if not effective_model_tier and model_name:
+            try:
+                from robotmcp.domains.shared.kernel import ModelTier as _MT
+
+                detected_tier = _MT.from_model_name(model_name)
+                effective_model_tier = detected_tier.value
+                result["model_tier_detected"] = detected_tier.value
+                result["model_name"] = model_name
+            except Exception:
+                pass
         if effective_profile or effective_model_tier:
             if _tool_profile_manager is None:
                 try:
@@ -3111,6 +3156,8 @@ async def get_session_state(
     include_reduced_dom: bool = True,
     include_dom_stream: bool = False,
     dom_chunk_size: int = 65536,
+    mode: Literal["full", "delta", "auto", "none"] = "auto",
+    since_version: int | None = None,
 ) -> Dict[str, Any]:
     """Retrieve aggregated session state for debugging and visibility.
 
@@ -3196,10 +3243,65 @@ async def get_session_state(
         rf_context = await _diagnose_rf_context_payload(session_id)
         payload["sections"]["rf_context"] = rf_context
 
+    # ADR-018: Delta-based state retrieval
+    # mode="auto" (default): auto-detect delta when prior version exists
+    _use_delta = False
+    if mode == "delta" and since_version is not None:
+        _use_delta = True
+    elif mode in ("full", "auto") and since_version is not None:
+        _use_delta = True  # auto-detect: client sent since_version
+    elif mode == "auto" and since_version is None:
+        # Check if a previous version exists for this session
+        try:
+            from robotmcp.container import get_container as _gc
+            _dsvc = _gc().delta_state_service
+            if _dsvc.has_version(session_id):
+                # Return full this time but record for future delta
+                _use_delta = False
+        except Exception:
+            pass
+
+    if _use_delta and since_version is not None:
+        try:
+            from robotmcp.container import get_container
+
+            delta_svc = get_container().delta_state_service
+            delta, new_version = delta_svc.compute_delta(
+                session_id, since_version, payload.get("sections", {}), list(requested),
+            )
+            # Add sections_changed summary for quick LLM overview
+            changed_sections = [s.section_name for s in delta.sections if s.change_type.value != "unchanged"]
+            payload = {
+                "success": True,
+                "session_id": session_id,
+                "mode": "delta",
+                "state_version": new_version.version_number,
+                "sections_changed": changed_sections,
+                "delta": delta.to_dict(),
+            }
+        except Exception as e:
+            logger.debug(f"Delta computation failed, returning full state: {e}")
+            payload["mode"] = "full"
+    elif mode != "none":
+        # Record full state version for future deltas
+        try:
+            from robotmcp.container import get_container
+
+            delta_svc = get_container().delta_state_service
+            version = delta_svc.record_full_state(
+                session_id, payload.get("sections", {}), list(requested),
+            )
+            payload["state_version"] = version.version_number
+        except Exception:
+            pass  # Non-critical; don't fail the response
+
     # ADR-014.2: Augment get_session_state with memory hints
     payload = await _augment_with_memory(
         session_id, "get_session_state", {"sections": sections}, payload,
     )
+
+    # ADR-015: Externalize large fields to artifacts
+    payload = _externalize_response("get_session_state", session_id, payload)
 
     # Track for instruction learning
     _track_tool_result(session_id, "get_session_state", {"sections": sections}, payload)
@@ -3484,6 +3586,9 @@ async def execute_step(
     result["mode"] = mode_norm
     result.setdefault("keyword", keyword_to_run)
 
+    # ADR-015: Externalize large fields to artifacts
+    result = _externalize_response("execute_step", session_id, result)
+
     # Track for instruction learning
     _track_tool_result(
         session_id,
@@ -3665,6 +3770,9 @@ async def build_test_suite(
             "fallback_used": False,
             "session_id": resolved_session_id,
         }
+
+    # ADR-015: Externalize large fields to artifacts
+    result = _externalize_response("build_test_suite", resolved_session_id, result)
 
     return result
 
@@ -4060,6 +4168,28 @@ async def execute_batch(
             container.batch_state_manager.store(state)
 
         response = batch.to_response_dict()
+
+        # Add compact inline digest for LLM (full steps[] may be externalized)
+        steps_list = response.get("steps", [])
+        passed = sum(1 for s in steps_list if s.get("status") == "PASS")
+        failed = sum(1 for s in steps_list if s.get("status") == "FAIL")
+        response["digest"] = {
+            "passed": passed,
+            "failed": failed,
+            "total": len(steps_list),
+        }
+        if failed > 0:
+            # Find first failure for quick summary
+            for i, s in enumerate(steps_list):
+                if s.get("status") == "FAIL":
+                    response["digest"]["failed_at_step"] = i
+                    response["digest"]["error"] = (
+                        f"{s.get('keyword', '?')}: {s.get('error', 'unknown')}"
+                    )[:200]
+                    break
+
+        # ADR-015: Externalize large fields to artifacts
+        response = _externalize_response("execute_batch", session_id, response)
 
         # Track for instruction learning
         _track_tool_result(
@@ -5613,6 +5743,9 @@ async def run_test_suite(
             "session_id": resolved_session_id,
         }
 
+    # ADR-015: Externalize large fields to artifacts
+    result = _externalize_response("run_test_suite", resolved_session_id, result)
+
     return result
 
 
@@ -6219,6 +6352,48 @@ async def get_session_keyword_documentation(
     return await _get_session_keyword_documentation_payload(session_id, keyword_name)
 
 
+def _fetch_artifact_enabled() -> dict:
+    """Return @mcp.tool kwargs for fetch_artifact based on env config.
+
+    fetch_artifact is only enabled when BOTH conditions are met:
+    1. Output mode is not INLINE (externalization is active)
+    2. ROBOTMCP_FETCH_ARTIFACT=true (opt-in, disabled by default)
+    """
+    from robotmcp.domains.artifact_output.value_objects import (
+        OutputMode, is_fetch_artifact_enabled,
+    )
+    mode = OutputMode.from_env()
+    if mode == OutputMode.INLINE or not is_fetch_artifact_enabled():
+        return DISABLED_TOOL_KWARGS
+    return {} if FASTMCP_V3 else {"enabled": True}
+
+
+@mcp.tool(**_fetch_artifact_enabled())
+async def fetch_artifact(
+    artifact_id: str,
+    offset: int = 0,
+    limit: int = 4000,
+) -> Dict[str, Any]:
+    """Retrieve externalized artifact content by ID.
+
+    When tool responses are large, rf-mcp externalizes them to artifacts and returns
+    a summary with an artifact_id. Use this tool to retrieve the full content.
+
+    Args:
+        artifact_id: The artifact identifier (format: art_{12 hex chars}).
+        offset: Starting character offset for pagination (default 0).
+        limit: Maximum characters to return (default 4000).
+
+    Returns:
+        Dict with success, content, offset, total_size, has_more.
+        On failure: error message with guidance to re-run the original tool.
+    """
+    from robotmcp.container import get_container
+
+    container = get_container()
+    return container.artifact_retrieval_service.fetch(artifact_id, offset, limit)
+
+
 class BridgeHealthMonitor:
     """Monitors bridge health with periodic heartbeats.
 
@@ -6403,7 +6578,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 # ── Finalize disabled tools for fastmcp v3 compatibility ──────────
 # On v2: enabled=False already handled at decorator time (no-op here).
 # On v3: calls mcp.disable(names=...) to hide these superseded tools.
-_DISABLED_TOOL_NAMES: frozenset[str] = frozenset({
+_DISABLED_TOOL_NAMES_BASE: frozenset[str] = frozenset({
     "attach_status",
     "attach_stop_bridge",
     "debug_parse_keyword_arguments",
@@ -6412,6 +6587,7 @@ _DISABLED_TOOL_NAMES: frozenset[str] = frozenset({
     "discover_keywords",
     "evaluate_expression",
     "execute_for_each",
+    "fetch_artifact",
     "execute_if",
     "execute_try_except",
     "get_appium_locator_guidance",
@@ -6441,6 +6617,18 @@ _DISABLED_TOOL_NAMES: frozenset[str] = frozenset({
     "validate_scenario",
     "validate_test_readiness",
 })
+
+# ADR-015: Enable fetch_artifact only when explicitly opted-in
+def _compute_disabled_tools() -> frozenset:
+    from robotmcp.domains.artifact_output.value_objects import (
+        OutputMode, is_fetch_artifact_enabled,
+    )
+    mode = OutputMode.from_env()
+    if mode != OutputMode.INLINE and is_fetch_artifact_enabled():
+        return _DISABLED_TOOL_NAMES_BASE - {"fetch_artifact"}
+    return _DISABLED_TOOL_NAMES_BASE
+
+_DISABLED_TOOL_NAMES: frozenset[str] = _compute_disabled_tools()
 finalize_disabled_tools(mcp, _DISABLED_TOOL_NAMES)
 
 # ── ADR-014: Register memory MCP tools if available ────────────────

@@ -290,6 +290,32 @@ class KeywordExecutor:
                 return None
         return first_arg
 
+    @staticmethod
+    def _rank_and_deduplicate_hints(
+        hints: List[Dict[str, Any]], detail_level: str = "minimal"
+    ) -> List[Dict[str, Any]]:
+        """Deduplicate and rank hints: 1 primary + up to 2 secondary for non-full levels."""
+        if not hints or detail_level == "full":
+            return hints
+
+        # Deduplicate by message content (exact + substring containment)
+        seen_messages: list[str] = []
+        unique: list[Dict[str, Any]] = []
+        for h in hints:
+            msg = (h.get("message") or h.get("title") or str(h)).lower()
+            is_dup = False
+            for seen in seen_messages:
+                if msg in seen or seen in msg:
+                    is_dup = True
+                    break
+            if not is_dup:
+                unique.append(h)
+                seen_messages.append(msg)
+
+        # Cap: 1 primary + 2 secondary for minimal/standard
+        max_hints = 1 if detail_level == "minimal" else 3
+        return unique[:max_hints]
+
     def _add_link_image_locator_guidance(
         self,
         keyword: str,
@@ -1113,10 +1139,6 @@ class KeywordExecutor:
                                 "arguments": arguments,
                                 "status": "fail",
                                 "execution_time": step.execution_time,
-                                "session_variables": {
-                                    k: self.response_serializer.serialize_for_response(v)
-                                    for k, v in session.variables.items()
-                                },
                                 "hints": hints,
                             }
                         else:
@@ -1144,6 +1166,9 @@ class KeywordExecutor:
                     f"Executing keyword in RF native context mode: {keyword} with args: {arguments}, "
                     f"timeout: {effective_timeout_ms}ms ({timeout_source})"
                 )
+
+                # Snapshot variables before execution for changed_variables tracking
+                _vars_before = dict(session.variables)
 
                 # Use RF native context mode for keywords that require it
                 result = await self._execute_keyword_with_context(
@@ -1251,6 +1276,7 @@ class KeywordExecutor:
                 arguments,
                 session,
                 resolved_arguments,
+                vars_before=_vars_before,
             )
 
             def _serialize_event_value(value: Any) -> Any:
@@ -1341,10 +1367,6 @@ class KeywordExecutor:
                 "arguments": arguments,
                 "status": "fail",
                 "execution_time": step.execution_time,
-                "session_variables": {
-                    k: self.response_serializer.serialize_for_response(v)
-                    for k, v in session.variables.items()
-                },
                 "hints": hints,
             }
 
@@ -2778,6 +2800,7 @@ class KeywordExecutor:
         arguments: List[str],
         session: ExecutionSession,
         resolved_arguments: List[str] = None,
+        vars_before: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         """Build execution response based on requested detail level."""
         base_response = {
@@ -2827,6 +2850,8 @@ class KeywordExecutor:
             hints = self._add_link_image_locator_guidance(
                 keyword, arguments, hints
             )
+            # Deduplicate and rank hints: 1 primary + up to 2 secondary
+            hints = self._rank_and_deduplicate_hints(hints, detail_level)
             base_response["hints"] = hints
 
         if detail_level == "minimal":
@@ -2840,15 +2865,6 @@ class KeywordExecutor:
                 base_response["assigned_variables"] = result["assigned_variables"]
 
         elif detail_level == "standard":
-            # DUAL STORAGE: Keep ORIGINAL objects in session for RF, serialize ONLY for MCP response
-            # Do NOT serialize session.variables as they need to remain original for RF execution
-            session_vars_for_response = {}
-            for var_name, var_value in session.variables.items():
-                # Only serialize for MCP response display, but keep originals in session.variables
-                session_vars_for_response[var_name] = (
-                    self.response_serializer.serialize_for_response(var_value)
-                )
-
             # Serialize output for standard detail level
             raw_output = result.get("output", "")
             serialized_output = self.response_serializer.serialize_for_response(
@@ -2858,13 +2874,36 @@ class KeywordExecutor:
             base_response.update(
                 {
                     "output": serialized_output,
-                    "session_variables": session_vars_for_response,  # Serialized for MCP response only
                     "active_library": session.get_active_library(),
                 }
             )
             # Include assigned variables in standard detail level (serialized for MCP)
             if "assigned_variables" in result:
                 base_response["assigned_variables"] = result["assigned_variables"]
+            # Compute changed_variables: vars that were added or modified since before execution
+            if vars_before is not None:
+                changed = {}
+                for k, v in session.variables.items():
+                    if k not in vars_before or vars_before[k] is not v:
+                        # Skip RF built-in constants (start with special chars or are well-known)
+                        if k.startswith("${") and k.endswith("}"):
+                            inner = k[2:-1]
+                        else:
+                            inner = k
+                        _RF_BUILTINS = frozenset({
+                            "DEBUG_FILE", "LOG_FILE", "LOG_LEVEL", "OUTPUT_DIR",
+                            "OUTPUT_FILE", "REPORT_FILE", "CURDIR", "EXECDIR",
+                            "TEMPDIR", "/", ":", "\\n", "\\t", " ", "SPACE",
+                            "EMPTY", "True", "False", "None", "null", "OPTIONS",
+                            "PREV_TEST_NAME", "PREV_TEST_STATUS", "PREV_TEST_MESSAGE",
+                            "SUITE_NAME", "SUITE_SOURCE", "SUITE_DOCUMENTATION",
+                            "SUITE_METADATA", "TEST_NAME", "TEST_DOCUMENTATION",
+                            "TEST_TAGS", "TEST_STATUS", "TEST_MESSAGE",
+                        })
+                        if inner not in _RF_BUILTINS:
+                            changed[k] = self.response_serializer.serialize_for_response(v)
+                if changed:
+                    base_response["changed_variables"] = changed
             # Add resolved arguments for debugging if they differ from original (serialized)
             if resolved_arguments is not None and resolved_arguments != arguments:
                 serialized_resolved_args = [

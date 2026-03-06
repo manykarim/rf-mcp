@@ -357,7 +357,7 @@ class TestDisabledToolNamesConsistency:
                 target_name = node.target.id
                 value = node.value
 
-            if target_name == "_DISABLED_TOOL_NAMES" and value is not None:
+            if target_name in ("_DISABLED_TOOL_NAMES", "_DISABLED_TOOL_NAMES_BASE") and value is not None:
                 if isinstance(value, ast.Call):
                     for arg in value.args:
                         if isinstance(arg, ast.Set):
@@ -367,8 +367,11 @@ class TestDisabledToolNamesConsistency:
 
         assert decorator_names, "Should find decorated tools"
         assert set_names, "Should find _DISABLED_TOOL_NAMES entries"
-        assert decorator_names == set_names, (
+        # fetch_artifact is conditionally decorated via _fetch_artifact_enabled(),
+        # not DISABLED_TOOL_KWARGS, so exclude it from both sides.
+        conditionally_decorated = {"fetch_artifact"}
+        assert decorator_names == set_names - conditionally_decorated, (
             f"Mismatch!\n"
             f"  In decorators but not in set: {decorator_names - set_names}\n"
-            f"  In set but not in decorators: {set_names - decorator_names}"
+            f"  In set but not in decorators: {set_names - decorator_names - conditionally_decorated}"
         )

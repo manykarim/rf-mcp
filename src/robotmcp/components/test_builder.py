@@ -135,67 +135,7 @@ class TestBuilder:
 
         return result
 
-    def _detect_arithmetic_type_warnings(self, expression: str) -> List[Dict[str, Any]]:
-        """Detect potential type-related issues in arithmetic expressions.
 
-        This method identifies patterns that commonly fail due to type mismatches,
-        such as multiplying string variables without explicit type conversion.
-
-        Common problematic patterns:
-        - $var * $other (strings can't multiply)
-        - $var + 1 (string + int fails)
-        - $var / 100 (string / int fails)
-
-        Args:
-            expression: The Evaluate expression to analyze
-
-        Returns:
-            List of warning dictionaries with 'type', 'message', and 'suggestion' keys
-        """
-        warnings = []
-
-        if not expression:
-            return warnings
-
-        # Pattern: $var operator $var (or $var operator number)
-        # These often fail when variables are strings
-        arithmetic_ops = r'[\*/%]'  # Multiply, divide, modulo - these fail with strings
-
-        # Detect: $var * $other or $var * number (without int() wrapper)
-        pattern_mult = rf'(\$[A-Za-z_]\w*)\s*{arithmetic_ops}\s*(\$[A-Za-z_]\w*|\d+)'
-        matches = re.findall(pattern_mult, expression)
-
-        for var1, operand in matches:
-            # Check if the variables are wrapped in int() or float()
-            wrapped_pattern = rf'(?:int|float)\s*\(\s*\{re.escape(var1)}\s*\)'
-            if not re.search(wrapped_pattern, expression):
-                warnings.append({
-                    "type": "potential_type_error",
-                    "variable": var1,
-                    "message": f"Variable {var1} may be a string. Arithmetic operations may fail.",
-                    "suggestion": f"Use int({var1}) or float({var1}) for numeric operations",
-                    "original_expression": expression,
-                })
-
-        # Detect: $var + number or $var - number (addition/subtraction)
-        pattern_add = rf'(\$[A-Za-z_]\w*)\s*[\+\-]\s*(\d+)'
-        add_matches = re.findall(pattern_add, expression)
-
-        for var, num in add_matches:
-            wrapped_pattern = rf'(?:int|float)\s*\(\s*\{re.escape(var)}\s*\)'
-            if not re.search(wrapped_pattern, expression):
-                # Only warn if not already warned
-                existing_vars = [w.get("variable") for w in warnings]
-                if var not in existing_vars:
-                    warnings.append({
-                        "type": "potential_type_error",
-                        "variable": var,
-                        "message": f"Variable {var} may be a string. Adding/subtracting may fail.",
-                        "suggestion": f"Use int({var}) or float({var}) for numeric operations",
-                        "original_expression": expression,
-                    })
-
-        return warnings
 
     def _is_arithmetic_expression(self, value: str) -> bool:
         """Check if a value contains an arithmetic expression that can't be used in VAR.
@@ -514,7 +454,6 @@ class TestBuilder:
                 },
                 "rf_text": rf_text,
                 "statistics": stats,
-                "optimization_applied": list(self.optimization_rules.keys()),
             }
             event_bus.publish_sync(
                 FrontendEvent(
@@ -2327,24 +2266,20 @@ class TestBuilder:
         # Find untracked variables (referenced but not defined)
         untracked = referenced_vars - defined_vars
 
-        # Generate warnings for each untracked variable
-        for var_name in sorted(untracked):
+        # Group warnings into a compact summary instead of per-variable verbose messages
+        if untracked:
             warnings.append({
-                "type": "untracked_variable",
-                "variable": var_name,
-                "message": (
-                    f"Variable '${{{var_name}}}' is used in test steps but not defined in "
-                    f"*** Variables *** section. If this variable was set via execute_step "
-                    f"(e.g., Set Variable, Set Suite Variable), consider using "
-                    f"manage_session(action='set_variables') instead to ensure the "
-                    f"generated test suite is complete and executable."
-                ),
+                "type": "untracked_variables",
+                "count": len(untracked),
+                "variables": sorted(untracked),
+                "fix": "manage_session(action='set_variables', variables={...})",
             })
 
         if warnings:
+            var_names = warnings[0].get("variables", []) if warnings else []
             logger.warning(
-                f"build_test_suite: Found {len(warnings)} untracked variable(s) in session "
-                f"{session_id}: {', '.join(w['variable'] for w in warnings)}"
+                f"build_test_suite: Found {len(var_names)} untracked variable(s) in session "
+                f"{session_id}: {', '.join(var_names)}"
             )
 
         return warnings

@@ -20,8 +20,11 @@ from .events import (
     ToolsRevealed,
 )
 from .value_objects import (
+    AutoProfileSelection,
     ModelTier,
     ProfileTransition,
+    SchemaMode,
+    SlimToolSchema,
     ToolDescriptionMode,
 )
 
@@ -102,6 +105,8 @@ class ToolProfileManager:
             "discovery": ProfilePresets.discovery(),
             "minimal_exec": ProfilePresets.minimal_exec(),
             "full": ProfilePresets.full(),
+            "desktop_exec": ProfilePresets.desktop_exec(),
+            "slim_exec": ProfilePresets.slim_exec(),
         }
 
     async def activate_profile(
@@ -375,6 +380,125 @@ class ToolProfileManager:
             Sorted list of profile names.
         """
         return sorted(self._profile_registry.keys())
+
+    def auto_select_profile(
+        self,
+        model_tier: ModelTier,
+        task_domain: str = "browser",
+    ) -> AutoProfileSelection:
+        """Automatically select a profile based on model tier and task domain (ADR-016).
+
+        Decision matrix:
+        - SMALL_7B -> slim_exec for all domains (most constrained)
+        - SMALL_CONTEXT -> domain-specific (browser_exec, api_exec, desktop_exec)
+        - MEDIUM_13B -> domain-specific with STANDARD schema mode
+        - STANDARD / LARGE_CONTEXT / HOSTED -> full profile
+
+        Args:
+            model_tier: The detected model capability tier.
+            task_domain: The task domain ("browser", "api", "desktop", etc.).
+
+        Returns:
+            AutoProfileSelection with recommendation details.
+        """
+        domain = task_domain.lower().strip()
+
+        if model_tier == ModelTier.SMALL_7B:
+            return AutoProfileSelection(
+                model_tier=model_tier,
+                task_domain=domain,
+                recommended_profile="slim_exec",
+                recommended_schema_mode=SchemaMode.MINIMAL,
+                recommended_instruction_template="slim_7b",
+                confidence=0.95,
+                rationale=(
+                    "7B models have limited context and tool-calling ability; "
+                    "slim_exec with MINIMAL schema maximizes usable context."
+                ),
+            )
+
+        if model_tier == ModelTier.SMALL_CONTEXT:
+            profile_map = {
+                "api": "api_exec",
+                "desktop": "desktop_exec",
+            }
+            profile = profile_map.get(domain, "browser_exec")
+            return AutoProfileSelection(
+                model_tier=model_tier,
+                task_domain=domain,
+                recommended_profile=profile,
+                recommended_schema_mode=SchemaMode.STANDARD,
+                recommended_instruction_template="small_context",
+                confidence=0.85,
+                rationale=(
+                    f"Small-context model matched to {profile} profile "
+                    f"with STANDARD schema for {domain} domain."
+                ),
+            )
+
+        if model_tier == ModelTier.MEDIUM_13B:
+            profile_map = {
+                "api": "api_exec",
+                "desktop": "desktop_exec",
+            }
+            profile = profile_map.get(domain, "browser_exec")
+            return AutoProfileSelection(
+                model_tier=model_tier,
+                task_domain=domain,
+                recommended_profile=profile,
+                recommended_schema_mode=SchemaMode.STANDARD,
+                recommended_instruction_template="medium_13b",
+                confidence=0.80,
+                rationale=(
+                    f"13B model has moderate capacity; {profile} profile "
+                    f"with STANDARD schema balances capability and context."
+                ),
+            )
+
+        # STANDARD, LARGE_CONTEXT, HOSTED -> full
+        return AutoProfileSelection(
+            model_tier=model_tier,
+            task_domain=domain,
+            recommended_profile="full",
+            recommended_schema_mode=SchemaMode.FULL,
+            recommended_instruction_template="full",
+            confidence=0.90,
+            rationale=(
+                f"Model tier {model_tier.value} has sufficient context "
+                f"for full profile with complete schemas."
+            ),
+        )
+
+    def generate_slim_schema(
+        self, tool_name: str
+    ) -> Optional[SlimToolSchema]:
+        """Generate a slim schema for a tool using its full schema (ADR-016).
+
+        Looks up the tool's full schema from the descriptor registry
+        and produces a MINIMAL-mode SlimToolSchema.
+
+        Args:
+            tool_name: The tool to generate a slim schema for.
+
+        Returns:
+            A SlimToolSchema, or None if the tool is not in the registry
+            or has no schema.
+        """
+        descriptor = self._descriptors.get(tool_name)
+        if descriptor is None:
+            logger.warning(f"No descriptor for tool '{tool_name}', cannot generate slim schema")
+            return None
+
+        full_schema = descriptor.schema_full
+        if not full_schema or not full_schema.get("properties"):
+            logger.debug(f"Tool '{tool_name}' has no properties in schema, skipping slim generation")
+            return None
+
+        return SlimToolSchema.from_full_schema(
+            tool_name=tool_name,
+            full_schema=full_schema,
+            mode=SchemaMode.MINIMAL,
+        )
 
     def _publish_event(self, event: object) -> None:
         """Publish a domain event.

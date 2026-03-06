@@ -50,7 +50,7 @@ async def test_api_session_keyword_available(mcp_client):
         "analyze_scenario",
         {"scenario": "Exercise API workflow", "context": "api"},
     )
-    session_id = analyze.data["session_info"]["session_id"]
+    session_id = analyze.data["session_id"]
 
     create_session = await mcp_client.call_tool(
         "execute_step",
@@ -96,7 +96,7 @@ async def test_database_library_initialization(mcp_client):
         "analyze_scenario",
         {"scenario": "Validate data warehouse", "context": "database"},
     )
-    session_id = analyze.data["session_info"]["session_id"]
+    session_id = analyze.data["session_id"]
 
     # Initialize DB session using SQLite (in-memory).
     connect = await mcp_client.call_tool(

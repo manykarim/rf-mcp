@@ -264,25 +264,83 @@ class AriaNodeIterator:
 
 
 class ModelTier(Enum):
-    """LLM context window capacity classification.
+    """LLM capability and context window classification.
 
     Used by Tool Profile (ADR-006) for profile selection and description mode,
     Response Optimization (ADR-008) for token budget allocation,
-    and Instruction context for template selection.
+    Instruction context for template selection,
+    and ADR-016 for ultra-slim profile auto-selection.
+
+    ADR-016 additions: SMALL_7B, MEDIUM_13B, HOSTED for capability-based tiers.
     """
+    SMALL_7B = "small_7b"
     SMALL_CONTEXT = "small_context"
+    MEDIUM_13B = "medium_13b"
     STANDARD = "standard"
     LARGE_CONTEXT = "large_context"
+    HOSTED = "hosted"
 
     @classmethod
     def from_context_window(cls, window_size: int) -> "ModelTier":
-        """Infer model tier from context window size in tokens."""
+        """Infer model tier from context window size in tokens.
+
+        Note: Returns only the original 3 tiers for backward compatibility.
+        Use from_model_name() for capability-based tier detection.
+        """
         if window_size <= 16384:
             return cls.SMALL_CONTEXT
         elif window_size <= 65536:
             return cls.STANDARD
         else:
             return cls.LARGE_CONTEXT
+
+    @classmethod
+    def from_model_name(cls, model_name: str) -> "ModelTier":
+        """Infer model tier from a model name string (ADR-016).
+
+        Heuristic pattern matching against common model naming conventions.
+        Falls back to STANDARD if no pattern matches.
+
+        Args:
+            model_name: Model identifier (e.g., "qwen2.5-7b-instruct")
+
+        Returns:
+            Detected ModelTier
+        """
+        name = model_name.lower().strip()
+
+        # Hosted API models
+        hosted_patterns = (
+            "claude", "gpt-4", "gpt-3.5", "o1-", "o3-",
+            "gemini-pro", "gemini-1.5", "gemini-2",
+        )
+        if any(p in name for p in hosted_patterns):
+            return cls.HOSTED
+
+        # Small hosted models (still capable but cost-optimized)
+        small_hosted = ("haiku", "flash", "mini", "nano", "gpt-4o-mini")
+        if any(p in name for p in small_hosted):
+            return cls.HOSTED
+
+        # Extract parameter count
+        param_match = re.search(r"(\d+\.?\d*)\s*[bB]", name)
+        if param_match:
+            param_b = float(param_match.group(1))
+            if param_b <= 9:
+                return cls.SMALL_7B
+            elif param_b <= 15:
+                return cls.MEDIUM_13B
+            elif param_b <= 35:
+                return cls.STANDARD
+            else:
+                return cls.LARGE_CONTEXT
+
+        # Known small model families without explicit param count
+        small_families = ("phi-3", "phi-2", "glm-4.5-air", "qwen2.5-coder")
+        if any(f in name for f in small_families):
+            return cls.SMALL_7B
+
+        return cls.STANDARD
 
 
 # ============================================================
@@ -323,12 +381,18 @@ TestStatus = Annotated[
 ]
 
 ToolProfileName = Annotated[
-    Literal["browser_exec", "api_exec", "discovery", "minimal_exec", "full"],
+    Literal[
+        "browser_exec", "api_exec", "discovery", "minimal_exec",
+        "desktop_exec", "slim_exec", "full",
+    ],
     BeforeValidator(_normalize_str),
 ]
 
 ModelTierLiteral = Annotated[
-    Literal["small_context", "standard", "large_context"],
+    Literal[
+        "small_7b", "small_context", "medium_13b",
+        "standard", "large_context", "hosted",
+    ],
     BeforeValidator(_normalize_str),
 ]
 

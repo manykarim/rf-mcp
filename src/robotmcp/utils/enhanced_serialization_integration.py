@@ -95,14 +95,6 @@ def patch_keyword_executor_response_formatting(keyword_executor: Any) -> None:
                 )
 
         elif detail_level == "standard":
-            # DUAL STORAGE: Keep ORIGINAL objects in session for RF, serialize ONLY for MCP response
-            # For consistency in test expectations, use "minimal" detail for session variables
-            # even though we're in "standard" detail level
-            session_vars_for_response = serialize_variables_with_detail_level(
-                session.variables,
-                "minimal",  # Force minimal mode for session variables
-            )
-
             # Serialize output for standard detail level
             raw_output = result.get("output", "")
             serialized_output = serialize_with_detail_level(raw_output, detail_level)
@@ -110,7 +102,6 @@ def patch_keyword_executor_response_formatting(keyword_executor: Any) -> None:
             base_response.update(
                 {
                     "output": serialized_output,
-                    "session_variables": session_vars_for_response,  # Serialized for MCP response only
                     "active_library": session.get_active_library(),
                 }
             )
@@ -180,12 +171,8 @@ def patch_keyword_executor_response_formatting(keyword_executor: Any) -> None:
 
         return base_response
 
-    # Replace the original method with our patched version
-    keyword_executor._build_execution_response = (
-        patched_build_execution_response.__get__(
-            keyword_executor, type(keyword_executor)
-        )
-    )
+    # Replace the response serializer with the enhanced one that supports detail_level
+    keyword_executor.response_serializer = _enhanced_serializer
 
     logger.info(
         "KeywordExecutor response formatting patched with enhanced serialization"

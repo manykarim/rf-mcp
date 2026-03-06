@@ -13,6 +13,7 @@ from typing import Dict, FrozenSet, List, Optional
 from .value_objects import (
     ModelTier,
     ProfileTransition,
+    SchemaMode,
     TokenBudget,
     ToolDescriptionMode,
     ToolTag,
@@ -50,14 +51,15 @@ class ToolProfile:
     token_budget: Optional[TokenBudget] = None
     tags: FrozenSet[ToolTag] = field(default_factory=frozenset)
     description: str = ""
+    schema_mode: SchemaMode = SchemaMode.FULL
 
     def __post_init__(self) -> None:
         """Validate invariants on creation."""
         if not self.tool_names:
             raise ValueError("ToolProfile must contain at least one tool")
-        if self.model_tier == ModelTier.SMALL_CONTEXT and self.token_budget is None:
+        if self.model_tier in (ModelTier.SMALL_CONTEXT, ModelTier.SMALL_7B) and self.token_budget is None:
             raise ValueError(
-                "SMALL_CONTEXT profiles require an explicit token_budget"
+                f"{self.model_tier.value.upper()} profiles require an explicit token_budget"
             )
 
     @property
@@ -93,6 +95,7 @@ class ToolProfile:
             token_budget=self.token_budget,
             tags=self.tags,
             description=self.description,
+            schema_mode=self.schema_mode,
         )
 
     def without_tool(self, tool_name: str) -> "ToolProfile":
@@ -118,6 +121,7 @@ class ToolProfile:
             token_budget=self.token_budget,
             tags=self.tags,
             description=self.description,
+            schema_mode=self.schema_mode,
         )
 
     def estimate_token_cost(
@@ -169,7 +173,7 @@ class ProfilePresets:
     profiles and full description mode for the full profile.
     """
 
-    # --- 16 enabled tools in the current server ---
+    # --- 17 enabled tools in the current server ---
     ALL_TOOLS: FrozenSet[str] = frozenset({
         "manage_session", "execute_step", "execute_flow",
         "get_session_state", "find_keywords", "get_keyword_info",
@@ -177,7 +181,7 @@ class ProfilePresets:
         "check_library_availability", "build_test_suite",
         "run_test_suite", "get_locator_guidance",
         "set_library_search_order", "manage_library_plugins",
-        "manage_attach", "intent_action",
+        "manage_attach", "intent_action", "execute_batch",
     })
 
     @classmethod
@@ -272,4 +276,45 @@ class ProfilePresets:
                 ToolTag.ADVANCED, ToolTag.REPORTING,
             }),
             description="Full tool set for large-context LLMs (32K+)",
+        )
+
+    @classmethod
+    def desktop_exec(cls) -> ToolProfile:
+        """5-tool profile for desktop automation on small-context models.
+
+        Estimated ~1,400 tokens (compact descriptions).
+        """
+        return ToolProfile(
+            name="desktop_exec",
+            tool_names=frozenset({
+                "manage_session", "execute_step",
+                "get_session_state", "find_keywords",
+                "intent_action",
+            }),
+            description_mode=ToolDescriptionMode.COMPACT,
+            model_tier=ModelTier.SMALL_CONTEXT,
+            token_budget=TokenBudget.for_context_window(8192),
+            tags=frozenset({ToolTag.CORE, ToolTag.EXECUTION}),
+            description="Desktop test execution for small-context LLMs",
+        )
+
+    @classmethod
+    def slim_exec(cls) -> ToolProfile:
+        """4-tool ultra-slim profile for 7B parameter models (ADR-016).
+
+        Uses MINIMAL description mode and MINIMAL schema mode to
+        minimize token overhead. Targets ~600 tokens for tool definitions.
+        """
+        return ToolProfile(
+            name="slim_exec",
+            tool_names=frozenset({
+                "manage_session", "intent_action",
+                "execute_batch", "get_session_state",
+            }),
+            description_mode=ToolDescriptionMode.MINIMAL,
+            schema_mode=SchemaMode.MINIMAL,
+            model_tier=ModelTier.SMALL_7B,
+            token_budget=TokenBudget.for_context_window(8192),
+            tags=frozenset({ToolTag.CORE, ToolTag.EXECUTION}),
+            description="Ultra-slim profile for 7B models (ADR-016)",
         )
