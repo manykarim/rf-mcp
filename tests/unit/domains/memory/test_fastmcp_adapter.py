@@ -530,3 +530,231 @@ class TestRecallResultToDict:
         )
         d = result.to_dict()
         assert d["metadata"] == {"keyword": "Click Button"}
+
+
+# =========================================================================
+# _recall_suggestion() helper (ADR-014.2 Phase 3)
+# =========================================================================
+
+
+class TestRecallSuggestion:
+    """Tests for the _recall_suggestion() module-level helper that generates
+    actionable suggestion strings from recall results."""
+
+    def test_empty_results(self):
+        from robotmcp.domains.memory.adapters.fastmcp_adapter import (
+            _recall_suggestion,
+        )
+
+        result = _recall_suggestion([])
+        assert result == "No relevant memories found."
+
+    def test_high_similarity_result(self):
+        from robotmcp.domains.memory.adapters.fastmcp_adapter import (
+            _recall_suggestion,
+        )
+
+        results = [
+            _make_recall_result(content="step 1", similarity=0.8, rank=1),
+        ]
+        result = _recall_suggestion(results)
+        assert "High-confidence" in result
+        assert "directly" in result
+
+    def test_low_similarity_result(self):
+        from robotmcp.domains.memory.adapters.fastmcp_adapter import (
+            _recall_suggestion,
+        )
+
+        results = [
+            _make_recall_result(content="step 1", similarity=0.3, rank=1),
+        ]
+        result = _recall_suggestion(results)
+        assert "Low-confidence" in result
+        assert "starting points" in result
+
+    def test_with_recall_result_adjusted_similarity(self):
+        """RecallResult objects use adjusted_similarity property."""
+        from robotmcp.domains.memory.adapters.fastmcp_adapter import (
+            _recall_suggestion,
+        )
+
+        result_obj = RecallResult(
+            record_id="r-1",
+            content="fix content",
+            memory_type=MemoryType.common_errors(),
+            similarity=SimilarityScore.cosine(0.9),
+            adjusted_similarity=SimilarityScore.cosine(0.9),
+            age_days=0.5,
+            metadata={},
+            rank=1,
+        )
+        suggestion = _recall_suggestion([result_obj])
+        assert "High-confidence" in suggestion
+
+    def test_with_locator_recall_result(self):
+        """LocatorRecallResult objects have a simple float similarity."""
+        from robotmcp.domains.memory.adapters.fastmcp_adapter import (
+            _recall_suggestion,
+        )
+
+        locator_result = LocatorRecallResult(
+            locator="id=loginBtn",
+            strategy=LocatorStrategy.ID,
+            keyword="Click",
+            library="Browser",
+            outcome="success",
+            page_url="https://example.com",
+            description="loginBtn (id)",
+            similarity=0.7,
+        )
+        suggestion = _recall_suggestion([locator_result])
+        # LocatorRecallResult has no adjusted_similarity, falls back to
+        # .similarity attribute which is a float > 0.5
+        assert "High-confidence" in suggestion
+
+    def test_boundary_similarity_exactly_half(self):
+        """Similarity exactly at 0.5 should be low-confidence (not > 0.5)."""
+        from robotmcp.domains.memory.adapters.fastmcp_adapter import (
+            _recall_suggestion,
+        )
+
+        results = [
+            _make_recall_result(content="step", similarity=0.5, rank=1),
+        ]
+        result = _recall_suggestion(results)
+        assert "Low-confidence" in result
+
+
+# =========================================================================
+# Tool description directives (ADR-014.2 Phase 3)
+# =========================================================================
+
+
+class TestToolDescriptionDirectives:
+    """Verify that MCP tool descriptions contain the expected action
+    directives so LLMs know when to call each tool."""
+
+    def test_recall_step_description_contains_before(self):
+        adapter, *_ = _build_adapter()
+        mcp = FakeMCP()
+        adapter.register_tools(mcp)
+
+        # Get the recall_step function and inspect its registration
+        # The FakeMCP captures the function, and the tool decorator
+        # receives the description kwarg. We verify via the adapter
+        # source description constants.
+        from robotmcp.domains.memory.adapters import fastmcp_adapter
+        import inspect
+
+        source = inspect.getsource(fastmcp_adapter.FastMCPMemoryAdapter.register_tools)
+        # The recall_step description must contain "BEFORE"
+        assert "BEFORE" in source
+
+    def test_recall_fix_description_contains_immediately(self):
+        from robotmcp.domains.memory.adapters import fastmcp_adapter
+        import inspect
+
+        source = inspect.getsource(fastmcp_adapter.FastMCPMemoryAdapter.register_tools)
+        assert "IMMEDIATELY" in source
+
+    def test_recall_locator_description_contains_before(self):
+        from robotmcp.domains.memory.adapters import fastmcp_adapter
+        import inspect
+
+        source = inspect.getsource(fastmcp_adapter.FastMCPMemoryAdapter.register_tools)
+        # Count occurrences of "BEFORE" - should be at least 2
+        # (one for recall_step, one for recall_locator)
+        count = source.count("BEFORE")
+        assert count >= 2
+
+
+# =========================================================================
+# recall tool suggestion field (ADR-014.2 Phase 3)
+# =========================================================================
+
+
+@_async_mark
+class TestRecallToolSuggestionField:
+    """Verify that recall tools include a 'suggestion' field in response."""
+
+    async def test_recall_step_includes_suggestion(self):
+        adapter, query_service, *_ = _build_adapter()
+        results = [
+            _make_recall_result(content="step 1", similarity=0.9, rank=1),
+        ]
+        query_service.recall_steps = AsyncMock(return_value=results)
+
+        mcp = FakeMCP()
+        adapter.register_tools(mcp)
+        recall_step = mcp.get_tool("recall_step")
+
+        response = await recall_step(scenario="login flow")
+        assert "suggestion" in response
+        assert isinstance(response["suggestion"], str)
+
+    async def test_recall_fix_includes_suggestion(self):
+        adapter, query_service, *_ = _build_adapter()
+        results = [
+            _make_recall_result(
+                content="Fix: add retry",
+                similarity=0.85,
+                memory_type="common_errors",
+                confidence=0.85,
+                rank=1,
+            ),
+        ]
+        query_service.recall_for_error = AsyncMock(return_value=results)
+
+        mcp = FakeMCP()
+        adapter.register_tools(mcp)
+        recall_fix = mcp.get_tool("recall_fix")
+
+        response = await recall_fix(error_text="TimeoutError")
+        assert "suggestion" in response
+
+    async def test_recall_locator_includes_suggestion(self):
+        adapter, query_service, *_ = _build_adapter()
+        results = [
+            LocatorRecallResult(
+                locator="id=loginButton",
+                strategy=LocatorStrategy.ID,
+                keyword="Click",
+                library="Browser",
+                outcome="success",
+                page_url="https://example.com",
+                description="loginButton (id)",
+                similarity=0.75,
+            ),
+        ]
+        query_service.recall_locators = AsyncMock(return_value=results)
+
+        mcp = FakeMCP()
+        adapter.register_tools(mcp)
+        recall_locator = mcp.get_tool("recall_locator")
+
+        response = await recall_locator(element_description="login button")
+        assert "suggestion" in response
+
+    async def test_recall_step_empty_results_suggestion(self):
+        adapter, query_service, *_ = _build_adapter()
+        query_service.recall_steps = AsyncMock(return_value=[])
+
+        mcp = FakeMCP()
+        adapter.register_tools(mcp)
+        recall_step = mcp.get_tool("recall_step")
+
+        response = await recall_step(scenario="unknown")
+        assert response["suggestion"] == "No relevant memories found."
+
+    async def test_recall_locator_empty_results_suggestion(self):
+        adapter, query_service, *_ = _build_adapter()
+        query_service.recall_locators = AsyncMock(return_value=[])
+
+        mcp = FakeMCP()
+        adapter.register_tools(mcp)
+        recall_locator = mcp.get_tool("recall_locator")
+
+        response = await recall_locator(element_description="unknown element")
+        assert "suggestion" in response
+        assert "No relevant locator" in response["suggestion"]

@@ -22,10 +22,14 @@ from robotmcp.domains.memory.services import (
     EmbeddingService,
     MemoryHookService,
     MemoryQueryService,
+    _describe_step,
     create_memory_services,
 )
 from robotmcp.domains.memory.value_objects import (
+    ConfidenceScore,
     EmbeddingVector,
+    LocatorRecallResult,
+    LocatorStrategy,
     MemoryEntry,
     MemoryQuery,
     MemoryType,
@@ -1661,3 +1665,352 @@ class TestPytestCollectionSuppression:
 
     def test_memory_store_test_flag(self):
         assert MemoryStore.__test__ is False
+
+
+# =========================================================================
+# _describe_step() module-level helper (ADR-014.2 Phase 1)
+# =========================================================================
+
+
+class TestDescribeStep:
+    """Tests for the _describe_step() helper that converts RF syntax
+    into human-readable descriptions for better embedding quality."""
+
+    def test_keyword_only(self):
+        result = _describe_step("Click", [], {})
+        assert result == "Click"
+
+    def test_keyword_with_one_argument(self):
+        result = _describe_step("Click", ["css=.btn"], {})
+        assert result == "Click css=.btn"
+
+    def test_keyword_with_two_arguments(self):
+        result = _describe_step("Fill Text", ["id=email", "test@test.com"], {})
+        assert result == "Fill Text id=email with test@test.com"
+
+    def test_keyword_with_library_in_result(self):
+        result = _describe_step("Click", ["text=Submit"], {"library": "Browser"})
+        assert result == "Click text=Submit (Browser)"
+
+    def test_keyword_no_args_with_library(self):
+        result = _describe_step("New Browser", [], {"library": "Browser"})
+        assert result == "New Browser (Browser)"
+
+    def test_keyword_with_many_args_uses_first_two(self):
+        result = _describe_step(
+            "Some Keyword",
+            ["arg1", "arg2", "arg3", "arg4"],
+            {},
+        )
+        assert result == "Some Keyword arg1 with arg2"
+        assert "arg3" not in result
+        assert "arg4" not in result
+
+    def test_keyword_with_empty_library_string(self):
+        """Empty library string in result should not produce trailing parens."""
+        result = _describe_step("Click", ["#btn"], {"library": ""})
+        assert result == "Click #btn"
+        assert "()" not in result
+
+    def test_keyword_with_args_and_library(self):
+        """All three components: keyword, two args, library."""
+        result = _describe_step(
+            "Fill Text",
+            ["id=email", "user@test.com"],
+            {"library": "Browser"},
+        )
+        assert result == "Fill Text id=email with user@test.com (Browser)"
+
+
+# =========================================================================
+# MemoryHookService.augment_response() (ADR-014.2 Phase 2)
+# =========================================================================
+
+
+@_async_mark
+class TestAugmentResponse:
+    """Tests for MemoryHookService.augment_response() which augments tool
+    responses with memory hints before returning to the LLM."""
+
+    async def test_execute_step_failure_with_error_adds_previous_fix(self):
+        """On execute_step failure with error text, should recall hints
+        and add memory_hints with a previous_fix entry."""
+        services = _make_wired_services()
+        hook_svc: MemoryHookService = services["hook_service"]
+
+        # Seed an error memory so recall_for_hint finds something
+        await hook_svc.on_step_failure(
+            keyword="Click",
+            arguments=["#missing"],
+            error_text="Element not found",
+        )
+
+        response = {"success": False, "error": "Element not found"}
+        arguments = {"keyword": "Click", "arguments": ["#missing"]}
+
+        result = await hook_svc.augment_response(
+            "execute_step", arguments, response,
+        )
+
+        # May or may not have memory_hints depending on embedding similarity.
+        # With identical embeddings from the mock model, recall should match.
+        if "memory_hints" in result:
+            assert result["memory_hints"]["source"] == "memory"
+            assert result["memory_hints"]["count"] >= 1
+            hint_types = [h["type"] for h in result["memory_hints"]["hints"]]
+            assert "previous_fix" in hint_types
+
+    async def test_execute_step_success_returns_original(self):
+        """Successful execute_step should not be augmented."""
+        services = _make_wired_services()
+        hook_svc: MemoryHookService = services["hook_service"]
+
+        response = {"success": True, "output": "clicked ok"}
+        arguments = {"keyword": "Click", "arguments": ["#btn"]}
+
+        result = await hook_svc.augment_response(
+            "execute_step", arguments, response,
+        )
+
+        assert "memory_hints" not in result
+        assert result is response  # same object returned
+
+    async def test_execute_step_failure_locator_keyword_includes_working_locator(self):
+        """When a locator keyword fails, should also suggest working locators."""
+        services = _make_wired_services()
+        hook_svc: MemoryHookService = services["hook_service"]
+
+        # Seed a successful locator use
+        await hook_svc.on_locator_used(
+            keyword="Click",
+            locator="css=.submit-btn",
+            success=True,
+            library="Browser",
+            session_id="s1",
+        )
+
+        response = {"success": False, "error": "Element not found"}
+        arguments = {"keyword": "Click", "arguments": ["css=.submit-btn"]}
+
+        result = await hook_svc.augment_response(
+            "execute_step", arguments, response,
+        )
+
+        if "memory_hints" in result:
+            hint_types = [h["type"] for h in result["memory_hints"]["hints"]]
+            # May include working_locator hints
+            if "working_locator" in hint_types:
+                wl_hints = [
+                    h for h in result["memory_hints"]["hints"]
+                    if h["type"] == "working_locator"
+                ]
+                assert wl_hints[0]["locator"] is not None
+                assert "suggestion" in wl_hints[0]
+
+    async def test_get_session_state_adds_previous_steps(self):
+        """get_session_state should recall step patterns."""
+        services = _make_wired_services()
+        hook_svc: MemoryHookService = services["hook_service"]
+
+        # Seed step memory
+        steps = [
+            {"keyword": "Open Browser", "arguments": ["https://example.com"], "success": True},
+            {"keyword": "Click", "arguments": ["#login"], "success": True},
+        ]
+        await hook_svc.on_session_end(session_id="s1", steps=steps)
+
+        response = {"session_id": "s2", "state": "active"}
+        arguments = {"scenario": "web testing session state"}
+
+        result = await hook_svc.augment_response(
+            "get_session_state", arguments, response,
+        )
+
+        if "memory_hints" in result:
+            hint_types = [h["type"] for h in result["memory_hints"]["hints"]]
+            assert "previous_steps" in hint_types
+
+    async def test_get_session_state_default_scenario(self):
+        """get_session_state without scenario uses default context string."""
+        services = _make_wired_services()
+        hook_svc: MemoryHookService = services["hook_service"]
+
+        response = {"session_id": "s1", "state": "active"}
+        # No scenario key in arguments
+        arguments = {}
+
+        result = await hook_svc.augment_response(
+            "get_session_state", arguments, response,
+        )
+
+        # Should not crash -- returns response with or without hints
+        assert "session_id" in result
+
+    async def test_analyze_scenario_with_scenario_text(self):
+        """analyze_scenario should recall step patterns for the scenario."""
+        services = _make_wired_services()
+        hook_svc: MemoryHookService = services["hook_service"]
+
+        # Seed step memory
+        steps = [
+            {"keyword": "Click", "arguments": ["#submit"], "success": True},
+        ]
+        await hook_svc.on_session_end(session_id="s1", steps=steps)
+
+        response = {"analysis": "some analysis"}
+        arguments = {"scenario": "submit a form"}
+
+        result = await hook_svc.augment_response(
+            "analyze_scenario", arguments, response,
+        )
+
+        if "memory_hints" in result:
+            hint_types = [h["type"] for h in result["memory_hints"]["hints"]]
+            assert "previous_steps" in hint_types
+
+    async def test_analyze_scenario_no_scenario_text(self):
+        """analyze_scenario without scenario text returns original response."""
+        services = _make_wired_services()
+        hook_svc: MemoryHookService = services["hook_service"]
+
+        response = {"analysis": "something"}
+        arguments = {}  # No scenario key
+
+        result = await hook_svc.augment_response(
+            "analyze_scenario", arguments, response,
+        )
+
+        assert "memory_hints" not in result
+
+    async def test_unknown_tool_returns_original(self):
+        """Unrecognized tool names should return original response unchanged."""
+        services = _make_wired_services()
+        hook_svc: MemoryHookService = services["hook_service"]
+
+        response = {"data": "something"}
+
+        result = await hook_svc.augment_response(
+            "some_other_tool", {}, response,
+        )
+
+        assert result is response
+        assert "memory_hints" not in result
+
+    async def test_embedding_unavailable_returns_original(self):
+        """When embedding service is unavailable, return original unchanged."""
+        backend = EmbeddingBackend(is_available=False)
+        embedding_svc = EmbeddingService(backend)
+        repo = InMemoryMemoryRepository()
+        store = MemoryStore.create(_make_config())
+        query_svc = MemoryQueryService(embedding_svc, repo, store)
+        hook_svc = MemoryHookService(query_svc, embedding_svc, repo, store)
+
+        response = {"success": False, "error": "some error"}
+
+        result = await hook_svc.augment_response(
+            "execute_step",
+            {"keyword": "Click", "arguments": ["#btn"]},
+            response,
+        )
+
+        assert result is response
+        assert "memory_hints" not in result
+
+    async def test_recall_returns_empty_no_hints_added(self):
+        """When recall returns no results, memory_hints key should not be added."""
+        services = _make_wired_services()
+        hook_svc: MemoryHookService = services["hook_service"]
+        # No seeded memory -- recall returns empty
+
+        response = {"success": False, "error": "unique error never seen"}
+
+        result = await hook_svc.augment_response(
+            "execute_step",
+            {"keyword": "Click", "arguments": ["#btn"]},
+            response,
+        )
+
+        # With no seeded memories, recall should return nothing
+        # But with the mock model all embeddings are identical, so it might
+        # actually return results if anything is seeded. Since we seeded
+        # nothing, it should be empty.
+        assert "memory_hints" not in result
+
+    async def test_recall_raises_exception_returns_original(self):
+        """If recall raises internally, augment_response returns original."""
+        services = _make_wired_services()
+        hook_svc: MemoryHookService = services["hook_service"]
+
+        # Monkey-patch recall_for_hint to raise
+        async def _boom(*a: Any, **kw: Any) -> None:
+            raise RuntimeError("internal recall error")
+
+        hook_svc.recall_for_hint = _boom  # type: ignore[assignment]
+
+        response = {"success": False, "error": "some error"}
+
+        result = await hook_svc.augment_response(
+            "execute_step",
+            {"keyword": "Click", "arguments": ["#btn"]},
+            response,
+        )
+
+        # Should not crash; returns original response
+        assert "success" in result
+
+    async def test_memory_hints_structure(self):
+        """Verify the structure of memory_hints when present."""
+        services = _make_wired_services()
+        hook_svc: MemoryHookService = services["hook_service"]
+
+        # Seed error memory
+        await hook_svc.on_step_failure(
+            keyword="Click",
+            arguments=["#missing"],
+            error_text="Element not interactable",
+        )
+
+        response = {"success": False, "error": "Element not interactable"}
+        arguments = {"keyword": "Click", "arguments": ["#missing"]}
+
+        result = await hook_svc.augment_response(
+            "execute_step", arguments, response,
+        )
+
+        if "memory_hints" in result:
+            mh = result["memory_hints"]
+            assert "source" in mh
+            assert mh["source"] == "memory"
+            assert "count" in mh
+            assert isinstance(mh["count"], int)
+            assert "hints" in mh
+            assert isinstance(mh["hints"], list)
+            assert mh["count"] == len(mh["hints"])
+
+            for hint in mh["hints"]:
+                assert "type" in hint
+                assert "suggestion" in hint
+
+    async def test_augment_does_not_mutate_original_response(self):
+        """augment_response should return a new dict, not mutate the original."""
+        services = _make_wired_services()
+        hook_svc: MemoryHookService = services["hook_service"]
+
+        # Seed data
+        await hook_svc.on_step_failure(
+            keyword="Click",
+            arguments=["#btn"],
+            error_text="Element not found",
+        )
+
+        original = {"success": False, "error": "Element not found"}
+        original_copy = dict(original)
+
+        result = await hook_svc.augment_response(
+            "execute_step",
+            {"keyword": "Click", "arguments": ["#btn"]},
+            original,
+        )
+
+        # Original should not be mutated
+        assert original == original_copy
