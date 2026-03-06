@@ -766,7 +766,7 @@ class TestMemoryQuery:
         mq = MemoryQuery.for_step_recall("login to the website")
         assert mq.memory_type == MemoryType.working_steps()
         assert mq.top_k == 10
-        assert mq.min_similarity == 0.15
+        assert mq.min_similarity == 0.05
 
     # -- Frozen --------------------------------------------------------------
 
