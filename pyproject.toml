@@ -29,6 +29,7 @@ mobile = ["robotframework-appiumlibrary"]
 api = ["robotframework-requests"]
 database = ["robotframework-databaselibrary"]
 memory = ["sqlite-vec>=0.1.6", "model2vec>=0.4.0"]
+tokens = ["tiktoken>=0.7.0"]
 all = [
     "robotframework-browser",
     "robotframework-seleniumlibrary",
@@ -39,6 +40,7 @@ all = [
     "uvicorn[standard]>=0.24",
     "sqlite-vec>=0.1.6",
     "model2vec>=0.4.0",
+    "tiktoken>=0.7.0",
 ]
 dev = [
     "pytest>=7.0.0",

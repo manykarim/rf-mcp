@@ -1,0 +1,11 @@
+{
+  "baselines": {
+    "full": 233,
+    "browser_exec": 118,
+    "slim_exec": 110
+  },
+  "meta": {
+    "version": 1,
+    "updated": "2026-03-06T10:34:52.795260"
+  }
+}

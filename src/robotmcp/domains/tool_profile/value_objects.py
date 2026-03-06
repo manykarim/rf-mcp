@@ -9,9 +9,10 @@ domains/shared/kernel.py and domains/instruction/value_objects.py.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from enum import Enum
-from typing import ClassVar, FrozenSet
+from typing import Any, ClassVar, Dict, FrozenSet, Tuple
 
 # Re-export ModelTier from shared kernel (canonical definition)
 from ..shared.kernel import ModelTier
@@ -22,6 +23,9 @@ __all__ = [
     "ToolTag",
     "TokenBudget",
     "ProfileTransition",
+    "SchemaMode",
+    "SlimToolSchema",
+    "AutoProfileSelection",
 ]
 
 
@@ -199,3 +203,189 @@ class ProfileTransition:
             raise ValueError(
                 "Transition to the same profile is only valid for escalation"
             )
+
+
+class SchemaMode(Enum):
+    """Controls JSON Schema structural complexity (ADR-016).
+
+    FULL: Complete schema with all properties, descriptions, unions
+    STANDARD: All properties kept, property descriptions removed
+    MINIMAL: Only required properties, no descriptions, unions flattened
+    """
+    FULL = "full"
+    STANDARD = "standard"
+    MINIMAL = "minimal"
+
+    @property
+    def strips_optional_fields(self) -> bool:
+        """Whether optional (non-required) properties should be removed."""
+        return self == SchemaMode.MINIMAL
+
+    @property
+    def strips_property_descriptions(self) -> bool:
+        """Whether per-property descriptions should be removed."""
+        return self in (SchemaMode.STANDARD, SchemaMode.MINIMAL)
+
+    @property
+    def flattens_unions(self) -> bool:
+        """Whether anyOf/oneOf unions should be flattened to first variant."""
+        return self == SchemaMode.MINIMAL
+
+
+@dataclass(frozen=True)
+class SlimToolSchema:
+    """Structurally reduced JSON Schema for small models (ADR-016).
+
+    Produces a simplified schema from a full JSON Schema by removing
+    optional properties, stripping descriptions, and flattening unions
+    based on the specified SchemaMode.
+
+    Attributes:
+        tool_name: The tool this schema belongs to.
+        properties: Reduced property definitions.
+        required: Tuple of required property names.
+        schema_mode: The mode used to produce this schema.
+        token_estimate: Estimated token cost of the reduced schema.
+    """
+    tool_name: str
+    properties: Dict[str, Any]
+    required: Tuple[str, ...]
+    schema_mode: SchemaMode
+    token_estimate: int
+
+    def __post_init__(self) -> None:
+        """Validate that schema has at least one property."""
+        if not self.properties:
+            raise ValueError("Schema must have at least one property")
+
+    @classmethod
+    def from_full_schema(
+        cls,
+        tool_name: str,
+        full_schema: Dict[str, Any],
+        mode: SchemaMode = SchemaMode.MINIMAL,
+    ) -> "SlimToolSchema":
+        """Create a slim schema from a full JSON Schema.
+
+        Applies transformations based on the schema mode:
+        - FULL: No changes (identity transform).
+        - STANDARD: Remove per-property descriptions.
+        - MINIMAL: Remove optional properties, descriptions, flatten unions.
+
+        If removing optional properties would leave zero properties, the
+        first property from the original schema is preserved.
+
+        Args:
+            tool_name: The tool name.
+            full_schema: The full JSON Schema dict.
+            mode: The schema simplification mode.
+
+        Returns:
+            A SlimToolSchema with the reduced properties.
+        """
+        props = dict(full_schema.get("properties", {}))
+        required = list(full_schema.get("required", []))
+
+        # Strip optional (non-required) properties in MINIMAL mode
+        if mode.strips_optional_fields:
+            props = {k: v for k, v in props.items() if k in required}
+
+        # Strip per-property descriptions in STANDARD and MINIMAL modes
+        if mode.strips_property_descriptions:
+            props = {
+                k: (
+                    {kk: vv for kk, vv in v.items() if kk != "description"}
+                    if isinstance(v, dict)
+                    else v
+                )
+                for k, v in props.items()
+            }
+
+        # Flatten anyOf/oneOf unions in MINIMAL mode
+        if mode.flattens_unions:
+            for k, v in props.items():
+                if isinstance(v, dict):
+                    if "anyOf" in v:
+                        props[k] = v["anyOf"][0] if v["anyOf"] else {"type": "string"}
+                    elif "oneOf" in v:
+                        props[k] = v["oneOf"][0] if v["oneOf"] else {"type": "string"}
+
+        # Safety net: if all properties were removed, keep the first original one
+        if not props and full_schema.get("properties"):
+            first_key = next(iter(full_schema["properties"]))
+            props = {first_key: full_schema["properties"][first_key]}
+            required = [first_key]
+
+        # Estimate token cost from serialized schema size (4 chars ~ 1 token)
+        token_est = len(json.dumps(
+            {"type": "object", "properties": props, "required": required}
+        )) // 4
+
+        return cls(
+            tool_name=tool_name,
+            properties=props,
+            required=tuple(required),
+            schema_mode=mode,
+            token_estimate=token_est,
+        )
+
+    def to_schema(self) -> Dict[str, Any]:
+        """Convert back to a JSON Schema dict.
+
+        Returns:
+            A dict with type, properties, and required keys.
+        """
+        return {
+            "type": "object",
+            "properties": self.properties,
+            "required": list(self.required),
+        }
+
+
+@dataclass(frozen=True)
+class AutoProfileSelection:
+    """Result of automatic profile selection based on model tier and task domain (ADR-016).
+
+    Encapsulates the recommendation produced by the auto-selection
+    heuristic, including the selected profile, schema mode,
+    instruction template, and confidence level.
+
+    Attributes:
+        model_tier: The detected model capability tier.
+        task_domain: The task domain (e.g. "browser", "api", "desktop").
+        recommended_profile: Name of the recommended profile.
+        recommended_schema_mode: Schema mode for the profile.
+        recommended_instruction_template: Instruction template name.
+        confidence: Confidence in the recommendation (0.0 to 1.0).
+        rationale: Human-readable explanation.
+    """
+    model_tier: ModelTier
+    task_domain: str
+    recommended_profile: str
+    recommended_schema_mode: SchemaMode
+    recommended_instruction_template: str
+    confidence: float
+    rationale: str
+
+    def __post_init__(self) -> None:
+        """Validate confidence is within [0.0, 1.0]."""
+        if not (0.0 <= self.confidence <= 1.0):
+            raise ValueError(
+                f"confidence must be 0.0-1.0, got {self.confidence}"
+            )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to a serializable dictionary.
+
+        Returns:
+            Dict with all fields as primitive types.
+        """
+        return {
+            "tier": self.model_tier.value,
+            "domain": self.task_domain,
+            "profile": self.recommended_profile,
+            "schema_mode": self.recommended_schema_mode.value,
+            "template": self.recommended_instruction_template,
+            "confidence": self.confidence,
+            "rationale": self.rationale,
+        }

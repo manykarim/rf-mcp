@@ -63,11 +63,11 @@ _TYPE_ALIASES = {
     ),
     "ToolProfileName": (
         ToolProfileName,
-        ["browser_exec", "api_exec", "discovery", "minimal_exec", "full"],
+        ["browser_exec", "api_exec", "discovery", "minimal_exec", "desktop_exec", "slim_exec", "full"],
     ),
     "ModelTierLiteral": (
         ModelTierLiteral,
-        ["small_context", "standard", "large_context"],
+        ["small_context", "standard", "large_context", "small_7b", "medium_13b", "hosted"],
     ),
     "PluginAction": (
         PluginAction,
@@ -566,9 +566,9 @@ class TestFlowStructureSpecifics:
 class TestToolProfileNameSpecifics:
     """Targeted tests for ToolProfileName (ADR-006 profiles)."""
 
-    def test_all_5_profiles(self):
+    def test_all_7_profiles(self):
         ta = TypeAdapter(ToolProfileName)
-        profiles = ["browser_exec", "api_exec", "discovery", "minimal_exec", "full"]
+        profiles = ["browser_exec", "api_exec", "discovery", "minimal_exec", "desktop_exec", "slim_exec", "full"]
         for p in profiles:
             assert ta.validate_python(p) == p
 
@@ -589,9 +589,9 @@ class TestToolProfileNameSpecifics:
 class TestModelTierLiteralSpecifics:
     """Targeted tests for ModelTierLiteral."""
 
-    def test_all_3_tiers(self):
+    def test_all_6_tiers(self):
         ta = TypeAdapter(ModelTierLiteral)
-        for tier in ["small_context", "standard", "large_context"]:
+        for tier in ["small_context", "standard", "large_context", "small_7b", "medium_13b", "hosted"]:
             assert ta.validate_python(tier) == tier
 
     def test_optional_model_tier_none(self):

@@ -28,6 +28,13 @@ if TYPE_CHECKING:
     )
     from robotmcp.domains.recovery import RecoveryEngine
     from robotmcp.domains.batch_execution.services import BatchStateManager
+    from robotmcp.domains.token_accounting.services import TokenEstimationService
+    from robotmcp.domains.snapshot.delta_service import DeltaStateService
+    from robotmcp.domains.artifact_output.aggregates import ArtifactStore
+    from robotmcp.domains.artifact_output.services import (
+        ArtifactExternalizationService,
+        ArtifactRetrievalService,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +69,11 @@ class ServiceContainer:
     _page_analyzer: Optional["PageAnalyzer"] = field(default=None, repr=False)
     _recovery_engine: Optional["RecoveryEngine"] = field(default=None, repr=False)
     _batch_state_manager: Optional["BatchStateManager"] = field(default=None, repr=False)
+    _token_estimation_service: Optional["TokenEstimationService"] = field(default=None, repr=False)
+    _delta_state_service: Optional["DeltaStateService"] = field(default=None, repr=False)
+    _artifact_store: Optional["ArtifactStore"] = field(default=None, repr=False)
+    _artifact_externalization_service: Optional["ArtifactExternalizationService"] = field(default=None, repr=False)
+    _artifact_retrieval_service: Optional["ArtifactRetrievalService"] = field(default=None, repr=False)
 
     # Session-scoped registries
     _timeout_policies: Dict[str, "TimeoutPolicy"] = field(
@@ -121,6 +133,50 @@ class ServiceContainer:
             self._batch_state_manager = BatchStateManager()
         return self._batch_state_manager
 
+    @property
+    def token_estimation_service(self) -> "TokenEstimationService":
+        """Get the token estimation service (ADR-017)."""
+        if self._token_estimation_service is None:
+            from robotmcp.domains.token_accounting.services import TokenEstimationService
+            self._token_estimation_service = TokenEstimationService()
+        return self._token_estimation_service
+
+    @property
+    def delta_state_service(self) -> "DeltaStateService":
+        """Get the delta state service (ADR-018)."""
+        if self._delta_state_service is None:
+            from robotmcp.domains.snapshot.delta_service import DeltaStateService
+            self._delta_state_service = DeltaStateService()
+        return self._delta_state_service
+
+    @property
+    def artifact_store(self) -> "ArtifactStore":
+        """Get the artifact store (ADR-015)."""
+        if self._artifact_store is None:
+            from robotmcp.domains.artifact_output.aggregates import ArtifactStore
+            self._artifact_store = ArtifactStore.create()
+        return self._artifact_store
+
+    @property
+    def artifact_externalization_service(self) -> "ArtifactExternalizationService":
+        """Get the artifact externalization service (ADR-015)."""
+        if self._artifact_externalization_service is None:
+            from robotmcp.domains.artifact_output.services import ArtifactExternalizationService
+            self._artifact_externalization_service = ArtifactExternalizationService(
+                store=self.artifact_store
+            )
+        return self._artifact_externalization_service
+
+    @property
+    def artifact_retrieval_service(self) -> "ArtifactRetrievalService":
+        """Get the artifact retrieval service (ADR-015)."""
+        if self._artifact_retrieval_service is None:
+            from robotmcp.domains.artifact_output.services import ArtifactRetrievalService
+            self._artifact_retrieval_service = ArtifactRetrievalService(
+                store=self.artifact_store
+            )
+        return self._artifact_retrieval_service
+
     def get_timeout_policy(self, session_id: str) -> "TimeoutPolicy":
         """Get or create a timeout policy for a session.
 
@@ -164,6 +220,10 @@ class ServiceContainer:
         """
         self._timeout_policies.pop(session_id, None)
         self._snapshot_cache.pop(session_id, None)
+        if self._delta_state_service is not None:
+            self._delta_state_service.clear_session(session_id)
+        if self._artifact_store is not None:
+            self._artifact_store.cleanup_session(session_id)
         logger.debug(f"Cleared container data for session {session_id}")
 
     def get_compression_settings(self, page_type: str) -> Dict:

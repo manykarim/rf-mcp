@@ -71,8 +71,27 @@ class TestModelTier:
         assert ModelTier.STANDARD.value == "standard"
         assert ModelTier.LARGE_CONTEXT.value == "large_context"
 
-    def test_enum_has_exactly_3_members(self):
-        assert len(ModelTier) == 3
+    def test_enum_has_expected_members(self):
+        """ADR-016: ModelTier extended with SMALL_7B, MEDIUM_13B, HOSTED."""
+        assert len(ModelTier) == 6
+        assert ModelTier.SMALL_7B.value == "small_7b"
+        assert ModelTier.MEDIUM_13B.value == "medium_13b"
+        assert ModelTier.HOSTED.value == "hosted"
+
+    def test_from_model_name_7b(self):
+        assert ModelTier.from_model_name("qwen2.5-7b-instruct") == ModelTier.SMALL_7B
+        assert ModelTier.from_model_name("llama-3.1-8b") == ModelTier.SMALL_7B
+        assert ModelTier.from_model_name("mistral-7b-v0.1") == ModelTier.SMALL_7B
+
+    def test_from_model_name_13b(self):
+        assert ModelTier.from_model_name("llama-2-13b-chat") == ModelTier.MEDIUM_13B
+
+    def test_from_model_name_hosted(self):
+        assert ModelTier.from_model_name("claude-3-sonnet") == ModelTier.HOSTED
+        assert ModelTier.from_model_name("gpt-4o") == ModelTier.HOSTED
+
+    def test_from_model_name_fallback(self):
+        assert ModelTier.from_model_name("unknown-model") == ModelTier.STANDARD
 
 
 # =============================================================================

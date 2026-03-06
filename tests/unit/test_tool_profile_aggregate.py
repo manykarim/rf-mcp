@@ -324,9 +324,9 @@ class TestProfilePresets:
         p = ProfilePresets.minimal_exec()
         assert p.description_mode == ToolDescriptionMode.MINIMAL
 
-    def test_full_has_all_16_tools(self):
+    def test_full_has_all_17_tools(self):
         p = ProfilePresets.full()
-        assert p.tool_count == 16
+        assert p.tool_count == 17
 
     def test_full_tools_equal_all_tools(self):
         p = ProfilePresets.full()
@@ -338,8 +338,8 @@ class TestProfilePresets:
         assert p.model_tier == ModelTier.LARGE_CONTEXT
         assert p.token_budget is None
 
-    def test_all_tools_has_16_entries(self):
-        assert len(ProfilePresets.ALL_TOOLS) == 16
+    def test_all_tools_has_17_entries(self):
+        assert len(ProfilePresets.ALL_TOOLS) == 17
 
     def test_all_presets_have_unique_names(self):
         names = {
@@ -348,8 +348,10 @@ class TestProfilePresets:
             ProfilePresets.discovery().name,
             ProfilePresets.minimal_exec().name,
             ProfilePresets.full().name,
+            ProfilePresets.desktop_exec().name,
+            ProfilePresets.slim_exec().name,
         }
-        assert len(names) == 5
+        assert len(names) == 7
 
     def test_browser_exec_is_frozen(self):
         p = ProfilePresets.browser_exec()

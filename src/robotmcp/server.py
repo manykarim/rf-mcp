@@ -2353,6 +2353,8 @@ async def manage_session(
     model_tier: ModelTierLiteral | None = None,
     scenario: str | None = None,
     profile: ToolProfileName | None = None,
+    # ADR-016: Auto-detect model tier from model name
+    model_name: str | None = None,
 ) -> Dict[str, Any]:
     """Manage session lifecycle: initialize, configure libraries/variables, and organize tests.
 
@@ -2539,9 +2541,20 @@ async def manage_session(
             "next_step": f"Use session_id='{session_id}' in all subsequent tool calls.",
         }
 
-        # ── ADR-006: Auto-activate tool profile (params > env vars) ──
+        # ── ADR-006/ADR-016: Auto-activate tool profile (params > env vars) ──
         effective_profile = tool_profile or os.environ.get("ROBOTMCP_TOOL_PROFILE")
         effective_model_tier = model_tier or os.environ.get("ROBOTMCP_MODEL_TIER")
+        # ADR-016: Auto-detect tier from model_name when no explicit tier given
+        if not effective_model_tier and model_name:
+            try:
+                from robotmcp.domains.shared.kernel import ModelTier as _MT
+
+                detected_tier = _MT.from_model_name(model_name)
+                effective_model_tier = detected_tier.value
+                result["model_tier_detected"] = detected_tier.value
+                result["model_name"] = model_name
+            except Exception:
+                pass
         if effective_profile or effective_model_tier:
             if _tool_profile_manager is None:
                 try:
@@ -3111,6 +3124,8 @@ async def get_session_state(
     include_reduced_dom: bool = True,
     include_dom_stream: bool = False,
     dom_chunk_size: int = 65536,
+    mode: Literal["full", "delta", "none"] = "full",
+    since_version: int | None = None,
 ) -> Dict[str, Any]:
     """Retrieve aggregated session state for debugging and visibility.
 
@@ -3195,6 +3210,38 @@ async def get_session_state(
     if "rf_context" in requested or "context" in requested:
         rf_context = await _diagnose_rf_context_payload(session_id)
         payload["sections"]["rf_context"] = rf_context
+
+    # ADR-018: Delta-based state retrieval
+    if mode == "delta" and since_version is not None:
+        try:
+            from robotmcp.container import get_container
+
+            delta_svc = get_container().delta_state_service
+            delta, new_version = delta_svc.compute_delta(
+                session_id, since_version, payload.get("sections", {}), list(requested),
+            )
+            payload = {
+                "success": True,
+                "session_id": session_id,
+                "mode": "delta",
+                "state_version": new_version.version_number,
+                "delta": delta.to_dict(),
+            }
+        except Exception as e:
+            logger.debug(f"Delta computation failed, returning full state: {e}")
+            payload["mode"] = "full"
+    elif mode != "none":
+        # Record full state version for future deltas
+        try:
+            from robotmcp.container import get_container
+
+            delta_svc = get_container().delta_state_service
+            version = delta_svc.record_full_state(
+                session_id, payload.get("sections", {}), list(requested),
+            )
+            payload["state_version"] = version.version_number
+        except Exception:
+            pass  # Non-critical; don't fail the response
 
     # ADR-014.2: Augment get_session_state with memory hints
     payload = await _augment_with_memory(
@@ -6219,6 +6266,32 @@ async def get_session_keyword_documentation(
     return await _get_session_keyword_documentation_payload(session_id, keyword_name)
 
 
+@mcp.tool(**DISABLED_TOOL_KWARGS)
+async def fetch_artifact(
+    artifact_id: str,
+    offset: int = 0,
+    limit: int = 4000,
+) -> Dict[str, Any]:
+    """Retrieve externalized artifact content by ID.
+
+    When tool responses are large, rf-mcp externalizes them to artifacts and returns
+    a summary with an artifact_id. Use this tool to retrieve the full content.
+
+    Args:
+        artifact_id: The artifact identifier (format: art_{12 hex chars}).
+        offset: Starting character offset for pagination (default 0).
+        limit: Maximum characters to return (default 4000).
+
+    Returns:
+        Dict with success, content, offset, total_size, has_more.
+        On failure: error message with guidance to re-run the original tool.
+    """
+    from robotmcp.container import get_container
+
+    container = get_container()
+    return container.artifact_retrieval_service.fetch(artifact_id, offset, limit)
+
+
 class BridgeHealthMonitor:
     """Monitors bridge health with periodic heartbeats.
 
@@ -6412,6 +6485,7 @@ _DISABLED_TOOL_NAMES: frozenset[str] = frozenset({
     "discover_keywords",
     "evaluate_expression",
     "execute_for_each",
+    "fetch_artifact",
     "execute_if",
     "execute_try_except",
     "get_appium_locator_guidance",

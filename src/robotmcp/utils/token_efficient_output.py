@@ -556,8 +556,10 @@ def estimate_tokens(obj: Any) -> int:
     """
     Estimate the number of tokens in a JSON-serializable object.
 
-    This provides a rough estimate based on string lengths and structure.
-    Actual token counts may vary by model.
+    Delegates to TokenEstimationService (ADR-017) which supports pluggable
+    backends (heuristic, tiktoken cl100k_base/o200k_base) via the
+    ROBOTMCP_TOKENIZER env var. Falls back to heuristic (chars // 4)
+    when tiktoken is not installed.
 
     Args:
         obj: Object to estimate tokens for
@@ -565,14 +567,9 @@ def estimate_tokens(obj: Any) -> int:
     Returns:
         Estimated token count
     """
-    import json
+    from robotmcp.domains.token_accounting.services import get_estimation_service
 
-    try:
-        json_str = json.dumps(obj, default=str)
-        # Rough estimate: ~4 characters per token for JSON
-        return len(json_str) // 4
-    except Exception:
-        return len(str(obj)) // 4
+    return get_estimation_service().estimate_json(obj).count
 
 
 def token_budget_check(obj: Any, max_tokens: int = 4000) -> Dict[str, Any]:
