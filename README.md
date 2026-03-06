@@ -107,6 +107,7 @@ uv pip install rf-mcp[mobile]    # AppiumLibrary
 uv pip install rf-mcp[api]       # RequestsLibrary
 uv pip install rf-mcp[database]  # DatabaseLibrary
 uv pip install rf-mcp[frontend]  # Django-based web frontend dashboard
+uv pip install rf-mcp[memory]    # Persistent semantic memory (sqlite-vec + model2vec)
 uv pip install rf-mcp[all]       # All optional Robot Framework libraries
 
 # Alternatively, add to an existing uv project
@@ -131,6 +132,7 @@ pip install rf-mcp[mobile]    # AppiumLibrary
 pip install rf-mcp[api]       # RequestsLibrary
 pip install rf-mcp[database]  # DatabaseLibrary
 pip install rf-mcp[frontend]  # Django-based web frontend dashboard
+pip install rf-mcp[memory]    # Persistent semantic memory (sqlite-vec + model2vec)
 pip install rf-mcp[all]       # All optional Robot Framework libraries
 
 # Browser Library still needs Playwright browsers
@@ -539,6 +541,14 @@ RobotMCP provides a comprehensive toolset organized by function. Highlights:
 
 - `get_locator_guidance` – Consolidated Browser/Selenium/Appium selector guidance with structured output.
 
+### Memory (optional, requires `rf-mcp[memory]`)
+
+- `recall_step` – Recall previously successful step sequences for a test scenario.
+- `recall_fix` – Recall known fixes for an error message from past sessions.
+- `recall_locator` – Recall working locator strategies for a UI element.
+- `store_knowledge` – Store domain knowledge for future recall.
+- `get_memory_status` – Check memory availability and collection statistics.
+
 ---
 
 ## 🧠 Small LLM Optimization
@@ -619,6 +629,82 @@ Configurable server-level instructions guide LLMs to follow the "discover-then-a
 
 ---
 
+## 🧠 Persistent Semantic Memory
+
+RobotMCP can learn from past sessions and recall successful patterns, locators, and error fixes — reducing trial-and-error for repeated testing scenarios.
+
+### How It Works
+
+Memory is powered by **sqlite-vec** (vector search) and **model2vec** (256-dimensional embeddings). When enabled, the server:
+
+1. **Stores** successful step sequences, working locators, and error→fix mappings after each tool call
+2. **Recalls** relevant memories and injects them as hints into tool responses (e.g., `execute_step` failures include previous fixes, `get_session_state` includes previously successful step patterns)
+3. **Learns** across sessions — the warm database persists between server restarts
+
+### Installation
+
+```bash
+pip install rf-mcp[memory]
+# or
+uv pip install rf-mcp[memory]
+```
+
+### Configuration
+
+Enable via environment variables:
+
+```json
+{
+  "servers": {
+    "robotmcp": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "-m", "robotmcp.server"],
+      "env": {
+        "ROBOTMCP_MEMORY_ENABLED": "true",
+        "ROBOTMCP_MEMORY_DB_PATH": "./memory.db"
+      }
+    }
+  }
+}
+```
+
+### Memory MCP Tools
+
+When memory is enabled, five additional tools become available:
+
+| Tool | Description |
+|------|-------------|
+| `recall_step` | Recall previously successful step sequences. Call **before** building new test steps to reuse proven patterns. |
+| `recall_fix` | Recall known fixes for an error. Call **immediately** when `execute_step` fails before retrying. |
+| `recall_locator` | Recall working locators for a UI element. Call **before** DOM inspection for familiar elements. |
+| `store_knowledge` | Store domain knowledge (e.g., site structure, auth flows) for future recall. |
+| `get_memory_status` | Check memory availability and statistics at session start. |
+
+### Response Augmentation
+
+Memory hints are automatically injected into existing tool responses — no LLM cooperation required:
+
+- **`execute_step` failures**: Previous fixes and working locators are included in the error response
+- **`get_session_state`**: Previously successful step patterns for the scenario are included
+- **`analyze_scenario`**: Recalled step sequences from past sessions are suggested
+
+All memory lookups have a 50ms timeout to avoid impacting response latency.
+
+### Benchmark Results
+
+Tested across 8 scenarios (72 opencode invocations, 3 iterations each) with `qwen/qwen3-coder`:
+
+| Scenario Type | Best Result | Memory Recall Rate |
+|---|---|---|
+| Complex web flows (checkout) | **-23% calls, -22% tokens** | 3/3 iterations |
+| Exploration-heavy browsing | -44% calls on best iteration | 3/3 iterations |
+| API error recovery | -3% calls ±3% (tightest CI) | 3/3 iterations |
+
+Memory benefits are strongest for **complex, multi-step scenarios** where past locators and step sequences reduce exploratory tool calls.
+
+---
+
 ## ⚙️ Environment Variables Reference
 
 ### Core Configuration
@@ -633,6 +719,14 @@ Configurable server-level instructions guide LLMs to follow the "discover-then-a
 | `ROBOTMCP_USE_SAMPLING` | `true` / `1` / `yes` | *(disabled)* | Enable LLM-powered scenario analysis |
 | `ROBOTMCP_PRE_VALIDATION` | `0` / `1` | `1` | Enable element pre-validation before actions |
 | `ROBOTMCP_STARTUP_CLEANUP` | `auto` / `on` / `off` | `auto` | Session cleanup on server start |
+
+### Persistent Memory
+
+| Variable | Values | Default | Description |
+|----------|--------|---------|-------------|
+| `ROBOTMCP_MEMORY_ENABLED` | `true` / `1` / `yes` | *(disabled)* | Enable persistent semantic memory |
+| `ROBOTMCP_MEMORY_DB_PATH` | file path | `./robotmcp_memory.db` | SQLite database path for memory storage |
+| `ROBOTMCP_MEMORY_MODEL` | model name | `potion-base-8M` | Embedding model for similarity search |
 
 ### Debug Attach Bridge
 
@@ -670,6 +764,7 @@ We welcome contributions! Here's how to get started:
 
 ## 📝 Changelog
 
+- **v0.31.0** – Persistent semantic memory with response augmentation (ADR-014, ADR-014.2)
 - [v0.30.1](docs/RELEASE_NOTES_v0.30.1.md) – FastMCP 3.x compatibility layer
 - [v0.30.0](docs/RELEASE_NOTES_v0.30.0.md) – Small LLM optimization (tool profiles, intent action, response optimization, type constraints)
 - [v0.29.0](docs/RELEASE_NOTES_v0.29.0.md) – Instruction templates, multi-test sessions, batch execution, smart timeouts

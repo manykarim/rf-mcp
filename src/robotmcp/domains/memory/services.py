@@ -30,6 +30,26 @@ from .value_objects import (
 logger = logging.getLogger(__name__)
 
 
+def _describe_step(
+    keyword: str, arguments: List[str], result: Dict[str, Any]
+) -> str:
+    """Create human-readable step description optimized for semantic embedding.
+
+    Converts RF syntax like ``Keyword: Click\\nArguments: css=.badge`` into
+    natural language like ``Click css=.badge (Browser)`` so that model2vec
+    produces meaningful similarity scores against natural language queries.
+    """
+    library = result.get("library", "")
+    parts = [keyword]
+    if arguments:
+        parts.append(arguments[0])
+        if len(arguments) > 1:
+            parts.append(f"with {arguments[1]}")
+    if library:
+        parts.append(f"({library})")
+    return " ".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # EmbeddingService
 # ---------------------------------------------------------------------------
@@ -418,9 +438,9 @@ class MemoryHookService:
     ) -> None:
         """Store successful step as WORKING_STEPS memory."""
         try:
-            content = f"Keyword: {keyword}\nArguments: {', '.join(arguments)}"
+            content = _describe_step(keyword, arguments, result)
             if result.get("output"):
-                content += f"\nResult: {str(result['output'])[:500]}"
+                content += f" → {str(result['output'])[:300]}"
 
             entry = MemoryEntry(
                 content=content,
@@ -533,7 +553,7 @@ class MemoryHookService:
             for s in successful:
                 kw = s.get("keyword", "?")
                 args = s.get("arguments", [])
-                step_lines.append(f"  {kw} {' '.join(str(a) for a in args)}")
+                step_lines.append(f"  {_describe_step(kw, args, s)}")
 
             content = f"Session steps ({len(successful)} successful):\n" + "\n".join(
                 step_lines
@@ -626,6 +646,91 @@ class MemoryHookService:
         except Exception as e:
             logger.debug("Memory recall (scenario) failed: %s", e)
             return None
+
+    # -- Response augmentation (ADR-014.2) -----------------------------------
+
+    async def augment_response(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        response: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Augment a tool response with relevant memory hints.
+
+        Called inline (not fire-and-forget) before returning tool results
+        to the LLM.  Adds a ``memory_hints`` key with recalled data so the
+        LLM receives it automatically without calling recall tools.
+        """
+        if not self._embedding_service.is_available:
+            return response
+
+        hints: List[Dict[str, Any]] = []
+
+        try:
+            if tool_name == "execute_step" and not response.get("success", True):
+                error = response.get("error", "")
+                kw = arguments.get("keyword", "")
+                if error:
+                    hint_text = await self.recall_for_hint(kw, error)
+                    if hint_text:
+                        hints.append({
+                            "type": "previous_fix",
+                            "content": hint_text,
+                            "suggestion": "A similar error was fixed before. Try the approach above.",
+                        })
+                # Also check for working locator if it was a locator keyword
+                args = arguments.get("arguments", [])
+                if self._is_locator_keyword(kw) and args:
+                    locator_results = await self._query_service.recall_locators(args[0])
+                    for lr in locator_results[:2]:
+                        if lr.outcome == "success":
+                            hints.append({
+                                "type": "working_locator",
+                                "locator": lr.locator,
+                                "keyword": lr.keyword,
+                                "library": lr.library,
+                                "similarity": lr.similarity,
+                                "suggestion": f"This locator worked before: {lr.locator}",
+                            })
+
+            elif tool_name == "get_session_state":
+                # Inject relevant step patterns based on session context
+                scenario = arguments.get("scenario", "")
+                if not scenario:
+                    # Try to derive context from sections requested
+                    scenario = "web testing session state"
+                pattern_text = await self.recall_for_scenario(scenario)
+                if pattern_text:
+                    hints.append({
+                        "type": "previous_steps",
+                        "content": pattern_text,
+                        "suggestion": "Previous successful patterns for similar scenarios.",
+                    })
+
+            elif tool_name == "analyze_scenario":
+                scenario = arguments.get("scenario", "")
+                if scenario:
+                    pattern_text = await self.recall_for_scenario(scenario)
+                    if pattern_text:
+                        hints.append({
+                            "type": "previous_steps",
+                            "content": pattern_text,
+                            "suggestion": "Reuse these previously successful step sequences.",
+                        })
+
+        except Exception as e:
+            logger.debug("Memory augmentation failed: %s", e)
+
+        if hints:
+            augmented = dict(response)
+            augmented["memory_hints"] = {
+                "source": "memory",
+                "count": len(hints),
+                "hints": hints,
+            }
+            return augmented
+
+        return response
 
     # -- Central dispatch ----------------------------------------------------
 

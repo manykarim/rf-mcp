@@ -27,6 +27,18 @@ _UNAVAILABLE_RECALL: Dict[str, Any] = {
 }
 
 
+def _recall_suggestion(results: list) -> str:
+    """Generate an actionable suggestion string from recall results."""
+    if not results:
+        return "No relevant memories found."
+    top = results[0]
+    sim = getattr(top, "adjusted_similarity", None)
+    score = sim.value if sim else getattr(top, "similarity", 0.0)
+    if score > 0.5:
+        return "High-confidence matches found. Use these results directly."
+    return "Low-confidence matches. Consider as starting points."
+
+
 class FastMCPMemoryAdapter:
     """Anti-Corruption Layer adapting memory domain services to MCP tools.
 
@@ -75,7 +87,10 @@ class FastMCPMemoryAdapter:
 
         @mcp.tool(
             description=(
-                "Recall previously successful step sequences for a test scenario"
+                "Recall previously successful step sequences. "
+                "Call this BEFORE building new test steps to reuse proven patterns. "
+                "Returns ranked keyword sequences that worked in past sessions. "
+                "When results have similarity > 0.3, prefer recalled steps over discovering new ones."
             ),
             **extra_kwargs,
         )
@@ -88,6 +103,7 @@ class FastMCPMemoryAdapter:
                 return {
                     "results": [r.to_dict() for r in results],
                     "count": len(results),
+                    "suggestion": _recall_suggestion(results),
                 }
             except Exception as exc:
                 logger.debug("recall_step failed: %s", exc)
@@ -96,7 +112,11 @@ class FastMCPMemoryAdapter:
         # --- recall_fix ---------------------------------------------------
 
         @mcp.tool(
-            description="Recall known fixes for an error message",
+            description=(
+                "Recall known fixes for an error. "
+                "Call this IMMEDIATELY when execute_step fails before retrying. "
+                "Returns previously successful recovery strategies ranked by relevance."
+            ),
             **extra_kwargs,
         )
         async def recall_fix(error_text: str) -> Dict[str, Any]:
@@ -105,6 +125,7 @@ class FastMCPMemoryAdapter:
                 return {
                     "results": [r.to_dict() for r in results],
                     "count": len(results),
+                    "suggestion": _recall_suggestion(results),
                 }
             except Exception as exc:
                 logger.debug("recall_fix failed: %s", exc)
@@ -114,7 +135,10 @@ class FastMCPMemoryAdapter:
 
         @mcp.tool(
             description=(
-                "Recall structured locator-outcome mappings for an element"
+                "Recall working locators for a UI element. "
+                "Call this BEFORE using get_session_state to find locators "
+                "when you've interacted with similar elements before. "
+                "Returns proven locator strategies with success/failure history."
             ),
             **extra_kwargs,
         )
@@ -123,9 +147,20 @@ class FastMCPMemoryAdapter:
                 results = await query_service.recall_locators(
                     element_description
                 )
+                suggestion = "No relevant locator memories found."
+                if results:
+                    top = results[0]
+                    if top.similarity > 0.5:
+                        suggestion = (
+                            f"High-confidence match: use {top.locator} "
+                            f"with {top.keyword} ({top.library})."
+                        )
+                    else:
+                        suggestion = "Low-confidence matches. Consider as starting points."
                 return {
                     "results": [r.to_dict() for r in results],
                     "count": len(results),
+                    "suggestion": suggestion,
                 }
             except Exception as exc:
                 logger.debug("recall_locator failed: %s", exc)
@@ -134,7 +169,11 @@ class FastMCPMemoryAdapter:
         # --- store_knowledge ----------------------------------------------
 
         @mcp.tool(
-            description="Store domain knowledge for future recall",
+            description=(
+                "Store domain knowledge (e.g., site structure, auth flows) "
+                "for future recall. Use when you discover reusable information "
+                "about the system under test."
+            ),
             **extra_kwargs,
         )
         async def store_knowledge(
@@ -172,7 +211,8 @@ class FastMCPMemoryAdapter:
 
         @mcp.tool(
             description=(
-                "Get memory subsystem status and collection statistics"
+                "Check memory availability and statistics. "
+                "Call at session start to see what historical data is available."
             ),
             **extra_kwargs,
         )

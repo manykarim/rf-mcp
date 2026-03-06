@@ -204,6 +204,12 @@ class FastMCPInstructionAdapter:
             include_wrapper=False,
         )
 
+        # ADR-014.2: Append memory workflow guidance when memory is enabled
+        if os.environ.get("ROBOTMCP_MEMORY_ENABLED", "").lower() in (
+            "true", "1", "yes",
+        ):
+            rendered = self._append_memory_instructions(rendered)
+
         # Update config with content for version tracking
         config = config.with_content(content, session_id)
 
@@ -226,6 +232,23 @@ class FastMCPInstructionAdapter:
         )
 
         return rendered
+
+    @staticmethod
+    def _append_memory_instructions(rendered: str) -> str:
+        """Append memory-augmented workflow guidance to instructions."""
+        memory_section = (
+            "\n\n## Memory-Augmented Workflow\n"
+            "When memory tools are available:\n"
+            "1. On error: Check recall_fix BEFORE retrying the failed step\n"
+            "2. For locators: Check recall_locator BEFORE inspecting DOM "
+            "with get_session_state\n"
+            "3. For scenarios: Check recall_step BEFORE building new step "
+            "sequences\n"
+            "Memory tools are fast (<50ms) and reduce trial-and-error.\n"
+            "Note: Tool responses may include a memory_hints section with "
+            "relevant historical data — use it to avoid repeating past mistakes."
+        )
+        return rendered + memory_section
 
     def create_config_from_env(self) -> InstructionConfig:
         """Create instruction config from environment variables.

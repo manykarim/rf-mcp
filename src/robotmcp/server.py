@@ -78,6 +78,8 @@ _response_optimization_configs: Dict[str, Any] = {}  # session_id -> ResponseOpt
 
 # ADR-014: Memory hook service singleton
 _memory_hook_service: Any = None  # None=uninitialized, False=disabled
+# ADR-014.2: Track pending memory writes so they aren't lost on shutdown
+_pending_memory_tasks: set = set()
 
 
 def _get_memory_hook_service():
@@ -136,17 +138,45 @@ def _track_tool_result(
         # Don't let learning errors affect tool execution
         logger.debug(f"Instruction learning tracking error: {e}")
 
-    # ADR-014: fire-and-forget memory dispatch
+    # ADR-014.2: tracked memory dispatch (tasks survive until done)
     try:
         mem_svc = _get_memory_hook_service()
         if mem_svc is not None:
             import asyncio
 
-            asyncio.ensure_future(
+            task = asyncio.ensure_future(
                 mem_svc.on_tool_call(session_id, tool_name, arguments, result)
             )
+            _pending_memory_tasks.add(task)
+            task.add_done_callback(_pending_memory_tasks.discard)
     except Exception:
         pass  # Never let memory errors affect tool execution
+
+
+async def _augment_with_memory(
+    session_id: str,
+    tool_name: str,
+    arguments: Dict[str, Any],
+    result: Dict[str, Any],
+) -> Dict[str, Any]:
+    """ADR-014.2: Augment tool result with memory hints (inline, not fire-and-forget).
+
+    Injects relevant memory context into tool responses so the LLM sees it
+    without needing to call recall tools.  Returns the original result
+    unchanged on any error or if memory is unavailable.
+    """
+    import asyncio
+
+    mem_svc = _get_memory_hook_service()
+    if mem_svc is None:
+        return result
+    try:
+        return await asyncio.wait_for(
+            mem_svc.augment_response(tool_name, arguments, result),
+            timeout=0.05,  # 50ms max
+        )
+    except Exception:
+        return result
 
 
 if TYPE_CHECKING:
@@ -1980,6 +2010,12 @@ async def analyze_scenario(
     except Exception as e:
         logger.debug(f"Failed to start instruction learning: {e}")
 
+    # ADR-014.2: Augment analyze_scenario with memory hints
+    result = await _augment_with_memory(
+        session_id, "analyze_scenario",
+        {"scenario": scenario, "context": context}, result,
+    )
+
     return result
 
 
@@ -3160,6 +3196,11 @@ async def get_session_state(
         rf_context = await _diagnose_rf_context_payload(session_id)
         payload["sections"]["rf_context"] = rf_context
 
+    # ADR-014.2: Augment get_session_state with memory hints
+    payload = await _augment_with_memory(
+        session_id, "get_session_state", {"sections": sections}, payload,
+    )
+
     # Track for instruction learning
     _track_tool_result(session_id, "get_session_state", {"sections": sections}, payload)
 
@@ -3392,6 +3433,13 @@ async def execute_step(
         use_context=bool(use_context),
         timeout_ms=timeout_ms,
     )
+
+    # ADR-014.2: Augment failed step results with memory hints
+    if not result.get("success", False):
+        result = await _augment_with_memory(
+            session_id, "execute_step",
+            {"keyword": keyword_to_run, "arguments": arguments}, result,
+        )
 
     # For proper MCP protocol compliance, failed steps should raise exceptions
     # This ensures AI agents see failures as red/failed instead of green/successful

@@ -527,7 +527,7 @@ class MemoryQuery:
             query_text=scenario_description[:cls.MAX_QUERY_LENGTH],
             memory_type=MemoryType.working_steps(),
             top_k=10,
-            min_similarity=0.15,
+            min_similarity=0.05,
         )
 
     @classmethod
