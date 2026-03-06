@@ -1,3 +1,8 @@
+# Artifact output files
+.robotmcp_artifacts/
+.robotmcp_artifacts_e2e/
+.e2e_artifact_results/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

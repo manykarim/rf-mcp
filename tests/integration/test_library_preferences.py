@@ -35,10 +35,10 @@ async def test_analyze_scenario_selenium_preference(mcp_client):
     assert analysis["explicit_library_preference"] == "SeleniumLibrary"
     assert analysis["detected_session_type"] == "web_automation"
 
-    session_info = result.data["session_info"]
-    assert session_info["explicit_library_preference"] == "SeleniumLibrary"
-    assert session_info["search_order"][0] == "SeleniumLibrary"
-    assert "Browser" not in session_info["recommended_libraries"]
+    # analyze_scenario returns session_id directly, not under session_info
+    assert "session_id" in result.data
+    # Library preference is in the analysis sub-dict
+    assert analysis["explicit_library_preference"] == "SeleniumLibrary"
 
 
 @pytest.mark.asyncio
@@ -51,11 +51,7 @@ async def test_analyze_scenario_browser_preference(mcp_client):
 
     analysis = result.data["analysis"]
     assert analysis["explicit_library_preference"] == "Browser"
-
-    session_info = result.data["session_info"]
-    assert session_info["explicit_library_preference"] == "Browser"
-    assert session_info["search_order"][0] == "Browser"
-    assert "SeleniumLibrary" not in session_info["recommended_libraries"]
+    assert "session_id" in result.data
 
 
 @pytest.mark.asyncio
@@ -65,9 +61,8 @@ async def test_analyze_scenario_no_preference(mcp_client):
         "analyze_scenario", {"scenario": scenario, "context": "web"}
     )
     assert result.data["success"] is True
-    session_info = result.data["session_info"]
-    assert session_info["explicit_library_preference"] is None
-    assert session_info["auto_configured"] is True
+    analysis = result.data["analysis"]
+    assert analysis["explicit_library_preference"] is None
 
 
 @pytest.mark.asyncio

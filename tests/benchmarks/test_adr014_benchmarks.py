@@ -41,12 +41,15 @@ def memory_services():
     assert services is not None
     yield services
 
-    if os.path.exists(db_path):
-        os.unlink(db_path)
-    for ext in ("-wal", "-shm"):
-        p = db_path + ext
-        if os.path.exists(p):
-            os.unlink(p)
+    # Close repository connection before cleanup (prevents Windows file locks)
+    repo = services.get("repository")
+    if repo and hasattr(repo, "close"):
+        try:
+            repo.close()
+        except Exception:
+            pass
+    import shutil
+    shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 class TestEmbeddingBenchmarks:
