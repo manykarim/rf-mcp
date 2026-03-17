@@ -26,12 +26,17 @@ logger = logging.getLogger(__name__)
 class TestCaseStep:
     """Represents a test case step."""
 
+    __test__ = False  # Not a pytest test class
+
     keyword: str
     arguments: List[str]
     comment: Optional[str] = None
     # Variable assignment tracking for test suite generation
     assigned_variables: List[str] = field(default_factory=list)
     assignment_type: Optional[str] = None  # "single", "multiple", "none"
+    # BDD step grouping
+    bdd_group: Optional[str] = None
+    bdd_intent: Optional[str] = None
 
 
 @dataclass
@@ -42,8 +47,31 @@ class GeneratedTestCase:
     steps: List[TestCaseStep]
     documentation: str = ""
     tags: List[str] = None
+    template: Optional[str] = None  # ADR-019: data-driven template
     setup: Optional[TestCaseStep] = None
     teardown: Optional[TestCaseStep] = None
+
+
+@dataclass
+class BddKeywordGroup:
+    """A group of steps that form a behavioral keyword."""
+
+    name: str  # Human-readable keyword name
+    steps: List[TestCaseStep]  # Implementation steps
+    bdd_intent: str = "when"  # "given", "when", "then"
+
+
+@dataclass
+class BddKeyword:
+    """A behavioral keyword for BDD-style test suites."""
+
+    name: str  # e.g., 'the user adds "${product}" to the cart'
+    steps: List[TestCaseStep]  # Implementation steps
+    bdd_intent: str = "when"  # "given", "when", "then", "and", "but"
+    embedded_args: Dict[str, str] = field(
+        default_factory=dict
+    )  # arg_name -> example value
+    is_embedded: bool = False  # True if uses embedded arguments
 
 
 @dataclass
@@ -67,6 +95,8 @@ class GeneratedTestSuite:
     variables: Dict[str, Any] = None
     # Track variable files imported via manage_session(action="import_variables")
     variable_files: List[str] = None
+    # BDD behavioral keywords (generated when bdd_style=True)
+    bdd_keywords: Optional[List[BddKeyword]] = None
 
 
 class TestBuilder:
@@ -225,6 +255,7 @@ class TestBuilder:
         tags: List[str] = None,
         documentation: str = "",
         remove_library_prefixes: bool = True,
+        bdd_style: bool = False,
     ) -> Dict[str, Any]:
         """
         Generate Robot Framework test suite from successful execution steps.
@@ -235,6 +266,9 @@ class TestBuilder:
             tags: Test tags
             documentation: Test documentation
             remove_library_prefixes: Remove library prefixes from keywords (e.g., "Browser.Click" -> "Click")
+            bdd_style: Generate BDD-style suite with Keywords section. When True,
+                steps are grouped into behavioral keywords (Given/When/Then) and a
+                ``*** Keywords ***`` section is appended to the generated RF text.
 
         Returns:
             Generated test suite with RF API objects and text representation
@@ -356,6 +390,10 @@ class TestBuilder:
             if remove_library_prefixes:
                 suite = self._apply_prefix_removal(suite)
 
+            # Apply BDD transformation if requested
+            if bdd_style:
+                suite = self._transform_to_bdd_style(suite)
+
             # Generate Robot Framework API objects
             rf_suite = await self._create_rf_suite(suite)
 
@@ -471,6 +509,860 @@ class TestBuilder:
             logger.error(f"Error building test suite: {e}")
             return {"success": False, "error": str(e), "suite": None}
 
+    # ── BDD transformation methods ─────────────────────────────────────
+
+    # Keywords whose presence signals a "setup / given" group
+    _SETUP_KEYWORDS = frozenset({
+        "new browser", "new context", "new page", "open browser", "go to",
+    })
+
+    # Keywords whose presence signals an "assertion / then" group
+    _ASSERTION_KEYWORDS_PREFIXES = (
+        "should be", "should contain", "should not", "should match",
+        "should start with", "should end with", "element should",
+        "page should", "checkbox should", "list should", "title should",
+        "location should", "wait until element",
+    )
+
+    # Phase 2.1: Semantic phase indicators from locator/argument content
+    _PHASE_INDICATORS = {
+        "cart": ("add to cart", "add .* to cart", "remove from cart",
+                 "cart", "basket", "bag"),
+        "checkout": ("checkout", "proceed", "continue", "shipping",
+                     "payment", "billing", "place order"),
+        "order": ("finish", "complete order", "submit order", "confirm"),
+        "login": ("login", "sign in", "log in", "username", "password"),
+        "navigate": ("products", "home", "categories", "menu", "back"),
+    }
+
+    def _transform_to_bdd_style(self, suite: GeneratedTestSuite) -> GeneratedTestSuite:
+        """Transform a flat test suite into BDD-style with a Keywords section.
+
+        Three-pass architecture (Phase 3.1):
+        Pass 1: Filter instrumentation steps, group into BddKeyword objects.
+        Pass 2: Detect & merge embedded args — keyword names may change.
+        Pass 3: Assign test case references using final merged names.
+
+        Data-driven BDD (Phase 4):
+        Template test cases are wrapped in BDD wrapper keywords.
+        """
+        # ── Pass 1: Group steps into preliminary keywords ────────────
+        all_bdd_keywords: List[BddKeyword] = []
+        seen_keyword_names: Dict[str, BddKeyword] = {}
+        # Track which groups map to which test cases for Pass 3
+        tc_group_map: List[Tuple[GeneratedTestCase, List[BddKeywordGroup]]] = []
+
+        for tc in suite.test_cases:
+            if getattr(tc, "template", None):
+                self._transform_template_to_bdd(
+                    tc, all_bdd_keywords, seen_keyword_names, suite
+                )
+                continue
+
+            # Phase 1.2: Filter instrumentation steps before grouping
+            filtered = self._filter_instrumentation_steps(tc.steps)
+            groups = self._group_steps_into_bdd_keywords(filtered)
+
+            for group in groups:
+                if group.name not in seen_keyword_names:
+                    kw = BddKeyword(
+                        name=group.name,
+                        steps=list(group.steps),
+                        bdd_intent=group.bdd_intent,
+                    )
+                    all_bdd_keywords.append(kw)
+                    seen_keyword_names[kw.name] = kw
+
+            tc_group_map.append((tc, groups))
+
+        # ── Pass 2: Detect embedded args (may rename keywords) ───────
+        all_bdd_keywords = self._detect_embedded_args(all_bdd_keywords)
+
+        # Rebuild name lookup after potential merges
+        final_name_lookup: Dict[str, BddKeyword] = {kw.name: kw for kw in all_bdd_keywords}
+
+        # Build old-name → new-name mapping for merged keywords.
+        # Only map names whose keywords were structurally identical to the
+        # merged keyword (same keyword sequence + arg count).
+        old_to_new: Dict[str, str] = {}
+        for kw in all_bdd_keywords:
+            old_to_new[kw.name] = kw.name  # identity for non-merged
+
+        for kw in all_bdd_keywords:
+            if kw.is_embedded and kw.embedded_args:
+                # Build the structural key for this merged keyword
+                merged_key = tuple(
+                    (s.keyword, len(s.arguments or []))
+                    for s in kw.steps
+                )
+                for old_name, old_kw in list(seen_keyword_names.items()):
+                    if old_name in final_name_lookup or old_name in old_to_new:
+                        continue
+                    # Only map if structurally matching
+                    old_key = tuple(
+                        (s.keyword, len(s.arguments or []))
+                        for s in old_kw.steps
+                    )
+                    if old_key == merged_key:
+                        old_to_new[old_name] = kw.name
+
+        # ── Pass 3: Assign BDD references using final names ──────────
+        prefix_map = {"given": "Given", "when": "When", "then": "Then"}
+
+        for tc, groups in tc_group_map:
+            bdd_refs: List[TestCaseStep] = []
+            for group in groups:
+                # Resolve name through merge mapping
+                final_name = old_to_new.get(group.name, group.name)
+                resolved_kw = final_name_lookup.get(final_name)
+                if resolved_kw:
+                    intent = resolved_kw.bdd_intent
+                else:
+                    # Fallback to original group intent
+                    intent = group.bdd_intent
+                    final_name = group.name
+
+                prefix = prefix_map.get(intent, "When")
+
+                # For embedded keywords, substitute the actual argument values
+                if resolved_kw and resolved_kw.is_embedded and resolved_kw.embedded_args:
+                    # Use the original group's step arguments to fill in embedded values
+                    call_name = self._build_embedded_call(
+                        resolved_kw, group.steps
+                    )
+                    bdd_refs.append(
+                        TestCaseStep(keyword=f"{prefix} {call_name}", arguments=[])
+                    )
+                else:
+                    bdd_refs.append(
+                        TestCaseStep(keyword=f"{prefix} {final_name}", arguments=[])
+                    )
+            tc.steps = bdd_refs
+
+        suite.bdd_keywords = all_bdd_keywords
+
+        # Phase 4.2: Extract URLs into Variables section
+        self._extract_bdd_variables(suite)
+
+        return suite
+
+    def _extract_bdd_variables(self, suite: GeneratedTestSuite) -> None:
+        """Extract hardcoded URLs from BDD keyword steps into Variables section."""
+        if not suite.bdd_keywords:
+            return
+        if suite.variables is None:
+            suite.variables = {}
+
+        url_pattern = re.compile(r'https?://[^\s]+')
+        for kw in suite.bdd_keywords:
+            for step in kw.steps:
+                for i, arg in enumerate(step.arguments or []):
+                    arg_str = str(arg)
+                    if url_pattern.match(arg_str) and "://" in arg_str:
+                        # Generate a variable name from the URL
+                        try:
+                            from urllib.parse import urlparse
+                            parsed = urlparse(arg_str)
+                            domain = (parsed.hostname or "site").replace("www.", "")
+                            domain = domain.split(".")[0].upper()
+                            var_name = f"{domain}_URL"
+                        except Exception:
+                            var_name = "BASE_URL"
+
+                        if var_name not in suite.variables:
+                            suite.variables[var_name] = arg_str
+                            step.arguments[i] = f"${{{var_name}}}"
+
+    def _build_embedded_call(
+        self, kw: BddKeyword, original_steps: List[TestCaseStep]
+    ) -> str:
+        """Build the call name for an embedded keyword using original step values.
+
+        For a keyword named ``the user clicks ${value}``,
+        and original steps containing ``Click role=button[name="Add Speaker to cart"]``,
+        produce ``the user clicks "add speaker to cart"``.
+        """
+        name = kw.name
+        if not kw.embedded_args or not original_steps:
+            return name
+
+        # Find the actual argument values from the original steps
+        for arg_name, _example in kw.embedded_args.items():
+            placeholder = f"${{{arg_name}}}"
+            if placeholder not in name:
+                continue
+            # Find the differing value from the original steps vs the template
+            for orig_step, tmpl_step in zip(original_steps, kw.steps):
+                for oi, (orig_arg, tmpl_arg) in enumerate(
+                    zip(orig_step.arguments or [], tmpl_step.arguments or [])
+                ):
+                    if placeholder in str(tmpl_arg) and str(orig_arg) != str(tmpl_arg):
+                        # Humanize the locator for the call name
+                        actual = self._humanize_locator(str(orig_arg))
+                        if actual == "the element":
+                            actual = str(orig_arg)  # Fallback to raw
+                        name = name.replace(placeholder, f'"{actual}"', 1)
+                        break
+                if placeholder not in name:
+                    break
+        return name
+
+    # Phase 1.2: Instrumentation step filtering
+    def _filter_instrumentation_steps(
+        self, steps: List[TestCaseStep]
+    ) -> List[TestCaseStep]:
+        """Remove LLM instrumentation steps that pollute BDD output.
+
+        Steps like ``Get Text body`` (whole-page DOM read) and bare
+        ``Get Url``/``Get Title`` without assertion operators are agent
+        observation artifacts, not real test assertions.
+        """
+        result = []
+        for step in steps:
+            kw = (step.keyword or "").strip().lower()
+            args = step.arguments or []
+
+            # Get Text body (no assertion) — LLM reads DOM for navigation
+            if kw == "get text" and args and str(args[0]).lower() == "body":
+                if len(args) <= 1:
+                    continue  # No assertion operator — skip
+
+            # Bare Get Url / Get Title without assertion
+            if kw in ("get url", "get title") and len(args) <= 1:
+                if not any(s.assigned_variables for s in [step] if s.assigned_variables):
+                    continue
+
+            # Get Property without assertion operator (observation only)
+            if kw == "get property" and len(args) <= 2:
+                if not any(s.assigned_variables for s in [step] if s.assigned_variables):
+                    continue
+
+            result.append(step)
+        return result if result else steps  # Never return empty
+
+    def _transform_template_to_bdd(
+        self,
+        tc: GeneratedTestCase,
+        all_bdd_keywords: List[BddKeyword],
+        seen_keyword_names: Dict[str, BddKeyword],
+        suite: GeneratedTestSuite,
+    ) -> None:
+        """Transform a data-driven (template) test case into BDD style.
+
+        The template keyword's implementation steps (found in the Keywords section
+        or inferred from the session) are grouped into BDD behavioral keywords.
+        A wrapper template keyword is created that calls Given/When/Then steps,
+        and the test case's ``template`` is updated to point to the wrapper.
+
+        If we cannot find the template keyword's implementation steps (e.g. when
+        the template references an external keyword), we look for the steps in
+        the test case body as a heuristic — some agents record the template body
+        steps as the test case steps.
+        """
+        original_template = tc.template
+
+        # Try to find implementation steps for the template keyword.
+        # Strategy 1: Look in existing bdd_keywords / suite keywords
+        template_steps: List[TestCaseStep] = []
+
+        # Strategy 2: If tc.steps contain actual keyword steps (not just data rows),
+        # they represent the template body.  Data rows have no keyword, only arguments.
+        has_keyword_steps = any(
+            s.keyword and s.keyword.strip() for s in tc.steps
+        )
+        if has_keyword_steps:
+            template_steps = [s for s in tc.steps if s.keyword and s.keyword.strip()]
+
+        if not template_steps:
+            # No implementation steps found — we can only rename the template
+            # to a BDD-style name and leave the test case as-is.
+            return
+
+        # Group the template implementation steps into BDD keywords
+        groups = self._group_steps_into_bdd_keywords(template_steps)
+
+        # Build the BDD keyword references for the wrapper
+        wrapper_steps: List[TestCaseStep] = []
+        for group in groups:
+            if group.name in seen_keyword_names:
+                kw = seen_keyword_names[group.name]
+            else:
+                kw = BddKeyword(
+                    name=group.name,
+                    steps=list(group.steps),
+                    bdd_intent=group.bdd_intent,
+                )
+                all_bdd_keywords.append(kw)
+                seen_keyword_names[kw.name] = kw
+
+            prefix_map = {"given": "Given", "when": "When", "then": "Then"}
+            prefix = prefix_map.get(kw.bdd_intent, "When")
+            wrapper_steps.append(
+                TestCaseStep(keyword=f"{prefix} {kw.name}", arguments=[])
+            )
+
+        # Collect all argument names used in the template steps to build
+        # the wrapper keyword's [Arguments] line.
+        arg_vars = self._extract_template_arg_vars(template_steps)
+
+        # Create the BDD wrapper template keyword
+        wrapper_name = f"Verify {tc.name}"
+        wrapper_kw = BddKeyword(
+            name=wrapper_name,
+            steps=wrapper_steps,
+            bdd_intent="when",
+            embedded_args={},
+            is_embedded=False,
+        )
+        # Attach argument variables as metadata for rendering
+        wrapper_kw._arg_vars = arg_vars  # type: ignore[attr-defined]
+        all_bdd_keywords.append(wrapper_kw)
+        seen_keyword_names[wrapper_name] = wrapper_kw
+
+        # Update the test case to use the BDD wrapper as template
+        tc.template = wrapper_name
+
+        # Convert tc.steps to data rows (arguments only, no keyword)
+        # Keep only the data row steps (those without meaningful keywords)
+        data_rows = [s for s in tc.steps if not (s.keyword and s.keyword.strip())]
+        if data_rows:
+            tc.steps = data_rows
+        # else: steps remain as-is (agent may have structured them differently)
+
+    def _extract_template_arg_vars(self, steps: List[TestCaseStep]) -> List[str]:
+        """Extract ${var} references from template steps for [Arguments] line."""
+        var_pattern = re.compile(r'\$\{([^}]+)\}')
+        found: List[str] = []
+        seen: set = set()
+        for step in steps:
+            for arg in (step.arguments or []):
+                for match in var_pattern.finditer(str(arg)):
+                    var_name = match.group(1)
+                    if var_name not in seen:
+                        seen.add(var_name)
+                        found.append(f"${{{var_name}}}")
+        return found
+
+    def _group_steps_into_bdd_keywords(
+        self, steps: List[TestCaseStep]
+    ) -> List[BddKeywordGroup]:
+        """Group flat steps into BDD keyword clusters.
+
+        Priority:
+        1. Explicit ``bdd_group`` annotations on steps.
+        2. Heuristic grouping based on keyword semantics.
+        """
+        if not steps:
+            return []
+
+        # ── Strategy 1: explicit groups ──────────────────────────────
+        has_explicit = any(s.bdd_group for s in steps)
+        if has_explicit:
+            return self._group_by_explicit_annotations(steps)
+
+        # ── Strategy 2: heuristic grouping ───────────────────────────
+        return self._group_by_heuristics(steps)
+
+    def _group_by_explicit_annotations(
+        self, steps: List[TestCaseStep]
+    ) -> List[BddKeywordGroup]:
+        """Group steps that share the same ``bdd_group`` value."""
+        groups: List[BddKeywordGroup] = []
+        current_group_name: Optional[str] = None
+        current_steps: List[TestCaseStep] = []
+        current_intent: str = "when"
+
+        for step in steps:
+            group_name = step.bdd_group or step.keyword
+            intent = step.bdd_intent or "when"
+
+            if group_name != current_group_name:
+                if current_steps:
+                    groups.append(
+                        BddKeywordGroup(
+                            name=current_group_name or self._generate_bdd_keyword_name(
+                                current_steps, current_intent
+                            ),
+                            steps=current_steps,
+                            bdd_intent=current_intent,
+                        )
+                    )
+                current_group_name = group_name
+                current_steps = [step]
+                current_intent = intent
+            else:
+                current_steps.append(step)
+
+        if current_steps:
+            groups.append(
+                BddKeywordGroup(
+                    name=current_group_name or self._generate_bdd_keyword_name(
+                        current_steps, current_intent
+                    ),
+                    steps=current_steps,
+                    bdd_intent=current_intent,
+                )
+            )
+
+        return groups
+
+    def _group_by_heuristics(
+        self, steps: List[TestCaseStep]
+    ) -> List[BddKeywordGroup]:
+        """Group steps by semantic heuristics with phase-aware boundaries.
+
+        Phase 2.1: Detects semantic phases (cart, checkout, etc.) from locator
+        content and forces group splits at phase transitions.
+        Phase 2.2: Enforces max group size (7 steps) to prevent monolithic keywords.
+        """
+        groups: List[BddKeywordGroup] = []
+        current_steps: List[TestCaseStep] = []
+        current_intent: str = "when"
+        current_phase: Optional[str] = None
+
+        def _flush():
+            if current_steps:
+                name = self._generate_bdd_keyword_name(current_steps, current_intent)
+                groups.append(
+                    BddKeywordGroup(
+                        name=name,
+                        steps=list(current_steps),
+                        bdd_intent=current_intent,
+                    )
+                )
+                current_steps.clear()
+
+        for step in steps:
+            kw_lower = (step.keyword or "").strip().lower()
+            step_intent = self._classify_step_intent(kw_lower, step.arguments)
+            step_phase = self._detect_phase(step)
+
+            # Phase 2.1: Phase change forces a new group
+            phase_changed = (
+                step_phase is not None
+                and current_phase is not None
+                and step_phase != current_phase
+            )
+
+            # Phase 2.2: Max group size constraint
+            size_exceeded = len(current_steps) >= 7
+
+            if step_intent != current_intent or phase_changed or size_exceeded:
+                _flush()
+                current_intent = step_intent
+
+            if step_phase is not None:
+                current_phase = step_phase
+
+            current_steps.append(step)
+
+        _flush()
+        return groups
+
+    def _classify_step_intent(
+        self, keyword_lower: str, arguments: Optional[List[str]] = None
+    ) -> str:
+        """Classify a single keyword into given/when/then.
+
+        Improved: considers arguments to distinguish assertions from observations.
+        ``Get Text`` with an assertion operator (==, contains, should) is "then";
+        without one it's "when" (observation/data extraction).
+        """
+        if keyword_lower in self._SETUP_KEYWORDS:
+            return "given"
+        for prefix in self._ASSERTION_KEYWORDS_PREFIXES:
+            if keyword_lower.startswith(prefix):
+                return "then"
+
+        # Get keywords: only "then" if they have an assertion operator
+        if keyword_lower.startswith("get ") and keyword_lower in (
+            "get text", "get element count", "get title", "get url",
+            "get attribute", "get property",
+        ):
+            args = arguments or []
+            # Check for assertion operators in arguments
+            assertion_ops = {"==", "!=", ">=", "<=", ">", "<",
+                             "contains", "should", "matches", "starts",
+                             "ends", "validate", "then", "equal"}
+            for arg in args:
+                if str(arg).strip().lower() in assertion_ops:
+                    return "then"
+            # No assertion operator → observation, treat as "when"
+            return "when"
+
+        return "when"
+
+    def _detect_phase(self, step: TestCaseStep) -> Optional[str]:
+        """Detect the semantic phase of a step from its locator content."""
+        args = step.arguments or []
+        if not args:
+            return None
+        humanized = self._humanize_locator(args[0]).lower()
+        for phase, indicators in self._PHASE_INDICATORS.items():
+            for indicator in indicators:
+                if re.search(indicator, humanized):
+                    return phase
+        return None
+
+    def _generate_bdd_keyword_name(
+        self, steps: List[TestCaseStep], intent: str
+    ) -> str:
+        """Generate a natural-language BDD keyword name from steps.
+
+        Phase 2.3: Improved naming with locator content analysis and
+        domain-aware multi-step names.
+        """
+        if len(steps) == 1:
+            return self._name_single_step(steps[0], intent)
+
+        # Multi-step groups
+        if intent == "given":
+            return self._name_given_group(steps)
+
+        if intent == "then":
+            return self._name_then_group(steps)
+
+        # "when" multi-step
+        return self._name_when_group(steps)
+
+    def _name_single_step(self, step: TestCaseStep, intent: str) -> str:
+        """Name a single-step BDD keyword."""
+        kw = (step.keyword or "").strip().lower()
+        args = step.arguments or []
+
+        # Setup keywords
+        if kw in ("new browser", "new page", "open browser", "go to"):
+            target = args[0] if args else "the page"
+            if "://" in str(target):
+                try:
+                    from urllib.parse import urlparse
+                    domain = urlparse(str(target)).hostname or "the page"
+                    domain = domain.replace("www.", "").split(".")[0]
+                    return f"the {domain} is open"
+                except Exception:
+                    pass
+            return "the page is open"
+
+        if kw == "new context":
+            return "a browser context is created"
+
+        if kw == "click":
+            target = self._humanize_locator(args[0]) if args else "the element"
+            return f"the user clicks {target}"
+
+        if kw in ("fill text", "fill", "type text"):
+            target = self._humanize_locator(args[0]) if args else "the field"
+            return f"the user fills in {target}"
+
+        if kw in ("select from list by value", "select from list by label",
+                   "select from list by index"):
+            target = self._humanize_locator(args[0]) if args else "the dropdown"
+            return f"the user selects from {target}"
+
+        if kw in ("check checkbox", "select checkbox"):
+            target = self._humanize_locator(args[0]) if args else "the checkbox"
+            return f"the user checks {target}"
+
+        if kw in ("get text", "get element count"):
+            target = self._humanize_locator(args[0]) if args else "the element"
+            # Phase 1.3: Avoid "the the element" double article
+            target = self._strip_leading_article(target)
+            # Check if we have an assertion value to make name more specific
+            if len(args) >= 3:
+                return f"the {target} should show the expected value"
+            return f"the {target} shows the expected value"
+
+        if "should" in kw:
+            return "the result is correct"
+
+        # Hover keywords
+        if kw == "hover":
+            target = self._humanize_locator(args[0]) if args else "the element"
+            return f"the user hovers over {self._strip_leading_article(target)}"
+
+        # Generic single-step
+        return f"the user performs {kw}"
+
+    def _strip_leading_article(self, text: str) -> str:
+        """Strip leading 'the ' to avoid 'the the X' double-article."""
+        if text.startswith("the "):
+            return text[4:]
+        return text
+
+    def _name_given_group(self, steps: List[TestCaseStep]) -> str:
+        """Name a multi-step 'given' group."""
+        for step in steps:
+            for arg in (step.arguments or []):
+                if "://" in str(arg):
+                    try:
+                        from urllib.parse import urlparse
+                        domain = urlparse(str(arg)).hostname or "the application"
+                        domain = domain.replace("www.", "").split(".")[0]
+                        return f"the {domain} is open"
+                    except Exception:
+                        pass
+        return "the application is set up"
+
+    def _name_then_group(self, steps: List[TestCaseStep]) -> str:
+        """Name a multi-step 'then' group with specificity."""
+        # Extract targets from assertion steps
+        targets = []
+        for step in steps:
+            if step.arguments:
+                target = self._humanize_locator(step.arguments[0])
+                target = self._strip_leading_article(target)
+                if target != "element":
+                    targets.append(target)
+
+        unique_targets = list(dict.fromkeys(targets))
+
+        if len(unique_targets) == 1:
+            return f"the {unique_targets[0]} should show the expected value"
+        if len(unique_targets) == 2:
+            return f"the {unique_targets[0]} and {unique_targets[1]} are verified"
+        if unique_targets:
+            return f"the {unique_targets[0]} results are verified"
+        return "the expected results are verified"
+
+    def _name_when_group(self, steps: List[TestCaseStep]) -> str:
+        """Name a multi-step 'when' group with action awareness."""
+        # Classify each step's action type and target
+        fills = []
+        clicks = []
+        for step in steps:
+            kw_lower = (step.keyword or "").strip().lower()
+            target = (
+                self._humanize_locator(step.arguments[0])
+                if step.arguments else "element"
+            )
+            target = self._strip_leading_article(target)
+            if kw_lower in ("fill text", "fill", "type text"):
+                fills.append(target)
+            elif kw_lower == "click":
+                clicks.append(target)
+
+        # Pure fill group
+        if fills and not clicks:
+            if len(fills) <= 2:
+                return f"the user fills in {' and '.join(fills)}"
+            return "the user fills in the form"
+
+        # Pure click group
+        if clicks and not fills:
+            if len(clicks) == 1:
+                return f"the user clicks {clicks[0]}"
+            # Use the last click (often the submit/confirm action)
+            return f"the user clicks {clicks[-1]}"
+
+        # Mixed — describe the dominant action
+        if fills and clicks:
+            # Fill + click pattern = form submission
+            if len(clicks) == 1:
+                return f"the user fills in the form and clicks {clicks[0]}"
+            return "the user completes the form"
+
+        return "the user performs the action"
+
+    def _humanize_locator(self, locator: Any) -> str:
+        """Convert a CSS/ARIA locator to human-readable text."""
+        loc = str(locator)
+        # aria-label extraction
+        if "aria-label=" in loc:
+            match = re.search(r'aria-label="([^"]+)"', loc)
+            if match:
+                return match.group(1).lower()
+        # role=button[name="..."] extraction
+        if 'name="' in loc:
+            match = re.search(r'name="([^"]+)"', loc)
+            if match:
+                return match.group(1).lower()
+        # text= extraction
+        if loc.startswith("text="):
+            return loc[5:].strip('"').strip("'").lower()
+        # id= extraction
+        if loc.startswith("id=") or loc.startswith("#"):
+            name = loc.replace("id=", "").replace("#", "").replace("-", " ").replace("_", " ")
+            return f"the {name} field"
+        # data-testid extraction
+        if "data-testid=" in loc or "data-test=" in loc:
+            match = re.search(r'data-test(?:id)?="([^"]+)"', loc)
+            if match:
+                return match.group(1).replace("-", " ").replace("_", " ")
+        # CSS class extraction — Phase 1.4: strip pseudo-selectors
+        if loc.startswith("."):
+            name = loc[1:]
+            name = re.sub(r':[\w-]+\([^)]*\)', '', name)  # :nth-child(1) etc.
+            name = re.sub(r':[\w-]+', '', name)  # :hover, :focus etc.
+            return name.replace("-", " ").replace("_", " ").strip()
+        # xpath: extract meaningful text from XPath expressions
+        if loc.startswith("//") or loc.startswith("xpath="):
+            match = re.search(r"@(?:Name|name|text\(\))='([^']+)'", loc)
+            if not match:
+                match = re.search(r'@(?:Name|name|text\(\))="([^"]+)"', loc)
+            if match:
+                return match.group(1).lower()
+        # Fallback
+        return "the element"
+
+    def _detect_embedded_args(
+        self, keywords: List[BddKeyword]
+    ) -> List[BddKeyword]:
+        """Detect repeated patterns and create embedded argument keywords.
+
+        When multiple keywords differ only in a literal argument value, merge them
+        into a single keyword with an embedded ``${arg}`` placeholder.
+        """
+        if len(keywords) < 2:
+            return keywords
+
+        # Group keywords by structural similarity: same number of steps,
+        # same keyword sequence, differing only in argument values.
+        from collections import defaultdict
+
+        def _structural_key(kw: BddKeyword) -> Tuple:
+            return tuple(
+                (s.keyword, len(s.arguments or []))
+                for s in kw.steps
+            )
+
+        struct_groups: Dict[Tuple, List[BddKeyword]] = defaultdict(list)
+        for kw in keywords:
+            key = _structural_key(kw)
+            struct_groups[key].append(kw)
+
+        result: List[BddKeyword] = []
+        merged_names: set = set()
+
+        for key, group in struct_groups.items():
+            if len(group) < 2:
+                result.extend(group)
+                continue
+
+            # Find differing argument positions
+            first = group[0]
+            diff_positions: List[Tuple[int, int]] = []  # (step_idx, arg_idx)
+            for step_idx, first_step in enumerate(first.steps):
+                for arg_idx in range(len(first_step.arguments or [])):
+                    values = set()
+                    for kw in group:
+                        val = str(kw.steps[step_idx].arguments[arg_idx])
+                        values.add(val)
+                    if len(values) > 1:
+                        diff_positions.append((step_idx, arg_idx))
+
+            if not diff_positions:
+                # No differences — keep all
+                result.extend(group)
+                continue
+
+            # Create a merged keyword with embedded args
+            merged_steps: List[TestCaseStep] = []
+            embedded_args: Dict[str, str] = {}
+            arg_counter = 0
+
+            for step_idx, step in enumerate(first.steps):
+                new_args = list(step.arguments or [])
+                for arg_idx in range(len(new_args)):
+                    if (step_idx, arg_idx) in diff_positions:
+                        arg_name = f"arg{arg_counter + 1}" if arg_counter > 0 else "value"
+                        embedded_args[arg_name] = str(new_args[arg_idx])
+                        new_args[arg_idx] = f"${{{arg_name}}}"
+                        arg_counter += 1
+                merged_steps.append(
+                    TestCaseStep(
+                        keyword=step.keyword,
+                        arguments=new_args,
+                        assigned_variables=step.assigned_variables,
+                        assignment_type=step.assignment_type,
+                    )
+                )
+
+            # Build merged keyword name with embedded args
+            base_name = first.name
+            # Try to substitute the varying part in the name as well
+            for kw in group:
+                merged_names.add(kw.name)
+
+            # Create the merged keyword with embedded arg placeholders in name
+            # Find common prefix/suffix in names to build template
+            merged_name = self._build_embedded_name(
+                [kw.name for kw in group], embedded_args
+            )
+
+            merged_kw = BddKeyword(
+                name=merged_name,
+                steps=merged_steps,
+                bdd_intent=first.bdd_intent,
+                embedded_args=embedded_args,
+                is_embedded=True,
+            )
+            result.append(merged_kw)
+
+        return result
+
+    def _build_embedded_name(
+        self, names: List[str], embedded_args: Dict[str, str]
+    ) -> str:
+        """Build an embedded-argument keyword name from a set of similar names.
+
+        Phase 1.1: Uses WORD-level prefix/suffix matching instead of
+        character-level, avoiding malformed names like ``the c ${value}``.
+        """
+        if not names or len(names) < 2:
+            return names[0] if names else "the user performs the action"
+
+        arg_name = list(embedded_args.keys())[0] if embedded_args else "value"
+
+        # Split all names into word lists
+        word_lists = [n.split() for n in names]
+        first_words = word_lists[0]
+
+        # Find common word prefix
+        prefix_len = 0
+        for i in range(len(first_words)):
+            word = first_words[i]
+            if all(
+                len(wl) > i and wl[i] == word
+                for wl in word_lists[1:]
+            ):
+                prefix_len = i + 1
+            else:
+                break
+
+        # Find common word suffix
+        suffix_len = 0
+        for i in range(1, len(first_words) + 1):
+            word = first_words[-i]
+            if all(
+                len(wl) >= i and wl[-i] == word
+                for wl in word_lists[1:]
+            ):
+                suffix_len = i
+            else:
+                break
+
+        # Avoid overlap
+        if prefix_len + suffix_len > len(first_words):
+            suffix_len = max(0, len(first_words) - prefix_len)
+
+        prefix_words = first_words[:prefix_len] if prefix_len else []
+        suffix_words = first_words[len(first_words) - suffix_len:] if suffix_len else []
+
+        if not prefix_words and not suffix_words:
+            # No common words — use first name's leading words + ${arg}
+            return f'{" ".join(first_words[:-1])} ${{{arg_name}}}' if len(first_words) > 1 else f'${{{arg_name}}}'
+
+        parts = []
+        if prefix_words:
+            parts.append(" ".join(prefix_words))
+        parts.append(f'${{{arg_name}}}')
+        if suffix_words:
+            parts.append(" ".join(suffix_words))
+
+        return " ".join(parts)
+
+    # ── End BDD transformation methods ─────────────────────────────
+
     def _build_test_case_from_test_info(self, test_info) -> "GeneratedTestCase":
         """Build a GeneratedTestCase from a TestInfo (ADR-005 multi-test mode)."""
         steps = []
@@ -480,6 +1372,8 @@ class TestBuilder:
                 arguments=exec_step.arguments,
                 assigned_variables=getattr(exec_step, "assigned_variables", []),
                 assignment_type=getattr(exec_step, "assignment_type", None),
+                bdd_group=getattr(exec_step, "bdd_group", None),
+                bdd_intent=getattr(exec_step, "bdd_intent", None),
             )
             steps.append(tc_step)
 
@@ -502,6 +1396,7 @@ class TestBuilder:
             steps=steps,
             documentation=test_info.documentation,
             tags=test_info.tags,
+            template=getattr(test_info, 'template', None),  # ADR-019
             setup=setup,
             teardown=teardown,
         )
@@ -749,6 +1644,10 @@ class TestBuilder:
                             # Skip this step - it's an orphan Evaluate matching an IF condition
                             continue
 
+            # Extract BDD fields from step dict
+            bdd_group = step.get("bdd_group")
+            bdd_intent = step.get("bdd_intent")
+
             # Apply optimizations with assignment information
             optimized_step = await self._optimize_step(
                 keyword,
@@ -760,6 +1659,11 @@ class TestBuilder:
             )
 
             if optimized_step:  # Only add if not filtered out by optimization
+                # Carry BDD annotations through to the TestCaseStep
+                if bdd_group:
+                    optimized_step.bdd_group = bdd_group
+                if bdd_intent:
+                    optimized_step.bdd_intent = bdd_intent
                 test_steps.append(optimized_step)
 
         # Generate meaningful documentation if not provided
@@ -1447,6 +2351,10 @@ class TestBuilder:
                 name=test_case.name, doc=test_case.documentation
             )
 
+            # ADR-019: Set template for data-driven tests
+            if getattr(test_case, 'template', None):
+                rf_test.template = test_case.template
+
             # Add tags
             if test_case.tags:
                 rf_test.tags.add(test_case.tags)
@@ -1569,6 +2477,10 @@ class TestBuilder:
             if test_case.tags:
                 lines.append(f"    [Tags]    {'    '.join(test_case.tags)}")
 
+            # ADR-019: Template support for data-driven tests
+            if getattr(test_case, 'template', None):
+                lines.append(f"    [Template]    {test_case.template}")
+
             if test_case.setup:
                 escaped_setup_args = [
                     self._escape_robot_argument(arg)
@@ -1608,10 +2520,20 @@ class TestBuilder:
                         lines.append(line)
                     cur += 1
             else:
-                # Test steps (legacy linear rendering)
-                for step in test_case.steps:
-                    line = await self._render_linear_step(step)
-                    lines.append(line)
+                # ADR-019: Data-driven rendering when template is set
+                if getattr(test_case, 'template', None):
+                    for step in test_case.steps:
+                        escaped_args = [
+                            self._escape_robot_argument(str(arg))
+                            for arg in (step.arguments or [])
+                        ]
+                        if escaped_args:
+                            lines.append(f"    {'    '.join(escaped_args)}")
+                else:
+                    # Test steps (legacy linear rendering)
+                    for step in test_case.steps:
+                        line = await self._render_linear_step(step)
+                        lines.append(line)
 
             if test_case.teardown:
                 escaped_teardown_args = [
@@ -1623,6 +2545,24 @@ class TestBuilder:
                 )
 
             lines.append("")
+
+        # BDD Keywords section
+        if suite.bdd_keywords:
+            lines.append("*** Keywords ***")
+            for kw in suite.bdd_keywords:
+                lines.append(kw.name)
+                # Phase 4: Emit [Arguments] for template wrapper keywords
+                arg_vars = getattr(kw, "_arg_vars", None)
+                if arg_vars:
+                    lines.append(f"    [Arguments]    {'    '.join(arg_vars)}")
+                for step in kw.steps:
+                    escaped_args = [
+                        self._escape_robot_argument(str(a))
+                        for a in (step.arguments or [])
+                    ]
+                    args_str = ("    " + "    ".join(escaped_args)) if escaped_args else ""
+                    lines.append(f"    {step.keyword}{args_str}")
+                lines.append("")
 
         return "\n".join(lines)
 

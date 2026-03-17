@@ -2161,6 +2161,17 @@ async def find_keywords(
     """
 
     strategy_norm = (strategy or "semantic").strip().lower()
+
+    # BDD prefix stripping for query (ADR-019)
+    from robotmcp.domains.keyword_resolution.services import BddPrefixService
+    bdd_query_result = BddPrefixService.strip_prefix(query)
+    if bdd_query_result.has_prefix:
+        query = bdd_query_result.stripped_name
+        logger.debug(
+            f"Stripped BDD prefix from find_keywords query: "
+            f"'{bdd_query_result.original_name}' -> '{query}'"
+        )
+
     current_state = current_state or {}
     limit_value: int | None = None
     if limit is not None:
@@ -2237,6 +2248,16 @@ async def find_keywords(
         if limit_value is not None:
             matches = matches[:limit_value]
 
+        # ADR-019: Annotate embedded argument keywords
+        import re as _re
+        for kw in matches:
+            kw_name = kw.get("name", "")
+            if "${" in kw_name:
+                kw["embedded_args"] = True
+                kw["usage_example"] = _re.sub(
+                    r'\$\{([^}:]+)(?::[^}]*)?\}', r'<\1>', kw_name
+                )
+
         # Add compact top_matches summary for LLM (full results may be externalized)
         top_names = [m.get("name", "") for m in matches[:5]]
         result = {
@@ -2284,6 +2305,16 @@ async def find_keywords(
 
         if limit_value is not None:
             catalog = catalog[:limit_value]
+
+        # ADR-019: Annotate embedded argument keywords
+        import re as _re
+        for kw in catalog:
+            kw_name = kw.get("name", "")
+            if "${" in kw_name:
+                kw["embedded_args"] = True
+                kw["usage_example"] = _re.sub(
+                    r'\$\{([^}:]+)(?::[^}]*)?\}', r'<\1>', kw_name
+                )
 
         # Add compact top_matches summary for LLM (full results may be externalized)
         top_names = [c.get("name", "") for c in catalog[:5]]
@@ -2377,6 +2408,7 @@ async def manage_session(
     test_tags: OptionalCoercedStringList = None,
     test_setup: Dict[str, Any] | None = None,
     test_teardown: Dict[str, Any] | None = None,
+    template: str | None = None,  # ADR-019: template keyword for data-driven [Template]
     test_status: TestStatus = "pass",
     test_message: str = "",
     keyword: str | None = None,
@@ -2910,6 +2942,7 @@ async def manage_session(
             tags=test_tags or [],
             setup=test_setup,
             teardown=test_teardown,
+            template=template,  # ADR-019
         )
 
         # Start test in RF context (pushes test scope)
@@ -2921,13 +2954,20 @@ async def manage_session(
             logger.warning(f"RF context start_test failed (non-fatal): {e}")
             ctx_result = {"success": False, "error": str(e)}
 
-        return {
+        result = {
             "success": True,
             "session_id": session_id,
             "action": action_norm,
             "test_name": test_name,
             "context_result": ctx_result,
         }
+        if template:
+            result["template"] = template
+            result["hint"] = (
+                "Data-driven test. Execute the template keyword with different "
+                "arguments. build_test_suite will render as [Template] + data rows."
+            )
+        return result
 
     if action_norm in {"end_test", "end_task"}:
         # Guard: multi-test not supported with active attach bridge
@@ -3322,6 +3362,8 @@ async def execute_step(
     mode: ExecutionMode = "keyword",
     expression: str | None = None,
     timeout_ms: int | None = None,
+    bdd_group: str = "",
+    bdd_intent: str = "",
 ) -> Dict[str, Any]:
     """Execute a single Robot Framework keyword (or Evaluate) within a session.
 
@@ -3352,6 +3394,13 @@ async def execute_step(
                     - Read operations (Get Text): 2000ms
                     - API calls (GET, POST): 30000ms
                     Set to 0 or negative to disable timeout.
+        bdd_group: Optional group name for BDD keyword generation. Steps with the same
+                   bdd_group are clustered into a single behavioral keyword when
+                   build_test_suite(bdd_style=True) is called.
+                   Example: bdd_group="add product to cart"
+        bdd_intent: BDD intent prefix for the group: "given", "when", "then", "and", "but".
+                    Used with bdd_group to assign Given/When/Then prefixes in the
+                    generated BDD test suite.
 
     Returns:
         Dict[str, Any]: Execution result:
@@ -3402,6 +3451,16 @@ async def execute_step(
             # Convert other types (int, float, etc.) to string
             coerced_arguments.append(str(arg))
     arguments = coerced_arguments
+
+    # BDD prefix stripping (ADR-019)
+    from robotmcp.domains.keyword_resolution.services import BddPrefixService
+    bdd_result = BddPrefixService.strip_prefix(keyword)
+    if bdd_result.has_prefix:
+        keyword = bdd_result.stripped_name
+        logger.debug(
+            f"Stripped BDD prefix '{bdd_result.prefix_type.value}' from keyword: "
+            f"'{bdd_result.original_name}' -> '{bdd_result.stripped_name}'"
+        )
 
     # Handle assign_to=None explicitly passed by models
     if assign_to is None:
@@ -3586,6 +3645,29 @@ async def execute_step(
     result["mode"] = mode_norm
     result.setdefault("keyword", keyword_to_run)
 
+    # ADR-019: Annotate BDD prefix in result
+    if bdd_result.has_prefix:
+        result["bdd_prefix"] = bdd_result.prefix_type.value
+        result["original_keyword"] = bdd_result.original_name
+
+    # ADR-019 Phase 2: Annotate BDD group/intent on the ExecutionStep
+    if bdd_group or bdd_intent:
+        _session = execution_engine.session_manager.get_session(session_id)
+        if _session:
+            if _session.test_registry.is_multi_test_mode():
+                _current_test = _session.test_registry.get_current_test()
+                _steps = _current_test.steps if _current_test else []
+            else:
+                _steps = _session.steps
+            if _steps:
+                _steps[-1].bdd_group = bdd_group or None
+                _steps[-1].bdd_intent = bdd_intent or None
+        # Include in response payload
+        if bdd_group:
+            result["bdd_group"] = bdd_group
+        if bdd_intent:
+            result["bdd_intent"] = bdd_intent
+
     # ADR-015: Externalize large fields to artifacts
     result = _externalize_response("execute_step", session_id, result)
 
@@ -3704,6 +3786,7 @@ async def build_test_suite(
     tags: OptionalCoercedStringList = None,
     documentation: str = "",
     remove_library_prefixes: bool = True,
+    bdd_style: bool = False,
 ) -> Dict[str, Any]:
     """Generate a Robot Framework test suite from previously executed steps.
 
@@ -3713,6 +3796,9 @@ async def build_test_suite(
         tags: Optional test tags.
         documentation: Optional test case documentation.
         remove_library_prefixes: Whether to strip library prefixes from keywords.
+        bdd_style: Generate BDD-style suite with a Keywords section. When True,
+            steps are grouped into behavioral keywords (Given/When/Then) and a
+            ``*** Keywords ***`` section is appended to the generated .robot content.
 
     Returns:
         Dict[str, Any]: Suite generation result:
@@ -3754,7 +3840,8 @@ async def build_test_suite(
 
     # Build the test suite with resolved session
     result = await test_builder.build_suite(
-        resolved_session_id, test_name, tags, documentation, remove_library_prefixes
+        resolved_session_id, test_name, tags, documentation, remove_library_prefixes,
+        bdd_style=bdd_style,
     )
 
     # Add session resolution info to result
@@ -3775,6 +3862,69 @@ async def build_test_suite(
     result = _externalize_response("build_test_suite", resolved_session_id, result)
 
     return result
+
+
+@mcp.tool(**DISABLED_TOOL_KWARGS)
+async def load_test_data(
+    file_path: str,
+    encoding: str = "utf-8",
+    dialect: str = "Excel-EU",
+    delimiter: str = ";",
+    sheet_name: str = "0",
+    limit: int = 100,
+) -> Dict[str, Any]:
+    """Load test data from an external file (CSV, Excel, JSON) for data-driven testing.
+
+    Use this to inspect external data before building data-driven test suites.
+    Works with DataDriver-compatible formats (CSV, Excel, JSON).
+    If DataDriver is not installed, falls back to built-in CSV/JSON parsing.
+
+    Args:
+        file_path: Absolute path to the data file.
+        encoding: File encoding (default utf-8).
+        dialect: CSV dialect (Excel-EU, excel, unix).
+        delimiter: Column delimiter for CSV files.
+        sheet_name: Excel sheet index or name.
+        limit: Maximum rows to return (default 100).
+
+    Returns:
+        Dict with test_cases list, count, format, and column_names.
+    """
+    try:
+        from robotmcp.domains.keyword_resolution.services import (
+            DataSourceLoaderService,
+        )
+
+        ds = DataSourceLoaderService.load(
+            file_path, encoding, dialect, delimiter, sheet_name
+        )
+        rows = ds.rows[:limit]
+        return {
+            "success": True,
+            "count": ds.count,
+            "returned": len(rows),
+            "format": ds.format.value,
+            "column_names": list(ds.column_names),
+            "test_cases": [
+                {
+                    "test_name": r.test_name,
+                    "arguments": r.arguments,
+                    "tags": list(r.tags),
+                    "documentation": r.documentation,
+                }
+                for r in rows
+            ],
+        }
+    except FileNotFoundError:
+        return {"success": False, "error": f"File not found: {file_path}"}
+    except ImportError as e:
+        return {
+            "success": False,
+            "error": f"Missing dependency: {e}",
+            "hint": "Install with: pip install robotframework-datadriver",
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 @mcp.tool(**DISABLED_TOOL_KWARGS)
@@ -6609,6 +6759,7 @@ _DISABLED_TOOL_NAMES_BASE: frozenset[str] = frozenset({
     "initialize_context",
     "list_available_keywords",
     "list_library_plugins",
+    "load_test_data",
     "reload_library_plugins",
     "run_test_suite_dry",
     "search_keywords",

@@ -1,0 +1,59 @@
+id: demoshop_bdd_checkout
+name: DemoShop BDD Checkout with Data-Driven Products
+description: |
+  BDD-style test scenario for the demoshop using Given/When/Then prefixes.
+  Tests adding different products to cart and completing checkout.
+  Validates ADR-019 BDD prefix stripping and data-driven template support.
+context: web
+prompt: |
+  Use RobotMCP to create a test suite and execute it step wise.
+  Use BDD style (Given/When/Then/And) for all keywords where it makes sense.
+  Use Browser Library with headless=False.
+
+  Scenario: Purchase products from the demoshop
+
+  Given I open https://demoshop.makrocode.de/
+  When I add "Sauce Labs Backpack" to the cart
+  Then the cart badge should show 1 item
+  And I add "Sauce Labs Bike Light" to the cart
+  Then the cart badge should show 2 items
+  When I open the cart
+  Then I should see both items in the cart
+  When I proceed to checkout
+  And I fill in checkout information (first name: Test, last name: User, zip: 12345)
+  And I continue and finish the checkout
+  Then the checkout should be complete with a success message
+
+  Execute step by step using execute_step.
+  Use get_session_state with include_reduced_dom=True to inspect the page DOM/ARIA before interacting.
+  Build the final test suite afterwards using build_test_suite.
+
+  IMPORTANT: Use real locators from the DOM inspection, never guess locators.
+expected_tools:
+  - tool_name: manage_session
+    min_calls: 1
+  - tool_name: execute_step
+    min_calls: 8
+    max_calls: 40
+  - tool_name: get_session_state
+    min_calls: 2
+  - tool_name: build_test_suite
+    min_calls: 1
+    max_calls: 2
+expected_outcome: |
+  Successfully creates and executes a BDD-style test suite that:
+  1. Opens the demoshop
+  2. Adds Sauce Labs Backpack to cart
+  3. Verifies cart count
+  4. Adds Sauce Labs Bike Light to cart
+  5. Verifies cart count updated
+  6. Opens cart and verifies items
+  7. Completes checkout with test data
+  8. Verifies checkout success
+min_tool_hit_rate: 0.75
+tags:
+  - web
+  - browser
+  - bdd
+  - checkout
+  - data-driven

@@ -33,4 +33,30 @@ IMPORTANT: Before executing any Robot Framework test automation:
    - Use 'build_test_suite' to create test suites
    - Use 'run_test_suite' to execute complete test suites
 
+7. BDD STYLE (when user requests BDD/Gherkin)
+   - NEVER put Given/When/Then directly on library keywords (Click, Fill Text, etc.)
+   - ALWAYS create behavioral keywords that describe WHAT, not HOW
+   - BDD prefixes (Given/When/Then/And/But) are auto-stripped from keywords automatically
+   - Embedded argument keywords match concrete calls automatically
+   - Use build_test_suite(bdd_style=True) to generate proper BDD .robot output
+   - Test cases should read like an English specification with no technical details
+
+   BDD NAMING CONVENTIONS:
+     Given: "the [noun] is [state]"           e.g. "the demoshop is open"
+     When:  "the user [verb]s [object]"        e.g. "the user adds Backpack to the cart"
+     Then:  "the [noun] should [condition]"    e.g. "the cart should contain 2 items"
+
+   BDD STEP GROUPING (improves build_test_suite output quality):
+   When executing steps that belong to a single behavior, annotate them:
+     execute_step(keyword="Click", arguments=["role=link[name='Products']"],
+                  bdd_group="navigate to products", bdd_intent="when")
+     execute_step(keyword="Click", arguments=["button[name='Add X to cart']"],
+                  bdd_group="add product to cart", bdd_intent="when")
+     execute_step(keyword="Get Text", arguments=["[data-cart-count]", "==", "1"],
+                  bdd_group="verify cart count", bdd_intent="then")
+   Each unique bdd_group value becomes one keyword in the Keywords section.
+   Use domain language: bdd_group="add product to cart" NOT "click add button"
+
+   Data-driven: manage_session(action="start_test", template="Keyword Name") sets [Template]
+
 Available discovery tools: {available_tools}

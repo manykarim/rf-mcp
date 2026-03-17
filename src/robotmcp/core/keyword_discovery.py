@@ -17,6 +17,7 @@ class KeywordDiscovery:
         self.keyword_cache: Dict[str, KeywordInfo] = {}
         self.shadowed_keywords: Dict[str, List[Tuple[str, KeywordInfo]]] = {}  # keyword -> [(library, info), ...]
         self.ambiguous_keywords: Set[str] = set()  # Keywords that exist in multiple libraries
+        self.embedded_keywords: List[Tuple] = []  # [(EmbeddedPattern, KeywordInfo), ...]
 
         # Keywords that modify the DOM or navigate pages
         self.dom_changing_patterns = [
@@ -170,7 +171,14 @@ class KeywordDiscovery:
                     )
             else:
                 self.keyword_cache[simple_key] = keyword_info
-    
+
+            # Detect and store embedded keywords (ADR-019)
+            from robotmcp.domains.keyword_resolution.services import EmbeddedMatcherService
+            if EmbeddedMatcherService.is_embedded_keyword(keyword_name):
+                pattern = EmbeddedMatcherService.create_pattern(keyword_name)
+                if pattern:
+                    self.embedded_keywords.append((pattern, keyword_info))
+
     def remove_keywords_from_cache(self, lib_info: LibraryInfo) -> int:
         """Remove keywords from a specific library from the cache."""
         keywords_removed = 0
@@ -190,7 +198,13 @@ class KeywordDiscovery:
                 if self.keyword_cache[simple_key].library == lib_info.name:
                     del self.keyword_cache[simple_key]
                     keywords_removed += 1
-        
+
+        # Remove embedded keywords from this library (ADR-019)
+        self.embedded_keywords = [
+            (pat, ki) for pat, ki in self.embedded_keywords
+            if ki.library != lib_info.name
+        ]
+
         return keywords_removed
     
     def find_keyword(self, keyword_name: str, active_library: str = None, session_libraries: List[str] = None) -> Optional[KeywordInfo]:
@@ -305,7 +319,19 @@ class KeywordDiscovery:
             library_info = f" from {best_match.library}" if active_library else ""
             logger.debug(f"Fuzzy matched '{keyword_name}' to '{best_match.name}'{library_info} (score: {best_score:.2f})")
             return best_match
-        
+
+        # Embedded argument matching fallback (ADR-019)
+        if self.embedded_keywords:
+            from robotmcp.domains.keyword_resolution.services import EmbeddedMatcherService
+            result = EmbeddedMatcherService.match(normalized, self.embedded_keywords)
+            if result:
+                embedded_match, keyword_info = result
+                logger.debug(
+                    f"Embedded match: '{keyword_name}' matched template "
+                    f"'{embedded_match.template_name}' with args {embedded_match.extracted_args}"
+                )
+                return keyword_info
+
         return None
     
     def get_keyword_suggestions(self, keyword_name: str, limit: int = 5) -> List[str]:

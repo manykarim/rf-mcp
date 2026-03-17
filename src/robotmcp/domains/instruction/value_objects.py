@@ -493,6 +493,16 @@ For DOM inspection: get_session_state(sections=["page_source"], include_reduced_
    - manage_session(action="end_test") to finish it, then start another
    - build_test_suite generates a multi-test .robot file
 
+6. BDD STYLE (when user requests BDD/Gherkin):
+   - NEVER put Given/When/Then directly on library keywords (Click, Fill Text, etc.)
+   - ALWAYS create behavioral keywords in build_test_suite with bdd_style=True
+   - BDD prefixes are auto-stripped: execute_step(keyword="Given open page") runs "open page"
+   - Good BDD: test case reads like English specification, locators hidden in Keywords section
+   - Bad: "Given Click button[...]" / Good: "Given the browser is open"
+   - Use bdd_group in execute_step to group steps into behavioral keywords
+   - After execution, call build_test_suite(bdd_style=True) for proper BDD output
+   - Data-driven: manage_session(action="start_test", template="My Keyword") sets [Template]
+
 RULES:
 - NEVER fabricate locators - inspect the DOM first with get_session_state
 - ALWAYS discover keywords before executing unfamiliar ones
@@ -541,6 +551,15 @@ STEP 4: EXECUTE STEPS
 STEP 5: HANDLE ERRORS
 - "Element not found" -> call get_session_state for fresh DOM/ARIA snapshot
 - "Keyword not found" -> call find_keywords to verify spelling
+
+STEP 6: BDD STYLE (when user requests BDD/Gherkin)
+- NEVER put Given/When/Then on library keywords like "Given Click" or "When Fill Text"
+- Instead, create behavioral keywords that describe WHAT (not HOW)
+- Good: "Given the user is logged in" wraps Open Browser + Fill Text + Click
+- Bad: "Given Fill Text id=username admin" exposes implementation details
+- Use build_test_suite(bdd_style=True) to generate proper BDD .robot output
+- Use bdd_group in execute_step to group low-level steps into behavioral keywords
+- Test cases should read like English: Given/When/Then describe behavior, not clicks
 
 CRITICAL RULES:
 1. NEVER guess locators - always inspect the page first with get_session_state
