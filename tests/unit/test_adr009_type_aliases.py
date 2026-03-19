@@ -52,6 +52,7 @@ _TYPE_ALIASES = {
             "set_variables", "variables",
             "import_variables", "load_variables",
             "start_test", "end_test", "start_task", "end_task",
+            "add_data_row", "data_row",
             "list_tests",
             "set_suite_setup", "set_suite_teardown",
             "set_tool_profile", "tool_profile",
@@ -496,6 +497,7 @@ class TestSessionActionSpecifics:
             "set_variables", "variables",
             "import_variables", "load_variables",
             "start_test", "end_test", "start_task", "end_task",
+            "add_data_row", "data_row",
             "list_tests",
             "set_suite_setup", "set_suite_teardown",
             "set_tool_profile", "tool_profile",
@@ -504,10 +506,10 @@ class TestSessionActionSpecifics:
             assert ta.validate_python(action) == action
 
     def test_session_action_count(self):
-        """SessionAction should have exactly 20 allowed values (with aliases)."""
+        """SessionAction should have exactly 22 allowed values (with aliases)."""
         ta = TypeAdapter(SessionAction)
         schema = ta.json_schema()
-        assert len(schema["enum"]) == 20
+        assert len(schema["enum"]) == 22
 
     def test_session_action_init_case_variants(self):
         ta = TypeAdapter(SessionAction)

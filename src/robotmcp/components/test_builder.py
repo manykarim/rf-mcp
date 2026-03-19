@@ -72,6 +72,7 @@ class BddKeyword:
         default_factory=dict
     )  # arg_name -> example value
     is_embedded: bool = False  # True if uses embedded arguments
+    arg_vars: List[str] = field(default_factory=list)  # [Arguments] variables
 
 
 @dataclass
@@ -97,6 +98,10 @@ class GeneratedTestSuite:
     variable_files: List[str] = None
     # BDD behavioral keywords (generated when bdd_style=True)
     bdd_keywords: Optional[List[BddKeyword]] = None
+    # Suite-level Test Template (all test cases share the same template)
+    suite_template: Optional[str] = None
+    # Column header comments for Test Cases line (e.g., ["USERNAME", "PASSWORD"])
+    column_headers: Optional[List[str]] = None
 
 
 class TestBuilder:
@@ -256,6 +261,7 @@ class TestBuilder:
         documentation: str = "",
         remove_library_prefixes: bool = True,
         bdd_style: bool = False,
+        data_driven_mode: str = "auto",
     ) -> Dict[str, Any]:
         """
         Generate Robot Framework test suite from successful execution steps.
@@ -298,10 +304,29 @@ class TestBuilder:
 
                 test_cases = []
                 for name, test_info in session.test_registry.tests.items():
-                    if not test_info.steps:
+                    # Fix 1: Adopt legacy steps as template body when test has
+                    # data_rows but no steps (agent executed before start_test)
+                    if test_info.template and (test_info.data_rows or test_info.named_data_rows):
+                        if not test_info.steps and hasattr(session, 'steps') and session.steps:
+                            test_info.steps = list(session.steps)
+
+                    if not test_info.steps and not test_info.data_rows and not test_info.named_data_rows:
                         continue
-                    tc = self._build_test_case_from_test_info(test_info)
-                    test_cases.append(tc)
+                    # Expand named_data_rows into separate test cases
+                    if test_info.named_data_rows and test_info.template:
+                        impl_steps = self._build_impl_steps_from_test_info(test_info)
+                        for row_name, row_values in test_info.named_data_rows:
+                            row_tc = GeneratedTestCase(
+                                name=row_name,
+                                steps=impl_steps + [TestCaseStep(keyword="", arguments=list(row_values))],
+                                template=test_info.template,
+                                documentation=test_info.documentation,
+                                tags=test_info.tags,
+                            )
+                            test_cases.append(row_tc)
+                    else:
+                        tc = self._build_test_case_from_test_info(test_info)
+                        test_cases.append(tc)
 
                 if not test_cases:
                     return {
@@ -389,6 +414,10 @@ class TestBuilder:
             # Apply library prefix removal if requested
             if remove_library_prefixes:
                 suite = self._apply_prefix_removal(suite)
+
+            # Apply data-driven mode promotion BEFORE BDD (suite_template
+            # skips BDD transformation for template test cases)
+            self._apply_data_driven_mode(suite, data_driven_mode)
 
             # Apply BDD transformation if requested
             if bdd_style:
@@ -553,6 +582,10 @@ class TestBuilder:
         tc_group_map: List[Tuple[GeneratedTestCase, List[BddKeywordGroup]]] = []
 
         for tc in suite.test_cases:
+            # Skip suite_template TCs — they're data rows, not keyword steps
+            if suite.suite_template:
+                continue
+
             if getattr(tc, "template", None):
                 self._transform_template_to_bdd(
                     tc, all_bdd_keywords, seen_keyword_names, suite
@@ -749,88 +782,100 @@ class TestBuilder:
     ) -> None:
         """Transform a data-driven (template) test case into BDD style.
 
-        The template keyword's implementation steps (found in the Keywords section
-        or inferred from the session) are grouped into BDD behavioral keywords.
-        A wrapper template keyword is created that calls Given/When/Then steps,
-        and the test case's ``template`` is updated to point to the wrapper.
+        C3 fix: Instead of creating a wrapper that delegates to sub-keywords
+        (which breaks variable forwarding), we create a single template keyword
+        with BDD-prefixed steps directly inside. This ensures [Arguments] are
+        in scope for all steps.
 
-        If we cannot find the template keyword's implementation steps (e.g. when
-        the template references an external keyword), we look for the steps in
-        the test case body as a heuristic — some agents record the template body
-        steps as the test case steps.
+        Example output:
+            Verify Login
+                [Arguments]    ${username}    ${password}    ${expected}
+                Given the user fills in "${username}" and "${password}"
+                When the user clicks login
+                Then the message should show "${expected}"
         """
-        original_template = tc.template
-
-        # Try to find implementation steps for the template keyword.
-        # Strategy 1: Look in existing bdd_keywords / suite keywords
-        template_steps: List[TestCaseStep] = []
-
-        # Strategy 2: If tc.steps contain actual keyword steps (not just data rows),
-        # they represent the template body.  Data rows have no keyword, only arguments.
-        has_keyword_steps = any(
-            s.keyword and s.keyword.strip() for s in tc.steps
-        )
-        if has_keyword_steps:
-            template_steps = [s for s in tc.steps if s.keyword and s.keyword.strip()]
+        # Extract implementation steps (have keyword) vs data rows (empty keyword)
+        template_steps = [s for s in tc.steps if s.keyword and s.keyword.strip()]
+        data_rows = [s for s in tc.steps if not (s.keyword and s.keyword.strip())]
 
         if not template_steps:
-            # No implementation steps found — we can only rename the template
-            # to a BDD-style name and leave the test case as-is.
+            # No implementation steps — leave the test case as-is
             return
 
-        # Group the template implementation steps into BDD keywords
+        # Filter instrumentation from template body
+        template_steps = self._filter_instrumentation_steps(template_steps)
+
+        # Group template steps into BDD phases
         groups = self._group_steps_into_bdd_keywords(template_steps)
 
-        # Build the BDD keyword references for the wrapper
-        wrapper_steps: List[TestCaseStep] = []
+        # Build BDD-prefixed steps for the template keyword body.
+        # These steps reference the template [Arguments] directly — no wrapper
+        # indirection needed.
+        prefix_map = {"given": "Given", "when": "When", "then": "Then"}
+        bdd_body_steps: List[TestCaseStep] = []
+
         for group in groups:
-            if group.name in seen_keyword_names:
-                kw = seen_keyword_names[group.name]
-            else:
-                kw = BddKeyword(
-                    name=group.name,
-                    steps=list(group.steps),
-                    bdd_intent=group.bdd_intent,
+            prefix = prefix_map.get(group.bdd_intent, "When")
+            if len(group.steps) == 1:
+                # Single step: add BDD prefix directly
+                step = group.steps[0]
+                bdd_body_steps.append(
+                    TestCaseStep(
+                        keyword=f"{prefix} {step.keyword}",
+                        arguments=list(step.arguments or []),
+                    )
                 )
-                all_bdd_keywords.append(kw)
-                seen_keyword_names[kw.name] = kw
+            else:
+                # Multi-step group: create a sub-keyword and reference it
+                kw_name = group.name
+                if kw_name not in seen_keyword_names:
+                    kw = BddKeyword(
+                        name=kw_name,
+                        steps=list(group.steps),
+                        bdd_intent=group.bdd_intent,
+                    )
+                    all_bdd_keywords.append(kw)
+                    seen_keyword_names[kw_name] = kw
+                bdd_body_steps.append(
+                    TestCaseStep(
+                        keyword=f"{prefix} {kw_name}",
+                        arguments=[],
+                    )
+                )
 
-            prefix_map = {"given": "Given", "when": "When", "then": "Then"}
-            prefix = prefix_map.get(kw.bdd_intent, "When")
-            wrapper_steps.append(
-                TestCaseStep(keyword=f"{prefix} {kw.name}", arguments=[])
-            )
-
-        # Collect all argument names used in the template steps to build
-        # the wrapper keyword's [Arguments] line.
+        # Extract [Arguments] from template steps
         arg_vars = self._extract_template_arg_vars(template_steps)
 
-        # Create the BDD wrapper template keyword
-        wrapper_name = f"Verify {tc.name}"
-        wrapper_kw = BddKeyword(
-            name=wrapper_name,
-            steps=wrapper_steps,
+        # Create the template keyword with BDD body
+        template_kw_name = tc.template or f"Verify {tc.name}"
+        template_kw = BddKeyword(
+            name=template_kw_name,
+            steps=bdd_body_steps,
             bdd_intent="when",
-            embedded_args={},
-            is_embedded=False,
+            arg_vars=arg_vars,
         )
-        # Attach argument variables as metadata for rendering
-        wrapper_kw._arg_vars = arg_vars  # type: ignore[attr-defined]
-        all_bdd_keywords.append(wrapper_kw)
-        seen_keyword_names[wrapper_name] = wrapper_kw
+        all_bdd_keywords.append(template_kw)
+        seen_keyword_names[template_kw_name] = template_kw
 
-        # Update the test case to use the BDD wrapper as template
-        tc.template = wrapper_name
-
-        # Convert tc.steps to data rows (arguments only, no keyword)
-        # Keep only the data row steps (those without meaningful keywords)
-        data_rows = [s for s in tc.steps if not (s.keyword and s.keyword.strip())]
+        # Update the test case: keep only data rows
+        tc.template = template_kw_name
         if data_rows:
             tc.steps = data_rows
-        # else: steps remain as-is (agent may have structured them differently)
+
+    # M3: RF built-in variables that should NOT appear in [Arguments]
+    _RF_BUILTIN_VARS = frozenset({
+        "EMPTY", "SPACE", "TRUE", "FALSE", "NONE", "NULL",
+        "CURDIR", "TEMPDIR", "EXECDIR", "OUTPUT_DIR", "OUTPUT_FILE",
+        "LOG_FILE", "LOG_LEVEL", "REPORT_FILE", "TEST_NAME",
+        "SUITE_NAME", "SUITE_SOURCE", "PREV_TEST_STATUS",
+    })
 
     def _extract_template_arg_vars(self, steps: List[TestCaseStep]) -> List[str]:
-        """Extract ${var} references from template steps for [Arguments] line."""
+        """Extract ${var} references from template steps for [Arguments] line.
+
+        M3 fix: Filters out RF built-in variables (${EMPTY}, ${SPACE}, etc.)
+        that should not appear in [Arguments].
+        """
         var_pattern = re.compile(r'\$\{([^}]+)\}')
         found: List[str] = []
         seen: set = set()
@@ -838,7 +883,7 @@ class TestBuilder:
             for arg in (step.arguments or []):
                 for match in var_pattern.finditer(str(arg)):
                     var_name = match.group(1)
-                    if var_name not in seen:
+                    if var_name not in seen and var_name.upper() not in self._RF_BUILTIN_VARS:
                         seen.add(var_name)
                         found.append(f"${{{var_name}}}")
         return found
@@ -1363,6 +1408,100 @@ class TestBuilder:
 
     # ── End BDD transformation methods ─────────────────────────────
 
+    def _apply_data_driven_mode(
+        self, suite: GeneratedTestSuite, mode: str
+    ) -> None:
+        """Apply data-driven mode promotion to the suite.
+
+        Modes:
+        - "auto": auto-detect — if all TCs share the same template AND
+          each TC has exactly 1 data row, promote to suite_template.
+        - "per_test": no promotion (current [Template] per test case).
+        - "suite_template": force promotion — set Test Template in Settings,
+          suppress per-test [Template].
+        """
+        if mode == "per_test":
+            return
+
+        # Collect templates from all test cases
+        templates = {tc.template for tc in suite.test_cases if tc.template}
+
+        if not templates:
+            return  # No template test cases
+
+        if len(templates) != 1:
+            return  # Mixed templates — can't promote
+
+        common_template = templates.pop()
+
+        # Check if each TC has exactly 1 data row (named-row pattern)
+        all_single_row = all(
+            len([s for s in tc.steps if not (s.keyword and s.keyword.strip())]) <= 1
+            for tc in suite.test_cases
+            if tc.template
+        )
+
+        should_promote = False
+        if mode == "suite_template":
+            should_promote = True
+        elif mode == "auto":
+            # Auto-promote when: all TCs share template AND have ≤1 data row each
+            # AND there are at least 2 template TCs (otherwise per_test is fine)
+            template_tcs = [tc for tc in suite.test_cases if tc.template]
+            should_promote = all_single_row and len(template_tcs) >= 2
+
+        if should_promote:
+            suite.suite_template = common_template
+
+            # Extract column headers from multiple sources:
+            # 1. BDD keyword arg_vars (when bdd_style=True)
+            headers_found = False
+            for kw in (suite.bdd_keywords or []):
+                if kw.name == common_template and kw.arg_vars:
+                    suite.column_headers = [
+                        v.strip("${}") for v in kw.arg_vars
+                    ]
+                    headers_found = True
+                    break
+
+            # 2. Template implementation steps (extract ${var} names)
+            if not headers_found:
+                var_pattern = re.compile(r'\$\{([^}]+)\}')
+                col_names: List[str] = []
+                seen_vars: set = set()
+                for tc in suite.test_cases:
+                    for step in tc.steps:
+                        if step.keyword and step.keyword.strip():
+                            for arg in (step.arguments or []):
+                                for m in var_pattern.finditer(str(arg)):
+                                    vn = m.group(1)
+                                    if vn not in seen_vars and vn.upper() not in self._RF_BUILTIN_VARS:
+                                        seen_vars.add(vn)
+                                        col_names.append(vn)
+                    if col_names:
+                        break  # First TC with impl steps is enough
+                if col_names:
+                    suite.column_headers = col_names
+
+            # Suppress per-test [Template] — suite_template mode handles it
+            for tc in suite.test_cases:
+                if tc.template == common_template:
+                    tc.template = None
+
+    def _build_impl_steps_from_test_info(self, test_info) -> List[TestCaseStep]:
+        """Extract implementation steps (keyword-bearing) from a TestInfo."""
+        steps = []
+        for exec_step in test_info.steps:
+            steps.append(TestCaseStep(
+                keyword=exec_step.keyword,
+                arguments=exec_step.arguments,
+                assigned_variables=getattr(exec_step, "assigned_variables", []),
+                assignment_type=getattr(exec_step, "assignment_type", None),
+                bdd_group=getattr(exec_step, "bdd_group", None),
+                bdd_intent=getattr(exec_step, "bdd_intent", None),
+            ))
+        return steps
+
     def _build_test_case_from_test_info(self, test_info) -> "GeneratedTestCase":
         """Build a GeneratedTestCase from a TestInfo (ADR-005 multi-test mode)."""
         steps = []
@@ -1390,6 +1529,12 @@ class TestBuilder:
                 keyword=test_info.teardown["keyword"],
                 arguments=test_info.teardown.get("arguments", []),
             )
+
+        # Append data rows from TestInfo (added via add_data_row action)
+        data_rows = getattr(test_info, 'data_rows', [])
+        if data_rows:
+            for row in data_rows:
+                steps.append(TestCaseStep(keyword="", arguments=list(row)))
 
         return GeneratedTestCase(
             name=test_info.name,
@@ -2446,6 +2591,10 @@ class TestBuilder:
         if suite.tags:
             lines.append(f"Test Tags       {'    '.join(suite.tags)}")
 
+        # Suite-level Test Template (named-row data-driven pattern)
+        if suite.suite_template:
+            lines.append(f"Test Template    {suite.suite_template}")
+
         lines.append("")
 
         # Variables section - ONLY include variables explicitly set via manage_session
@@ -2461,10 +2610,29 @@ class TestBuilder:
 
             lines.append("")
 
-        # Test cases
-        lines.append("*** Test Cases ***")
+        # Test cases — column headers for suite_template mode
+        if suite.suite_template and suite.column_headers:
+            header = "    ".join(suite.column_headers)
+            lines.append(f"*** Test Cases ***    {header}")
+        else:
+            lines.append("*** Test Cases ***")
 
         for test_case in suite.test_cases:
+            # Suite-template mode: name + args on SAME line (no [Template], no indented body)
+            if suite.suite_template:
+                data_steps = [s for s in test_case.steps
+                              if not (s.keyword and s.keyword.strip())]
+                if data_steps and data_steps[0].arguments:
+                    escaped = [
+                        self._escape_robot_argument(str(a))
+                        for a in data_steps[0].arguments
+                    ]
+                    escaped = [a if a else "${EMPTY}" for a in escaped]
+                    lines.append(f"{test_case.name}    {'    '.join(escaped)}")
+                else:
+                    lines.append(f"{test_case.name}")
+                continue  # Skip normal per-test rendering
+
             lines.append(f"{test_case.name}")
 
             if test_case.documentation:
@@ -2490,45 +2658,53 @@ class TestBuilder:
                     f"    [Setup]    {test_case.setup.keyword}    {'    '.join(escaped_setup_args)}"
                 )
 
-            # Flow-aware rendering: if structured flow blocks exist, merge them with
-            # surrounding linear steps so that keywords before/after the block are kept.
-            # ADR-005: prefer per-test flow blocks over suite-level
-            tc_flow_blocks = None
-            if suite.per_test_flow_blocks and test_case.name in suite.per_test_flow_blocks:
-                tc_flow_blocks = suite.per_test_flow_blocks[test_case.name]
-            elif hasattr(suite, 'flow_blocks') and suite.flow_blocks:
-                tc_flow_blocks = suite.flow_blocks
-            if tc_flow_blocks:
-                # Map each flow block to its covered index range in linear steps
-                block_ranges, used_indices = self._map_blocks_to_ranges(test_case.steps, tc_flow_blocks)
-                cur = 0
-                for block, start_idx, end_idx in block_ranges:
-                    # Emit linear steps before this block
-                    while cur < start_idx:
+            # C2 fix: Template check BEFORE flow_blocks — template test cases
+            # must always use data-row rendering regardless of flow_blocks.
+            if getattr(test_case, 'template', None):
+                # C1 fix: Only render DATA ROWS (empty keyword), not template body steps
+                for step in test_case.steps:
+                    # Data rows have empty or whitespace-only keyword
+                    if step.keyword and step.keyword.strip():
+                        continue  # Skip template body steps
+                    escaped_args = [
+                        self._escape_robot_argument(str(arg))
+                        for arg in (step.arguments or [])
+                    ]
+                    if escaped_args:
+                        # M2 fix: Replace empty values with ${EMPTY}
+                        escaped_args = [a if a else '${EMPTY}' for a in escaped_args]
+                        lines.append(f"    {'    '.join(escaped_args)}")
+            else:
+                # Flow-aware rendering: if structured flow blocks exist, merge them
+                # with surrounding linear steps so that keywords before/after the
+                # block are kept.
+                # ADR-005: prefer per-test flow blocks over suite-level
+                tc_flow_blocks = None
+                if suite.per_test_flow_blocks and test_case.name in suite.per_test_flow_blocks:
+                    tc_flow_blocks = suite.per_test_flow_blocks[test_case.name]
+                elif hasattr(suite, 'flow_blocks') and suite.flow_blocks:
+                    tc_flow_blocks = suite.flow_blocks
+                if tc_flow_blocks:
+                    # Map each flow block to its covered index range in linear steps
+                    block_ranges, used_indices = self._map_blocks_to_ranges(test_case.steps, tc_flow_blocks)
+                    cur = 0
+                    for block, start_idx, end_idx in block_ranges:
+                        # Emit linear steps before this block
+                        while cur < start_idx:
+                            if cur not in used_indices:
+                                line = await self._render_linear_step(test_case.steps[cur])
+                                lines.append(line)
+                            cur += 1
+                        # Emit this flow block in RF syntax
+                        lines.extend(self._render_flow_blocks([block], indent="    "))
+                        # Advance cur past the block
+                        cur = max(cur, end_idx + 1)
+                    # Emit remaining linear steps after last block
+                    while cur < len(test_case.steps):
                         if cur not in used_indices:
                             line = await self._render_linear_step(test_case.steps[cur])
                             lines.append(line)
                         cur += 1
-                    # Emit this flow block in RF syntax
-                    lines.extend(self._render_flow_blocks([block], indent="    "))
-                    # Advance cur past the block
-                    cur = max(cur, end_idx + 1)
-                # Emit remaining linear steps after last block
-                while cur < len(test_case.steps):
-                    if cur not in used_indices:
-                        line = await self._render_linear_step(test_case.steps[cur])
-                        lines.append(line)
-                    cur += 1
-            else:
-                # ADR-019: Data-driven rendering when template is set
-                if getattr(test_case, 'template', None):
-                    for step in test_case.steps:
-                        escaped_args = [
-                            self._escape_robot_argument(str(arg))
-                            for arg in (step.arguments or [])
-                        ]
-                        if escaped_args:
-                            lines.append(f"    {'    '.join(escaped_args)}")
                 else:
                     # Test steps (legacy linear rendering)
                     for step in test_case.steps:
@@ -2552,7 +2728,7 @@ class TestBuilder:
             for kw in suite.bdd_keywords:
                 lines.append(kw.name)
                 # Phase 4: Emit [Arguments] for template wrapper keywords
-                arg_vars = getattr(kw, "_arg_vars", None)
+                arg_vars = kw.arg_vars if kw.arg_vars else None
                 if arg_vars:
                     lines.append(f"    [Arguments]    {'    '.join(arg_vars)}")
                 for step in kw.steps:

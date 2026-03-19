@@ -1,0 +1,48 @@
+id: demoshop_dd_cart
+name: DemoShop Data-Driven Cart Test
+description: |
+  Data-driven test scenario for the demoshop. Tests adding different products
+  to the cart with varying expected cart counts and totals.
+  Uses [Template] keyword with data rows.
+context: web
+prompt: |
+  Use RobotMCP to create a DATA-DRIVEN test suite. Execute step by step.
+
+  Scenario: Add different products to the DemoShop cart and verify counts.
+
+  1. Call manage_session to initialize a Browser session (headless=False)
+  2. Call execute_step: keyword="New Browser", arguments=["chromium", "headless=False"]
+  3. Call execute_step: keyword="New Page", arguments=["https://demoshop.makrocode.de/"]
+  4. Call get_session_state with include_reduced_dom=True to inspect the page
+  5. Navigate to the Products page
+  6. Call get_session_state to see the product listing
+
+  Now create a DATA-DRIVEN test:
+  7. Call manage_session with action="start_test", test_name="Add Product To Cart", template="Add And Verify Product"
+
+  For each product visible on the page, execute the template steps:
+  - Click the "Add to cart" button for that product
+  - Verify the cart badge updates
+  - Call manage_session with action="end_test"
+
+  After testing at least 3 products, call build_test_suite to generate the .robot file.
+  The generated file should use [Template] with data rows for each product.
+
+  IMPORTANT:
+  - Use get_session_state(include_reduced_dom=True) before each interaction
+  - Use real locators from the ARIA snapshot
+  - The test should be DATA-DRIVEN: one template keyword, multiple data rows
+expected_tools:
+  - tool_name: manage_session
+    min_calls: 2
+  - tool_name: execute_step
+    min_calls: 6
+  - tool_name: get_session_state
+    min_calls: 3
+  - tool_name: build_test_suite
+    min_calls: 1
+tags:
+  - web
+  - data-driven
+  - template
+  - cart

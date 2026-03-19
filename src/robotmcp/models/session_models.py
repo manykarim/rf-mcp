@@ -391,9 +391,16 @@ class ExecutionSession:
 
     @property
     def step_count(self) -> int:
-        """Get the total number of successful steps."""
+        """Get the total number of steps (including data rows)."""
         if self.test_registry.is_multi_test_mode():
-            return len(self.test_registry.all_steps_flat()) + len(self.suite_level_steps)
+            total = len(self.test_registry.all_steps_flat()) + len(self.suite_level_steps)
+            # Fix 2: Count data rows so session resolver doesn't reject
+            # sessions that have template data but no executed steps
+            for test in self.test_registry.tests.values():
+                total += len(test.data_rows) + len(getattr(test, 'named_data_rows', []))
+            # Also count legacy steps that may be adopted as template body
+            total += len(self.steps)
+            return total
         return len(self.steps)
 
     @property

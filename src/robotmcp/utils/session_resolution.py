@@ -31,7 +31,13 @@ class SessionResolver:
                 logger.info(f"Using provided session: {provided_session_id}")
                 return provided_session_id.strip()
             elif session and session.step_count == 0:
-                logger.info(f"Provided session {provided_session_id} exists but has no steps")
+                # Fix 5: Log more detail about why session appears empty
+                multi = session.test_registry.is_multi_test_mode() if hasattr(session, 'test_registry') else False
+                logger.warning(
+                    f"Session {provided_session_id} exists but step_count=0 "
+                    f"(multi_test={multi}, legacy_steps={len(getattr(session, 'steps', []))}). "
+                    f"Falling back to recent session."
+                )
             else:
                 logger.info(f"Provided session {provided_session_id} not found")
         

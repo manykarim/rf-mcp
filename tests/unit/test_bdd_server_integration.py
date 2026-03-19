@@ -346,10 +346,10 @@ class TestFullBddPipeline:
         suite = GeneratedTestSuite(name="DD", test_cases=[tc])
         result = builder._transform_to_bdd_style(suite)
 
-        # Should have a wrapper keyword
-        assert any("Verify" in kw.name for kw in result.bdd_keywords)
-        # Template should point to wrapper
-        assert result.test_cases[0].template == "Verify Add Products"
+        # Should have template keyword with original name
+        assert any("Add And Check" == kw.name for kw in result.bdd_keywords)
+        # Template name preserved
+        assert result.test_cases[0].template == "Add And Check"
 
     @pytest.mark.asyncio
     async def test_full_pipeline_multiple_test_cases(self):

@@ -57,6 +57,28 @@ IMPORTANT: Before executing any Robot Framework test automation:
    Each unique bdd_group value becomes one keyword in the Keywords section.
    Use domain language: bdd_group="add product to cart" NOT "click add button"
 
-   Data-driven: manage_session(action="start_test", template="Keyword Name") sets [Template]
+   DATA-DRIVEN TESTS (parameterized scenarios with different inputs):
+   IMPORTANT: Call start_test BEFORE or AFTER executing template steps — both work.
+
+   Mode A - Unnamed rows (one test, N iterations):
+     manage_session(action="start_test", test_name="Cart Test", template="Add And Verify")
+     execute_step(keyword="Click", arguments=["button[name='Add ${product}']"])  // template body
+     execute_step(keyword="Get Text", arguments=[".badge", "==", "${count}"])
+     manage_session(action="add_data_row", args=["Backpack", "1"])
+     manage_session(action="add_data_row", args=["Bike Light", "2"])
+     manage_session(action="end_test")
+     build_test_suite()  → generates [Template] with data rows
+
+   Mode B - Named rows (N separate test cases, better CI reports):
+     manage_session(action="start_test", test_name="Login Tests", template="Verify Login")
+     execute_step(keyword="Fill Text", arguments=["id=user-name", "${username}"])
+     execute_step(keyword="Fill Text", arguments=["id=password", "${password}"])
+     execute_step(keyword="Click", arguments=["id=login-button"])
+     manage_session(action="add_data_row", test_name="Valid User", args=["admin", "pass", "Products"])
+     manage_session(action="add_data_row", test_name="Invalid", args=["bad", "wrong", "Error"])
+     manage_session(action="add_data_row", test_name="Empty", args=["${EMPTY}", "${EMPTY}", "Required"])
+     manage_session(action="end_test")
+     build_test_suite(data_driven_mode="suite_template")
+     → generates Test Template in Settings, each row as a named test case
 
 Available discovery tools: {available_tools}

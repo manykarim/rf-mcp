@@ -52,8 +52,8 @@ class TestTransformTemplateToBdd:
     def setup_method(self):
         self.builder = TestBuilder()
 
-    def test_template_tc_creates_wrapper_keyword(self):
-        """Template test case should get a BDD wrapper keyword."""
+    def test_template_tc_creates_bdd_keyword(self):
+        """Template test case should get a BDD keyword with original template name."""
         steps = [
             _step("Click", ['button[aria-label="Add ${product} to cart"]']),
             _step("Get Text", ["[data-cart-count]", "==", "${expected}"]),
@@ -61,16 +61,16 @@ class TestTransformTemplateToBdd:
         suite = _template_suite("Add And Verify", steps, [])
         result = self.builder._transform_to_bdd_style(suite)
 
-        # Wrapper keyword created
+        # Template keyword created with original name
         assert result.bdd_keywords is not None
-        wrapper_names = [kw.name for kw in result.bdd_keywords]
-        assert "Verify Add Product To Cart" in wrapper_names
+        kw_names = [kw.name for kw in result.bdd_keywords]
+        assert "Add And Verify" in kw_names
 
-        # Template updated to wrapper
-        assert result.test_cases[0].template == "Verify Add Product To Cart"
+        # Template name preserved
+        assert result.test_cases[0].template == "Add And Verify"
 
-    def test_template_wrapper_has_bdd_steps(self):
-        """Wrapper keyword should contain Given/When/Then references."""
+    def test_template_keyword_has_bdd_steps(self):
+        """Template keyword should contain Given/When/Then-prefixed steps."""
         steps = [
             _step("New Browser", ["chromium"]),
             _step("Click", ['text="Buy"']),
@@ -79,15 +79,14 @@ class TestTransformTemplateToBdd:
         suite = _template_suite("Buy Flow", steps, [])
         result = self.builder._transform_to_bdd_style(suite)
 
-        wrapper = next(kw for kw in result.bdd_keywords if kw.name == "Verify Add Product To Cart")
-        # Wrapper steps should be Given/When/Then references
-        step_keywords = [s.keyword for s in wrapper.steps]
+        template_kw = next(kw for kw in result.bdd_keywords if kw.name == "Buy Flow")
+        step_keywords = [s.keyword for s in template_kw.steps]
         assert any(s.startswith("Given") for s in step_keywords)
         assert any(s.startswith("When") for s in step_keywords)
         assert any(s.startswith("Then") for s in step_keywords)
 
-    def test_template_wrapper_has_arguments(self):
-        """Wrapper keyword should have [Arguments] with ${var} from template steps."""
+    def test_template_keyword_has_arguments(self):
+        """Template keyword should have arg_vars with ${var} from template steps."""
         steps = [
             _step("Click", ['button[aria-label="Add ${product} to cart"]']),
             _step("Get Text", ["[data-cart-count]", "==", "${expected_count}"]),
@@ -95,10 +94,9 @@ class TestTransformTemplateToBdd:
         suite = _template_suite("Verify Product", steps, [])
         result = self.builder._transform_to_bdd_style(suite)
 
-        wrapper = next(kw for kw in result.bdd_keywords if kw.name == "Verify Add Product To Cart")
-        arg_vars = getattr(wrapper, "_arg_vars", [])
-        assert "${product}" in arg_vars
-        assert "${expected_count}" in arg_vars
+        template_kw = next(kw for kw in result.bdd_keywords if kw.name == "Verify Product")
+        assert "${product}" in template_kw.arg_vars
+        assert "${expected_count}" in template_kw.arg_vars
 
     def test_data_rows_preserved(self):
         """Data rows (no keyword) should be preserved in the test case."""
@@ -181,12 +179,11 @@ class TestTransformTemplateToBdd:
         result = self.builder._transform_to_bdd_style(suite)
 
         assert result.bdd_keywords is not None
-        # Should have keywords from both test cases
         names = [kw.name for kw in result.bdd_keywords]
-        # Template wrapper
-        assert any("Verify" in n for n in names)
-        # Regular BDD keywords
-        assert len(names) >= 3  # at least wrapper + 2 behavioral keywords
+        # Template keyword with original name
+        assert "Check Item" in names
+        # Regular BDD keywords from smoke test
+        assert len(names) >= 2
 
 
 # ---------------------------------------------------------------------------
@@ -265,11 +262,12 @@ class TestBddDataDrivenRfText:
         rf_text = await self.builder._generate_rf_text(suite)
 
         assert "*** Keywords ***" in rf_text
-        assert "Verify Add Product To Cart" in rf_text
+        # Template keyword uses original name
+        assert "Buy" in rf_text
 
     @pytest.mark.asyncio
     async def test_template_bdd_rf_text_has_template_directive(self):
-        """Test case should have [Template] pointing to wrapper."""
+        """Test case should have [Template] pointing to template keyword."""
         steps = [
             _step("Click", ['text="${item}"']),
         ]
@@ -277,7 +275,7 @@ class TestBddDataDrivenRfText:
         suite = self.builder._transform_to_bdd_style(suite)
         rf_text = await self.builder._generate_rf_text(suite)
 
-        assert "[Template]    Verify Add Product To Cart" in rf_text
+        assert "[Template]    Check Item" in rf_text
 
     @pytest.mark.asyncio
     async def test_complete_data_driven_bdd_suite(self):
@@ -299,13 +297,13 @@ class TestBddDataDrivenRfText:
         suite = self.builder._transform_to_bdd_style(suite)
         rf_text = await self.builder._generate_rf_text(suite)
 
-        # Should have template pointing to wrapper
-        assert "[Template]    Verify Add Products" in rf_text
+        # Template keeps original name
+        assert "[Template]    Add And Check" in rf_text
         # Should have Keywords section
         assert "*** Keywords ***" in rf_text
         # Should have [Arguments]
         assert "[Arguments]" in rf_text
-        # Should have behavioral keywords with Given/When/Then
+        # Should have BDD-prefixed steps (When/Then)
         assert "When" in rf_text or "Then" in rf_text
         # Data rows should be present
         assert "Echo Speaker" in rf_text

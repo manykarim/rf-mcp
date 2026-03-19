@@ -60,8 +60,9 @@ class TestGenerateRfTextTemplate:
                     name="Equality Checks",
                     template="Should Be Equal",
                     steps=[
-                        TestCaseStep(keyword="Should Be Equal", arguments=["hello", "hello"]),
-                        TestCaseStep(keyword="Should Be Equal", arguments=["42", "42"]),
+                        # Data rows have empty keyword (C1 fix)
+                        TestCaseStep(keyword="", arguments=["hello", "hello"]),
+                        TestCaseStep(keyword="", arguments=["42", "42"]),
                     ],
                 )
             ],

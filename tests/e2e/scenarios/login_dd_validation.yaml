@@ -1,0 +1,55 @@
+id: login_dd_validation
+name: Login Form Data-Driven Validation
+description: |
+  Data-driven login test with valid/invalid credentials.
+  Tests form validation messages with different input combinations.
+context: web
+prompt: |
+  Use RobotMCP to create a DATA-DRIVEN login test suite. Execute step by step.
+
+  Scenario: Test login form with multiple credential combinations.
+
+  1. Call manage_session to initialize a Browser session (headless=False)
+  2. Call execute_step: keyword="New Browser", arguments=["chromium", "headless=False"]
+  3. Call execute_step: keyword="New Page", arguments=["https://demoshop.makrocode.de/"]
+  4. Call get_session_state with include_reduced_dom=True
+  5. Look for a login link/button and click it
+  6. Call get_session_state to see the login form
+
+  Create a DATA-DRIVEN test for login:
+  7. Call manage_session with action="start_test", test_name="Login Validation", template="Verify Login Attempt"
+
+  Test these credential combinations:
+  - Valid: email="test@example.com", password="password123" → expect success/welcome
+  - Empty email: email="", password="password123" → expect validation error
+  - Empty password: email="test@example.com", password="" → expect validation error
+  - Both empty: email="", password="" → expect validation error
+
+  For each combination:
+  - Fill in the email field
+  - Fill in the password field
+  - Click the login/submit button
+  - Verify the result message
+  - Call manage_session(action="end_test")
+  - Start a new test for the next combination
+
+  After all combinations, call build_test_suite to generate a data-driven .robot file.
+
+  IMPORTANT:
+  - Use get_session_state(include_reduced_dom=True) before interactions
+  - Use real locators from the ARIA snapshot
+  - Generate [Template] test cases with data rows
+expected_tools:
+  - tool_name: manage_session
+    min_calls: 3
+  - tool_name: execute_step
+    min_calls: 8
+  - tool_name: get_session_state
+    min_calls: 4
+  - tool_name: build_test_suite
+    min_calls: 1
+tags:
+  - web
+  - data-driven
+  - login
+  - validation

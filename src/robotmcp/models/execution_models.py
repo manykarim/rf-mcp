@@ -78,6 +78,8 @@ class TestInfo:
     documentation: str = ""
     tags: List[str] = field(default_factory=list)
     template: Optional[str] = None  # ADR-019: template keyword for data-driven style
+    data_rows: List[List[str]] = field(default_factory=list)  # Unnamed data rows for [Template]
+    named_data_rows: List[tuple] = field(default_factory=list)  # (test_name, values) for Test Template
     setup: Optional[Dict[str, Any]] = None  # {"keyword": ..., "arguments": [...]}
     teardown: Optional[Dict[str, Any]] = None  # {"keyword": ..., "arguments": [...]}
     steps: List[ExecutionStep] = field(default_factory=list)
