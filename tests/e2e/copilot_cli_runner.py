@@ -22,6 +22,10 @@ if TYPE_CHECKING:
     from tests.e2e.models import Scenario, ScenarioResult
 
 
+# Delay between sequential Copilot CLI invocations to avoid burst rate limits.
+# Copilot enforces undocumented per-minute/per-hour request caps.
+INTER_TEST_DELAY_SECONDS = int(os.environ.get("COPILOT_INTER_TEST_DELAY", "15"))
+
 # Models available via Copilot CLI --model flag, grouped by cost tier.
 COPILOT_MODELS = {
     # 0x multiplier (free on paid plans)
@@ -90,6 +94,8 @@ class CopilotRunResult:
     api_duration_ms: int = 0
     session_duration_ms: int = 0
     success: bool = False
+    rate_limited: bool = False
+    rate_limit_message: str = ""
     raw_events: List[Dict[str, Any]] = field(default_factory=list)
     stderr: str = ""
     total_output_tokens: int = 0
@@ -415,6 +421,27 @@ def _count_turns(events: List[Dict[str, Any]]) -> int:
     return sum(1 for evt in events if evt.get("type") == "assistant.turn_start")
 
 
+def _detect_rate_limit(events: List[Dict[str, Any]]) -> Optional[str]:
+    """Check events for a session.error with errorType 'rate_limit'.
+
+    Returns the rate limit message if found, None otherwise.
+    """
+    for evt in events:
+        if evt.get("type") == "session.error":
+            data = evt.get("data", {})
+            if data.get("errorType") == "rate_limit" or data.get("statusCode") == 429:
+                return data.get("message", "Rate limited (429)")
+    # Also check stderr for rate limit indicators
+    return None
+
+
+def _detect_rate_limit_stderr(stderr: str) -> Optional[str]:
+    """Check stderr for rate limit messages."""
+    if "rate limit" in stderr.lower() or "429" in stderr:
+        return stderr.strip()
+    return None
+
+
 def run_copilot_cli(
     prompt: str,
     model: str = "gpt-5-mini",
@@ -505,6 +532,10 @@ def run_copilot_cli(
         messages = _extract_messages(events)
         metrics = _extract_result_metrics(events)
 
+        # Detect rate limiting from events or stderr
+        rl_msg = _detect_rate_limit(events) or _detect_rate_limit_stderr(result.stderr) or ""
+        is_rate_limited = bool(rl_msg)
+
         return CopilotRunResult(
             model=model,
             prompt=prompt,
@@ -514,7 +545,9 @@ def run_copilot_cli(
             premium_requests=metrics.get("premium_requests", 0),
             api_duration_ms=metrics.get("api_duration_ms", 0),
             session_duration_ms=metrics.get("session_duration_ms", 0),
-            success=result.returncode == 0,
+            success=result.returncode == 0 and not is_rate_limited,
+            rate_limited=is_rate_limited,
+            rate_limit_message=rl_msg,
             raw_events=events,
             stderr=result.stderr,
             total_output_tokens=sum(m.output_tokens for m in messages),

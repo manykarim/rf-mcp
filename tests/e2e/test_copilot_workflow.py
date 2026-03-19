@@ -28,6 +28,7 @@ from tests.e2e.copilot_cli_runner import (
     save_scenario_result,
 )
 from tests.e2e.models import ExpectedToolCall, Scenario
+from tests.e2e.conftest import skip_if_rate_limited
 
 # ---------------------------------------------------------------------------
 # Skip conditions
@@ -122,6 +123,7 @@ class TestCopilotWorkflow:
             timeout=180,
             mcp_config_path=_MCP_CONFIG,
         )
+        skip_if_rate_limited(result)
 
         # Always save metrics
         metrics_path = _save_metrics(result, "full_rf_test_creation")
@@ -196,6 +198,7 @@ class TestCopilotWorkflow:
             timeout=180,
             mcp_config_path=_MCP_CONFIG,
         )
+        skip_if_rate_limited(result)
 
         metrics_path = _save_metrics(result, "builtin_keyword_execution")
         print(f"Metrics saved to: {metrics_path}")

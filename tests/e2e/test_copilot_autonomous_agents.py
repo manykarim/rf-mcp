@@ -19,6 +19,7 @@ from tests.e2e.copilot_cli_runner import (
     save_scenario_result,
     COPILOT_MODELS,
 )
+from tests.e2e.conftest import skip_if_rate_limited
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -74,6 +75,7 @@ class TestCopilotAutonomousAgents:
             timeout=_TIMEOUT,
             mcp_config_path=_MCP_CONFIG,
         )
+        skip_if_rate_limited(result)
 
         # Always print summary
         mcp_tool_names = result.get_mcp_tool_names()
@@ -119,6 +121,7 @@ class TestCopilotAutonomousAgents:
             timeout=_TIMEOUT,
             mcp_config_path=_MCP_CONFIG,
         )
+        skip_if_rate_limited(result)
 
         scenario_result = result.to_scenario_result(scenario)
 
@@ -172,6 +175,7 @@ class TestCopilotAutonomousAgents:
             timeout=_TIMEOUT,
             mcp_config_path=_MCP_CONFIG,
         )
+        skip_if_rate_limited(result)
 
         mcp_tool_names = result.get_mcp_tool_names()
 

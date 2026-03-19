@@ -28,6 +28,7 @@ from tests.e2e.copilot_cli_runner import (
     is_copilot_available,
     run_copilot_cli,
 )
+from tests.e2e.conftest import skip_if_rate_limited
 
 # ---------------------------------------------------------------------------
 # Skip conditions
@@ -144,6 +145,7 @@ class TestCopilotModelComparison:
             timeout=180,
             mcp_config_path=_MCP_CONFIG,
         )
+        skip_if_rate_limited(result)
 
         # Save per-model metrics
         metrics_path = _save_model_metrics(result, model)

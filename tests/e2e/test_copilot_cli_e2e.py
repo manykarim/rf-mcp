@@ -24,6 +24,7 @@ from tests.e2e.copilot_cli_runner import (
     is_copilot_available,
     run_copilot_cli,
 )
+from tests.e2e.conftest import skip_if_rate_limited
 
 # ---------------------------------------------------------------------------
 # Skip conditions
@@ -116,6 +117,7 @@ class TestCopilotCliE2E:
         )
 
         result = run_copilot_cli(prompt=prompt, model="gpt-5-mini", timeout=180, mcp_config_path=_MCP_CONFIG)
+        skip_if_rate_limited(result)
 
         # Save metrics regardless of outcome
         metrics_path = _save_metrics(result, "find_keywords")
@@ -163,6 +165,7 @@ class TestCopilotCliE2E:
         )
 
         result = run_copilot_cli(prompt=prompt, model="gpt-5-mini", timeout=180, mcp_config_path=_MCP_CONFIG)
+        skip_if_rate_limited(result)
 
         metrics_path = _save_metrics(result, "analyze_and_execute")
         print(f"Metrics saved to: {metrics_path}")
@@ -216,6 +219,7 @@ class TestCopilotCliE2E:
         )
 
         result = run_copilot_cli(prompt=prompt, model=model, timeout=180, mcp_config_path=_MCP_CONFIG)
+        skip_if_rate_limited(result)
 
         metrics_path = _save_metrics(result, f"model_comparison_{model}")
         print(f"[{model}] Metrics saved to: {metrics_path}")
