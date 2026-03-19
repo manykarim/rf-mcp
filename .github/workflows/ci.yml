@@ -164,6 +164,7 @@ jobs:
     timeout-minutes: 90
     env:
       COPILOT_GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      COPILOT_MODEL: ${{ vars.COPILOT_MODEL }}
 
     steps:
       - name: Check Copilot token

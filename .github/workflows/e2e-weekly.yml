@@ -13,6 +13,7 @@ jobs:
     timeout-minutes: 30
     env:
       COPILOT_GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      COPILOT_MODEL: ${{ vars.COPILOT_MODEL }}
 
     steps:
       - name: Check Copilot token
@@ -86,6 +87,7 @@ jobs:
     timeout-minutes: 40
     env:
       COPILOT_GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      COPILOT_MODEL: ${{ vars.COPILOT_MODEL }}
       COPILOT_COMPARISON_MODELS: "gpt-5-mini,gpt-5.4-mini,claude-haiku-4.5"
 
     steps:
