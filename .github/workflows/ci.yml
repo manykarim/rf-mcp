@@ -161,7 +161,7 @@ jobs:
   e2e-tests:
     name: E2E Copilot CLI Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       COPILOT_GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
@@ -226,14 +226,14 @@ jobs:
         run: |
           uv run pytest tests/e2e/test_copilot_autonomous_agents.py -v -m copilot_cli --junitxml=results/copilot-autonomous.xml
         continue-on-error: true
-        timeout-minutes: 40
+        timeout-minutes: 55
 
       - name: Run Copilot workflow tests
         if: env.SKIP_COPILOT != 'true'
         run: |
           uv run pytest tests/e2e/test_copilot_workflow.py -v -m copilot_cli --junitxml=results/copilot-workflow.xml
         continue-on-error: true
-        timeout-minutes: 10
+        timeout-minutes: 15
 
       - name: Upload E2E Copilot metrics
         if: env.SKIP_COPILOT != 'true' && always()

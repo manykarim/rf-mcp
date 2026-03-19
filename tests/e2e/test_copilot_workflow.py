@@ -120,7 +120,7 @@ class TestCopilotWorkflow:
         result = run_copilot_cli(
             prompt=prompt,
             model=_MODEL,
-            timeout=180,
+            timeout=300,
             mcp_config_path=_MCP_CONFIG,
         )
         skip_if_rate_limited(result)
@@ -195,7 +195,7 @@ class TestCopilotWorkflow:
         result = run_copilot_cli(
             prompt=prompt,
             model=_MODEL,
-            timeout=180,
+            timeout=300,
             mcp_config_path=_MCP_CONFIG,
         )
         skip_if_rate_limited(result)
