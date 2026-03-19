@@ -113,10 +113,6 @@ class TestCopilotAutonomousAgents:
         """
         scenario = load_scenario(scenario_file)
 
-        # Skip web-context scenarios when no display is available
-        if scenario.context == "web" and not os.environ.get("DISPLAY"):
-            pytest.skip("Web scenarios require DISPLAY in headless environments")
-
         result = run_copilot_cli(
             prompt=scenario.prompt,
             model=_MODEL,
