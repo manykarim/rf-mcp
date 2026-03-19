@@ -41,6 +41,7 @@ expected_tools:
     min_calls: 3
   - tool_name: build_test_suite
     min_calls: 1
+expected_outcome: "Data-driven test suite generated with [Template] keyword and multiple product data rows for cart verification"
 tags:
   - web
   - data-driven

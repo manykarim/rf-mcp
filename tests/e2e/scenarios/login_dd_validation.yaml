@@ -48,6 +48,7 @@ expected_tools:
     min_calls: 4
   - tool_name: build_test_suite
     min_calls: 1
+expected_outcome: "Data-driven test suite generated with [Template] keyword and credential combination data rows for login validation"
 tags:
   - web
   - data-driven

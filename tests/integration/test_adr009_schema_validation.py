@@ -104,6 +104,7 @@ class TestManageSessionSchema:
             "set_variables", "variables",
             "import_variables", "load_variables",
             "start_test", "end_test", "start_task", "end_task",
+            "add_data_row", "data_row",
             "list_tests",
             "set_suite_setup", "set_suite_teardown",
             "set_tool_profile", "tool_profile",

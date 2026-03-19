@@ -197,7 +197,7 @@ class TestValidationThroughput:
         assert avg_ms < 0.005, f"AutomationContext validation too slow: {avg_ms:.6f}ms"
 
     def test_bench_all_session_action_values(self, benchmark_reporter):
-        """Validating all 20 SessionAction values should be < 0.1ms per sweep."""
+        """Validating all 22 SessionAction values should be < 0.1ms per sweep."""
         ta = TypeAdapter(SessionAction)
         all_values = [
             "init", "initialize", "bootstrap",
@@ -206,6 +206,7 @@ class TestValidationThroughput:
             "set_variables", "variables",
             "import_variables", "load_variables",
             "start_test", "end_test", "start_task", "end_task",
+            "add_data_row", "data_row",
             "list_tests",
             "set_suite_setup", "set_suite_teardown",
             "set_tool_profile", "tool_profile",
@@ -376,7 +377,7 @@ class TestSchemaGeneration:
         )
         avg_ms = elapsed_ms / iterations
         assert "enum" in schema, "Schema must contain 'enum' key"
-        assert len(schema["enum"]) == 20, f"Expected 20 enum values, got {len(schema['enum'])}"
+        assert len(schema["enum"]) == 22, f"Expected 22 enum values, got {len(schema['enum'])}"
         assert avg_ms < 0.5, f"Schema generation too slow: {avg_ms:.4f}ms"
 
     def test_bench_intent_verb_schema_generation(self, benchmark_reporter):
@@ -845,6 +846,7 @@ class TestADR009Correctness:
             "set_variables", "variables",
             "import_variables", "load_variables",
             "start_test", "end_test", "start_task", "end_task",
+            "add_data_row", "data_row",
             "list_tests",
             "set_suite_setup", "set_suite_teardown",
             "set_tool_profile", "tool_profile",

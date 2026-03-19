@@ -2164,13 +2164,14 @@ async def find_keywords(
 
     # BDD prefix stripping for query (ADR-019)
     from robotmcp.domains.keyword_resolution.services import BddPrefixService
-    bdd_query_result = BddPrefixService.strip_prefix(query)
-    if bdd_query_result.has_prefix:
-        query = bdd_query_result.stripped_name
-        logger.debug(
-            f"Stripped BDD prefix from find_keywords query: "
-            f"'{bdd_query_result.original_name}' -> '{query}'"
-        )
+    if query:
+        bdd_query_result = BddPrefixService.strip_prefix(query)
+        if bdd_query_result.has_prefix:
+            query = bdd_query_result.stripped_name
+            logger.debug(
+                f"Stripped BDD prefix from find_keywords query: "
+                f"'{bdd_query_result.original_name}' -> '{query}'"
+            )
 
     current_state = current_state or {}
     limit_value: int | None = None
@@ -3535,13 +3536,15 @@ async def execute_step(
 
     # BDD prefix stripping (ADR-019)
     from robotmcp.domains.keyword_resolution.services import BddPrefixService
-    bdd_result = BddPrefixService.strip_prefix(keyword)
-    if bdd_result.has_prefix:
-        keyword = bdd_result.stripped_name
-        logger.debug(
-            f"Stripped BDD prefix '{bdd_result.prefix_type.value}' from keyword: "
-            f"'{bdd_result.original_name}' -> '{bdd_result.stripped_name}'"
-        )
+    bdd_result = None
+    if keyword:
+        bdd_result = BddPrefixService.strip_prefix(keyword)
+        if bdd_result.has_prefix:
+            keyword = bdd_result.stripped_name
+            logger.debug(
+                f"Stripped BDD prefix '{bdd_result.prefix_type.value}' from keyword: "
+                f"'{bdd_result.original_name}' -> '{bdd_result.stripped_name}'"
+            )
 
     # Handle assign_to=None explicitly passed by models
     if assign_to is None:
@@ -3727,7 +3730,7 @@ async def execute_step(
     result.setdefault("keyword", keyword_to_run)
 
     # ADR-019: Annotate BDD prefix in result
-    if bdd_result.has_prefix:
+    if bdd_result and bdd_result.has_prefix:
         result["bdd_prefix"] = bdd_result.prefix_type.value
         result["original_keyword"] = bdd_result.original_name
 
