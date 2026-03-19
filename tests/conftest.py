@@ -31,6 +31,10 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "copilot_cli: E2E tests that invoke the GitHub Copilot CLI against the robotmcp MCP server",
     )
+    config.addinivalue_line(
+        "markers",
+        "copilot_autonomous: Copilot CLI autonomous agent E2E tests",
+    )
     for name in EXTRA_COMBINATIONS:
         config.addinivalue_line(
             "markers",
