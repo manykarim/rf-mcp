@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<library name="City Library" established="1995">
+    <authors>
+        <author id="a1" nationality="British">
+            <name>J.K. Rowling</name>
+            <born>1965</born>
+        </author>
+        <author id="a2" nationality="Colombian">
+            <name>Gabriel García Márquez</name>
+            <born>1927</born>
+        </author>
+        <author id="a3" nationality="American">
+            <name>Ernest Hemingway</name>
+            <born>1899</born>
+        </author>
+    </authors>
+    <books>
+        <book isbn="978-0-7475-3269-9" author_ref="a1" genre="Fantasy">
+            <title>Harry Potter and the Philosopher's Stone</title>
+            <year>1997</year>
+            <pages>223</pages>
+            <available>true</available>
+        </book>
+        <book isbn="978-0-06-088328-7" author_ref="a2" genre="Magical Realism">
+            <title>One Hundred Years of Solitude</title>
+            <year>1967</year>
+            <pages>417</pages>
+            <available>true</available>
+        </book>
+        <book isbn="978-0-684-80122-3" author_ref="a3" genre="Fiction">
+            <title>The Old Man and the Sea</title>
+            <year>1952</year>
+            <pages>127</pages>
+            <available>false</available>
+        </book>
+        <book isbn="978-0-7475-4215-5" author_ref="a1" genre="Fantasy">
+            <title>Harry Potter and the Chamber of Secrets</title>
+            <year>1998</year>
+            <pages>251</pages>
+            <available>true</available>
+        </book>
+    </books>
+</library>

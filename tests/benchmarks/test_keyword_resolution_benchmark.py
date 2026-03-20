@@ -1,9 +1,11 @@
-"""Benchmark Tests for Keyword Resolution Chain (C1/C2/C3 fixes).
+"""Benchmark Tests for Keyword Resolution Chain (C1/C3 fixes).
 
-Measures the performance of the 3-tier resolution chain:
-1. namespace.get_runner() — RF 7 native
-2. Direct library method lookup (with TestLibrary unwrapping)
-3. BuiltIn.run_keyword() fallback
+Measures the performance of the 2-tier resolution chain:
+1. namespace.get_runner() -- RF 7 native
+2. BuiltIn.run_keyword() fallback
+
+ADR-020 F3 removed the direct library method lookup (tier 2), so all
+non-get_runner resolution goes through BuiltIn.run_keyword().
 
 These benchmarks validate that the fix doesn't introduce performance regressions
 compared to the previous (broken) code path that relied on exception-driven fallthrough.
@@ -12,10 +14,8 @@ compared to the previous (broken) code path that relied on exception-driven fall
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List
+from typing import Any
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from robotmcp.components.execution.rf_native_context_manager import RobotFrameworkNativeContextManager
 
@@ -32,7 +32,7 @@ _BUILTIN_PATCH = "robot.libraries.BuiltIn.BuiltIn"
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_manager() -> RFNativeContextManager:
+def _make_manager() -> RobotFrameworkNativeContextManager:
     return RobotFrameworkNativeContextManager()
 
 
@@ -57,22 +57,6 @@ class FakeNamespace:
         if self._raise:
             raise AttributeError(f"No runner for {name}")
         return self._runner
-
-
-class FakeLibraryInstance:
-    """A fake raw Python library instance with configurable keyword methods."""
-
-    def __init__(self, methods: Dict[str, Any]):
-        for name, impl in methods.items():
-            setattr(self, name, impl)
-
-
-class FakeTestLibrary:
-    """Mimics RF 7.x TestLibrary wrapper."""
-
-    def __init__(self, name: str, instance: Any):
-        self.name = name
-        self.instance = instance
 
 
 def _make_ctx_with_libraries(libraries: list):
@@ -149,83 +133,12 @@ class TestTier1GetRunnerPerformance:
 
 
 # ===========================================================================
-# Tier 2: Library method lookup
+# Tier 2: BuiltIn fallback
 # ===========================================================================
 
 
-class TestTier2LibrarySearchPerformance:
-    """Benchmark the library method search fallback."""
-
-    def test_library_search_single_lib(self):
-        """Direct method lookup on 1 library should resolve in < 300ms for 1000 calls."""
-        ns = FakeNamespace(raise_on_get_runner=True)
-        mgr = _make_manager()
-
-        raw_lib = FakeLibraryInstance({"click": lambda *a: "clicked"})
-        test_lib = FakeTestLibrary("Browser", raw_lib)
-
-        with patch(_EC_PATCH) as ec:
-            ec.current = _make_ctx_with_libraries([test_lib])
-            total_ms, _ = _timed(
-                mgr._execute_any_keyword_generic, "Click", ["loc"], ns,
-                iterations=1000,
-            )
-
-        assert total_ms < 300, f"Library search (1 lib) too slow: {total_ms:.1f}ms"
-
-    def test_library_search_five_libs(self):
-        """Search across 5 libraries where match is in the last one."""
-        ns = FakeNamespace(raise_on_get_runner=True)
-        mgr = _make_manager()
-
-        libs = []
-        for i in range(4):
-            libs.append(FakeTestLibrary(f"Lib{i}", FakeLibraryInstance({})))
-        # Target method in last library
-        raw_target = FakeLibraryInstance({"new_browser": lambda *a: "browser_created"})
-        libs.append(FakeTestLibrary("Browser", raw_target))
-
-        with patch(_EC_PATCH) as ec:
-            ec.current = _make_ctx_with_libraries(libs)
-            total_ms, _ = _timed(
-                mgr._execute_any_keyword_generic, "New Browser", [], ns,
-                iterations=1000,
-            )
-
-        assert total_ms < 500, f"Library search (5 libs) too slow: {total_ms:.1f}ms"
-
-    def test_library_unwrap_overhead(self):
-        """TestLibrary unwrapping adds negligible overhead."""
-        mgr = _make_manager()
-        raw_lib = FakeLibraryInstance({"log": lambda *a: "logged"})
-
-        # Direct call (no unwrap needed)
-        _, direct_us = _timed(
-            mgr._try_execute_from_library, "Log", ["msg"], "BuiltIn", raw_lib,
-            iterations=5000,
-        )
-
-        # With TestLibrary wrapper (unwrap needed in _execute_any_keyword_generic)
-        ns = FakeNamespace(raise_on_get_runner=True)
-        test_lib = FakeTestLibrary("BuiltIn", raw_lib)
-        with patch(_EC_PATCH) as ec:
-            ec.current = _make_ctx_with_libraries([test_lib])
-            _, wrapped_us = _timed(
-                mgr._execute_any_keyword_generic, "Log", ["msg"], ns,
-                iterations=5000,
-            )
-
-        overhead = wrapped_us - direct_us
-        assert overhead < 100, f"Unwrap overhead too high: {overhead:.1f}us"
-
-
-# ===========================================================================
-# Tier 3: BuiltIn fallback
-# ===========================================================================
-
-
-class TestTier3BuiltInFallbackPerformance:
-    """Benchmark the BuiltIn.run_keyword() fallback path."""
+class TestTier2BuiltInFallbackPerformance:
+    """Benchmark the BuiltIn.run_keyword() fallback path (now tier 2 after ADR-020 F3)."""
 
     def test_builtin_fallback_throughput(self):
         """BuiltIn fallback should resolve in < 500ms for 1000 calls."""
@@ -281,7 +194,7 @@ class TestFullChainPerformance:
         assert per_call_us < 100, f"Happy path too slow: {per_call_us:.1f}us"
 
     def test_fallthrough_latency(self):
-        """Full fallthrough (get_runner fails → lib search fails → BuiltIn) < 500us."""
+        """Full fallthrough (get_runner fails -> BuiltIn fallback) < 500us."""
         ns = FakeNamespace(raise_on_get_runner=True)
         mgr = _make_manager()
 

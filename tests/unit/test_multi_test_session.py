@@ -335,8 +335,10 @@ class TestVariableScopesIntegration:
             ctx_info = mgr._session_contexts[sid]
             assert "current_run_test" in ctx_info
             assert "current_res_test" in ctx_info
-            assert ctx_info["current_run_test"] is None
-            assert ctx_info["current_res_test"] is None
+            # ADR-020: The initial MCP test is now properly tracked so that
+            # start_test_in_context can auto-end it before starting a named test.
+            assert ctx_info["current_run_test"] is not None
+            assert ctx_info["current_res_test"] is not None
         finally:
             if ctx_info:
                 try:
