@@ -113,27 +113,40 @@ class SuiteExecutionService:
         self,
         suite_content: str,
         session_id: str,
-        options: Dict[str, Any] = None
+        options: Dict[str, Any] = None,
+        companion_files: List[str] = None,
     ) -> Dict[str, Any]:
         """
         Execute suite normally and parse execution results.
-        
+
         Args:
             suite_content: Robot Framework suite content (.robot format)
             session_id: Session identifier for tracking
             options: Execution options including variables, tags, output settings
-            
+            companion_files: Optional list of data file paths to copy alongside the suite
+
         Returns:
             Comprehensive execution results
         """
         if options is None:
             options = {}
-        
+
         execution_id = f"normal_{session_id}_{uuid.uuid4().hex[:8]}"
-        
+
         try:
             # Create temporary suite file
             suite_file = await self._create_temp_suite_file(suite_content, execution_id)
+
+            # ADR-019: Copy companion data files to temp dir
+            if companion_files:
+                import shutil
+                for src_path in companion_files:
+                    if os.path.isfile(src_path):
+                        dst = os.path.join(
+                            os.path.dirname(suite_file), os.path.basename(src_path)
+                        )
+                        shutil.copy2(src_path, dst)
+                        logger.debug(f"Copied companion file: {src_path} -> {dst}")
             
             # Execute Robot Framework normally
             return_code, stdout, stderr, output_dir = await self._execute_rf_normal(suite_file, options)

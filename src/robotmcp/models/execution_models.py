@@ -22,6 +22,10 @@ class ExecutionStep:
     # Variable assignment tracking for test suite generation
     assigned_variables: List[str] = field(default_factory=list)  # Variables assigned from this step
     assignment_type: Optional[str] = None  # "single", "multiple", "none"
+
+    # BDD step grouping (Phase 2 of BDD quality improvement)
+    bdd_group: Optional[str] = None    # Group name, e.g., "add product to cart"
+    bdd_intent: Optional[str] = None   # "given", "when", "then", "and", "but"
     
     def mark_running(self) -> None:
         """Mark the step as currently running."""
@@ -73,6 +77,9 @@ class TestInfo:
     status: str = "not_run"  # not_run → running → pass/fail
     documentation: str = ""
     tags: List[str] = field(default_factory=list)
+    template: Optional[str] = None  # ADR-019: template keyword for data-driven style
+    data_rows: List[List[str]] = field(default_factory=list)  # Unnamed data rows for [Template]
+    named_data_rows: List[tuple] = field(default_factory=list)  # (test_name, values) for Test Template
     setup: Optional[Dict[str, Any]] = None  # {"keyword": ..., "arguments": [...]}
     teardown: Optional[Dict[str, Any]] = None  # {"keyword": ..., "arguments": [...]}
     steps: List[ExecutionStep] = field(default_factory=list)
@@ -104,6 +111,7 @@ class TestRegistry:
         tags: Optional[List[str]] = None,
         setup: Optional[Dict[str, Any]] = None,
         teardown: Optional[Dict[str, Any]] = None,
+        template: Optional[str] = None,  # ADR-019
     ) -> TestInfo:
         """Start a new test. Auto-ends current test if one is active."""
         if self.current_test_name and self.current_test_name in self.tests:
@@ -117,6 +125,7 @@ class TestRegistry:
             status="running",
             documentation=documentation,
             tags=tags or [],
+            template=template,  # ADR-019
             setup=setup,
             teardown=teardown,
             started_at=datetime.now(),

@@ -7,166 +7,153 @@ on:
   workflow_dispatch:  # Allow manual triggering
 
 jobs:
-  e2e-real-llm:
-    name: E2E Tests with Real LLM
+  e2e-copilot-autonomous:
+    name: E2E Copilot Autonomous Agent Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
-      USE_REAL_LLM: 'true'
-      PLAYWRIGHT_BROWSERS_PATH: '0'
+      COPILOT_GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      COPILOT_MODEL: ${{ vars.COPILOT_MODEL }}
 
     steps:
+      - name: Check Copilot token
+        run: |
+          if [ -z "$COPILOT_GITHUB_TOKEN" ]; then
+            echo "::warning::PERSONAL_ACCESS_TOKEN secret not set — skipping Copilot autonomous tests"
+            echo "SKIP_COPILOT=true" >> "$GITHUB_ENV"
+          fi
+
       - name: Checkout repository
+        if: env.SKIP_COPILOT != 'true'
         uses: actions/checkout@v4
 
       - name: Setup uv
+        if: env.SKIP_COPILOT != 'true'
         uses: astral-sh/setup-uv@v2
         with:
           version: 'latest'
 
       - name: Setup Python 3.12 (via uv)
+        if: env.SKIP_COPILOT != 'true'
         run: uv python install 3.12
 
-      - name: Show uv and Python versions
-        run: |
-          uv --version
-          uv run python --version
-
       - name: Install dependencies (dev)
+        if: env.SKIP_COPILOT != 'true'
         run: uv sync --all-extras --group dev
 
-      - name: Initialize Browser Library (rfbrowser)
-        run: uv run rfbrowser init
+      - name: Setup Node.js
+        if: env.SKIP_COPILOT != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Copilot CLI
+        if: env.SKIP_COPILOT != 'true'
+        run: npm install -g @github/copilot
+
+      - name: Verify Copilot CLI
+        if: env.SKIP_COPILOT != 'true'
+        run: copilot --version
+
+      - name: Create metrics and results directories
+        if: env.SKIP_COPILOT != 'true'
+        run: mkdir -p tests/e2e/metrics/copilot_autonomous results
+
+      - name: Run Copilot autonomous agent tests
+        if: env.SKIP_COPILOT != 'true'
+        run: |
+          uv run pytest tests/e2e/test_copilot_autonomous_agents.py -v -m copilot_cli --junitxml=results/copilot-autonomous.xml
         continue-on-error: true
+        timeout-minutes: 25
 
-      - name: Install Playwright browsers
-        run: |
-          uv run playwright install --with-deps chromium firefox
-          uv run python -m playwright install --with-deps chromium firefox || true
-
-      - name: Install Chrome and Firefox for Selenium
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y chromium-browser firefox
-
-      - name: Configure OpenAI Model with Fallback
-        shell: bash
-        run: |
-          OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
-          if [ -z "$OPENAI_MODEL_VALUE" ]; then
-            echo "⚠️ Missing OPENAI_MODEL, using fallback: gpt-5-mini"
-            OPENAI_MODEL_VALUE="gpt-5-mini"
-          else
-            echo "✅ Using OPENAI_MODEL: $OPENAI_MODEL_VALUE"
-          fi
-          echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> $GITHUB_ENV
-
-      - name: Create metrics directories
-        run: |
-          mkdir -p tests/e2e/metrics
-          mkdir -p tests/e2e/metrics/autonomous
-          mkdir -p tests/e2e/metrics/comparisons
-
-      - name: Run E2E autonomous agent tests (Real LLM)
-        env:
-          USE_REAL_LLM: 'true'
-        run: |
-          uv run pytest tests/e2e/test_autonomous_agents.py -v --junitxml=results/e2e-autonomous-pytest.xml
-        continue-on-error: true
-
-      - name: Upload E2E metrics
-        if: always()
+      - name: Upload Copilot autonomous metrics
+        if: env.SKIP_COPILOT != 'true' && always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-metrics-real-llm
-          path: |
-            tests/e2e/metrics/**/*.json
+          name: e2e-copilot-autonomous-metrics
+          path: tests/e2e/metrics/copilot_autonomous/**/*.json
 
       - name: Test Report
         uses: dorny/test-reporter@main
-        if: success() || failure()
+        if: env.SKIP_COPILOT != 'true' && (success() || failure())
         with:
-          name: E2E Autonomous Tests (Real LLM)
-          path: results/e2e-autonomous-pytest.xml
+          name: E2E Autonomous Tests (Copilot)
+          path: results/copilot-autonomous.xml
           reporter: java-junit
 
   model-comparison:
-    name: Model Comparison Tests
+    name: Copilot Model Comparison Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
-      RUN_MODEL_COMPARISON: 'true'
-      COMPARISON_MODELS: 'gpt-5-mini,gpt-5-nano'  # Compare fast models by default
-      PLAYWRIGHT_BROWSERS_PATH: '0'
+      COPILOT_GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      COPILOT_MODEL: ${{ vars.COPILOT_MODEL }}
+      COPILOT_COMPARISON_MODELS: "gpt-5-mini,gpt-5.4-mini,claude-haiku-4.5"
 
     steps:
+      - name: Check Copilot token
+        run: |
+          if [ -z "$COPILOT_GITHUB_TOKEN" ]; then
+            echo "::warning::PERSONAL_ACCESS_TOKEN secret not set — skipping Copilot model comparison tests"
+            echo "SKIP_COPILOT=true" >> "$GITHUB_ENV"
+          fi
+
       - name: Checkout repository
+        if: env.SKIP_COPILOT != 'true'
         uses: actions/checkout@v4
 
       - name: Setup uv
+        if: env.SKIP_COPILOT != 'true'
         uses: astral-sh/setup-uv@v2
         with:
           version: 'latest'
 
       - name: Setup Python 3.12 (via uv)
+        if: env.SKIP_COPILOT != 'true'
         run: uv python install 3.12
 
       - name: Install dependencies (dev)
+        if: env.SKIP_COPILOT != 'true'
         run: uv sync --all-extras --group dev
 
-      - name: Initialize Browser Library (rfbrowser)
-        run: uv run rfbrowser init
+      - name: Setup Node.js
+        if: env.SKIP_COPILOT != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Copilot CLI
+        if: env.SKIP_COPILOT != 'true'
+        run: npm install -g @github/copilot
+
+      - name: Verify Copilot CLI
+        if: env.SKIP_COPILOT != 'true'
+        run: copilot --version
+
+      - name: Create metrics and results directories
+        if: env.SKIP_COPILOT != 'true'
+        run: mkdir -p tests/e2e/metrics/copilot_model_comparison results
+
+      - name: Run Copilot model comparison tests
+        if: env.SKIP_COPILOT != 'true'
+        run: |
+          uv run pytest tests/e2e/test_copilot_model_comparison.py -v -m copilot_cli --junitxml=results/copilot-model-comparison.xml
         continue-on-error: true
+        timeout-minutes: 35
 
-      - name: Install Playwright browsers
-        run: |
-          uv run playwright install --with-deps chromium firefox
-          uv run python -m playwright install --with-deps chromium firefox || true
-
-      - name: Install Chrome and Firefox for Selenium
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y chromium-browser firefox
-
-      - name: Configure OpenAI Model with Fallback
-        shell: bash
-        run: |
-          OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
-          if [ -z "$OPENAI_MODEL_VALUE" ]; then
-            OPENAI_MODEL_VALUE="gpt-5-mini"
-          fi
-          echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> $GITHUB_ENV
-
-      - name: Create metrics directories
-        run: |
-          mkdir -p tests/e2e/metrics
-          mkdir -p tests/e2e/metrics/autonomous
-          mkdir -p tests/e2e/metrics/comparisons
-
-      - name: Run Model Comparison Tests
-        env:
-          RUN_MODEL_COMPARISON: 'true'
-          COMPARISON_MODELS: 'gpt-5-mini,gpt-5-nano'
-        run: |
-          uv run pytest tests/e2e/test_model_comparison.py -v --junitxml=results/model-comparison-pytest.xml
-        continue-on-error: true
-
-      - name: Upload comparison results
-        if: always()
+      - name: Upload model comparison metrics
+        if: env.SKIP_COPILOT != 'true' && always()
         uses: actions/upload-artifact@v4
         with:
-          name: model-comparison-results
-          path: |
-            tests/e2e/metrics/comparisons/**/*.json
+          name: copilot-model-comparison-metrics
+          path: tests/e2e/metrics/copilot_model_comparison/**/*.json
 
       - name: Test Report
         uses: dorny/test-reporter@main
-        if: success() || failure()
+        if: env.SKIP_COPILOT != 'true' && (success() || failure())
         with:
-          name: Model Comparison Tests
-          path: results/model-comparison-pytest.xml
+          name: Model Comparison Tests (Copilot)
+          path: results/copilot-model-comparison.xml
           reporter: java-junit
 
   opencode-e2e:

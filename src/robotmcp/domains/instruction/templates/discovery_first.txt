@@ -33,4 +33,52 @@ IMPORTANT: Before executing any Robot Framework test automation:
    - Use 'build_test_suite' to create test suites
    - Use 'run_test_suite' to execute complete test suites
 
+7. BDD STYLE (when user requests BDD/Gherkin)
+   - NEVER put Given/When/Then directly on library keywords (Click, Fill Text, etc.)
+   - ALWAYS create behavioral keywords that describe WHAT, not HOW
+   - BDD prefixes (Given/When/Then/And/But) are auto-stripped from keywords automatically
+   - Embedded argument keywords match concrete calls automatically
+   - Use build_test_suite(bdd_style=True) to generate proper BDD .robot output
+   - Test cases should read like an English specification with no technical details
+
+   BDD NAMING CONVENTIONS:
+     Given: "the [noun] is [state]"           e.g. "the demoshop is open"
+     When:  "the user [verb]s [object]"        e.g. "the user adds Backpack to the cart"
+     Then:  "the [noun] should [condition]"    e.g. "the cart should contain 2 items"
+
+   BDD STEP GROUPING (improves build_test_suite output quality):
+   When executing steps that belong to a single behavior, annotate them:
+     execute_step(keyword="Click", arguments=["role=link[name='Products']"],
+                  bdd_group="navigate to products", bdd_intent="when")
+     execute_step(keyword="Click", arguments=["button[name='Add X to cart']"],
+                  bdd_group="add product to cart", bdd_intent="when")
+     execute_step(keyword="Get Text", arguments=["[data-cart-count]", "==", "1"],
+                  bdd_group="verify cart count", bdd_intent="then")
+   Each unique bdd_group value becomes one keyword in the Keywords section.
+   Use domain language: bdd_group="add product to cart" NOT "click add button"
+
+   DATA-DRIVEN TESTS (parameterized scenarios with different inputs):
+   IMPORTANT: Call start_test BEFORE or AFTER executing template steps — both work.
+
+   Mode A - Unnamed rows (one test, N iterations):
+     manage_session(action="start_test", test_name="Cart Test", template="Add And Verify")
+     execute_step(keyword="Click", arguments=["button[name='Add ${product}']"])  // template body
+     execute_step(keyword="Get Text", arguments=[".badge", "==", "${count}"])
+     manage_session(action="add_data_row", args=["Backpack", "1"])
+     manage_session(action="add_data_row", args=["Bike Light", "2"])
+     manage_session(action="end_test")
+     build_test_suite()  → generates [Template] with data rows
+
+   Mode B - Named rows (N separate test cases, better CI reports):
+     manage_session(action="start_test", test_name="Login Tests", template="Verify Login")
+     execute_step(keyword="Fill Text", arguments=["id=user-name", "${username}"])
+     execute_step(keyword="Fill Text", arguments=["id=password", "${password}"])
+     execute_step(keyword="Click", arguments=["id=login-button"])
+     manage_session(action="add_data_row", test_name="Valid User", args=["admin", "pass", "Products"])
+     manage_session(action="add_data_row", test_name="Invalid", args=["bad", "wrong", "Error"])
+     manage_session(action="add_data_row", test_name="Empty", args=["${EMPTY}", "${EMPTY}", "Required"])
+     manage_session(action="end_test")
+     build_test_suite(data_driven_mode="suite_template")
+     → generates Test Template in Settings, each row as a named test case
+
 Available discovery tools: {available_tools}

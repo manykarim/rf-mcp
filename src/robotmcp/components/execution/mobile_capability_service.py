@@ -7,7 +7,6 @@ checks server connectivity, and manages device configurations.
 import logging
 import json
 from typing import Dict, Any, Optional, List
-import requests
 from robotmcp.models.session_models import MobileConfig
 
 logger = logging.getLogger(__name__)
@@ -155,15 +154,21 @@ class MobileCapabilityService:
             Tuple of (is_accessible, server_info)
         """
         try:
+            import requests  # lazy: optional dependency
+        except ImportError:
+            logger.error("'requests' package not installed — cannot check Appium server")
+            return False, None
+
+        try:
             # Normalize URL
             if not url.startswith('http'):
                 url = f'http://{url}'
             if not url.endswith('/'):
                 url = f'{url}/'
-                
+
             # Check server status
             response = requests.get(f'{url}status', timeout=5)
-            
+
             if response.status_code == 200:
                 data = response.json()
                 server_info = {
@@ -176,7 +181,7 @@ class MobileCapabilityService:
             else:
                 logger.warning(f"Appium server returned status {response.status_code}")
                 return False, None
-                
+
         except requests.exceptions.ConnectionError:
             logger.error(f"Cannot connect to Appium server at {url}")
             return False, None

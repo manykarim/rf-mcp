@@ -850,9 +850,23 @@ class ExecutionCoordinator:
                 }
             )
 
+            # ADR-019: Detect companion data files next to the suite file
+            import glob as glob_mod
+
+            suite_dir = os.path.dirname(os.path.abspath(suite_file_path))
+            data_extensions = ["*.csv", "*.xlsx", "*.xls", "*.json"]
+            companion_files: List[str] = []
+            for ext_pattern in data_extensions:
+                companion_files.extend(
+                    glob_mod.glob(os.path.join(suite_dir, ext_pattern))
+                )
+
             # Execute suite using suite execution service
             result = await self.suite_execution_service.execute_normal(
-                suite_content, f"file_{os.path.basename(suite_file_path)}", options
+                suite_content,
+                f"file_{os.path.basename(suite_file_path)}",
+                options,
+                companion_files=companion_files if companion_files else None,
             )
 
             # Update result with file information
