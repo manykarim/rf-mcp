@@ -83,7 +83,7 @@ class EmbeddedMatcherService:
         if len(matches) == 1:
             return matches[0]
         # Multiple matches: prefer more specific (more literal chars = fewer wildcards)
-        return min(matches, key=lambda m: len(m[0].template_name))
+        return max(matches, key=lambda m: len(m[0].template_name))
 
 
 class DataSourceLoaderService:

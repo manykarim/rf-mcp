@@ -96,6 +96,8 @@ class CopilotRunResult:
     success: bool = False
     rate_limited: bool = False
     rate_limit_message: str = ""
+    auth_error: bool = False
+    auth_error_message: str = ""
     raw_events: List[Dict[str, Any]] = field(default_factory=list)
     stderr: str = ""
     total_output_tokens: int = 0
@@ -237,10 +239,12 @@ def is_copilot_available() -> bool:
 
 
 def is_copilot_authenticated() -> bool:
-    """Check whether Copilot authentication is available.
+    """Check whether Copilot authentication is likely available.
 
-    Returns True if COPILOT_GITHUB_TOKEN is set or the copilot
-    binary exists (implying local auth via GitHub CLI).
+    Returns True if COPILOT_GITHUB_TOKEN is set or the copilot binary
+    exists in PATH.  The binary check assumes local auth via ``gh auth
+    login`` — if copilot is installed but not logged in, tests will get
+    a clear auth-error skip rather than a cryptic failure.
     """
     if os.environ.get("COPILOT_GITHUB_TOKEN"):
         return True
@@ -442,6 +446,18 @@ def _detect_rate_limit_stderr(stderr: str) -> Optional[str]:
     return None
 
 
+def _detect_auth_error(events: List[Dict[str, Any]], stderr: str) -> Optional[str]:
+    """Detect authentication failures from events or stderr."""
+    for evt in events:
+        if evt.get("type") == "session.error":
+            data = evt.get("data", {})
+            if "auth" in data.get("errorType", "").lower() or data.get("statusCode") == 401:
+                return data.get("message", "Authentication failed")
+    if "authentication failed" in stderr.lower() or "token may be invalid" in stderr.lower():
+        return stderr.strip()
+    return None
+
+
 def run_copilot_cli(
     prompt: str,
     model: str = "gpt-5-mini",
@@ -510,7 +526,7 @@ def run_copilot_cli(
                 env={**os.environ},
             )
         except subprocess.TimeoutExpired as exc:
-            raw = (exc.stdout or b"").decode("utf-8", errors="replace")
+            raw = exc.stdout or ""  # text=True means stdout is str|None
             events = _parse_jsonl_output(raw)
             tool_calls = _extract_tool_calls(events)
             messages = _extract_messages(events)
@@ -532,9 +548,11 @@ def run_copilot_cli(
         messages = _extract_messages(events)
         metrics = _extract_result_metrics(events)
 
-        # Detect rate limiting from events or stderr
+        # Detect rate limiting and auth errors from events or stderr
         rl_msg = _detect_rate_limit(events) or _detect_rate_limit_stderr(result.stderr) or ""
         is_rate_limited = bool(rl_msg)
+        auth_msg = _detect_auth_error(events, result.stderr) or ""
+        is_auth_error = bool(auth_msg)
 
         return CopilotRunResult(
             model=model,
@@ -545,9 +563,11 @@ def run_copilot_cli(
             premium_requests=metrics.get("premium_requests", 0),
             api_duration_ms=metrics.get("api_duration_ms", 0),
             session_duration_ms=metrics.get("session_duration_ms", 0),
-            success=result.returncode == 0 and not is_rate_limited,
+            success=result.returncode == 0 and not is_rate_limited and not is_auth_error,
             rate_limited=is_rate_limited,
             rate_limit_message=rl_msg,
+            auth_error=is_auth_error,
+            auth_error_message=auth_msg,
             raw_events=events,
             stderr=result.stderr,
             total_output_tokens=sum(m.output_tokens for m in messages),

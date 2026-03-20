@@ -3174,9 +3174,10 @@ async def manage_session(
     # ── End ADR-006 ──────────────────────────────────────────────────
 
     valid_actions = (
-        "init, import_library, import_resource, set_variables, import_variables, "
-        "start_test, end_test, add_data_row, list_tests, "
-        "set_suite_setup, set_suite_teardown, set_tool_profile"
+        "init/initialize/bootstrap, import_library/library, import_resource/resource, "
+        "set_variables/variables, import_variables/load_variables, "
+        "start_test/start_task, end_test/end_task, add_data_row/data_row, list_tests, "
+        "set_suite_setup, set_suite_teardown, set_tool_profile/tool_profile"
     )
     return {
         "success": False,
@@ -4008,12 +4009,6 @@ async def load_test_data(
         }
     except FileNotFoundError:
         return {"success": False, "error": f"File not found: {file_path}"}
-    except ImportError as e:
-        return {
-            "success": False,
-            "error": f"Missing dependency: {e}",
-            "hint": "Install with: pip install robotframework-datadriver",
-        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 

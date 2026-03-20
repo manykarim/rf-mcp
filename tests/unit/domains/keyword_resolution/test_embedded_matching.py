@@ -149,3 +149,26 @@ class TestEmbeddedMatcherService:
         assert d["extracted_args"] == ["login button"]
         assert d["library"] == "Browser"
         assert d["source_tool"] == "execute_step"
+
+    def test_multi_match_prefers_more_specific_template(self):
+        """When multiple embedded patterns match, the longer (more specific) wins."""
+        generic_pattern = EmbeddedMatcherService.create_pattern("Click ${element}")
+        specific_pattern = EmbeddedMatcherService.create_pattern(
+            "Click ${element} with ${modifier}"
+        )
+        assert generic_pattern is not None
+        assert specific_pattern is not None
+
+        generic_kw = _make_kw_info("Click ${element}", library="GenericLib")
+        specific_kw = _make_kw_info("Click ${element} with ${modifier}", library="SpecificLib")
+
+        result = EmbeddedMatcherService.match(
+            "Click button with shift",
+            [(generic_pattern, generic_kw), (specific_pattern, specific_kw)],
+        )
+        assert result is not None
+        match, kw_info = result
+        # The more specific template (longer) should win
+        assert match.template_name == "Click ${element} with ${modifier}"
+        assert kw_info.library == "SpecificLib"
+        assert match.extracted_args == ("button", "shift")

@@ -21,12 +21,14 @@ def _copilot_inter_test_delay(request):
 
 
 def skip_if_rate_limited(result) -> None:
-    """Call after ``run_copilot_cli`` to skip the test on rate-limit errors.
+    """Call after ``run_copilot_cli`` to skip on rate-limit or auth errors.
 
     Usage::
 
         result = run_copilot_cli(...)
         skip_if_rate_limited(result)
     """
+    if result.auth_error:
+        pytest.skip(f"Copilot auth failed: {result.auth_error_message[:120]}")
     if result.rate_limited:
         pytest.skip(f"Copilot rate limited: {result.rate_limit_message[:120]}")
