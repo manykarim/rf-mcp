@@ -116,7 +116,14 @@ class TestCopilotCliE2E:
             "Return the list of matching keywords."
         )
 
-        result = run_copilot_cli(prompt=prompt, model="gpt-5-mini", timeout=180, mcp_config_path=_MCP_CONFIG)
+        result = run_copilot_cli(
+            prompt=prompt,
+            model="gpt-5-mini",
+            timeout=180,
+            mcp_config_path=_MCP_CONFIG,
+            # Deny non-MCP tools so the model must use the RobotMCP find_keywords tool
+            extra_args=["--deny-tool=grep", "--deny-tool=bash", "--deny-tool=shell"],
+        )
         skip_if_rate_limited(result)
 
         # Save metrics regardless of outcome
