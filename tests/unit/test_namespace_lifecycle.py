@@ -21,6 +21,35 @@ from robot.conf import Languages, RobotSettings
 __test__ = True
 
 
+@pytest.fixture(autouse=True)
+def _ensure_clean_rf_context():
+    """Guarantee EXECUTION_CONTEXTS is clean before and after each test.
+
+    Without this, context leaks from one test pollute subsequent tests
+    (especially test_rf_native_context_manager_context.py which checks
+    ``EXECUTION_CONTEXTS.current is None`` to decide whether to create
+    a fresh context or reuse an existing one).
+    """
+    # Pre-clean: drain any leaked contexts from prior tests
+    while EXECUTION_CONTEXTS.current is not None:
+        try:
+            EXECUTION_CONTEXTS.end_suite()
+        except Exception:
+            # Force-clear if end_suite fails
+            EXECUTION_CONTEXTS._contexts.clear()
+            EXECUTION_CONTEXTS._context = None
+            break
+    yield
+    # Post-clean: drain contexts created by this test
+    while EXECUTION_CONTEXTS.current is not None:
+        try:
+            EXECUTION_CONTEXTS.end_suite()
+        except Exception:
+            EXECUTION_CONTEXTS._contexts.clear()
+            EXECUTION_CONTEXTS._context = None
+            break
+
+
 # ── Helpers ───────────────────────────────────────────────────────────
 
 

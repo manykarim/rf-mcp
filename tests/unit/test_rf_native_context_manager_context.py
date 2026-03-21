@@ -8,6 +8,47 @@ from robotmcp.components.execution.rf_native_context_manager import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_rf_context():
+    """Ensure no stale RF context from prior tests affects these tests.
+
+    The RobotFrameworkNativeContextManager is a process-global singleton.
+    Its ``_session_contexts`` dict and RF's ``EXECUTION_CONTEXTS`` can
+    carry state between tests when running the full suite.  We save the
+    entire singleton state, reset it, and restore after each test.
+    """
+    from robot.running.context import EXECUTION_CONTEXTS
+
+    mgr = get_rf_native_context_manager()
+
+    # Save and clear singleton + RF globals
+    saved_contexts = list(getattr(EXECUTION_CONTEXTS, "_contexts", []))
+    saved_current = getattr(EXECUTION_CONTEXTS, "_context", None)
+    saved_sessions = dict(mgr._session_contexts)
+    saved_active = getattr(mgr, "_active_context", None)
+
+    EXECUTION_CONTEXTS._contexts = []
+    EXECUTION_CONTEXTS._context = None
+    mgr._session_contexts.clear()
+    mgr._active_context = None
+
+    yield
+
+    # Restore original state (best-effort)
+    try:
+        while EXECUTION_CONTEXTS.current is not None:
+            try:
+                EXECUTION_CONTEXTS.end_suite()
+            except Exception:
+                break
+        EXECUTION_CONTEXTS._contexts = saved_contexts
+        EXECUTION_CONTEXTS._context = saved_current
+        mgr._session_contexts.update(saved_sessions)
+        mgr._active_context = saved_active
+    except Exception:
+        pass
+
+
 def _cleanup_context(session_id: str, context_info: dict | None) -> None:
     from robot.running.context import EXECUTION_CONTEXTS
 
