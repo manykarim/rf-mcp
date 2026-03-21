@@ -12,41 +12,51 @@ from robotmcp.components.execution.rf_native_context_manager import (
 def _isolate_rf_context():
     """Ensure no stale RF context from prior tests affects these tests.
 
-    The RobotFrameworkNativeContextManager is a process-global singleton.
-    Its ``_session_contexts`` dict and RF's ``EXECUTION_CONTEXTS`` can
-    carry state between tests when running the full suite.  We save the
-    entire singleton state, reset it, and restore after each test.
+    Other tests may ``patch("robotmcp...rf_native_context_manager.EXECUTION_CONTEXTS")``
+    which replaces the module-level attribute with a MagicMock.  If that
+    patch leaks, ``create_context_for_session`` sees ``current`` as a
+    mock and takes the "reuse" branch.  We fix this by ensuring the
+    module-level reference points to the **real** EXECUTION_CONTEXTS.
     """
-    from robot.running.context import EXECUTION_CONTEXTS
+    from robot.running.context import EXECUTION_CONTEXTS as _REAL_EC
+    import robotmcp.components.execution.rf_native_context_manager as _mod
 
     mgr = get_rf_native_context_manager()
 
-    # Save and clear singleton + RF globals
-    saved_contexts = list(getattr(EXECUTION_CONTEXTS, "_contexts", []))
-    saved_current = getattr(EXECUTION_CONTEXTS, "_context", None)
+    # Save state
+    saved_mod_ec = _mod.EXECUTION_CONTEXTS
+    saved_contexts = list(getattr(_REAL_EC, "_contexts", []))
+    saved_current = getattr(_REAL_EC, "_context", None)
     saved_sessions = dict(mgr._session_contexts)
     saved_active = getattr(mgr, "_active_context", None)
 
-    EXECUTION_CONTEXTS._contexts = []
-    EXECUTION_CONTEXTS._context = None
+    # Reset: ensure module uses the REAL EXECUTION_CONTEXTS (not a leaked mock)
+    _mod.EXECUTION_CONTEXTS = _REAL_EC
+    _REAL_EC._contexts = []
+    _REAL_EC._context = None
     mgr._session_contexts.clear()
     mgr._active_context = None
 
     yield
 
-    # Restore original state (best-effort)
+    # Post-clean: drain any contexts created by this test
     try:
-        while EXECUTION_CONTEXTS.current is not None:
+        while _REAL_EC.current is not None:
             try:
-                EXECUTION_CONTEXTS.end_suite()
+                _REAL_EC.end_suite()
             except Exception:
+                _REAL_EC._contexts.clear()
+                _REAL_EC._context = None
                 break
-        EXECUTION_CONTEXTS._contexts = saved_contexts
-        EXECUTION_CONTEXTS._context = saved_current
-        mgr._session_contexts.update(saved_sessions)
-        mgr._active_context = saved_active
     except Exception:
         pass
+
+    # Restore original state
+    _mod.EXECUTION_CONTEXTS = saved_mod_ec
+    _REAL_EC._contexts = saved_contexts
+    _REAL_EC._context = saved_current
+    mgr._session_contexts.update(saved_sessions)
+    mgr._active_context = saved_active
 
 
 def _cleanup_context(session_id: str, context_info: dict | None) -> None:
