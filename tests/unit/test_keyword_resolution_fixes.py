@@ -1,14 +1,15 @@
-"""Tests for critical keyword resolution fixes (C1, C2, C3).
+"""Tests for critical keyword resolution fixes (C1, C3).
 
 Validates that:
 - C1: namespace.get_runner() is used instead of the non-existent get_keyword()
-- C2: TestLibrary wrappers are unwrapped to raw instances in library search
 - C3: Input Password special case uses unwrapped instances (removed dead path)
 
 Also covers:
-- _try_execute_from_library naming conventions
 - _final_fallback_execution BuiltIn resolution
-- Full resolution chain ordering
+- Full resolution chain ordering (2-tier: get_runner -> BuiltIn fallback)
+
+Note: C2 (TestLibrary unwrapping) and _try_execute_from_library tests were removed
+after ADR-020 F3 eliminated the direct library method lookup path.
 """
 
 from __future__ import annotations
@@ -72,24 +73,6 @@ class FakeNamespace:
         return self._runner
 
 
-class FakeTestLibrary:
-    """Mimics RF 7 TestLibrary wrapper."""
-    def __init__(self, name: str, instance):
-        self.name = name
-        self._instance = instance
-
-    @property
-    def instance(self):
-        return self._instance
-
-
-class FakeLibraryInstance:
-    """A raw Python library instance with callable methods."""
-    def __init__(self, methods: dict):
-        for name, func in methods.items():
-            setattr(self, name, func)
-
-
 # ===========================================================================
 # C1: namespace.get_runner() replaces get_keyword()
 # ===========================================================================
@@ -138,36 +121,34 @@ class TestC1GetRunnerResolution:
 
         assert result == 42
 
-    def test_get_runner_failure_falls_through_to_library_search(self):
-        """C1: When get_runner() fails, resolution continues to library search."""
+    def test_get_runner_failure_falls_through_to_builtin(self):
+        """C1: When get_runner() fails, resolution falls through to BuiltIn fallback."""
         ns = FakeNamespace(raise_on_get_runner=True)
         mgr = _make_manager()
 
-        called_method = MagicMock(return_value="lib_result")
-        raw_lib = FakeLibraryInstance({"new_browser": called_method})
-        test_lib = FakeTestLibrary("Browser", raw_lib)
-
         with patch(_EC_PATCH) as ec:
-            ec.current = _make_ctx_with_libraries([test_lib])
-            result = mgr._execute_any_keyword_generic("New Browser", [], ns)
+            ec.current = MagicMock()
+            with patch(_BUILTIN_PATCH) as MockBI:
+                instance = MockBI.return_value
+                instance.run_keyword.return_value = "builtin_result"
+                result = mgr._execute_any_keyword_generic("New Browser", [], ns)
 
-        assert result == "lib_result"
-        called_method.assert_called_once_with()
+        assert result == "builtin_result"
+        instance.run_keyword.assert_called_once()
 
-    def test_namespace_without_get_runner_skips_to_library_search(self):
-        """C1: If namespace has no get_runner() at all, skip gracefully."""
+    def test_namespace_without_get_runner_skips_to_builtin(self):
+        """C1: If namespace has no get_runner() at all, skip to BuiltIn fallback."""
         ns = SimpleNamespace()  # no get_runner attribute
         mgr = _make_manager()
 
-        called = MagicMock(return_value="direct")
-        raw_lib = FakeLibraryInstance({"click": called})
-        test_lib = FakeTestLibrary("Browser", raw_lib)
-
         with patch(_EC_PATCH) as ec:
-            ec.current = _make_ctx_with_libraries([test_lib])
-            result = mgr._execute_any_keyword_generic("Click", [], ns)
+            ec.current = MagicMock()
+            with patch(_BUILTIN_PATCH) as MockBI:
+                instance = MockBI.return_value
+                instance.run_keyword.return_value = "builtin_result"
+                result = mgr._execute_any_keyword_generic("Click", [], ns)
 
-        assert result == "direct"
+        assert result == "builtin_result"
 
     def test_get_keyword_is_not_called(self):
         """C1: Verify the removed get_keyword() is never invoked."""
@@ -182,107 +163,6 @@ class TestC1GetRunnerResolution:
 
         # get_keyword must never be called
         assert not hasattr(ns, "get_keyword") or not ns.get_keyword.called
-
-
-# ===========================================================================
-# C2: TestLibrary wrappers unwrapped in library search
-# ===========================================================================
-
-
-class TestC2TestLibraryUnwrapping:
-    """Verify TestLibrary.instance is used, not the wrapper itself."""
-
-    def test_library_instance_is_unwrapped(self):
-        """C2: _try_execute_from_library receives the raw Python instance."""
-        ns = FakeNamespace(raise_on_get_runner=True)
-        mgr = _make_manager()
-
-        clicked = MagicMock(return_value="clicked!")
-        raw_lib = FakeLibraryInstance({"click": clicked})
-        test_lib = FakeTestLibrary("Browser", raw_lib)
-
-        with patch(_EC_PATCH) as ec:
-            ec.current = _make_ctx_with_libraries([test_lib])
-            result = mgr._execute_any_keyword_generic("Click", [], ns)
-
-        assert result == "clicked!"
-        clicked.assert_called_once()
-
-    def test_library_name_uses_test_library_name_attribute(self):
-        """C2: Library name comes from TestLibrary.name, not __class__.__name__."""
-        ns = FakeNamespace(raise_on_get_runner=True)
-        mgr = _make_manager()
-
-        method = MagicMock(return_value="ok")
-        raw_lib = FakeLibraryInstance({"new_browser": method})
-        test_lib = FakeTestLibrary("Browser", raw_lib)
-
-        with patch(_EC_PATCH) as ec:
-            ec.current = _make_ctx_with_libraries([test_lib])
-            with patch("robotmcp.components.execution.rf_native_context_manager.logger") as log:
-                mgr._execute_any_keyword_generic("New Browser", [], ns)
-                log_calls = " ".join(str(c) for c in log.info.call_args_list)
-                assert "Browser" in log_calls
-
-    def test_wrapper_without_instance_attribute_used_directly(self):
-        """C2: If object has no .instance, getattr fallback uses the object itself."""
-        ns = FakeNamespace(raise_on_get_runner=True)
-        mgr = _make_manager()
-
-        # Object that IS the library (no .instance wrapper) — simulates old-style
-        raw_lib = FakeLibraryInstance({"log": MagicMock(return_value="logged")})
-        raw_lib.name = "BuiltIn"
-        # getattr(raw_lib, 'instance', raw_lib) returns raw_lib since no .instance
-
-        with patch(_EC_PATCH) as ec:
-            ec.current = _make_ctx_with_libraries([raw_lib])
-            result = mgr._execute_any_keyword_generic("Log", ["msg"], ns)
-
-        assert result == "logged"
-
-    def test_multiple_libraries_searched_in_order(self):
-        """C2: All libraries are searched; first match wins."""
-        ns = FakeNamespace(raise_on_get_runner=True)
-        mgr = _make_manager()
-
-        builtin_log = MagicMock(return_value="builtin_result")
-        browser_log = MagicMock(return_value="browser_result")
-
-        builtin = FakeLibraryInstance({"log": builtin_log})
-        browser = FakeLibraryInstance({"log": browser_log})
-
-        test_libs = [
-            FakeTestLibrary("BuiltIn", builtin),
-            FakeTestLibrary("Browser", browser),
-        ]
-
-        with patch(_EC_PATCH) as ec:
-            ec.current = _make_ctx_with_libraries(test_libs)
-            result = mgr._execute_any_keyword_generic("Log", ["msg"], ns)
-
-        assert result == "builtin_result"
-        builtin_log.assert_called_once()
-        browser_log.assert_not_called()
-
-    def test_library_without_matching_keyword_skipped(self):
-        """C2: Libraries that don't have the keyword are skipped."""
-        ns = FakeNamespace(raise_on_get_runner=True)
-        mgr = _make_manager()
-
-        click_method = MagicMock(return_value="clicked")
-        builtin = FakeLibraryInstance({})  # no "click"
-        browser = FakeLibraryInstance({"click": click_method})
-
-        test_libs = [
-            FakeTestLibrary("BuiltIn", builtin),
-            FakeTestLibrary("Browser", browser),
-        ]
-
-        with patch(_EC_PATCH) as ec:
-            ec.current = _make_ctx_with_libraries(test_libs)
-            result = mgr._execute_any_keyword_generic("Click", [], ns)
-
-        assert result == "clicked"
 
 
 # ===========================================================================
@@ -310,88 +190,22 @@ class TestC3InputPasswordSpecialCaseRemoved:
         data_kw = runner.call_args[0]
         assert data_kw.name == "Input Password"
 
-    def test_input_password_fallback_uses_unwrapped_instance(self):
-        """C3: When get_runner fails, Input Password finds the method on the raw instance."""
+    def test_input_password_fallback_uses_builtin(self):
+        """C3: When get_runner fails, Input Password falls through to BuiltIn fallback."""
         ns = FakeNamespace(raise_on_get_runner=True)
         mgr = _make_manager()
 
-        ip_method = MagicMock(return_value="done")
-        raw_selenium = FakeLibraryInstance({"input_password": ip_method})
-        test_lib = FakeTestLibrary("SeleniumLibrary", raw_selenium)
-
         with patch(_EC_PATCH) as ec:
-            ec.current = _make_ctx_with_libraries([test_lib])
-            result = mgr._execute_any_keyword_generic(
-                "Input Password", ["loc", "pw"], ns
-            )
+            ec.current = MagicMock()
+            with patch(_BUILTIN_PATCH) as MockBI:
+                instance = MockBI.return_value
+                instance.run_keyword.return_value = "done"
+                result = mgr._execute_any_keyword_generic(
+                    "Input Password", ["loc", "pw"], ns
+                )
 
         assert result == "done"
-        ip_method.assert_called_once_with("loc", "pw")
-
-
-# ===========================================================================
-# _try_execute_from_library naming conventions
-# ===========================================================================
-
-
-class TestTryExecuteFromLibrary:
-    """Test method name normalization in _try_execute_from_library."""
-
-    def test_canonical_snake_case(self):
-        """'New Browser' -> 'new_browser'."""
-        mgr = _make_manager()
-        m = MagicMock(return_value="ok")
-        lib = FakeLibraryInstance({"new_browser": m})
-        result = mgr._try_execute_from_library("New Browser", ["arg"], "Browser", lib)
-        assert result == "ok"
-        m.assert_called_once_with("arg")
-
-    def test_preserved_case_underscore(self):
-        """'New Browser' -> 'New_Browser' (alternative naming)."""
-        mgr = _make_manager()
-        m = MagicMock(return_value="ok2")
-        lib = FakeLibraryInstance({"New_Browser": m})
-        result = mgr._try_execute_from_library("New Browser", [], "Browser", lib)
-        assert result == "ok2"
-
-    def test_concatenated_lowercase(self):
-        """'New Browser' -> 'newbrowser' (no separator)."""
-        mgr = _make_manager()
-        m = MagicMock(return_value="ok3")
-        lib = FakeLibraryInstance({"newbrowser": m})
-        result = mgr._try_execute_from_library("New Browser", [], "Browser", lib)
-        assert result == "ok3"
-
-    def test_no_matching_method_returns_none(self):
-        mgr = _make_manager()
-        lib = FakeLibraryInstance({})
-        result = mgr._try_execute_from_library("Click", [], "Browser", lib)
-        assert result is None
-
-    def test_non_callable_attribute_skipped(self):
-        mgr = _make_manager()
-        lib = FakeLibraryInstance({})
-        lib.click = "not_callable"
-        result = mgr._try_execute_from_library("Click", [], "Browser", lib)
-        assert result is None
-
-    def test_arguments_passed_through(self):
-        mgr = _make_manager()
-        m = MagicMock(return_value="result")
-        lib = FakeLibraryInstance({"fill_text": m})
-        mgr._try_execute_from_library("Fill Text", ["loc", "value", "force=True"], "Browser", lib)
-        m.assert_called_once_with("loc", "value", "force=True")
-
-    def test_canonical_name_preferred_over_alternatives(self):
-        """When canonical and alternative both exist, canonical wins."""
-        mgr = _make_manager()
-        canonical = MagicMock(return_value="canon")
-        alternative = MagicMock(return_value="alt")
-        lib = FakeLibraryInstance({"new_browser": canonical, "New_Browser": alternative})
-        result = mgr._try_execute_from_library("New Browser", [], "Browser", lib)
-        assert result == "canon"
-        canonical.assert_called_once()
-        alternative.assert_not_called()
+        instance.run_keyword.assert_called_once()
 
 
 # ===========================================================================
@@ -437,39 +251,26 @@ class TestFinalFallbackExecution:
 
 
 class TestResolutionChainOrder:
-    """Verify the 3-tier resolution order: get_runner -> library search -> BuiltIn."""
+    """Verify the 2-tier resolution order: get_runner -> BuiltIn fallback.
 
-    def test_get_runner_takes_priority_over_library_search(self):
-        """If get_runner succeeds, library search is never attempted."""
+    ADR-020 F3 removed the direct library method lookup (path 2), so
+    resolution is now: get_runner() -> BuiltIn.run_keyword().
+    """
+
+    def test_get_runner_takes_priority_over_builtin_fallback(self):
+        """If get_runner succeeds, BuiltIn fallback is never attempted."""
         runner = FakeRunner("runner_wins")
         ns = FakeNamespace(runner=runner)
         mgr = _make_manager()
 
-        click_method = MagicMock(return_value="lib_wins")
-        raw_lib = FakeLibraryInstance({"log": click_method})
-        test_lib = FakeTestLibrary("BuiltIn", raw_lib)
-
         with patch(_EC_PATCH) as ec:
-            ec.current = _make_ctx_with_libraries([test_lib])
-            result = mgr._execute_any_keyword_generic("Log", ["msg"], ns)
+            ec.current = MagicMock()
+            with patch(_BUILTIN_PATCH) as MockBI:
+                result = mgr._execute_any_keyword_generic("Log", ["msg"], ns)
 
         assert result == "runner_wins"
-        click_method.assert_not_called()
-
-    def test_library_search_takes_priority_over_builtin_fallback(self):
-        ns = FakeNamespace(raise_on_get_runner=True)
-        mgr = _make_manager()
-
-        method = MagicMock(return_value="lib_result")
-        raw_lib = FakeLibraryInstance({"new_page": method})
-        test_lib = FakeTestLibrary("Browser", raw_lib)
-
-        with patch(_EC_PATCH) as ec:
-            ec.current = _make_ctx_with_libraries([test_lib])
-            result = mgr._execute_any_keyword_generic("New Page", ["url"], ns)
-
-        assert result == "lib_result"
-        method.assert_called_once_with("url")
+        # BuiltIn should not have been instantiated for resolution
+        MockBI.assert_not_called()
 
     def test_empty_namespace_falls_through_to_builtin(self):
         ns = FakeNamespace(raise_on_get_runner=True)
@@ -542,21 +343,15 @@ class TestEdgeCases:
         assert result is None
         assert runner.called
 
-    def test_library_method_raising_exception_falls_to_builtin(self):
-        """Exception in library method is caught; resolution falls to BuiltIn."""
+    def test_get_runner_failure_falls_to_builtin_then_raises(self):
+        """When get_runner fails and BuiltIn fallback also fails, raises RuntimeError."""
         ns = FakeNamespace(raise_on_get_runner=True)
         mgr = _make_manager()
 
-        def boom(*args):
-            raise ValueError("element not found")
-
-        raw_lib = FakeLibraryInstance({"click": boom})
-        test_lib = FakeTestLibrary("Browser", raw_lib)
-
         with patch(_EC_PATCH) as ec:
-            ec.current = _make_ctx_with_libraries([test_lib])
+            ec.current = MagicMock()
             with patch(_BUILTIN_PATCH) as MockBI:
-                instance = MagicMock(spec=[])  # No attributes — no direct method fallback
+                instance = MagicMock(spec=[])  # No attributes -- no direct method fallback
                 instance.run_keyword = MagicMock(side_effect=RuntimeError("also fails"))
                 MockBI.return_value = instance
                 with pytest.raises(RuntimeError, match="could not be resolved"):

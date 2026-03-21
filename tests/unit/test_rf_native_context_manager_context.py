@@ -8,6 +8,57 @@ from robotmcp.components.execution.rf_native_context_manager import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_rf_context():
+    """Ensure no stale RF context from prior tests affects these tests.
+
+    Other tests may ``patch("robotmcp...rf_native_context_manager.EXECUTION_CONTEXTS")``
+    which replaces the module-level attribute with a MagicMock.  If that
+    patch leaks, ``create_context_for_session`` sees ``current`` as a
+    mock and takes the "reuse" branch.  We fix this by ensuring the
+    module-level reference points to the **real** EXECUTION_CONTEXTS.
+    """
+    from robot.running.context import EXECUTION_CONTEXTS as _REAL_EC
+    import robotmcp.components.execution.rf_native_context_manager as _mod
+
+    mgr = get_rf_native_context_manager()
+
+    # Save state
+    saved_mod_ec = _mod.EXECUTION_CONTEXTS
+    saved_contexts = list(getattr(_REAL_EC, "_contexts", []))
+    saved_current = getattr(_REAL_EC, "_context", None)
+    saved_sessions = dict(mgr._session_contexts)
+    saved_active = getattr(mgr, "_active_context", None)
+
+    # Reset: ensure module uses the REAL EXECUTION_CONTEXTS (not a leaked mock)
+    _mod.EXECUTION_CONTEXTS = _REAL_EC
+    _REAL_EC._contexts = []
+    _REAL_EC._context = None
+    mgr._session_contexts.clear()
+    mgr._active_context = None
+
+    yield
+
+    # Post-clean: drain any contexts created by this test
+    try:
+        while _REAL_EC.current is not None:
+            try:
+                _REAL_EC.end_suite()
+            except Exception:
+                _REAL_EC._contexts.clear()
+                _REAL_EC._context = None
+                break
+    except Exception:
+        pass
+
+    # Restore original state
+    _mod.EXECUTION_CONTEXTS = saved_mod_ec
+    _REAL_EC._contexts = saved_contexts
+    _REAL_EC._context = saved_current
+    mgr._session_contexts.update(saved_sessions)
+    mgr._active_context = saved_active
+
+
 def _cleanup_context(session_id: str, context_info: dict | None) -> None:
     from robot.running.context import EXECUTION_CONTEXTS
 
