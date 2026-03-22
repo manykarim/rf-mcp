@@ -311,8 +311,8 @@ class TestExecuteAnyKeywordGenericFailFast:
 
 
 class TestExecuteWithNativeResolutionFailFast:
-    """Test that _execute_with_native_resolution propagates ExecutionStatus
-    from _execute_any_keyword_generic without outer retries."""
+    """ADR-020 F5: Test that the consolidated _execute_with_native_resolution
+    propagates ExecutionStatus from runner.run() and returns failure dict."""
 
     def _make_context_manager_with_session(self, session_id="test"):
         """Create manager with a mocked session context."""
@@ -322,9 +322,8 @@ class TestExecuteWithNativeResolutionFailFast:
         mgr = RobotFrameworkNativeContextManager()
         return mgr
 
-    def test_execution_failed_no_outer_retry(self):
-        """ExecutionFailed from generic path should propagate to the outer
-        except and return failure — NOT fall through to outer runner.run/BuiltIn."""
+    def test_execution_failed_returns_failure(self):
+        """ExecutionFailed from runner.run() should return a failure dict."""
         from robot.errors import ExecutionFailed
         from robotmcp.components.execution.rf_native_context_manager import (
             RobotFrameworkNativeContextManager,
@@ -332,14 +331,23 @@ class TestExecuteWithNativeResolutionFailFast:
 
         mgr = self._make_context_manager_with_session()
 
+        mock_runner = MagicMock()
+        mock_runner.run.side_effect = ExecutionFailed(
+            "'Should Be True' expected True but got 0"
+        )
+
         mock_namespace = MagicMock()
+        mock_namespace.get_runner.return_value = mock_runner
+
         mock_variables = MagicMock(spec=[])
 
-        # Patch _execute_any_keyword_generic to raise ExecutionFailed
-        with patch.object(
-            mgr, "_execute_any_keyword_generic",
-            side_effect=ExecutionFailed("'Should Be True' expected True but got 0"),
-        ) as mock_generic:
+        with patch(
+            "robotmcp.components.execution.rf_native_context_manager.EXECUTION_CONTEXTS"
+        ) as mock_ec:
+            mock_ctx = MagicMock()
+            mock_ec.current = mock_ctx
+            mock_ctx.steps = []
+
             result = mgr._execute_with_native_resolution(
                 session_id="test",
                 keyword_name="Should Be True",
@@ -348,23 +356,16 @@ class TestExecuteWithNativeResolutionFailFast:
                 variables=mock_variables,
             )
 
-        # Generic was called once
-        mock_generic.assert_called_once()
-
         # Result should indicate failure
         assert result["success"] is False
         assert "Should Be True" in result["error"]
 
-        # The outer namespace.get_runner should NOT have been called
-        # (it would be on mock_namespace if the code fell through)
-        # Since we're patching _execute_any_keyword_generic and it raised,
-        # the code should hit the outer except and return error dict.
-        # Verify no additional runner.run calls happened:
-        mock_namespace.get_runner.assert_not_called()
+        # runner.run was called exactly once — no double execution
+        mock_namespace.get_runner.assert_called_once()
 
-    def test_non_execution_error_does_outer_retry(self):
-        """Non-ExecutionStatus errors from generic path should fall through
-        to the outer runner.run / BuiltIn retry paths."""
+    def test_runner_failure_falls_through_to_builtin(self):
+        """Non-ExecutionStatus errors from runner.run() should fall through
+        to the BuiltIn.run_keyword fallback."""
         from robotmcp.components.execution.rf_native_context_manager import (
             RobotFrameworkNativeContextManager,
         )
@@ -372,24 +373,24 @@ class TestExecuteWithNativeResolutionFailFast:
         mgr = self._make_context_manager_with_session()
 
         mock_runner = MagicMock()
-        mock_runner.run.return_value = "success_result"
+        mock_runner.run.side_effect = AttributeError("some infrastructure error")
 
         mock_namespace = MagicMock()
         mock_namespace.get_runner.return_value = mock_runner
 
         mock_variables = MagicMock(spec=[])
 
-        # Patch generic to raise a non-ExecutionStatus error
-        with patch.object(
-            mgr, "_execute_any_keyword_generic",
-            side_effect=AttributeError("some infrastructure error"),
-        ):
-            with patch(
-                "robotmcp.components.execution.rf_native_context_manager.EXECUTION_CONTEXTS"
-            ) as mock_ec:
-                mock_ctx = MagicMock()
-                mock_ec.current = mock_ctx
-                mock_ctx.steps = []
+        with patch(
+            "robotmcp.components.execution.rf_native_context_manager.EXECUTION_CONTEXTS"
+        ) as mock_ec:
+            mock_ctx = MagicMock()
+            mock_ec.current = mock_ctx
+            mock_ctx.steps = []
+
+            with patch("robot.libraries.BuiltIn.BuiltIn") as mock_bi_cls:
+                mock_bi = MagicMock()
+                mock_bi.run_keyword.return_value = "fallback_result"
+                mock_bi_cls.return_value = mock_bi
 
                 result = mgr._execute_with_native_resolution(
                     session_id="test",
@@ -399,56 +400,37 @@ class TestExecuteWithNativeResolutionFailFast:
                     variables=mock_variables,
                 )
 
-        # The outer path should have been reached
+        # BuiltIn fallback should have been reached
         assert result["success"] is True
-        mock_namespace.get_runner.assert_called()
 
 
 class TestFailFastStatusReporterCycles:
-    """Verify that P1 actually reduces StatusReporter cycles."""
+    """ADR-020 F5: Verify consolidated path has exactly one runner.run call."""
 
-    def test_execution_failed_single_cycle(self):
-        """A failing keyword should only enter StatusReporter once, not 4 times."""
+    def test_execution_failed_single_runner_call(self):
+        """A failing keyword should call runner.run exactly once (no retry)."""
         from robot.errors import ExecutionFailed
         from robotmcp.components.execution.rf_native_context_manager import (
             RobotFrameworkNativeContextManager,
         )
 
         mgr = RobotFrameworkNativeContextManager()
-        call_count = {"runner_run": 0, "builtin_run_keyword": 0}
 
-        original_generic = mgr._execute_any_keyword_generic
+        mock_runner = MagicMock()
+        mock_runner.run.side_effect = ExecutionFailed("test failure")
 
-        def counting_generic(keyword_name, arguments, namespace):
-            """Wrap _execute_any_keyword_generic to count runner.run calls."""
-            # Create a namespace that tracks calls
-            original_get_runner = namespace.get_runner
-
-            def counting_get_runner(name, *args, **kwargs):
-                runner = original_get_runner(name, *args, **kwargs)
-                original_run = runner.run
-
-                def counting_run(*a, **kw):
-                    call_count["runner_run"] += 1
-                    return original_run(*a, **kw)
-
-                runner.run = counting_run
-                return runner
-
-            namespace.get_runner = counting_get_runner
-            return original_generic(keyword_name, arguments, namespace)
-
-        # We can't easily run this with a real RF context, so we test the
-        # expected behavior: when _execute_any_keyword_generic raises
-        # ExecutionFailed, the outer code does NOT call namespace.get_runner
-        # again.
         mock_namespace = MagicMock()
+        mock_namespace.get_runner.return_value = mock_runner
+
         mock_variables = MagicMock(spec=[])
 
-        with patch.object(
-            mgr, "_execute_any_keyword_generic",
-            side_effect=ExecutionFailed("test failure"),
-        ):
+        with patch(
+            "robotmcp.components.execution.rf_native_context_manager.EXECUTION_CONTEXTS"
+        ) as mock_ec:
+            mock_ctx = MagicMock()
+            mock_ec.current = mock_ctx
+            mock_ctx.steps = []
+
             result = mgr._execute_with_native_resolution(
                 session_id="test",
                 keyword_name="Should Be True",
@@ -458,8 +440,9 @@ class TestFailFastStatusReporterCycles:
             )
 
         assert result["success"] is False
-        # The outer retry (namespace.get_runner at line ~880) should NOT be called
-        mock_namespace.get_runner.assert_not_called()
+        # ADR-020 F5: Exactly one runner.run call, no retry
+        mock_runner.run.assert_called_once()
+        mock_namespace.get_runner.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -578,13 +561,19 @@ class TestP1P2Integration:
         )
 
         mgr = RobotFrameworkNativeContextManager()
+        mock_runner = MagicMock()
+        mock_runner.run.side_effect = ExecutionFailed("assertion failed")
         mock_namespace = MagicMock()
+        mock_namespace.get_runner.return_value = mock_runner
         mock_variables = MagicMock(spec=[])
 
-        with patch.object(
-            mgr, "_execute_any_keyword_generic",
-            side_effect=ExecutionFailed("assertion failed"),
-        ):
+        with patch(
+            "robotmcp.components.execution.rf_native_context_manager.EXECUTION_CONTEXTS"
+        ) as mock_ec:
+            mock_ctx = MagicMock()
+            mock_ec.current = mock_ctx
+            mock_ctx.steps = []
+
             with _suppress_stdout():
                 result = mgr._execute_with_native_resolution(
                     session_id="test",
@@ -596,7 +585,8 @@ class TestP1P2Integration:
 
         assert result["success"] is False
         assert "assertion failed" in result["error"]
-        mock_namespace.get_runner.assert_not_called()
+        # ADR-020 F5: Exactly one runner call, no retry
+        mock_namespace.get_runner.assert_called_once()
 
     def test_concurrent_failfast_threads(self):
         """Multiple threads hitting fail-fast simultaneously under _suppress_stdout."""
@@ -612,13 +602,19 @@ class TestP1P2Integration:
 
         def worker(thread_id):
             mgr = RobotFrameworkNativeContextManager()
+            mock_runner = MagicMock()
+            mock_runner.run.side_effect = ExecutionFailed(f"error-{thread_id}")
             mock_ns = MagicMock()
+            mock_ns.get_runner.return_value = mock_runner
             mock_vars = MagicMock(spec=[])
 
-            with patch.object(
-                mgr, "_execute_any_keyword_generic",
-                side_effect=ExecutionFailed(f"error-{thread_id}"),
-            ):
+            with patch(
+                "robotmcp.components.execution.rf_native_context_manager.EXECUTION_CONTEXTS"
+            ) as mock_ec:
+                mock_ctx = MagicMock()
+                mock_ec.current = mock_ctx
+                mock_ctx.steps = []
+
                 with _suppress_stdout():
                     result = mgr._execute_with_native_resolution(
                         session_id=f"t-{thread_id}",

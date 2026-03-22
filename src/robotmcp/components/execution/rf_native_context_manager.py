@@ -133,11 +133,15 @@ class RobotFrameworkNativeContextManager:
         
         try:
             logger.info(f"Creating minimal RF context for session {session_id}")
-            
+
             # Simple approach: Create minimal context that enables BuiltIn keywords
             from robot.libraries.BuiltIn import BuiltIn
             from robot.running.testlibraries import TestLibrary
-            
+
+            # ADR-020: Track the initial MCP test for auto-end in start_test_in_context
+            _initial_run_test = None
+            _initial_res_test = None
+
             # Check if we already have a context
             if EXECUTION_CONTEXTS.current is None:
                 # Create VariableScopes for proper test/suite scope isolation (ADR-005)
@@ -337,16 +341,21 @@ class RobotFrameworkNativeContextManager:
                     if imported_libraries:
                         namespace.set_search_order(imported_libraries)
                         logger.info(f"Set RF Namespace search order: {imported_libraries}")
-                    # Initialize variable and library scopes for suite and test
+                    # Initialize variable and library scopes for suite and test.
+                    # ADR-020 F1+F2: Follow RF-native ordering. start_suite() first,
+                    # then ctx.start_test() which internally calls namespace.start_test().
+                    # Do NOT call namespace.start_test() separately — that creates a
+                    # zombie variable scope (4 scopes instead of 3).
                     namespace.start_suite()
-                    namespace.start_test()
-                    # Also start a real running+result test in ExecutionContext for StatusReporter/BuiltIn
+                    # Start a real running+result test in ExecutionContext for StatusReporter/BuiltIn
+                    _initial_run_test = None
+                    _initial_res_test = None
                     try:
                         from robot.running.model import TestCase as RunTest
                         from robot.result.model import TestCase as ResTest
-                        run_test = RunTest(name=f"MCP_Test_{session_id}")
-                        res_test = ResTest(name=f"MCP_Test_{session_id}")
-                        ctx.start_test(run_test, res_test)
+                        _initial_run_test = RunTest(name=f"MCP_Test_{session_id}")
+                        _initial_res_test = ResTest(name=f"MCP_Test_{session_id}")
+                        ctx.start_test(_initial_run_test, _initial_res_test)
                         logger.info("Started ExecutionContext test for session")
                     except Exception as e:
                         logger.debug(f"Could not start ExecutionContext test: {e}")
@@ -380,9 +389,10 @@ class RobotFrameworkNativeContextManager:
                 "libraries": libraries or [],
                 "imported_libraries": imported_libraries,
                 "failed_imports": failed_imports,
-                # ADR-005: multi-test cycling tracking
-                "current_run_test": None,
-                "current_res_test": None,
+                # ADR-005+ADR-020: Track the initial MCP test so that
+                # start_test_in_context auto-ends it before starting a named test.
+                "current_run_test": _initial_run_test,
+                "current_res_test": _initial_res_test,
             }
             
             # Set as active context
@@ -571,7 +581,8 @@ class RobotFrameworkNativeContextManager:
             # response ends up on stderr and the client never receives it.
             # Removed _suppress_stdout() here — console='none' is sufficient.
             result = self._execute_with_native_resolution(
-                session_id, keyword_name, arguments, namespace, variables, assign_to
+                session_id, keyword_name, arguments, namespace, variables, assign_to,
+                session_variables=session_variables,
             )
             
             # Update session variables from RF variables
@@ -644,62 +655,22 @@ class RobotFrameworkNativeContextManager:
                         raise
                     logger.debug(f"namespace.get_runner() failed for '{keyword_name}': {e}")
 
-            # ── 2. Direct method lookup on actual library instances ──────────
-            # namespace.libraries yields TestLibrary wrappers in RF 7.x;
-            # access .instance to reach the real Python library object.
-            ctx = EXECUTION_CONTEXTS.current
+            # ADR-020 F3: Removed direct method bypass (_try_execute_from_library).
+            # Direct Python method calls skip RF's variable resolution pipeline,
+            # causing ${var} in arguments to be passed as literal strings.
+            # The BuiltIn.run_keyword() fallback below handles all remaining cases
+            # correctly through RF's native argument processing.
 
-            if ctx and hasattr(ctx, 'namespace') and hasattr(ctx.namespace, 'libraries'):
-                for test_library in ctx.namespace.libraries:
-                    lib_name = getattr(test_library, 'name', type(test_library).__name__)
-                    # Unwrap TestLibrary → actual Python library instance
-                    raw_instance = getattr(test_library, 'instance', test_library)
-                    try:
-                        result = self._try_execute_from_library(
-                            keyword_name, arguments, lib_name, raw_instance
-                        )
-                        if result is not None:
-                            return result
-                    except Exception as e:
-                        logger.debug(f"Direct method lookup failed for '{keyword_name}' in {lib_name}: {e}")
-                        continue
-
-            # ── 3. BuiltIn.run_keyword() fallback ───────────────────────────
+            # ── 2. BuiltIn.run_keyword() fallback ───────────────────────────
             return self._final_fallback_execution(keyword_name, arguments)
 
         except Exception as e:
             logger.error(f"Generic keyword execution failed for '{keyword_name}': {e}")
             raise
 
-    def _try_execute_from_library(self, keyword_name: str, arguments: List[str], lib_name: str, lib_instance) -> Any:
-        """Try to execute keyword from an actual Python library instance.
-
-        Args:
-            keyword_name: RF keyword name (e.g. "New Browser")
-            arguments: positional arguments
-            lib_name: library display name for logging
-            lib_instance: the raw Python library object (NOT a TestLibrary wrapper)
-        """
-        # Canonical RF method name: "New Browser" → "new_browser"
-        method_name = keyword_name.replace(' ', '_').lower()
-        if hasattr(lib_instance, method_name):
-            method = getattr(lib_instance, method_name)
-            if callable(method):
-                logger.info(f"Executing '{keyword_name}' as {lib_name}.{method_name}()")
-                return method(*arguments)
-
-        # Try alternative naming conventions
-        for alt_name in [
-            keyword_name.replace(' ', '_'),           # "New Browser" → "New_Browser"
-            keyword_name.replace(' ', '').lower(),     # "New Browser" → "newbrowser"
-        ]:
-            if alt_name != method_name and hasattr(lib_instance, alt_name):
-                method = getattr(lib_instance, alt_name)
-                if callable(method):
-                    logger.info(f"Executing '{keyword_name}' as {lib_name}.{alt_name}()")
-                    return method(*arguments)
-
-        return None
+    # ADR-020 F3: _try_execute_from_library removed. Direct Python method calls
+    # bypass RF's variable resolution, type conversion, and named argument parsing.
+    # All keyword execution now goes through runner.run() or BuiltIn.run_keyword().
 
     def _final_fallback_execution(self, keyword_name: str, arguments: List[str]) -> Any:
         """Final fallback execution using BuiltIn library."""
@@ -758,10 +729,10 @@ class RobotFrameworkNativeContextManager:
 
             res_test = ResTest(name=test_name)
 
-            # Push test scope in Namespace (variable scope) and ExecutionContext.
+            # Push test scope in ExecutionContext (which calls namespace.start_test()
+            # internally — ADR-020 F1: do NOT call namespace.start_test() separately).
             # Suppress stdout: ctx.start_test writes test name via console writer.
             with _suppress_stdout():
-                namespace.start_test()
                 ctx.start_test(run_test, res_test)
 
             ctx_info["current_run_test"] = run_test
@@ -798,9 +769,11 @@ class RobotFrameworkNativeContextManager:
                 res_test.message = message
 
             # Pop test scope — cleans test-scoped variables, sets PREV_TEST_*
+            # ADR-020 F1: ctx.end_test() calls namespace.end_test() internally.
+            # Do NOT call namespace.end_test() separately — that double-pops and
+            # corrupts TEST-scoped library instance caches.
             with _suppress_stdout():
                 ctx.end_test(res_test)
-                namespace.end_test()
 
             test_name = res_test.name
             ctx_info["current_run_test"] = None
@@ -830,19 +803,22 @@ class RobotFrameworkNativeContextManager:
         arguments: List[str],
         namespace: Namespace,
         variables,
-        assign_to: Optional[Union[str, List[str]]] = None
+        assign_to: Optional[Union[str, List[str]]] = None,
+        session_variables: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Execute keyword using RF's native runner for discovery + argument resolution.
         """
         try:
             logger.info(f"RF NATIVE: Executing {keyword_name} with args: {arguments}")
-            # Generic path: try direct resolution/dispatch (often works for BuiltIn)
+            # ADR-020 F5: Use generic path as primary (simple RunKeyword without assign=).
+            # For keywords WITH assign_to, use the outer path (with assign= and parent).
+            # This preserves the proven code path while adding assign= support.
             try:
                 generic_result = self._execute_any_keyword_generic(
                     keyword_name, arguments, namespace
                 )
-                # If generic path succeeded, proceed with assignment/variables and return
+                # If generic path succeeded, handle assignment and return
                 assigned_vars = {}
                 if assign_to and generic_result is not None:
                     assigned_vars = self._handle_variable_assignment(
@@ -865,22 +841,15 @@ class RobotFrameworkNativeContextManager:
                     "assigned_variables": assigned_vars,
                 }
             except Exception as generic_err:
-                # P1: If the generic path raised ExecutionStatus, the keyword was
-                # resolved by RF and executed through StatusReporter — retrying
-                # via the outer runner.run / BuiltIn fallback will just repeat
-                # the same failure with additional StatusReporter cycles.
+                # P1: If the generic path raised ExecutionStatus, re-raise immediately.
                 from robot.errors import ExecutionStatus
                 if isinstance(generic_err, ExecutionStatus):
                     raise
-                # M1: Log the error instead of silently swallowing it.
-                # This path covers namespace.get_runner(), library method lookup,
-                # and BuiltIn.run_keyword() fallback.  Falling through to the
-                # outer get_runner() + BuiltIn fallback below is intentional, but
-                # the error should be visible for debugging.
                 logger.debug(
                     f"Generic keyword execution path failed for '{keyword_name}': "
                     f"{type(generic_err).__name__}: {generic_err}"
                 )
+
             # Evaluate expression normalization: support ${var} and bare variable names
             try:
                 if keyword_name.strip().lower() == "evaluate" and arguments:
@@ -956,33 +925,46 @@ class RobotFrameworkNativeContextManager:
                 # based on the keyword's real signature to avoid passing unexpected kwargs
                 # (e.g., BuiltIn.Set Variable should treat 'token=${auth}' as positional text).
                 pos_args: list[Any] = list(arguments)
-                named_args: dict[str, object] = {}
-                # Build running/data and result keyword models
+                # Build running/data and result keyword models.
+                _assign_tuple = ()
+                if assign_to:
+                    _assign_tuple = tuple(assign_to) if isinstance(assign_to, list) else (assign_to,)
                 data_kw = RunKeyword(
                     name=keyword_name,
                     args=tuple(pos_args),
-                    named_args=named_args,  # pass empty dict when no named args
-                    assign=tuple(assign_to) if isinstance(assign_to, list) else (() if not assign_to else (assign_to,)),
+                    assign=_assign_tuple,
                 )
                 # Build result keyword and bind to a parent test result to satisfy StatusReporter
                 res_kw = ResultKeyword(
                     name=keyword_name,
                     args=tuple(pos_args),
-                    assign=tuple(assign_to) if isinstance(assign_to, list) else (() if not assign_to else (assign_to,)),
+                    assign=_assign_tuple,
                 )
+                # Set parent on res_kw for StatusReporter. Use the active
+                # context test if available (more reliable than result_test).
                 try:
-                    ctx_info = self._session_contexts.get(session_id)
-                    parent_test = ctx_info.get("result_test") if ctx_info else None
-                    if parent_test is None:
-                        # Self-heal: create a minimal ResultTest to satisfy StatusReporter
-                        from robot.result.model import TestCase as ResultTest
-                        parent_test = ResultTest(name=f"MCP_Test_{session_id}")
-                        ctx_info["result_test"] = parent_test
-                    res_kw.parent = parent_test
+                    if ctx.test is not None:
+                        res_kw.parent = ctx.test
+                    else:
+                        ctx_info = self._session_contexts.get(session_id)
+                        parent_test = ctx_info.get("result_test") if ctx_info else None
+                        if parent_test is None:
+                            from robot.result.model import TestCase as ResultTest
+                            parent_test = ResultTest(name=f"MCP_Test_{session_id}")
+                            if ctx_info:
+                                ctx_info["result_test"] = parent_test
+                        res_kw.parent = parent_test
                 except Exception:
                     pass
                 result = runner.run(data_kw, res_kw, ctx)
             except Exception as runner_error:
+                # P1+ADR-020: If the runner raised ExecutionStatus (assertion
+                # failure, keyword not found, wrong args), do NOT retry via
+                # BuiltIn.run_keyword — it would just repeat the same failure
+                # with additional StatusReporter cycles.
+                from robot.errors import ExecutionStatus
+                if isinstance(runner_error, ExecutionStatus):
+                    raise
                 logger.error(
                     f"RF runner failed for '{keyword_name}' with args {arguments}: {runner_error}"
                 )
@@ -1023,12 +1005,22 @@ class RobotFrameworkNativeContextManager:
                     )
                     raise
             
-            # Handle variable assignment using RF's native variable system
+            # ADR-020 F4: RF's VariableAssigner already handled assignment via
+            # RunKeyword.assign in runner.run(). Manual assignment is only needed
+            # when the BuiltIn.run_keyword fallback was used (no assign= parameter).
             assigned_vars = {}
             if assign_to and result is not None:
-                assigned_vars = self._handle_variable_assignment(
-                    assign_to, result, variables
-                )
+                # Check if runner path was used (data_kw.assign was set) — if so,
+                # RF already assigned. Only do manual assignment for BuiltIn fallback.
+                _rf_already_assigned = False
+                try:
+                    _rf_already_assigned = bool(data_kw.assign)
+                except (NameError, AttributeError):
+                    pass  # data_kw not defined = BuiltIn fallback was used
+                if not _rf_already_assigned:
+                    assigned_vars = self._handle_variable_assignment(
+                        assign_to, result, variables
+                    )
             
             # Get variables in a way that works with Variables object
             current_vars = {}

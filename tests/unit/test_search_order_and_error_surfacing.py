@@ -308,11 +308,11 @@ class TestH2FailedImportSurfacing:
 class TestM1ExceptionLogging:
     """Verify generic execution path failures are logged, not silently swallowed."""
 
-    def test_generic_path_failure_logged(self, caplog):
-        """When _execute_any_keyword_generic fails, debug log is emitted."""
+    def test_runner_failure_logged(self, caplog):
+        """ADR-020 F5: When runner.run() fails, error log is emitted."""
         mgr = RobotFrameworkNativeContextManager()
 
-        # Build a mock context where get_runner fails
+        # Build a mock context where get_runner raises
         mock_ns = MagicMock()
         mock_ns.get_runner = MagicMock(
             side_effect=Exception("No keyword 'Zap'")
@@ -348,21 +348,21 @@ class TestM1ExceptionLogging:
                 )
                 MockBI.return_value = instance
 
-                with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
+                with caplog.at_level(logging.ERROR, logger=_LOGGER_NAME):
                     result = mgr._execute_with_native_resolution(
                         "test-m1", "Zap", [], mock_ns, mock_vars, None
                     )
 
         assert not result["success"]
-        # Check that the generic path failure was logged
-        debug_msgs = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
-        generic_logged = any(
-            "Generic keyword execution path failed" in m and "Zap" in m
-            for m in debug_msgs
+        # ADR-020 F5: Check that runner failure was logged at ERROR level
+        error_msgs = [r.message for r in caplog.records if r.levelno == logging.ERROR]
+        runner_logged = any(
+            "RF runner failed" in m and "Zap" in m
+            for m in error_msgs
         )
-        assert generic_logged, (
-            f"Expected 'Generic keyword execution path failed' debug log for 'Zap'. "
-            f"Debug messages: {debug_msgs}"
+        assert runner_logged, (
+            f"Expected 'RF runner failed' error log for 'Zap'. "
+            f"Error messages: {error_msgs}"
         )
 
     def test_generic_path_success_no_fallthrough(self):
