@@ -437,6 +437,7 @@ When `ROBOTMCP_ATTACH_HOST` is set, `execute_step(..., use_context=true)` and ot
 ```
 Use RobotMCP to create a test suite and execute it step wise.
 It shall:
+
 - Open https://demoshop.makrocode.de/
 - Add item to cart
 - Assert item was added to cart
@@ -445,29 +446,30 @@ It shall:
 - Checkout
 - Assert checkout was successful
 
-Execute step by step and build final test suite afterwards.
-Create in BDD style and use Keywords with embedded arguments when applicable.
+Execute step by step and build final test suite afterwards
+Create in BDD style and use Keywords with embedded arguments when applicable
 ```
 
 **Result:** BDD-style Robot Framework test suite with Given/When/Then keywords, embedded arguments, and extracted variables.
 
-### 🌐 Web Application Testing (Selenium)
+### 🌐 Web Application Testing (Data-Driven)
 
 **Prompt:**
 
 ```
-Use RobotMCP to create a TestSuite and execute it step wise.
-Create a test for https://www.saucedemo.com/ that:
-- Logs in to https://www.saucedemo.com/ with valid credentials
-- Adds two items to cart
-- Completes checkout process
-- Verifies success message
+Use RobotMCP to create a test suite and execute it step wise.
+It shall:
 
-Use Selenium Library.
-Execute the test suite stepwise and build the final version afterwards.
+- Open https://saucedemo.com
+- Login with different user/password combinations
+- Assert message or login
+
+Execute step by step and build final test suite afterwards
+Create in datadriven style and add multiple test rows with different scenarios
+Use Test Template setting in suite
 ```
 
-**Result:** Complete Robot Framework test suite with proper locators, assertions, and structure.
+**Result:** Data-driven Robot Framework test suite with `Test Template` and parameterized rows for each login scenario.
 
 ### 📱 Mobile App Testing
 
@@ -581,74 +583,82 @@ RobotMCP provides a comprehensive toolset organized by function. Highlights:
 
 ### BDD Style (Given/When/Then)
 
-Generate clean BDD test suites by grouping `execute_step` calls with `bdd_group` and `bdd_intent`, then calling `build_test_suite(bdd_style=True)`:
+**Prompt:**
 
 ```
-# During stepwise execution, tag each step:
-execute_step(keyword="New Page", args=["https://example.com"],
-             bdd_group="open_site", bdd_intent="given")
+Use RobotMCP to create a test suite and execute it step wise.
+It shall:
 
-execute_step(keyword="Click", args=["text=Login"],
-             bdd_group="login", bdd_intent="when")
+- Open https://demoshop.makrocode.de/
+- Add item to cart
+- Assert item was added to cart
+- Add another item to cart
+- Assert another item was added to cart
+- Checkout
+- Assert checkout was successful
 
-execute_step(keyword="Get Text", args=["#welcome"],
-             bdd_group="verify_login", bdd_intent="then")
-
-# Then generate the BDD suite:
-build_test_suite(bdd_style=True)
+Execute step by step and build final test suite afterwards
+Create in BDD style and use Keywords with embedded arguments when applicable
 ```
 
-This produces a `.robot` file with natural-language test cases and a `*** Keywords ***` section:
+**Result:** RobotMCP executes each step, inspects the DOM between actions, and generates a BDD-style suite with Given/When/Then keywords:
 
 ```robotframework
 *** Test Cases ***
-Login Workflow
-    Given the site is open
-    When the user logs in
-    Then the welcome message is displayed
+Demoshop BDD Purchase Workflow
+    Given the demoshop is open
+    When the user adds the first product to cart
+    Then the cart should contain 1 item
+    When the user adds the second product to cart
+    Then the cart should contain 2 items
+    When the user proceeds to checkout
+    And the user fills in the checkout form
+    And the user places the order
+    Then the order confirmation should be displayed
 
 *** Keywords ***
-the site is open
-    New Page    https://example.com
+the demoshop is open
+    New Browser    chromium
+    New Context
+    New Page    ${DEMOSHOP_URL}
 
-the user logs in
-    Click    text=Login
-
-the welcome message is displayed
-    ${text}=    Get Text    #welcome
-    Should Contain    ${text}    Welcome
+the user adds the first product to cart
+    Click    ${FIRST_PRODUCT_BUTTON}
 ```
+
+During stepwise execution, use `bdd_group` and `bdd_intent` on `execute_step` to control how steps are grouped into behavioral keywords. Call `build_test_suite(bdd_style=True)` at the end.
 
 ### Data-Driven Templates
 
-Build parameterized test suites with `add_data_row`:
+**Prompt:**
 
 ```
-# Set a template keyword for the test:
-manage_session(action="start_test", test_name="Login Tests",
-               template="Verify Login")
+Use RobotMCP to create a test suite and execute it step wise.
+It shall:
 
-# Add named data rows:
-manage_session(action="add_data_row", test_name="Valid User",
-               args=["standard_user", "secret_sauce", "Products"])
+- Open https://saucedemo.com
+- Login with different user/password combinations
+- Assert message or login
 
-manage_session(action="add_data_row", test_name="Invalid User",
-               args=["locked_out_user", "secret_sauce", "locked out"])
-
-# Build generates a data-driven suite:
-build_test_suite()
+Execute step by step and build final test suite afterwards
+Create in datadriven style and add multiple test rows with different scenarios
+Use Test Template setting in suite
 ```
 
-Output:
+**Result:** RobotMCP builds a parameterized suite using `Test Template` with named data rows:
 
 ```robotframework
 *** Settings ***
-Test Template    Verify Login
+Library         Browser
+Test Template   Verify Login
 
-*** Test Cases ***        USERNAME           PASSWORD        EXPECTED
-Valid User                standard_user      secret_sauce    Products
-Invalid User              locked_out_user    secret_sauce    locked out
+*** Test Cases ***          USERNAME            PASSWORD        EXPECTED
+Valid User                  standard_user       secret_sauce    Products
+Locked Out User             locked_out_user     secret_sauce    locked out
+Invalid Password            standard_user       wrong_pass      Username and password do not match
 ```
+
+Use `manage_session(action="start_test", template="Verify Login")` to set the template keyword, then `manage_session(action="add_data_row", test_name="Valid User", args=["standard_user", "secret_sauce", "Products"])` to add each row.
 
 ---
 
