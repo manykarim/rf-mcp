@@ -64,6 +64,12 @@ Then configure your AI agent:
 }
 ```
 
+#### Claude Code
+
+```bash
+claude mcp add rf-mcp -- uvx rf-mcp
+```
+
 ### 3️⃣ Start Testing with AI
 
 ```
@@ -424,7 +430,28 @@ When `ROBOTMCP_ATTACH_HOST` is set, `execute_step(..., use_context=true)` and ot
 
 ## 🎪 Example Workflows
 
-### 🌐 Web Application Testing
+### 🌐 Web Application Testing (BDD)
+
+**Prompt:**
+
+```
+Use RobotMCP to create a test suite and execute it step wise.
+It shall:
+- Open https://demoshop.makrocode.de/
+- Add item to cart
+- Assert item was added to cart
+- Add another item to cart
+- Assert another item was added to cart
+- Checkout
+- Assert checkout was successful
+
+Execute step by step and build final test suite afterwards.
+Create in BDD style and use Keywords with embedded arguments when applicable.
+```
+
+**Result:** BDD-style Robot Framework test suite with Given/When/Then keywords, embedded arguments, and extracted variables.
+
+### 🌐 Web Application Testing (Selenium)
 
 **Prompt:**
 
@@ -438,7 +465,6 @@ Create a test for https://www.saucedemo.com/ that:
 
 Use Selenium Library.
 Execute the test suite stepwise and build the final version afterwards.
-
 ```
 
 **Result:** Complete Robot Framework test suite with proper locators, assertions, and structure.
@@ -534,7 +560,7 @@ RobotMCP provides a comprehensive toolset organized by function. Highlights:
 
 ### Suite Lifecycle
 
-- `build_test_suite` – Generate Robot Framework test files from validated steps. Supports multi-test suites with per-test tags, setup, and teardown.
+- `build_test_suite` – Generate Robot Framework test files from validated steps. Supports multi-test suites with per-test tags, setup, and teardown. Use `bdd_style=True` for Given/When/Then output.
 - `run_test_suite` – Validate (`mode="dry"`) or execute (`mode="full"`) suites.
 
 ### Locator Guidance
@@ -548,6 +574,81 @@ RobotMCP provides a comprehensive toolset organized by function. Highlights:
 - `recall_locator` – Recall working locator strategies for a UI element.
 - `store_knowledge` – Store domain knowledge for future recall.
 - `get_memory_status` – Check memory availability and collection statistics.
+
+---
+
+## 🧪 BDD & Data-Driven Test Generation
+
+### BDD Style (Given/When/Then)
+
+Generate clean BDD test suites by grouping `execute_step` calls with `bdd_group` and `bdd_intent`, then calling `build_test_suite(bdd_style=True)`:
+
+```
+# During stepwise execution, tag each step:
+execute_step(keyword="New Page", args=["https://example.com"],
+             bdd_group="open_site", bdd_intent="given")
+
+execute_step(keyword="Click", args=["text=Login"],
+             bdd_group="login", bdd_intent="when")
+
+execute_step(keyword="Get Text", args=["#welcome"],
+             bdd_group="verify_login", bdd_intent="then")
+
+# Then generate the BDD suite:
+build_test_suite(bdd_style=True)
+```
+
+This produces a `.robot` file with natural-language test cases and a `*** Keywords ***` section:
+
+```robotframework
+*** Test Cases ***
+Login Workflow
+    Given the site is open
+    When the user logs in
+    Then the welcome message is displayed
+
+*** Keywords ***
+the site is open
+    New Page    https://example.com
+
+the user logs in
+    Click    text=Login
+
+the welcome message is displayed
+    ${text}=    Get Text    #welcome
+    Should Contain    ${text}    Welcome
+```
+
+### Data-Driven Templates
+
+Build parameterized test suites with `add_data_row`:
+
+```
+# Set a template keyword for the test:
+manage_session(action="start_test", test_name="Login Tests",
+               template="Verify Login")
+
+# Add named data rows:
+manage_session(action="add_data_row", test_name="Valid User",
+               args=["standard_user", "secret_sauce", "Products"])
+
+manage_session(action="add_data_row", test_name="Invalid User",
+               args=["locked_out_user", "secret_sauce", "locked out"])
+
+# Build generates a data-driven suite:
+build_test_suite()
+```
+
+Output:
+
+```robotframework
+*** Settings ***
+Test Template    Verify Login
+
+*** Test Cases ***        USERNAME           PASSWORD        EXPECTED
+Valid User                standard_user      secret_sauce    Products
+Invalid User              locked_out_user    secret_sauce    locked out
+```
 
 ---
 
@@ -574,6 +675,34 @@ Control response detail level to reduce token consumption. Available on most too
 - `full` – Complete detailed output
 
 Set a default via `ROBOTMCP_OUTPUT_VERBOSITY=compact|standard|verbose`.
+
+### Delta State Responses
+
+`get_session_state` supports incremental responses that only return sections that changed since the last call:
+
+```
+# First call returns full state (version 1):
+get_session_state(session_id="...", sections=["variables", "page_source"])
+
+# Subsequent calls return only what changed:
+get_session_state(session_id="...", mode="delta", since_version=1)
+```
+
+In `mode="auto"` (the default), the server automatically returns delta responses when a previous version exists. This reduces token usage by 50-80% for multi-step workflows where only variables or page content change between steps.
+
+### Artifact Externalization
+
+Large outputs (HTML page source, execution logs, stack traces) are automatically externalized into fetchable artifacts instead of being inlined in the response:
+
+```
+# Response includes artifact_id instead of full content:
+{"result": "...", "artifact_id": "abc123", "artifact_hint": "Full page source available via fetch_artifact"}
+
+# Fetch when needed:
+fetch_artifact(artifact_id="abc123")
+```
+
+This keeps tool responses compact while preserving access to full output on demand.
 
 ### Intent Action
 
@@ -717,6 +846,7 @@ Memory benefits are strongest for **complex, multi-step scenarios** where past l
 | `ROBOTMCP_TOOL_PROFILE` | `browser_exec` / `api_exec` / `discovery` / `minimal_exec` / `full` | *(auto)* | Default tool profile |
 | `ROBOTMCP_OUTPUT_VERBOSITY` | `compact` / `standard` / `verbose` | `standard` | Response detail level |
 | `ROBOTMCP_USE_SAMPLING` | `true` / `1` / `yes` | *(disabled)* | Enable LLM-powered scenario analysis |
+| `ROBOTMCP_OUTPUT_MODE` | `auto` / `full` / `delta` | `auto` | Default `get_session_state` response mode |
 | `ROBOTMCP_PRE_VALIDATION` | `0` / `1` | `1` | Enable element pre-validation before actions |
 | `ROBOTMCP_STARTUP_CLEANUP` | `auto` / `on` / `off` | `auto` | Session cleanup on server start |
 
@@ -764,7 +894,8 @@ We welcome contributions! Here's how to get started:
 
 ## 📝 Changelog
 
-- **v0.31.0** – Persistent semantic memory with response augmentation (ADR-014, ADR-014.2)
+- [**v0.31.1**](docs/RELEASE_NOTES_v0.31.0.md) – Packaging cleanup (exclude tests/examples from sdist)
+- [**v0.31.0**](docs/RELEASE_NOTES_v0.31.0.md) – BDD/data-driven generation, namespace architecture fixes, persistent memory, 71-88% token reduction
 - [v0.30.1](docs/RELEASE_NOTES_v0.30.1.md) – FastMCP 3.x compatibility layer
 - [v0.30.0](docs/RELEASE_NOTES_v0.30.0.md) – Small LLM optimization (tool profiles, intent action, response optimization, type constraints)
 - [v0.29.0](docs/RELEASE_NOTES_v0.29.0.md) – Instruction templates, multi-test sessions, batch execution, smart timeouts
