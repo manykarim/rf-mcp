@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rf-mcp"
-version = "0.31.0"
+version = "0.31.1"
 description = "Robot Framework MCP Server - Natural Language Test Automation Bridge"
 authors = [{ name = "Many Kasiriha" }]
 license = { text = "Apache-2.0" }
@@ -73,11 +73,14 @@ include = [
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "src/robotmcp",
+    "src/robotmcp/**",
     "README.md",
+    "LICENSE",
     "pyproject.toml",
-    "src/robotmcp/frontend/templates/**/*.html",
-    "src/robotmcp/frontend/static/**/*",
+]
+exclude = [
+    "tests",
+    "examples",
 ]
 
 [tool.black]

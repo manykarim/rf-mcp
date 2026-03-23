@@ -1,0 +1,344 @@
+{
+  "name": "rf-mcp",
+  "version": "0.31.1",
+  "total_tools": 56,
+  "enabled_tools": 18,
+  "tools": [
+    {
+      "name": "analyze_scenario",
+      "description": "Analyze a natural-language scenario into structured intent and create a session.\n\nWORKFLOW: This should be your FIRST tool call for any test scenario.\n\nWhat this tool does:\n1. Creates a new session with unique session_id (or reuses provided one)\n2. Analyzes scenario to detect context (web/api/mobile/desktop)\n3. Auto-configures libraries based on scenario text\n4. Returns session_id for use in ALL subsequent tool calls\n\nCRITICAL: Save the session_id from the response and use it in all other tool calls.\n\nArgs:\n    scenario: Human-language description of the task to automate.\n    context: Application context (e.g., \"web\", \"mobile\", \"api\"); defaults to \"web\".\n    session_id: Optional existing session id to reuse; if omitted, a new one is created.\n\nReturns:\n    Dict[str, Any]: Structured intent and session metadata:\n        - success: bool\n        - session_id: created/resolved id (reuse for subsequent tools)\n        - session_info: auto-configured libraries, search order, next-step guidance\n        - intent/requirements/risk: parsed scenario details\n        - error/guidance: present on failure\n\nExamples:\n    analyze_scenario(\n        scenario=\"Test REST API endpoint /users with GET request\",\n        context=\"api\"\n    )\n    # Returns: {\"session_id\": \"auto_generated_id\", \"recommended_libraries\": [\"RequestsLibrary\"], ...}\n\n    # Use session_id in ALL subsequent calls:\n    execute_step(\n        keyword=\"Create Session\",\n        arguments=[\"api\", \"https://api.example.com\"],\n        session_id=\"auto_generated_id\"  # Use the returned session_id\n    )",
+      "enabled_by_default": true,
+      "parameters": {}
+    },
+    {
+      "name": "attach_status",
+      "description": "Report attach-mode configuration and bridge health. Indicates whether execute_step(use_context=true) will route externally.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "attach_stop_bridge",
+      "description": "Send a stop command to the external attach bridge (McpAttach) to exit MCP Serve in the debugged suite.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "build_test_suite",
+      "description": "Generate a Robot Framework test suite from previously executed steps.\n\nArgs:\n    test_name: Name for the generated test case.\n    session_id: Session containing executed steps; auto-resolves if empty/invalid.\n    tags: Optional test tags.\n    documentation: Optional test case documentation.\n    remove_library_prefixes: Whether to strip library prefixes from keywords.\n    bdd_style: Generate BDD-style suite with a Keywords section. When True,\n        steps are grouped into behavioral keywords (Given/When/Then) and a\n        ``*** Keywords ***`` section is appended to the generated .robot content.\n    data_driven_mode: How to render data-driven (template) test cases.\n        \"auto\" (default) \u2014 auto-detect: named rows \u2192 suite_template, else per_test.\n        \"per_test\" \u2014 [Template] per test case with data rows (current behavior).\n        \"suite_template\" \u2014 Test Template in Settings, each named row is a separate\n        test case with individual pass/fail in reports.\n\nReturns:\n    Dict[str, Any]: Suite generation result:\n        - success: bool\n        - session_id: resolved id\n        - suite: structured suite metadata\n        - rf_text: generated .robot content\n        - statistics/optimization_applied: summary of generated steps\n        - error/guidance: present on failure",
+      "enabled_by_default": true,
+      "parameters": {}
+    },
+    {
+      "name": "check_library_availability",
+      "description": "Verify that specified Robot Framework libraries can be imported/installed.\n\nRecommended as step 3 after analyze_scenario and recommend_libraries; use the recommended\nnames to avoid unnecessary checks.\n\nArgs:\n    libraries: Library names to verify (preferably from recommend_libraries output).\n\nReturns:\n    Dict[str, Any]: Availability report:\n        - success: bool\n        - results: per-library availability/install guidance\n        - error/guidance: present on failure",
+      "enabled_by_default": true,
+      "parameters": {}
+    },
+    {
+      "name": "debug_parse_keyword_arguments",
+      "description": "",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "diagnose_library_plugin",
+      "description": "Inspect metadata, capabilities, and hooks for a specific library plugin.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "diagnose_rf_context",
+      "description": "Inspect RF context state for a session: libraries, search order, and variables count.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "discover_keywords",
+      "description": "Find matching Robot Framework keywords for an action.\n\nArgs:\n    action_description: Description of the action to perform\n    context: Current context (web, mobile, API, etc.)\n    current_state: Current application state",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "evaluate_expression",
+      "description": "Evaluate a Python expression in RF context (BuiltIn.Evaluate).\n\n- Uses the current RF session variables; supports ${var} inside the expression.\n- Optionally assigns the result to a variable name (test scope).",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "execute_batch",
+      "description": "Execute multiple RF keywords in one call with recovery and variable chaining.\n\nReduces N MCP round-trips to 1. Steps run sequentially; each step's return\nvalue is available to later steps via ${STEP_N} references in arguments.\nBoth 0-based (${STEP_0} = first step) and 1-based (${STEP_1} = first step)\nindexing are accepted. When ambiguous, 1-based is preferred.\n\nArgs:\n    session_id: Session to execute within (must exist or be auto-created).\n    steps: List of step dicts, each with:\n        - keyword (str, required): RF keyword name\n        - args (list[str], optional): Positional arguments, may contain ${STEP_N}\n          (both 0-based and 1-based indexing supported)\n        - label (str, optional): Human-readable label\n        - timeout (str, optional): Per-step RF timeout (e.g., \"10s\")\n        - assign_to (str, optional): Variable name to capture return value (e.g., \"cart_count\")\n    on_failure: Policy on step failure:\n        - \"stop\": abort immediately\n        - \"retry\": retry without recovery logic\n        - \"recover\" (default): attempt tiered recovery before giving up\n    max_recovery_attempts: Max recovery retries per failed step (1-10, default 2).\n    timeout_ms: Total batch time budget in milliseconds (1000-600000, default 120000).\n\nReturns:\n    Dict with:\n        - status: \"PASS\" | \"FAIL\" | \"RECOVERED\" | \"TIMEOUT\"\n        - summary: human-readable result string\n        - total_time_ms: wall-clock execution time\n        - steps_executed / steps_total: counts\n        - steps: per-step results array\n        - failure: diagnostic detail (only on FAIL)\n        - batch_id: identifier for resume_batch (only on FAIL)",
+      "enabled_by_default": true,
+      "parameters": {}
+    },
+    {
+      "name": "execute_flow",
+      "description": "Execute structured flow (if/for/try) within a session.\n\nArgs:\n    structure: Flow type (\"if\", \"for\", \"try\").\n    session_id: Session id to run the flow in.\n    condition: Expression for if/conditional flows.\n    then_steps: Steps for the main branch (if/loop body/try block).\n    else_steps: Steps for the else branch (if).\n    items: Items to iterate when structure=\"for\".\n    item_var: Variable name to bind each item in for-each loops.\n    stop_on_failure: Whether to stop loop/branch execution on first failure.\n    max_iterations: Maximum iterations for for-each loops.\n    try_steps: Steps for the try block (when structure=\"try\").\n    except_patterns: Error patterns to match for except handling.\n    except_steps: Steps for the except block.\n    finally_steps: Steps for the finally block.\n    rethrow: Whether to rethrow after except/finally.\n\nReturns:\n    Dict[str, Any]: Flow execution result:\n        - success: bool\n        - structure: flow type executed\n        - session_id: echoed id\n        - per-branch results/errors",
+      "enabled_by_default": true,
+      "parameters": {}
+    },
+    {
+      "name": "execute_for_each",
+      "description": "",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "execute_if",
+      "description": "",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "execute_step",
+      "description": "Execute a single Robot Framework keyword (or Evaluate) within a session.\n\nIMPORTANT: Do NOT invent or guess keyword names. Use find_keywords or get_keyword_info\n           to discover available keywords first. Common mistakes:\n           - Using \"Press Button\" (doesn't exist - use \"Click\" or \"Click Button\")\n           - Using \"Verify\" (doesn't exist - use \"Should Be Equal\" or similar)\n           - Using \"Validate Json\" (doesn't exist - use library-specific validation)\n\nArgs:\n    keyword: Keyword name (Library.Keyword supported).\n             Use find_keywords to discover correct keyword names before calling.\n    arguments: Keyword arguments; positional and named (`name=value`) supported.\n    session_id: Session to execute in; resolves default if omitted.\n    raise_on_failure: If True, raise on failure; otherwise return error in payload.\n    detail_level: Response verbosity: \"minimal\" | \"standard\" | \"full\".\n    scenario_hint: Optional scenario text to auto-configure libraries on first call.\n    assign_to: Variable name(s) to assign the result to (string or list).\n               CRITICAL: Use this to capture results for later steps.\n               Example: assign_to=\"response\" captures ${response} variable\n    use_context: Whether to run inside RF native context; defaults via config/attach.\n    mode: \"keyword\" (default) or \"evaluate\" (runs BuiltIn.Evaluate).\n    expression: Expression for mode=\"evaluate\"; falls back to keyword/first argument.\n    timeout_ms: Optional timeout in milliseconds for keyword execution.\n                If not provided, uses smart defaults based on keyword type:\n                - Element actions (Click, Fill): 5000ms\n                - Navigation (Go To, New Page): 60000ms\n                - Read operations (Get Text): 2000ms\n                - API calls (GET, POST): 30000ms\n                Set to 0 or negative to disable timeout.\n    bdd_group: Optional group name for BDD keyword generation. Steps with the same\n               bdd_group are clustered into a single behavioral keyword when\n               build_test_suite(bdd_style=True) is called.\n               Example: bdd_group=\"add product to cart\"\n    bdd_intent: BDD intent prefix for the group: \"given\", \"when\", \"then\", \"and\", \"but\".\n                Used with bdd_group to assign Given/When/Then prefixes in the\n                generated BDD test suite.\n\nReturns:\n    Dict[str, Any]: Execution result:\n        - success: bool\n        - result/output: keyword return value or stringified output\n        - assigned_variables / session_variables: when applicable\n        - error/guidance: present on failure\n\nExamples:\n    Execute with variable assignment:\n        execute_step(\n            keyword=\"GET\",\n            arguments=[\"https://api.example.com/users\"],\n            assign_to=\"api_response\",  # Stores result in ${api_response}\n            session_id=\"api_session\"\n        )\n\n    Use captured variable:\n        execute_step(\n            keyword=\"Should Be Equal\",\n            arguments=[\"${api_response.status_code}\", \"200\"],\n            session_id=\"api_session\"\n        )\n\n    Execute with custom timeout:\n        execute_step(\n            keyword=\"Go To\",\n            arguments=[\"https://slow-website.com\"],\n            timeout_ms=120000,  # 2 minutes for slow page\n            session_id=\"web_session\"\n        )",
+      "enabled_by_default": true,
+      "parameters": {}
+    },
+    {
+      "name": "execute_try_except",
+      "description": "",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "fetch_artifact",
+      "description": "Retrieve externalized artifact content by ID.\n\nWhen tool responses are large, rf-mcp externalizes them to artifacts and returns\na summary with an artifact_id. Use this tool to retrieve the full content.\n\nArgs:\n    artifact_id: The artifact identifier (format: art_{12 hex chars}).\n    offset: Starting character offset for pagination (default 0).\n    limit: Maximum characters to return (default 4000).\n\nReturns:\n    Dict with success, content, offset, total_size, has_more.\n    On failure: error message with guidance to re-run the original tool.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "find_keywords",
+      "description": "Discover Robot Framework keywords using multiple strategies.\n\nWHEN TO USE THIS TOOL:\n- ALWAYS before calling execute_step with an unfamiliar keyword\n- When you're unsure of exact keyword name or spelling\n- To discover what keywords are available in imported libraries\n- When error says \"No keyword with name 'X' found\"\n\nArgs:\n    query: Search text or intent description.\n           Examples: \"click a button\", \"validate json\", \"get*request\"\n    strategy: Discovery approach:\n              - \"semantic\": Natural language search (best for exploring)\n              - \"pattern\": Glob/regex matching (best when you know partial name)\n              - \"catalog\": List all available keywords\n              - \"session\": List keywords from session's loaded libraries\n    context: Scenario context (e.g., \"web\", \"mobile\", \"api\") used by semantic discovery.\n    session_id: Required for strategy=\"session\" to search the live RF namespace.\n    library_name: Optional library filter for catalog search.\n    current_state: Optional state payload to improve semantic matching.\n    limit: Optional maximum number of results to return.\n\nReturns:\n    Dict[str, Any]: Discovery result:\n        - success: bool\n        - strategy: strategy used\n        - query: original query\n        - result/results: strategy-specific payload\n        - error: present on failure\n\nExamples:\n    Discover button-clicking keywords:\n        find_keywords(\n            query=\"click a button\",\n            strategy=\"semantic\",\n            session_id=\"web_session\"\n        )\n        # Returns: [\"Click\", \"Click Button\", \"Click Element\", ...]\n\n    Find keywords matching pattern:\n        find_keywords(\n            query=\"Get*\",\n            strategy=\"pattern\",\n            session_id=\"api_session\"\n        )\n        # Returns: [\"GET\", \"Get Request\", \"Get Element\", ...]",
+      "enabled_by_default": true,
+      "parameters": {}
+    },
+    {
+      "name": "get_appium_locator_guidance",
+      "description": "Get comprehensive AppiumLibrary locator strategy guidance for AI agents.\n\nThis tool helps AI agents understand AppiumLibrary's locator strategies and\nprovides context-aware suggestions for mobile element location and error resolution.\n\nAppiumLibrary supports these locator strategies:\n\n**Basic Locators:**\n- id: Element ID (e.g., 'id=my_element' or just 'my_element')\n- xpath: XPath expression (e.g., '//*[@type=\"android.widget.EditText\"]')\n- identifier: Matches by @id attribute (e.g., 'identifier=my_element')\n- accessibility_id: Accessibility options utilize (e.g., 'accessibility_id=button3')\n- class: Matches by class (e.g., 'class=UIAPickerWheel')\n- name: Matches by @name attribute (e.g., 'name=my_element') - Only valid for Selendroid\n\n**Platform-Specific Locators:**\n- android: Android UI Automator (e.g., 'android=UiSelector().description(\"Apps\")')\n- ios: iOS UI Automation (e.g., 'ios=.buttons().withName(\"Apps\")')\n- predicate: iOS Predicate (e.g., 'predicate=name==\"login\"')\n- chain: iOS Class Chain (e.g., 'chain=XCUIElementTypeWindow[1]/*')\n\n**WebView Locators:**\n- css: CSS selector in webview (e.g., 'css=.green_button')\n\n**Default Behavior:**\n- By default, locators match against key attributes (id for all elements)\n- Plain text (e.g., 'my_element') is treated as ID lookup\n- XPath should start with // or use explicit 'xpath=' prefix\n\n**WebElement Support:**\nStarting with AppiumLibrary v1.4, you can pass WebElement objects:\n- Get elements with: Get WebElements or Get WebElement\n- Use directly: Click Element ${element}\n\nArgs:\n    error_message: Optional error message to analyze for specific guidance\n    keyword_name: Optional keyword name that failed for context-specific tips\n\nReturns:\n    Comprehensive locator strategy guidance with examples, tips, and error-specific advice",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "get_application_state",
+      "description": "Retrieve current application state.\n\nArgs:\n    state_type: Type of state to retrieve (dom, api, database, all)\n    elements_of_interest: Specific elements to focus on\n    session_id: Session identifier",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "get_available_keywords",
+      "description": "List available RF keywords with minimal metadata.\n\nReturns one entry per keyword with fields:\n- name: keyword name\n- library: library name\n- args: list of argument names\n- arg_types: list of argument types if available (empty when unknown)\n- short_doc: short documentation summary (no full docstrings)\n\nIf `library_name` is provided, results are filtered to that library, loading it on demand if needed.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "get_browser_locator_guidance",
+      "description": "Get comprehensive Browser Library (Playwright) locator strategy guidance for AI agents.\n\nThis tool helps AI agents understand Browser Library's selector strategies and\nprovides context-aware suggestions for element location and error resolution.\n\nBrowser Library uses Playwright's locator strategies with these key features:\n\n**Selector Strategies:**\n- css: CSS selector (default) - e.g., '.button' or 'css=.button'\n- xpath: XPath expression - e.g., '//button' or 'xpath=//button'\n- text: Text content matching - e.g., '\"Login\"' or 'text=Login'\n- id: Element ID - e.g., 'id=submit-btn'\n- data-testid: Test ID attribute - e.g., 'data-testid=login-button'\n\n**Advanced Features:**\n- Cascaded selectors: 'text=Hello >> ../.. >> .select_button'\n- iFrame piercing: 'id=myframe >>> .inner-button'\n- Shadow DOM: Automatic piercing with CSS and text engines\n- Strict mode: Controls behavior with multiple element matches\n- Element references: '${ref} >> .child' for chained operations\n\n**Implicit Detection Rules:**\n- Plain selectors \u2192 CSS (default): '.button' becomes 'css=.button'\n- Starting with // or .. \u2192 XPath: '//button' becomes 'xpath=//button'\n- Quoted text \u2192 Text selector: '\"Login\"' becomes 'text=Login'\n- Explicit format: 'strategy=value' for any strategy\n\nArgs:\n    error_message: Optional error message to analyze for specific guidance\n    keyword_name: Optional keyword name that failed for context-specific tips\n\nReturns:\n    Comprehensive Browser Library locator guidance with examples, patterns, and error-specific advice",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "get_context_variables",
+      "description": "Get all variables from a session.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "get_keyword_documentation",
+      "description": "Get full documentation for a specific Robot Framework keyword using native RF libdoc.\n\nUses Robot Framework's native LibraryDocumentation and KeywordDoc objects to provide\ncomprehensive keyword information including source location, argument types, and\ndeprecation status when available.\n\nArgs:\n    keyword_name: Name of the keyword to get documentation for\n    library_name: Optional library name to narrow search\n\nReturns:\n    Dict containing comprehensive keyword information:\n    - success: Boolean indicating if keyword was found\n    - keyword: Dict with keyword details including:\n      - name, library, args: Basic keyword information\n      - arg_types: Argument types from libdoc (when available)\n      - doc: Full documentation text\n      - short_doc: Native Robot Framework short_doc\n      - tags: Keyword tags\n      - is_deprecated: Deprecation status (libdoc only)\n      - source: Source file path (libdoc only)\n      - lineno: Line number in source (libdoc only)",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "get_keyword_info",
+      "description": "Retrieve keyword or library documentation, or parse signatures.\n\nArgs:\n    mode: One of \"keyword\" (default), \"library\", \"session\", or \"parse\".\n    keyword_name: Keyword to document (required for modes \"keyword\"/\"session\"/\"parse\").\n    library_name: Library to document (required for mode \"library\"; optional for keyword mode).\n    session_id: Session id when mode=\"session\" to fetch overrides from the live namespace.\n    arguments: Optional arguments to parse when mode=\"parse\".\n\nReturns:\n    Dict[str, Any]: Documentation or parse payload:\n        - success: bool\n        - mode: resolved mode\n        - doc/signature data or error on failure",
+      "enabled_by_default": true,
+      "parameters": {}
+    },
+    {
+      "name": "get_library_documentation",
+      "description": "Get full documentation for a Robot Framework library using native RF libdoc.\n\nUses Robot Framework's native LibraryDocumentation API to provide comprehensive\nlibrary information including library metadata and all keywords with their\ndocumentation, arguments, and metadata.\n\nArgs:\n    library_name: Name of the library to get documentation for\n\nReturns:\n    Dict containing comprehensive library information:\n    - success: Boolean indicating if library was found\n    - library: Dict with library details including:\n      - name: Library name\n      - doc: Library documentation\n      - version: Library version\n      - type: Library type\n      - scope: Library scope\n      - source: Source file path\n      - keywords: List of all library keywords with full details including:\n        - name: Keyword name\n        - args: List of argument names\n        - arg_types: List of argument types (when available from libdoc)\n        - doc: Full keyword documentation text\n        - short_doc: Native Robot Framework short_doc\n        - tags: Keyword tags\n        - is_deprecated: Deprecation status (libdoc only)\n        - source: Source file path (libdoc only)\n        - lineno: Line number in source (libdoc only)\n      - keyword_count: Total number of keywords in library\n      - data_source: 'libdoc' or 'inspection' indicating data source",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "get_library_status",
+      "description": "Get detailed installation status for a specific library.\n\nArgs:\n    library_name: Name of the library to check (e.g., 'Browser', 'SeleniumLibrary')\n\nReturns:\n    Dict with detailed status and installation information",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "get_loaded_libraries",
+      "description": "Get status of all loaded Robot Framework libraries using both libdoc and inspection methods.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "get_locator_guidance",
+      "description": "Provide locator/selector guidance for Browser, SeleniumLibrary, or AppiumLibrary.\n\nArgs:\n    library: Target library (\"Browser\", \"SeleniumLibrary\", or \"AppiumLibrary\"). Case-insensitive.\n    error_message: Optional error text to tailor guidance (e.g., from a failed keyword).\n    keyword_name: Optional keyword name for context-specific hints.\n\nReturns:\n    Dict[str, Any]: Guidance payload:\n        - success: bool\n        - library: resolved library name\n        - tips/warnings/examples: library-specific suggestions\n        - error: present when library is unsupported",
+      "enabled_by_default": true,
+      "parameters": {}
+    },
+    {
+      "name": "get_page_source",
+      "description": "Get page source and context for a browser session with optional DOM filtering.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "get_selenium_locator_guidance",
+      "description": "Get comprehensive SeleniumLibrary locator strategy guidance for AI agents.\n\nThis tool helps AI agents understand SeleniumLibrary's locator strategies and\nprovides context-aware suggestions for element location and error resolution.\n\nSeleniumLibrary supports these locator strategies:\n- id: Element id (e.g., 'id:example')\n- name: name attribute (e.g., 'name:example')\n- identifier: Either id or name (e.g., 'identifier:example')\n- class: Element class (e.g., 'class:example')\n- tag: Tag name (e.g., 'tag:div')\n- xpath: XPath expression (e.g., 'xpath://div[@id=\"example\"]')\n- css: CSS selector (e.g., 'css:div#example')\n- dom: DOM expression (e.g., 'dom:document.images[5]')\n- link: Exact link text (e.g., 'link:Click Here')\n- partial link: Partial link text (e.g., 'partial link:Click')\n- data: Element data-* attribute (e.g., 'data:id:my_id')\n- jquery: jQuery expression (e.g., 'jquery:div.example')\n- default: Keyword-specific default (e.g., 'default:example')\n\nArgs:\n    error_message: Optional error message to analyze for specific guidance\n    keyword_name: Optional keyword name that failed for context-specific tips\n\nReturns:\n    Comprehensive locator strategy guidance with examples, tips, and error-specific advice",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "get_session_info",
+      "description": "Get comprehensive information about a session's configuration and state.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "get_session_keyword_documentation",
+      "description": "Get documentation for a keyword (library or resource) available in the session RF Namespace.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "get_session_state",
+      "description": "Retrieve aggregated session state for debugging and visibility.\n\nPrimary uses:\n    - UI inspection: DOM tree/page source/ARIA snapshots for Browser/Selenium/Appium sessions.\n    - Variable inspection: current RF variables, assigned values, and context search order.\n    - Validation/health checks: validation summaries, library lists, and attach/bridge status.\n    - Application insight: application_state (dom/api/database) when provided by plugins.\n\nArgs:\n    session_id: Active session identifier to inspect.\n    sections: Specific data blocks to include (e.g., summary, page_source, variables, application_state).\n    state_type: Type of application state to fetch when requesting application_state (dom|api|database|all).\n    elements_of_interest: Targeted element identifiers passed to application state collectors.\n    page_source_filtered: When True, returns sanitized/filtered DOM text instead of the full source.\n    page_source_filtering_level: Filtering aggressiveness for DOM output (standard|aggressive).\n    include_reduced_dom: Whether to include lightweight semantic DOM (ARIA snapshots) for quick inspection.\n    include_dom_stream: Chunk large page_source payloads into page_source_stream entries for easier transport.\n    dom_chunk_size: Maximum size of each DOM chunk when streaming is enabled (minimum 1024 bytes).\n\nReturns:\n    Dict[str, Any]: Payload with:\n        - success: bool indicating retrieval success.\n        - session_id: resolved session id.\n        - sections: list of sections included.\n        - data: per-section content (e.g., variables, page_source/ARIA snapshots, validation, libraries,\n          application_state).\n        - error: present only on failure, with guidance if available.",
+      "enabled_by_default": true,
+      "parameters": {}
+    },
+    {
+      "name": "get_session_validation_status",
+      "description": "Get validation status of all steps in a session with intelligent session resolution.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "import_custom_library",
+      "description": "Import a custom Robot Framework library (module name or file path) into the session RF Namespace.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "import_resource",
+      "description": "Import a Robot Framework resource file into the session RF Namespace.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "initialize_context",
+      "description": "Initialize a session with libraries and variables.\n\nNOTE: Full RF context mode is not yet implemented. This tool currently\ninitializes a session with the specified libraries and variables using\nthe existing session-based variable system.\n\nArgs:\n    session_id: Session identifier\n    libraries: List of libraries to import in the session\n    variables: Initial variables to set in the session\n\nReturns:\n    Session initialization status with information",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "intent_action",
+      "description": "Execute a high-level intent that auto-resolves to the correct library keyword.\n\nValid intents: navigate, click, fill, hover, select, assert_visible, extract_text, wait_for.\nThe intent is resolved based on the session's active library (Browser/SeleniumLibrary/AppiumLibrary).\n\nArgs:\n    intent: Action verb (e.g. \"click\", \"navigate\", \"fill\")\n    target: Locator or URL (e.g. \"#submit\", \"text=Login\", \"https://example.com\")\n    value: Value for fill/select intents\n    session_id: Session to execute against (uses default if not provided)\n    options: Additional options (e.g. {\"timeout\": \"10s\"})\n    assign_to: Variable name to capture result\n    detail_level: Response detail level",
+      "enabled_by_default": true,
+      "parameters": {}
+    },
+    {
+      "name": "list_available_keywords",
+      "description": "List available keywords from imported libraries and resources in the session RF Namespace.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "list_library_plugins",
+      "description": "List discovered library plugins with basic metadata.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "load_test_data",
+      "description": "Load test data from an external file (CSV, Excel, JSON) for data-driven testing.\n\nUse this to inspect external data before building data-driven test suites.\nWorks with DataDriver-compatible formats (CSV, Excel, JSON).\nIf DataDriver is not installed, falls back to built-in CSV/JSON parsing.\n\nArgs:\n    file_path: Absolute path to the data file.\n    encoding: File encoding (default utf-8).\n    dialect: CSV dialect (Excel-EU, excel, unix).\n    delimiter: Column delimiter for CSV files.\n    sheet_name: Excel sheet index or name.\n    limit: Maximum rows to return (default 100).\n\nReturns:\n    Dict with test_cases list, count, format, and column_names.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "manage_attach",
+      "description": "Inspect or control attach bridge configuration.\n\nArgs:\n    action: One of:\n        - \"status\" (default): Check bridge configuration and health\n        - \"stop\": Send stop command to bridge (sets stop flag)\n        - \"cleanup\"/\"clean\": Clean expired sessions and check bridge health\n        - \"reset\"/\"reconnect\": Stop bridge and clean all local sessions\n        - \"disconnect_all\"/\"terminate\"/\"force_stop\": Force stop bridge and terminate all\n\nReturns:\n    Dict[str, Any]: Attach status payload:\n        - success: bool\n        - action: echoed action\n        - configured/reachable/default_mode/strict: attach configuration fields\n        - diagnostics/hint/error: context-specific fields\n\n    For cleanup action:\n        - sessions_cleaned: number of expired sessions removed\n        - remaining_sessions: count of active sessions\n        - bridge_status: bridge health information\n\n    For reset action:\n        - bridge_stopped: whether bridge was successfully stopped\n        - sessions_cleaned: number of sessions removed\n        - recovery_hint: how to restart the bridge\n\n    For disconnect_all action:\n        - bridge_stopped: whether bridge was successfully stopped\n        - sessions_cleaned: number of sessions removed\n        - hint: next steps for bridge restart",
+      "enabled_by_default": true,
+      "parameters": {}
+    },
+    {
+      "name": "manage_library_plugins",
+      "description": "Inspect or reload library plugins.\n\nArgs:\n    action: One of \"list\", \"reload\", or \"diagnose\".\n    plugin_name: Plugin name when action=\"diagnose\".\n\nReturns:\n    Dict[str, Any]: Plugin metadata depending on action:\n        - success: bool\n        - action: echo of the requested action\n        - plugins/plugin/reload_result: action-specific data\n        - error: present on failure",
+      "enabled_by_default": true,
+      "parameters": {}
+    },
+    {
+      "name": "manage_session",
+      "description": "Manage session lifecycle: initialize, configure libraries/variables, and organize tests.\n\nWorkflows:\n    Single test:  init -> execute_step (repeat) -> build_test_suite\n    Multi-test:   init -> set_suite_setup -> start_test -> execute_step (repeat)\n                  -> end_test -> start_test -> ... -> build_test_suite\n\nActions and parameters (session_id is always required):\n\n    init             - Create session and load libraries.\n                       Params: libraries (list of library names),\n                               variables (dict or list to pre-set).\n\n    import_library   - Add a library to an existing session.\n                       Params: library_name, args (constructor args), alias.\n\n    import_resource  - Import a Robot Framework resource file.\n                       Params: resource_path, args.\n\n    set_variables    - Set variables in the session.\n                       Params: variables (dict {\"NAME\": \"value\"} or list [\"NAME=value\"]),\n                               scope (\"test\" | \"suite\" | \"global\", default \"suite\").\n\n    import_variables - Load variables from a Python variable file.\n                       Params: variable_file_path, args (passed to get_variables()).\n\n    start_test       - Begin a named test (enables multi-test mode). Local mode only.\n                       Params: test_name (required),\n                               test_documentation, test_tags,\n                               test_setup (dict {\"keyword\": \"...\", \"arguments\": [...]}),\n                               test_teardown (same format as test_setup).\n                       Alias: start_task.\n\n    end_test         - End the current test. Local mode only.\n                       Params: test_status (\"pass\" or \"fail\", default \"pass\"),\n                               test_message (optional error description).\n                       NOTE: test_status and test_message are session tracking metadata.\n                       They do NOT affect the .robot file generated by build_test_suite.\n                       Alias: end_task.\n\n    add_data_row     - Add a data row to the current data-driven (template) test.\n                       Requires an active test with template set via start_test.\n                       Params: args (list of values matching the template keyword's [Arguments]).\n                       Alias: data_row.\n                       Example:\n                         manage_session(action=\"start_test\", test_name=\"Cart Test\",\n                                      template=\"Add And Verify Product\")\n                         manage_session(action=\"add_data_row\", args=[\"Backpack\", \"1\", \"$29.99\"])\n                         manage_session(action=\"add_data_row\", args=[\"Bike Light\", \"2\", \"$39.98\"])\n                         manage_session(action=\"end_test\")\n                       The data rows appear under [Template] in the generated .robot file.\n\n    list_tests       - List all tests in the session with their status and step counts.\n                       Params: (none).\n\n    set_suite_setup    - Set a suite-level setup keyword (appears in *** Settings ***).\n                         Params: keyword (required), args (keyword arguments).\n\n    set_suite_teardown - Set a suite-level teardown keyword (appears in *** Settings ***).\n                         Params: keyword (required), args (keyword arguments).\n\nReturns:\n    Dict with success, session_id, and action-specific details.\n    On failure: error and guidance fields are present.\n\nExamples:\n    Initialize session with libraries:\n        manage_session(action=\"init\", session_id=\"s1\",\n                       libraries=[\"Browser\", \"BuiltIn\", \"Collections\"])\n\n    Set suite-level variables:\n        manage_session(action=\"set_variables\", session_id=\"s1\",\n                       variables={\"BASE_URL\": \"https://example.com\", \"TIMEOUT\": \"30\"})\n\n    Import a library with constructor arguments:\n        manage_session(action=\"import_library\", session_id=\"s1\",\n                       library_name=\"Browser\", args=[\"chromium\"])\n\n    Load a Python variable file:\n        manage_session(action=\"import_variables\", session_id=\"s1\",\n                       variable_file_path=\"config/variables.py\",\n                       args=[\"production\", \"secret_key\"])\n\n    Start a named test (multi-test mode):\n        manage_session(action=\"start_test\", session_id=\"s1\",\n                       test_name=\"Login Test\", test_tags=[\"smoke\"],\n                       test_setup={\"keyword\": \"Open Browser\", \"arguments\": [\"chromium\"]})\n\n    End the current test:\n        manage_session(action=\"end_test\", session_id=\"s1\")\n\n    Set suite setup (for generated .robot file):\n        manage_session(action=\"set_suite_setup\", session_id=\"s1\",\n                       keyword=\"New Browser\", args=[\"chromium\"])\n\n    Set suite teardown:\n        manage_session(action=\"set_suite_teardown\", session_id=\"s1\",\n                       keyword=\"Close Browser\")",
+      "enabled_by_default": true,
+      "parameters": {}
+    },
+    {
+      "name": "recommend_libraries",
+      "description": "Recommend libraries for a scenario or generate/merge sampling prompts.\n\nWHEN TO USE THIS TOOL:\n- IMMEDIATELY after analyze_scenario, before execute_step\n- When you encounter \"No keyword with name\" errors\n- To discover which libraries provide needed functionality\n\nThis tool analyzes scenario text and suggests relevant libraries, saving you from\nguessing which libraries to import.\n\nArgs:\n    scenario: Natural-language description of the task to automate.\n    context: Context such as \"web\", \"mobile\", or \"api\". Defaults to \"web\".\n    session_id: Optional session id to align recommendations with an existing session.\n    max_recommendations: Maximum libraries to return (direct mode).\n    check_availability: When True, checks installability/presence of suggested libs.\n    apply_search_order: When True, applies recommended order to the session.\n    mode: \"direct\", \"sampling_prompt\", or \"merge_samples\".\n    samples: Sampled recommendations to merge when mode=\"merge_samples\".\n    k: Number of samples to request when mode=\"sampling_prompt\" (defaults to 4).\n    available_libraries: Optional pre-fetched library metadata to use instead of registry defaults.\n    include_keywords: When True, include a compact keyword list (names only) for the top recommendation.\n    use_llm_refinement: When True, uses LLM via ctx.sample() to refine recommendations.\n    ctx: FastMCP Context object providing access to sample() for LLM refinement.\n\nReturns:\n    Dict[str, Any]: Recommendation payload:\n        - success: bool\n        - recommendations or sampling_prompt or merged result (depending on mode)\n        - session_id: echoed/preserved when provided\n        - error/guidance: present on failure\n\nExamples:\n    After analyzing web scenario:\n        recommend_libraries(\n            scenario=\"Test login form with username and password\",\n            context=\"web\",\n            session_id=\"web_test\"\n        )\n        # Returns: [\"Browser\", \"SeleniumLibrary\"] with usage guidance",
+      "enabled_by_default": true,
+      "parameters": {}
+    },
+    {
+      "name": "reload_library_plugins",
+      "description": "Reload library plugins from builtin definitions, entry points, and manifests.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "resume_batch",
+      "description": "Resume a failed batch from its failure point, optionally inserting fix steps.\n\nAfter execute_batch returns status=FAIL with a batch_id, call this to:\n1. Re-run the failed step (with optional fix_steps injected before it)\n2. Continue executing remaining steps from the original batch\n\nArgs:\n    batch_id: The batch_id from a failed execute_batch response.\n    fix_steps: Optional steps to execute before retrying the failed step.\n        Same format as execute_batch steps.\n    timeout_ms: Override remaining timeout budget (uses original if omitted).\n\nReturns:\n    Same format as execute_batch response.",
+      "enabled_by_default": true,
+      "parameters": {}
+    },
+    {
+      "name": "run_test_suite",
+      "description": "Validate or execute a Robot Framework suite.\n\nArgs:\n    session_id: Session containing steps to build/execute; optional if suite_file_path is given.\n    suite_file_path: Path to an existing .robot file to validate/execute.\n    mode: \"dry\"/\"validate\" for dry run; \"full\" to execute. Defaults to \"full\".\n    validation_level: Dry-run validation depth (\"minimal\", \"standard\", \"strict\"). Default \"standard\".\n    include_warnings: Whether to include warnings in validation output.\n    execution_options: RF execution options (variables, tags, loglevel, timeout, etc.).\n    output_level: Response verbosity (\"minimal\", \"standard\", \"detailed\").\n    capture_screenshots: Enable screenshot capture on failures (if supported).\n\nReturns:\n    Dict[str, Any]: Suite result:\n        - success: bool\n        - mode: \"dry\" or \"full\"\n        - statistics/execution_details/output_files when executed\n        - validation_results when dry run\n        - session_resolution: info when fallback session resolution is used\n        - error/guidance: present on failure",
+      "enabled_by_default": true,
+      "parameters": {}
+    },
+    {
+      "name": "run_test_suite_dry",
+      "description": "Validate test suite using Robot Framework dry run mode.\n\nRECOMMENDED WORKFLOW - SUITE VALIDATION:\nThis tool should be used AFTER build_test_suite to validate the generated suite:\n1. \u2705 build_test_suite - Generate .robot file from session steps\n2. \u2705 run_test_suite_dry (THIS TOOL) - Validate syntax and structure\n3. \u27a1\ufe0f run_test_suite - Execute if validation passes\n\nEnhanced Session Resolution:\n- If session_id provided and valid: Uses that session's generated suite\n- If session_id empty/invalid: Automatically finds most suitable session\n- If suite_file_path provided: Validates specified file directly\n\nValidation Levels:\n- minimal: Basic syntax checking only\n- standard: Syntax + keyword verification + imports (default)\n- strict: All checks + argument validation + structure analysis\n\nArgs:\n    session_id: Session with executed steps (auto-resolves if empty/invalid)\n    suite_file_path: Direct path to .robot file (optional, overrides session)\n    validation_level: Validation depth ('minimal', 'standard', 'strict')\n    include_warnings: Include warnings in validation report\n\nReturns:\n    Structured validation results with issues, warnings, and suggestions",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "search_keywords",
+      "description": "Search for Robot Framework keywords matching a pattern using native RF libdoc.\n\nUses Robot Framework's native libdoc API for accurate search results and documentation.\nSearches through keyword names, documentation, short_doc, and tags.\n\nCRITICAL FIX: Now ensures all session libraries are loaded before search.\n\nArgs:\n    pattern: Search pattern to match against keyword names, documentation, or tags\n\nReturns:\n    List of matching keywords with native RF libdoc metadata including short_doc,\n    argument types, deprecation status, and enhanced tag information.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "set_library_search_order",
+      "description": "Set explicit library search order for keyword resolution.\n\nArgs:\n    libraries: Library names in priority order (highest first).\n    session_id: Session to apply the search order to.\n\nReturns:\n    Dict[str, Any]: Result payload:\n        - success: bool\n        - session_id: echoed id\n        - old_search_order/new_search_order: before/after lists\n        - warnings: any invalid or missing libraries",
+      "enabled_by_default": true,
+      "parameters": {}
+    },
+    {
+      "name": "set_variables",
+      "description": "Set multiple variables in the RF session Variables store.\n\n- variables: either a dict {name: value} or a list of \"name=value\" strings.\n- scope: one of 'test', 'suite', 'global' (default 'test').",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "suggest_next_step",
+      "description": "AI-driven suggestion for next test step.\n\nArgs:\n    current_state: Current application state\n    test_objective: Overall test objective\n    executed_steps: Previously executed steps\n    session_id: Session identifier",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "validate_scenario",
+      "description": "Pre-execution validation of scenario feasibility.\n\nArgs:\n    parsed_scenario: Parsed scenario from analyze_scenario\n    available_libraries: List of available RF libraries",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "validate_test_readiness",
+      "description": "Check if session is ready for test suite generation.\n\nEnforces stepwise workflow by verifying all steps have been validated.\nUse this before calling build_test_suite() to ensure quality.\n\nArgs:\n    session_id: Session identifier to validate\n\nReturns:\n    Readiness status with guidance on next actions",
+      "enabled_by_default": false,
+      "parameters": {}
+    }
+  ]
+}
