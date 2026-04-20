@@ -2269,11 +2269,8 @@ class KeywordExecutor:
                 logger.info(
                     f"BUILTIN KEYWORD EXECUTION PATH: {keyword} with args: {args}"
                 )
-                print(f"🔍 BUILTIN PATH: {keyword} with args: {args}", file=sys.stderr)
-                print(
-                    f"🔍 BUILTIN ARGS TYPES: {[type(arg).__name__ for arg in args]}",
-                    file=sys.stderr,
-                )
+                logger.debug("BUILTIN PATH: %s with args: %s", keyword, args)
+                logger.debug("BUILTIN ARGS TYPES: %s", [type(arg).__name__ for arg in args])
                 try:
                     processed_args = self.rf_converter.parse_and_convert_arguments(
                         keyword,
@@ -2284,12 +2281,12 @@ class KeywordExecutor:
                     logger.info(
                         f"RF converter processed {keyword} args: {args} → {processed_args}"
                     )
-                    print(f"🔍 RF CONVERTER SUCCESS: {processed_args}", file=sys.stderr)
+                    logger.debug("RF CONVERTER SUCCESS: %s", processed_args)
                 except Exception as converter_error:
                     logger.warning(
                         f"RF converter failed for {keyword}: {converter_error}, falling back to basic processing"
                     )
-                    print(f"🔍 RF CONVERTER FAILED: {converter_error}", file=sys.stderr)
+                    logger.debug("RF CONVERTER FAILED: %s", converter_error)
                     processed_args = args
 
                 # DUAL HANDLING: RequestsLibrary needs object arguments, others need string arguments
@@ -2399,11 +2396,8 @@ class KeywordExecutor:
         """
         keyword_lower = keyword.lower()
 
-        # Debug output
-        print(
-            f"🔍 OBJECT CHECK: keyword={keyword_lower}, arg_index={arg_index}, arg_value={arg_value}, type={type(arg_value).__name__}",
-            file=sys.stderr,
-        )
+        logger.debug("OBJECT CHECK: keyword=%s, arg_index=%s, arg_value=%s, type=%s",
+                     keyword_lower, arg_index, arg_value, type(arg_value).__name__)
 
         # RequestsLibrary keywords that accept object parameters
         requests_keywords_with_objects = {
@@ -2418,19 +2412,13 @@ class KeywordExecutor:
         if keyword_lower in requests_keywords_with_objects:
             # Check if this is a dict or list object that should be preserved
             if isinstance(arg_value, (dict, list)):
-                print(
-                    f"🔍 PRESERVING OBJECT: RequestsLibrary keyword {keyword} detected with {type(arg_value).__name__} argument",
-                    file=sys.stderr,
-                )
                 logger.debug(
-                    f"RequestsLibrary keyword {keyword} detected with {type(arg_value).__name__} argument - preserving as object"
+                    "PRESERVING OBJECT: RequestsLibrary keyword %s with %s argument",
+                    keyword, type(arg_value).__name__,
                 )
                 return True
 
-        print(
-            f"🔍 CONVERTING TO STRING: keyword={keyword}, arg will be converted",
-            file=sys.stderr,
-        )
+        logger.debug("CONVERTING TO STRING: keyword=%s, arg will be converted", keyword)
         # For other complex argument structures that might need objects
         # Add more library-specific logic here as needed
 
@@ -2584,10 +2572,8 @@ class KeywordExecutor:
         for i, arg in enumerate(args):
             if isinstance(arg, ObjectPreservingArgument):
                 # This is a named parameter with an object value
-                print(
-                    f"🔍 PROCESSING OBJECT ARG: {arg.param_name}={arg.value} (type: {type(arg.value).__name__})",
-                    file=sys.stderr,
-                )
+                logger.debug("PROCESSING OBJECT ARG: %s=%s (type: %s)",
+                             arg.param_name, arg.value, type(arg.value).__name__)
 
                 # For Robot Framework, we need to handle named parameters properly
                 # The RF ArgumentResolver expects either:
@@ -2603,10 +2589,7 @@ class KeywordExecutor:
 
                 # For common first positional parameters like 'url', convert to positional
                 if param_name == "url" and i == 0:  # First argument and it's URL
-                    print(
-                        f"🔍 CONVERTING URL TO POSITIONAL: {param_value}",
-                        file=sys.stderr,
-                    )
+                    logger.debug("CONVERTING URL TO POSITIONAL: %s", param_value)
                     processed_args.append(param_value)
                 else:
                     # Keep as named parameter
@@ -2656,9 +2639,7 @@ class KeywordExecutor:
 
         signature = REQUESTS_LIBRARY_SIGNATURES.get(keyword.upper(), [])
 
-        print(
-            f"🔍 REQUESTS SIGNATURE: {keyword.upper()} → {signature}", file=sys.stderr
-        )
+        logger.debug("REQUESTS SIGNATURE: %s -> %s", keyword.upper(), signature)
 
         fixed_args = []
         for i, (orig_arg, resolved_arg) in enumerate(zip(original_args, resolved_args)):
@@ -2674,10 +2655,7 @@ class KeywordExecutor:
                     "=", 1
                 )
 
-                print(
-                    f"🔍 PROCESSING PARAM: {orig_param_name}={orig_param_value}",
-                    file=sys.stderr,
-                )
+                logger.debug("PROCESSING PARAM: %s=%s", orig_param_name, orig_param_value)
 
                 # Handle URL parameter (first positional parameter for session-less methods)
                 if orig_param_name == "url" and keyword_lower in [
@@ -2688,10 +2666,7 @@ class KeywordExecutor:
                     "delete",
                 ]:
                     # URL should be positional, not named
-                    print(
-                        f"🔍 CONVERTING URL TO POSITIONAL: {resolved_param_value}",
-                        file=sys.stderr,
-                    )
+                    logger.debug("CONVERTING URL TO POSITIONAL: %s", resolved_param_value)
                     fixed_args.append(resolved_param_value)
                     continue
 
@@ -2709,10 +2684,8 @@ class KeywordExecutor:
 
                             # If the original value is a dict/list but got stringified, restore it
                             if isinstance(original_value, (dict, list)):
-                                print(
-                                    f"🔍 RESTORING OBJECT FOR {orig_param_name}: {orig_param_value} → object",
-                                    file=sys.stderr,
-                                )
+                                logger.debug("RESTORING OBJECT FOR %s: %s -> object",
+                                             orig_param_name, orig_param_value)
                                 # Keep it as named parameter but with restored object
                                 fixed_args.append(f"{orig_param_name}={original_value}")
                                 continue
@@ -2723,7 +2696,7 @@ class KeywordExecutor:
                 # Non-named parameter, keep as-is
                 fixed_args.append(resolved_arg)
 
-        print(f"🔍 FINAL FIXED ARGS: {fixed_args}", file=sys.stderr)
+        logger.debug("FINAL FIXED ARGS: %s", fixed_args)
         return fixed_args
 
     def _extract_browser_state_updates(

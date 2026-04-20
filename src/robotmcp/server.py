@@ -6890,13 +6890,62 @@ except Exception as _mem_exc:
 # ── End ADR-014 ────────────────────────────────────────────────────
 
 
+def _protect_mcp_stdout() -> None:
+    """Redirect sys.__stdout__ to stderr to prevent RF console output from
+    corrupting the MCP stdio transport.
+
+    The MCP SDK captures ``sys.stdout.buffer`` once at startup for JSON-RPC
+    responses.  Robot Framework's ``Log To Console`` keyword and any library
+    ``print()`` call write to ``sys.__stdout__`` instead.  By replacing
+    ``sys.__stdout__`` with a stderr-backed wrapper, those writes go to
+    stderr while MCP's captured buffer reference remains on fd 1.
+
+    Additionally monkey-patches ``robot.output.librarylogger.write_to_console``
+    to force ``stream='stderr'`` as a defence-in-depth measure.
+    """
+    import sys as _sys
+    from io import TextIOWrapper
+
+    # Phase 2: Replace sys.__stdout__ with stderr wrapper.
+    # MCP uses sys.stdout.buffer (captured at mcp.run() time) — unaffected.
+    # RF uses sys.__stdout__ (resolved at call time) — now goes to stderr.
+    try:
+        stderr_fd = _sys.stderr.fileno()
+        _sys.__stdout__ = TextIOWrapper(
+            open(stderr_fd, "wb", closefd=False),
+            encoding="utf-8",
+            line_buffering=True,
+        )
+    except (OSError, AttributeError):
+        # Non-fd stderr (e.g., pytest capture) — use stderr object directly
+        _sys.__stdout__ = _sys.stderr
+
+    # Phase 3: Monkey-patch RF's write_to_console to force stderr stream.
+    try:
+        import robot.output.librarylogger as _rll
+
+        _original_w2c = _rll.write_to_console
+
+        def _safe_write_to_console(msg, newline=True, stream="stdout"):
+            return _original_w2c(msg, newline=newline, stream="stderr")
+
+        _rll.write_to_console = _safe_write_to_console
+    except (ImportError, AttributeError):
+        pass  # RF not installed or API changed
+
+
 def main(argv: List[str] | None = None) -> None:
     """Start the RobotMCP server, optionally booting the Django frontend."""
 
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, stream=__import__("sys").stderr)
+
+    # Protect MCP stdio transport from RF console output contamination.
+    # Must run before mcp.run() so sys.__stdout__ is redirected before any
+    # RF keyword execution, but after MCP can still capture sys.stdout.buffer.
+    _protect_mcp_stdout()
 
     try:
         _log_attach_banner()
