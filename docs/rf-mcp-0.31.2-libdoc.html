@@ -1,0 +1,126 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>rf-mcp 0.31.2 - Tool Reference</title>
+<style>body{font-family:system-ui,sans-serif;max-width:960px;margin:2em auto;padding:0 1em;color:#1a1a1a}
+h1{border-bottom:2px solid #2563eb;padding-bottom:.3em}
+.tool{margin:1.5em 0;padding:1em;border:1px solid #e5e7eb;border-radius:8px}
+.tool h3{margin:0 0 .5em;color:#2563eb}.tool.disabled h3{color:#9ca3af}
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.75em;margin-left:.5em}
+.enabled{background:#dcfce7;color:#166534}.disabled{background:#f3f4f6;color:#6b7280}
+pre{background:#f8fafc;padding:.75em;border-radius:4px;overflow-x:auto;font-size:.85em}
+.param{margin:.25em 0;padding-left:1em}
+</style></head><body>
+<h1>rf-mcp v0.31.2 - MCP Tool Reference</h1>
+<p><strong>56</strong> tools total, <strong>18</strong> enabled by default</p><hr>
+<div class="tool" id="analyze_scenario"><h3>analyze_scenario<span class="badge enabled">enabled</span></h3><p>Analyze a natural-language scenario into structured intent and create a session.</p>
+</div>
+<div class="tool disabled" id="attach_status"><h3>attach_status<span class="badge disabled">disabled</span></h3><p>Report attach-mode configuration and bridge health. Indicates whether execute_step(use_context=true) will route externally.</p>
+</div>
+<div class="tool disabled" id="attach_stop_bridge"><h3>attach_stop_bridge<span class="badge disabled">disabled</span></h3><p>Send a stop command to the external attach bridge (McpAttach) to exit MCP Serve in the debugged suite.</p>
+</div>
+<div class="tool" id="build_test_suite"><h3>build_test_suite<span class="badge enabled">enabled</span></h3><p>Generate a Robot Framework test suite from previously executed steps.</p>
+</div>
+<div class="tool" id="check_library_availability"><h3>check_library_availability<span class="badge enabled">enabled</span></h3><p>Verify that specified Robot Framework libraries can be imported/installed.</p>
+</div>
+<div class="tool disabled" id="debug_parse_keyword_arguments"><h3>debug_parse_keyword_arguments<span class="badge disabled">disabled</span></h3><p>No description</p>
+</div>
+<div class="tool disabled" id="diagnose_library_plugin"><h3>diagnose_library_plugin<span class="badge disabled">disabled</span></h3><p>Inspect metadata, capabilities, and hooks for a specific library plugin.</p>
+</div>
+<div class="tool disabled" id="diagnose_rf_context"><h3>diagnose_rf_context<span class="badge disabled">disabled</span></h3><p>Inspect RF context state for a session: libraries, search order, and variables count.</p>
+</div>
+<div class="tool disabled" id="discover_keywords"><h3>discover_keywords<span class="badge disabled">disabled</span></h3><p>Find matching Robot Framework keywords for an action.</p>
+</div>
+<div class="tool disabled" id="evaluate_expression"><h3>evaluate_expression<span class="badge disabled">disabled</span></h3><p>Evaluate a Python expression in RF context (BuiltIn.Evaluate).</p>
+</div>
+<div class="tool" id="execute_batch"><h3>execute_batch<span class="badge enabled">enabled</span></h3><p>Execute multiple RF keywords in one call with recovery and variable chaining.</p>
+</div>
+<div class="tool" id="execute_flow"><h3>execute_flow<span class="badge enabled">enabled</span></h3><p>Execute structured flow (if/for/try) within a session.</p>
+</div>
+<div class="tool disabled" id="execute_for_each"><h3>execute_for_each<span class="badge disabled">disabled</span></h3><p>No description</p>
+</div>
+<div class="tool disabled" id="execute_if"><h3>execute_if<span class="badge disabled">disabled</span></h3><p>No description</p>
+</div>
+<div class="tool" id="execute_step"><h3>execute_step<span class="badge enabled">enabled</span></h3><p>Execute a single Robot Framework keyword (or Evaluate) within a session.</p>
+</div>
+<div class="tool disabled" id="execute_try_except"><h3>execute_try_except<span class="badge disabled">disabled</span></h3><p>No description</p>
+</div>
+<div class="tool disabled" id="fetch_artifact"><h3>fetch_artifact<span class="badge disabled">disabled</span></h3><p>Retrieve externalized artifact content by ID.</p>
+</div>
+<div class="tool" id="find_keywords"><h3>find_keywords<span class="badge enabled">enabled</span></h3><p>Discover Robot Framework keywords using multiple strategies.</p>
+</div>
+<div class="tool disabled" id="get_appium_locator_guidance"><h3>get_appium_locator_guidance<span class="badge disabled">disabled</span></h3><p>Get comprehensive AppiumLibrary locator strategy guidance for AI agents.</p>
+</div>
+<div class="tool disabled" id="get_application_state"><h3>get_application_state<span class="badge disabled">disabled</span></h3><p>Retrieve current application state.</p>
+</div>
+<div class="tool disabled" id="get_available_keywords"><h3>get_available_keywords<span class="badge disabled">disabled</span></h3><p>List available RF keywords with minimal metadata.</p>
+</div>
+<div class="tool disabled" id="get_browser_locator_guidance"><h3>get_browser_locator_guidance<span class="badge disabled">disabled</span></h3><p>Get comprehensive Browser Library (Playwright) locator strategy guidance for AI agents.</p>
+</div>
+<div class="tool disabled" id="get_context_variables"><h3>get_context_variables<span class="badge disabled">disabled</span></h3><p>Get all variables from a session.</p>
+</div>
+<div class="tool disabled" id="get_keyword_documentation"><h3>get_keyword_documentation<span class="badge disabled">disabled</span></h3><p>Get full documentation for a specific Robot Framework keyword using native RF libdoc.</p>
+</div>
+<div class="tool" id="get_keyword_info"><h3>get_keyword_info<span class="badge enabled">enabled</span></h3><p>Retrieve keyword or library documentation, or parse signatures.</p>
+</div>
+<div class="tool disabled" id="get_library_documentation"><h3>get_library_documentation<span class="badge disabled">disabled</span></h3><p>Get full documentation for a Robot Framework library using native RF libdoc.</p>
+</div>
+<div class="tool disabled" id="get_library_status"><h3>get_library_status<span class="badge disabled">disabled</span></h3><p>Get detailed installation status for a specific library.</p>
+</div>
+<div class="tool disabled" id="get_loaded_libraries"><h3>get_loaded_libraries<span class="badge disabled">disabled</span></h3><p>Get status of all loaded Robot Framework libraries using both libdoc and inspection methods.</p>
+</div>
+<div class="tool" id="get_locator_guidance"><h3>get_locator_guidance<span class="badge enabled">enabled</span></h3><p>Provide locator/selector guidance for Browser, SeleniumLibrary, or AppiumLibrary.</p>
+</div>
+<div class="tool disabled" id="get_page_source"><h3>get_page_source<span class="badge disabled">disabled</span></h3><p>Get page source and context for a browser session with optional DOM filtering.</p>
+</div>
+<div class="tool disabled" id="get_selenium_locator_guidance"><h3>get_selenium_locator_guidance<span class="badge disabled">disabled</span></h3><p>Get comprehensive SeleniumLibrary locator strategy guidance for AI agents.</p>
+</div>
+<div class="tool disabled" id="get_session_info"><h3>get_session_info<span class="badge disabled">disabled</span></h3><p>Get comprehensive information about a session&#x27;s configuration and state.</p>
+</div>
+<div class="tool disabled" id="get_session_keyword_documentation"><h3>get_session_keyword_documentation<span class="badge disabled">disabled</span></h3><p>Get documentation for a keyword (library or resource) available in the session RF Namespace.</p>
+</div>
+<div class="tool" id="get_session_state"><h3>get_session_state<span class="badge enabled">enabled</span></h3><p>Retrieve aggregated session state for debugging and visibility.</p>
+</div>
+<div class="tool disabled" id="get_session_validation_status"><h3>get_session_validation_status<span class="badge disabled">disabled</span></h3><p>Get validation status of all steps in a session with intelligent session resolution.</p>
+</div>
+<div class="tool disabled" id="import_custom_library"><h3>import_custom_library<span class="badge disabled">disabled</span></h3><p>Import a custom Robot Framework library (module name or file path) into the session RF Namespace.</p>
+</div>
+<div class="tool disabled" id="import_resource"><h3>import_resource<span class="badge disabled">disabled</span></h3><p>Import a Robot Framework resource file into the session RF Namespace.</p>
+</div>
+<div class="tool disabled" id="initialize_context"><h3>initialize_context<span class="badge disabled">disabled</span></h3><p>Initialize a session with libraries and variables.</p>
+</div>
+<div class="tool" id="intent_action"><h3>intent_action<span class="badge enabled">enabled</span></h3><p>Execute a high-level intent that auto-resolves to the correct library keyword.</p>
+</div>
+<div class="tool disabled" id="list_available_keywords"><h3>list_available_keywords<span class="badge disabled">disabled</span></h3><p>List available keywords from imported libraries and resources in the session RF Namespace.</p>
+</div>
+<div class="tool disabled" id="list_library_plugins"><h3>list_library_plugins<span class="badge disabled">disabled</span></h3><p>List discovered library plugins with basic metadata.</p>
+</div>
+<div class="tool disabled" id="load_test_data"><h3>load_test_data<span class="badge disabled">disabled</span></h3><p>Load test data from an external file (CSV, Excel, JSON) for data-driven testing.</p>
+</div>
+<div class="tool" id="manage_attach"><h3>manage_attach<span class="badge enabled">enabled</span></h3><p>Inspect or control attach bridge configuration.</p>
+</div>
+<div class="tool" id="manage_library_plugins"><h3>manage_library_plugins<span class="badge enabled">enabled</span></h3><p>Inspect or reload library plugins.</p>
+</div>
+<div class="tool" id="manage_session"><h3>manage_session<span class="badge enabled">enabled</span></h3><p>Manage session lifecycle: initialize, configure libraries/variables, and organize tests.</p>
+</div>
+<div class="tool" id="recommend_libraries"><h3>recommend_libraries<span class="badge enabled">enabled</span></h3><p>Recommend libraries for a scenario or generate/merge sampling prompts.</p>
+</div>
+<div class="tool disabled" id="reload_library_plugins"><h3>reload_library_plugins<span class="badge disabled">disabled</span></h3><p>Reload library plugins from builtin definitions, entry points, and manifests.</p>
+</div>
+<div class="tool" id="resume_batch"><h3>resume_batch<span class="badge enabled">enabled</span></h3><p>Resume a failed batch from its failure point, optionally inserting fix steps.</p>
+</div>
+<div class="tool" id="run_test_suite"><h3>run_test_suite<span class="badge enabled">enabled</span></h3><p>Validate or execute a Robot Framework suite.</p>
+</div>
+<div class="tool disabled" id="run_test_suite_dry"><h3>run_test_suite_dry<span class="badge disabled">disabled</span></h3><p>Validate test suite using Robot Framework dry run mode.</p>
+</div>
+<div class="tool disabled" id="search_keywords"><h3>search_keywords<span class="badge disabled">disabled</span></h3><p>Search for Robot Framework keywords matching a pattern using native RF libdoc.</p>
+</div>
+<div class="tool" id="set_library_search_order"><h3>set_library_search_order<span class="badge enabled">enabled</span></h3><p>Set explicit library search order for keyword resolution.</p>
+</div>
+<div class="tool disabled" id="set_variables"><h3>set_variables<span class="badge disabled">disabled</span></h3><p>Set multiple variables in the RF session Variables store.</p>
+</div>
+<div class="tool disabled" id="suggest_next_step"><h3>suggest_next_step<span class="badge disabled">disabled</span></h3><p>AI-driven suggestion for next test step.</p>
+</div>
+<div class="tool disabled" id="validate_scenario"><h3>validate_scenario<span class="badge disabled">disabled</span></h3><p>Pre-execution validation of scenario feasibility.</p>
+</div>
+<div class="tool disabled" id="validate_test_readiness"><h3>validate_test_readiness<span class="badge disabled">disabled</span></h3><p>Check if session is ready for test suite generation.</p>
+</div>
+</body></html>
