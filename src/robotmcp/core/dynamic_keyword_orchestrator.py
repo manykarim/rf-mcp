@@ -1984,12 +1984,14 @@ class DynamicKeywordDiscovery:
                 diagnostic_info = self._get_diagnostic_info(
                     effective_keyword_name, session_id, active_library
                 )
-                print(
-                    f"PHASE4_DEBUG: Generated diagnostics for '{effective_keyword_name}': {list(diagnostic_info.keys())}"
+                logger.debug(
+                    "Generated diagnostics for '%s': %s",
+                    effective_keyword_name, list(diagnostic_info.keys()),
                 )
             except Exception as diag_error:
-                print(
-                    f"PHASE4_DEBUG: Diagnostics generation failed for '{effective_keyword_name}': {diag_error}"
+                logger.debug(
+                    "Diagnostics generation failed for '%s': %s",
+                    effective_keyword_name, diag_error,
                 )
                 diagnostic_info = {"diagnostic_error": str(diag_error)}
 
@@ -2003,8 +2005,9 @@ class DynamicKeywordDiscovery:
                 "diagnostics": diagnostic_info,  # Phase 4: Enhanced diagnostics
                 "source": "orchestrator",  # Phase 4: Debug - identify source
             }
-            print(
-                f"PHASE4_DEBUG: Orchestrator returning error response with diagnostics: {list(result.keys())}"
+            logger.debug(
+                "Orchestrator returning error response with diagnostics: %s",
+                list(result.keys()),
             )
             return result
 
