@@ -62,6 +62,12 @@ from robotmcp.models.session_models import PlatformType
 from robotmcp.optimization.instruction_hooks import InstructionLearningHooks
 from robotmcp.plugins import get_library_plugin_manager
 from robotmcp.utils.server_integration import initialize_enhanced_serialization
+from robotmcp.utils.prometheus_metrics import (
+    get_metrics,
+    get_request_context,
+    initialize_metrics,
+    start_metrics_http_server,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,14 +127,16 @@ def _track_tool_result(
     tool_name: str,
     arguments: Dict[str, Any],
     result: Dict[str, Any],
+    _metrics_ctx: Dict[str, Any] | None = None,
 ) -> None:
-    """Track a tool call result for instruction learning.
+    """Track a tool call result for instruction learning and Prometheus metrics.
 
     Args:
         session_id: Session identifier
         tool_name: Name of the tool that was called
         arguments: Arguments passed to the tool
         result: Result dictionary from the tool
+        _metrics_ctx: Opaque context dict from RobotMCPMetrics.start_tool_tracking
     """
     try:
         hooks = _get_instruction_hooks()
@@ -138,6 +146,48 @@ def _track_tool_result(
     except Exception as e:
         # Don't let learning errors affect tool execution
         logger.debug(f"Instruction learning tracking error: {e}")
+
+    # Prometheus metrics: track every tool call with caller identity labels.
+    try:
+        m = get_metrics()
+        if m is not None:
+            success = result.get("success", True)
+            ctx_data = get_request_context()  # populated by HTTP middleware or tool code
+            username = ctx_data.get("username", "unknown")
+            user_agent = ctx_data.get("user_agent", "unknown")
+            error_type = ""
+            if not success:
+                err = result.get("error", "")
+                error_type = (
+                    err.split(":")[0].strip().lower().replace(" ", "_")[:40]
+                    if err
+                    else "unknown"
+                )
+            if _metrics_ctx:
+                # start_tool_tracking() was called before the tool ran – end it
+                # (counter was already incremented; only duration + error matter now)
+                m.end_tool_tracking(_metrics_ctx, success=success, error_type=error_type)
+            else:
+                # No pre-tracking context; increment counter directly.
+                m.track_tool_call(
+                    tool_name=tool_name,
+                    username=username,
+                    user_agent=user_agent,
+                )
+                if not success and m.errors is not None:
+                    m.errors.labels(
+                        tool_name=tool_name,
+                        pod=m.pod_name,
+                        error_type=error_type,
+                    ).inc()
+            # Refresh active-sessions gauge after every call
+            try:
+                session_count = len(execution_engine.session_manager.sessions)
+                m.set_active_sessions(session_count)
+            except Exception:
+                pass
+    except Exception:
+        pass  # Never let metrics errors affect tool execution
 
     # ADR-014.2: tracked memory dispatch (tasks survive until done)
     try:
@@ -152,6 +202,36 @@ def _track_tool_result(
             task.add_done_callback(_pending_memory_tasks.discard)
     except Exception:
         pass  # Never let memory errors affect tool execution
+
+
+def _start_metrics_tracking(
+    tool_name: str,
+    username: str | None = None,
+    user_agent: str | None = None,
+) -> Dict[str, Any]:
+    """Begin timing a tool call and increment its call counter.
+
+    Returns an opaque context dict that must be passed to ``_track_tool_result``
+    as ``_metrics_ctx`` after the tool finishes so the duration histogram can be
+    recorded.  Returns an empty dict when metrics are unavailable.
+
+    Args:
+        tool_name:  Name of the MCP tool being executed.
+        username:   Caller identity (falls back to ContextVar → "unknown").
+        user_agent: Caller's user-agent (falls back to ContextVar → "unknown").
+    """
+    try:
+        m = get_metrics()
+        if m is None:
+            return {}
+        ctx_data = get_request_context()
+        return m.start_tool_tracking(
+            tool_name=tool_name,
+            username=username or ctx_data.get("username", "unknown"),
+            user_agent=user_agent or ctx_data.get("user_agent", "unknown"),
+        )
+    except Exception:
+        return {}
 
 
 async def _augment_with_memory(
@@ -468,6 +548,107 @@ def _frontend_dependencies_available() -> bool:
     except ImportError:
         return False
     return True
+
+
+def _build_metrics_middleware():
+    """Build a pure ASGI middleware class that populates the Prometheus
+    request-context ContextVar from HTTP headers on every request.
+
+    This enables ``_track_tool_result`` to attach real ``user_agent`` and
+    ``username`` labels to all tool-call counters when the server is running
+    in HTTP / SSE transport mode.
+
+    The ``username`` is resolved from the following sources (first wins):
+    1. ``X-Username`` HTTP header (set by reverse proxy / auth layer)
+    2. ``X-Forwarded-User`` HTTP header
+    3. ``Authorization: Bearer <token>`` – the raw token is used as-is
+    4. ``ROBOTMCP_DEFAULT_USERNAME`` environment variable
+    5. OS login name (``USERNAME`` env var on Windows, ``USER`` on Unix, or ``os.getlogin()``)
+    6. "unknown"
+
+    Returns:
+        A pure ASGI middleware class, or None if prometheus_metrics is
+        not available (stdio-only / no-metrics deployments).
+    """
+    try:
+        from robotmcp.utils.prometheus_metrics import set_request_context
+    except ImportError:
+        return None
+
+    class MetricsContextMiddleware:
+        """Pure ASGI middleware – compatible with all Starlette/FastMCP versions.
+
+        Does NOT subclass BaseHTTPMiddleware to avoid constructor-signature
+        incompatibilities introduced in Starlette ≥ 0.40 when the class is
+        passed through FastMCP's ``run_kwargs["middleware"]`` pipeline.
+        """
+
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] == "http":
+                # Headers in ASGI scope are raw bytes pairs
+                headers = {k.lower(): v for k, v in scope.get("headers", [])}
+                user_agent = headers.get(b"user-agent", b"unknown").decode(
+                    "utf-8", errors="replace"
+                )
+                x_username = headers.get(b"x-username", b"").decode(
+                    "utf-8", errors="replace"
+                )
+                x_forwarded_user = headers.get(b"x-forwarded-user", b"").decode(
+                    "utf-8", errors="replace"
+                )
+                auth = headers.get(b"authorization", b"").decode(
+                    "utf-8", errors="replace"
+                )
+                def _os_username() -> str:
+                    """Best-effort OS login name, empty string on failure."""
+                    name = (
+                        os.environ.get("ROBOTMCP_DEFAULT_USERNAME")
+                        or os.environ.get("USERNAME")   # Windows
+                        or os.environ.get("USER")       # Linux / macOS
+                    )
+                    if name:
+                        return name
+                    try:
+                        return os.getlogin()
+                    except OSError:
+                        return ""
+
+                username = (
+                    x_username
+                    or x_forwarded_user
+                    or _extract_username_from_auth(auth)
+                    or _os_username()
+                    or "unknown"
+                )
+                set_request_context(username=username, user_agent=user_agent)
+            await self.app(scope, receive, send)
+
+    return MetricsContextMiddleware
+
+
+def _extract_username_from_auth(auth_header: str) -> str | None:
+    """Extract a username hint from an Authorization header.
+
+    Only the ``Bearer`` scheme is handled; returns None for other schemes so
+    the caller can fall-through to the next resolution step.
+
+    Note: No secret is decoded here – we use the opaque token as a user
+    identifier only (consistent with the reference implementation which
+    hashes PAT tokens for anonymity).
+    """
+    if not auth_header:
+        return None
+    parts = auth_header.split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        token = parts[1].strip()
+        if token:
+            # Return a short hash so credentials are never stored in metrics labels
+            import hashlib
+            return "token:" + hashlib.sha256(token.encode()).hexdigest()[:12]
+    return None
 
 
 def _install_frontend_lifespan(config: "FrontendConfig") -> None:
@@ -1045,6 +1226,9 @@ mobile_capability_service = MobileCapabilityService()
 # Initialize enhanced serialization system
 initialize_enhanced_serialization(execution_engine)
 
+# Initialize Prometheus metrics (eager, so counters are available from first tool call)
+initialize_metrics()
+
 # Shared guidance for automation workflows
 AUTOMATION_TOOL_GUIDE: List[tuple[str, str]] = [
     (
@@ -1373,6 +1557,42 @@ async def manage_library_plugins(
             "plugin": _plugin_payload(plugin_name),
         }
     return {"success": False, "error": f"Unsupported action '{action}'"}
+
+
+@mcp.tool(
+    name="get_metrics_output",
+    description=(
+        "Return Prometheus-compatible metrics text for this server pod. "
+        "Exposes rf_mcp_tool_calls_total, rf_mcp_tool_duration_seconds, "
+        "rf_mcp_errors_total, rf_mcp_active_sessions, and rf_mcp_concurrent_requests."
+    ),
+)
+async def get_metrics_output() -> Dict[str, Any]:
+    """Expose Prometheus metrics via the MCP protocol.
+
+    Returns the full Prometheus text exposition format so that LLMs, dashboards,
+    or monitoring agents can query the server's metrics without a separate HTTP
+    scrape endpoint.
+
+    Returns:
+        Dict with fields:
+            - success: bool
+            - metrics: Prometheus text exposition string
+            - content_type: MIME type of the metrics payload
+            - pod: Name of this server pod
+            - metrics_enabled: Whether prometheus-client is installed
+    """
+    from robotmcp.utils.prometheus_metrics import get_metrics, initialize_metrics
+
+    m = get_metrics() or initialize_metrics()
+    content, content_type = m.generate_metrics()
+    return {
+        "success": True,
+        "metrics": content,
+        "content_type": content_type,
+        "pod": m.pod_name,
+        "metrics_enabled": m.is_enabled,
+    }
 
 
 async def _refine_recommendations_with_llm(
@@ -6947,6 +7167,20 @@ def main(argv: List[str] | None = None) -> None:
     # RF keyword execution, but after MCP can still capture sys.stdout.buffer.
     _protect_mcp_stdout()
 
+    # ── Prometheus metrics initialization ──────────────────────────────────
+    # Initialize the global metrics singleton early so _track_tool_result works
+    # from the first tool call.  The HTTP scrape endpoint is started separately
+    # (configurable via ROBOTMCP_METRICS_PORT; default 9090; 0 = disabled).
+    try:
+        _prom = initialize_metrics()
+        if _prom.is_enabled:
+            start_metrics_http_server()
+        else:
+            logger.info("Prometheus metrics collection not active")
+    except Exception as _metrics_exc:
+        logger.debug("Prometheus metrics init error: %s", _metrics_exc)
+    # ── End Prometheus metrics initialization ──────────────────────────────
+
     try:
         _log_attach_banner()
     except Exception:
@@ -7045,6 +7279,25 @@ def main(argv: List[str] | None = None) -> None:
                 run_kwargs["port"] = args.port
             if args.path:
                 run_kwargs["path"] = args.path
+
+            # HTTP transport: install pure-ASGI middleware to capture User-Agent /
+            # username from incoming HTTP headers into the Prometheus ContextVar.
+            # We pass it via run_kwargs["middleware"] (ASGI / Starlette level) rather
+            # than mcp.add_middleware() which is FastMCP protocol-level only.
+            try:
+                middleware_cls = _build_metrics_middleware()
+                if middleware_cls is not None:
+                    from starlette.middleware import Middleware as _ASGIMiddleware
+
+                    run_kwargs["middleware"] = [
+                        _ASGIMiddleware(middleware_cls)
+                    ]
+                    logger.info(
+                        "Prometheus metrics HTTP-context middleware installed "
+                        "(user-agent / username extraction active)"
+                    )
+            except Exception as _mw_exc:
+                logger.debug("Could not install metrics middleware: %s", _mw_exc)
 
         mcp.run(**run_kwargs)
     except KeyboardInterrupt:
