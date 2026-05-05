@@ -242,3 +242,10 @@ tests/*.robot
 /*.py
 
 /*.xml
+
+# Local-only issue reproduction artefacts that may contain real credentials
+# (e.g. SauceLabs username / access key). Never commit these.
+docs/issues/saucelabs.robot
+docs/issues/saucelabs.txt
+docs/issues/sauce*credentials*
+docs/issues/*credentials*
