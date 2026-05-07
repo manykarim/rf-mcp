@@ -119,6 +119,25 @@ class KeywordExecutor:
         "upload file by selector",  # Browser: file upload to element
     }
 
+    # Substrings that indicate an editable text field across web/mobile.
+    # ``element.tag_name`` returns:
+    #   - HTML tag (web/Selenium): ``input``, ``textarea``
+    #   - Full Java class (Android/Appium): ``android.widget.EditText``,
+    #     ``android.widget.AutoCompleteTextView``,
+    #     ``androidx.appcompat.widget.AppCompatEditText``
+    #   - XCUI element type (iOS/Appium): ``XCUIElementTypeTextField``,
+    #     ``XCUIElementTypeSecureTextField``, ``XCUIElementTypeSearchField``
+    # Matching uses substring containment after lower-casing so all three
+    # styles map to the same editability heuristic.
+    _EDITABLE_TAG_SUBSTRINGS: tuple = (
+        "edittext",         # Android: *.EditText / *.AppCompatEditText / AutoCompleteTextView
+        "textfield",        # iOS: XCUIElementTypeTextField, XCUIElementTypeSecureTextField
+        "searchfield",      # iOS: XCUIElementTypeSearchField
+        "input",            # Web fallback: <input>
+        "textarea",         # Web fallback: <textarea>
+        "textview",         # Some Android variants expose editable TextView
+    )
+
     # Required element states for different action types
     REQUIRED_STATES_FOR_ACTION: Dict[str, Set[str]] = {
         "click": {"visible", "enabled"},
@@ -865,11 +884,29 @@ class KeywordExecutor:
                         current_states.add("visible")
                     if hasattr(element, 'is_enabled') and element.is_enabled():
                         current_states.add("enabled")
-                    # For mobile, most editable elements are enabled input fields
+                    # For mobile, most editable elements are enabled input fields.
+                    # ``tag_name`` may be a full Java class (Android:
+                    # ``android.widget.EditText``) or an XCUI element type
+                    # (iOS: ``XCUIElementTypeTextField``), so substring match
+                    # against _EDITABLE_TAG_SUBSTRINGS rather than exact equality.
                     tag_name = element.tag_name.lower() if hasattr(element, 'tag_name') else ""
-                    if tag_name in ("edittext", "textfield", "input", "textarea"):
-                        if "enabled" in current_states:
-                            current_states.add("editable")
+                    is_editable_tag = any(
+                        token in tag_name for token in self._EDITABLE_TAG_SUBSTRINGS
+                    )
+                    if not is_editable_tag and hasattr(element, 'get_attribute'):
+                        # React Native / Compose / Flutter wrappers can hide the
+                        # underlying widget behind a generic tag while still
+                        # exposing the real class via the ``className`` attr.
+                        try:
+                            class_attr = (element.get_attribute("className") or "").lower()
+                        except Exception:
+                            class_attr = ""
+                        if class_attr and any(
+                            token in class_attr for token in self._EDITABLE_TAG_SUBSTRINGS
+                        ):
+                            is_editable_tag = True
+                    if is_editable_tag and "enabled" in current_states:
+                        current_states.add("editable")
             except Exception:
                 current_states = {"attached"}
 
