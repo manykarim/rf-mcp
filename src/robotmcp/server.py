@@ -5789,6 +5789,7 @@ async def run_test_suite_dry(
     suite_file_path: str = None,
     validation_level: str = "standard",
     include_warnings: bool = True,
+    execution_options: Dict[str, Any] = None,
 ) -> Dict[str, Any]:
     """Validate test suite using Robot Framework dry run mode.
 
@@ -5813,10 +5814,14 @@ async def run_test_suite_dry(
         suite_file_path: Direct path to .robot file (optional, overrides session)
         validation_level: Validation depth ('minimal', 'standard', 'strict')
         include_warnings: Include warnings in validation report
+        execution_options: Optional Robot CLI-oriented options when validating a file path
 
     Returns:
         Structured validation results with issues, warnings, and suggestions
     """
+
+    if execution_options is None:
+        execution_options = {}
 
     # Session resolution with same logic as build_test_suite
     from robotmcp.utils.session_resolution import SessionResolver
@@ -5827,7 +5832,10 @@ async def run_test_suite_dry(
         # Direct file validation mode
         logger.info(f"Running dry run validation on file: {suite_file_path}")
         return await execution_engine.run_suite_dry_run_from_file(
-            suite_file_path, validation_level, include_warnings
+            suite_file_path,
+            validation_level,
+            include_warnings,
+            execution_options,
         )
     else:
         # Session-based validation mode
@@ -5890,7 +5898,12 @@ async def run_test_suite(
         mode: "dry"/"validate" for dry run; "full" to execute. Defaults to "full".
         validation_level: Dry-run validation depth ("minimal", "standard", "strict"). Default "standard".
         include_warnings: Whether to include warnings in validation output.
-        execution_options: RF execution options (variables, tags, loglevel, timeout, etc.).
+        execution_options: RF execution options (variables, tags, loglevel, etc.). For
+            ``suite_file_path`` with dry/validate mode, these are forwarded to Robot (e.g.
+            ``variables``, ``include_tags``, ``exclude_tags``, ``test`` / ``tests``,
+            ``pythonpath``, ``loglevel``). Subprocess cap: ``dry_run_timeout`` (preferred),
+            ``dryrun_timeout``, or ``timeout`` (seconds); default comes from config
+            ``DRY_RUN_TIMEOUT``.
         output_level: Response verbosity ("minimal", "standard", "detailed").
         capture_screenshots: Enable screenshot capture on failures (if supported).
 
@@ -5917,7 +5930,10 @@ async def run_test_suite(
         if mode_norm in {"dry", "validate", "validation"}:
             logger.info(f"Running dry run validation on file: {suite_file_path}")
             result = await execution_engine.run_suite_dry_run_from_file(
-                suite_file_path, validation_level, include_warnings
+                suite_file_path,
+                validation_level,
+                include_warnings,
+                execution_options,
             )
             result["mode"] = "dry"
             return result

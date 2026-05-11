@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 import json
 import io
+import subprocess
 import sys
 from contextlib import redirect_stdout, redirect_stderr
 
@@ -39,7 +40,7 @@ class SuiteExecutionService:
         self.active_executions = {}  # Track active executions for cleanup
         
         # Execution timeouts
-        self.dry_run_timeout = getattr(config, 'DRY_RUN_TIMEOUT', 30)
+        self.dry_run_timeout = int(getattr(config, 'DRY_RUN_TIMEOUT', 180))
         self.execution_timeout = getattr(config, 'EXECUTION_TIMEOUT', 300)
         
         logger.info(f"SuiteExecutionService initialized with temp dir: {self.temp_dir}")
@@ -53,33 +54,96 @@ class SuiteExecutionService:
             return temp_dir
         else:
             return tempfile.mkdtemp(prefix="rf_mcp_execution_")
+
+    _DRY_RUN_TIMEOUT_CAP_S = 7200
+
+    def _effective_dry_run_timeout_seconds(self, options: Dict[str, Any]) -> int:
+        """Resolve subprocess timeout for dry-run (per-call overrides supported)."""
+        base = int(self.dry_run_timeout)
+        if base < 1:
+            base = 1
+        for key in ("dry_run_timeout", "dryrun_timeout"):
+            if key not in options or options[key] is None:
+                continue
+            try:
+                v = int(float(options[key]))
+                return max(1, min(v, self._DRY_RUN_TIMEOUT_CAP_S))
+            except (TypeError, ValueError):
+                pass
+        if "timeout" in options and options["timeout"] is not None:
+            try:
+                v = int(float(options["timeout"]))
+                return max(1, min(v, self._DRY_RUN_TIMEOUT_CAP_S))
+            except (TypeError, ValueError):
+                pass
+        return max(1, min(base, self._DRY_RUN_TIMEOUT_CAP_S))
+
+    def _append_dry_run_cli_execution_options(self, rf_options: List[str], options: Dict) -> None:
+        """Append Robot CLI flags from execution options (shared shape with normal runs)."""
+        if options.get("variables"):
+            for key, value in options["variables"].items():
+                rf_options.extend(["--variable", f"{key}:{value}"])
+        if options.get("include_tags"):
+            for tag in options["include_tags"]:
+                rf_options.extend(["--include", str(tag)])
+        if options.get("exclude_tags"):
+            for tag in options["exclude_tags"]:
+                rf_options.extend(["--exclude", str(tag)])
+        test_names: List[str] = []
+        if options.get("test"):
+            test_names.append(str(options["test"]))
+        tests = options.get("tests")
+        if isinstance(tests, str):
+            test_names.append(tests)
+        elif isinstance(tests, (list, tuple)):
+            test_names.extend(str(t) for t in tests)
+        for name in test_names:
+            rf_options.extend(["--test", name])
+        pp = options.get("pythonpath")
+        if isinstance(pp, str):
+            pp = [pp]
+        if isinstance(pp, (list, tuple)):
+            for p in pp:
+                rf_options.extend(["--pythonpath", str(p)])
     
     async def execute_dry_run(
-        self, 
-        suite_content: str, 
+        self,
+        suite_content: str,
         session_id: str,
-        options: Dict[str, Any] = None
+        options: Dict[str, Any] = None,
+        existing_suite_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Execute suite in dry run mode and parse validation results.
-        
+
         Args:
-            suite_content: Robot Framework suite content (.robot format)
+            suite_content: Robot Framework suite content (.robot format); ignored when
+                ``existing_suite_path`` is set.
             session_id: Session identifier for tracking
             options: Execution options including validation_level, include_warnings
-            
-        Returns:
-            Structured validation results
+            existing_suite_path: If set, run Robot against this absolute on-disk suite
+                (preserves suite-relative ``Resource`` / file paths). Otherwise a temp
+                file is created from ``suite_content`` (generated suites).
         """
         if options is None:
             options = {}
-        
+
         execution_id = f"dry_{session_id}_{uuid.uuid4().hex[:8]}"
-        
+
         try:
-            # Create temporary suite file
-            suite_file = await self._create_temp_suite_file(suite_content, execution_id)
-            
+            if existing_suite_path:
+                suite_file = os.path.abspath(existing_suite_path)
+                if not os.path.isfile(suite_file):
+                    return {
+                        "success": False,
+                        "tool": "run_test_suite_dry",
+                        "session_id": session_id,
+                        "error": f"Suite file not found: {suite_file}",
+                        "error_type": "file_not_found",
+                    }
+            else:
+                suite_file = await self._create_temp_suite_file(suite_content, execution_id)
+
             # Execute Robot Framework dry run
             return_code, stdout, stderr = await self._execute_rf_dry_run(suite_file, options)
             
@@ -92,7 +156,7 @@ class SuiteExecutionService:
                 "session_id": session_id,
                 "tool": "run_test_suite_dry",
                 "execution_time": validation_results.get("execution_time", 0),
-                "suite_file_generated": os.path.basename(suite_file)
+                "suite_file_generated": os.path.basename(suite_file),
             })
             
             return validation_results
@@ -115,15 +179,19 @@ class SuiteExecutionService:
         session_id: str,
         options: Dict[str, Any] = None,
         companion_files: List[str] = None,
+        existing_suite_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Execute suite normally and parse execution results.
 
         Args:
-            suite_content: Robot Framework suite content (.robot format)
+            suite_content: Robot Framework suite content (.robot format); ignored when
+                ``existing_suite_path`` is set.
             session_id: Session identifier for tracking
             options: Execution options including variables, tags, output settings
-            companion_files: Optional list of data file paths to copy alongside the suite
+            companion_files: Optional list of data file paths to copy alongside a **temp**
+                generated suite (ignored when ``existing_suite_path`` is set).
+            existing_suite_path: If set, run Robot against this absolute on-disk suite.
 
         Returns:
             Comprehensive execution results
@@ -134,22 +202,39 @@ class SuiteExecutionService:
         execution_id = f"normal_{session_id}_{uuid.uuid4().hex[:8]}"
 
         try:
-            # Create temporary suite file
-            suite_file = await self._create_temp_suite_file(suite_content, execution_id)
+            cleanup_tracking_id: Optional[str] = None
+            if existing_suite_path:
+                suite_file = os.path.abspath(existing_suite_path)
+                if not os.path.isfile(suite_file):
+                    return {
+                        "success": False,
+                        "tool": "run_test_suite",
+                        "session_id": session_id,
+                        "error": f"Suite file not found: {suite_file}",
+                        "error_type": "file_not_found",
+                    }
+                if execution_id not in self.active_executions:
+                    self.active_executions[execution_id] = {"files": [], "dirs": []}
+                cleanup_tracking_id = execution_id
+            else:
+                suite_file = await self._create_temp_suite_file(suite_content, execution_id)
 
-            # ADR-019: Copy companion data files to temp dir
-            if companion_files:
-                import shutil
-                for src_path in companion_files:
-                    if os.path.isfile(src_path):
-                        dst = os.path.join(
-                            os.path.dirname(suite_file), os.path.basename(src_path)
-                        )
-                        shutil.copy2(src_path, dst)
-                        logger.debug(f"Copied companion file: {src_path} -> {dst}")
-            
+                # ADR-019: Copy companion data files to temp dir
+                if companion_files:
+                    import shutil
+
+                    for src_path in companion_files:
+                        if os.path.isfile(src_path):
+                            dst = os.path.join(
+                                os.path.dirname(suite_file), os.path.basename(src_path)
+                            )
+                            shutil.copy2(src_path, dst)
+                            logger.debug(f"Copied companion file: {src_path} -> {dst}")
+
             # Execute Robot Framework normally
-            return_code, stdout, stderr, output_dir = await self._execute_rf_normal(suite_file, options)
+            return_code, stdout, stderr, output_dir = await self._execute_rf_normal(
+                suite_file, options, cleanup_tracking_id=cleanup_tracking_id
+            )
             
             # Parse execution results
             execution_results = await self._parse_execution_results(output_dir, return_code, stdout, stderr, options)
@@ -203,30 +288,30 @@ class SuiteExecutionService:
         """Execute Robot Framework dry run using native API."""
         if not ROBOT_AVAILABLE:
             raise Exception("Robot Framework not available for dry run execution")
-        
+
+        timeout_s = self._effective_dry_run_timeout_seconds(options)
+        # Allow the worker thread to surface subprocess.TimeoutExpired before asyncio aborts.
+        asyncio_cap = timeout_s + 60
+
         try:
             start_time = datetime.now()
             
             # Prepare Robot Framework options
             rf_options = ["--dryrun", "--output", "NONE", "--report", "NONE", "--log", "NONE"]
             
-            # Add validation level options
-            validation_level = options.get("validation_level", "standard")
-            if validation_level == "strict":
-                rf_options.extend(["--loglevel", "DEBUG"])
-            elif validation_level == "minimal":
-                rf_options.extend(["--loglevel", "WARN"])
+            # Add validation level options (execution_options may override loglevel)
+            if options.get("loglevel"):
+                rf_options.extend(["--loglevel", str(options["loglevel"])])
             else:
-                rf_options.extend(["--loglevel", "INFO"])
-            
-            # Add custom options if provided
-            if options.get("include_tags"):
-                for tag in options["include_tags"]:
-                    rf_options.extend(["--include", tag])
-            
-            if options.get("exclude_tags"):
-                for tag in options["exclude_tags"]:
-                    rf_options.extend(["--exclude", tag])
+                validation_level = options.get("validation_level", "standard")
+                if validation_level == "strict":
+                    rf_options.extend(["--loglevel", "DEBUG"])
+                elif validation_level == "minimal":
+                    rf_options.extend(["--loglevel", "WARN"])
+                else:
+                    rf_options.extend(["--loglevel", "INFO"])
+
+            self._append_dry_run_cli_execution_options(rf_options, options)
             
             # Set output directory
             rf_options.extend(["--outputdir", self.temp_dir])
@@ -235,58 +320,70 @@ class SuiteExecutionService:
             rf_options.append(suite_file)
             
             logger.debug(f"Executing dry run with options: {rf_options}")
-            
-            # Capture stdout and stderr
-            stdout_capture = io.StringIO()
-            stderr_capture = io.StringIO()
-            
-            # Execute Robot Framework dry run in executor to avoid blocking
+
+            # Use subprocess so Robot console output is captured reliably (run_cli may
+            # write to the underlying stdout fd and bypass contextlib.redirect_stdout).
             def run_robot_dry():
-                with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                    try:
-                        # Use run_cli which properly handles command line arguments
-                        return run_cli(rf_options, exit=False)
-                    except SystemExit as e:
-                        return e.code if hasattr(e, 'code') else (e.args[0] if e.args else 1)
-                    except Exception as e:
-                        logger.error(f"Robot Framework dry run error: {e}")
-                        return 252  # Invalid test data
-            
-            # Run in thread to avoid blocking
+                cmd = [sys.executable, "-m", "robot", *rf_options]
+                try:
+                    proc = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=timeout_s,
+                    )
+                    return proc.returncode, proc.stdout or "", proc.stderr or ""
+                except subprocess.TimeoutExpired:
+                    raise
+                except Exception as e:
+                    logger.error(f"Robot Framework dry run error: {e}")
+                    return 252, "", str(e)
+
             loop = asyncio.get_event_loop()
-            return_code = await asyncio.wait_for(
+            return_code, stdout_content, stderr_content = await asyncio.wait_for(
                 loop.run_in_executor(None, run_robot_dry),
-                timeout=self.dry_run_timeout
+                timeout=asyncio_cap,
             )
-            
+
             execution_time = (datetime.now() - start_time).total_seconds()
-            stdout_content = stdout_capture.getvalue()
-            stderr_content = stderr_capture.getvalue()
-            
-            logger.debug(f"Dry run completed in {execution_time:.2f}s with return code {return_code}")
-            
+
+            logger.debug(
+                f"Dry run completed in {execution_time:.2f}s with return code {return_code}"
+            )
+
             return return_code, stdout_content, stderr_content
             
-        except asyncio.TimeoutError:
-            logger.error(f"Dry run execution timed out after {self.dry_run_timeout}s")
-            raise Exception(f"Dry run execution timed out after {self.dry_run_timeout}s")
+        except (asyncio.TimeoutError, subprocess.TimeoutExpired):
+            logger.error(f"Dry run execution timed out after {timeout_s}s")
+            raise Exception(f"Dry run execution timed out after {timeout_s}s")
         
         except Exception as e:
             logger.error(f"Error executing dry run: {e}")
             raise
     
-    async def _execute_rf_normal(self, suite_file: str, options: Dict) -> Tuple[int, str, str, str]:
+    async def _execute_rf_normal(
+        self,
+        suite_file: str,
+        options: Dict,
+        cleanup_tracking_id: Optional[str] = None,
+    ) -> Tuple[int, str, str, str]:
         """Execute Robot Framework normal run using native API."""
         if not ROBOT_AVAILABLE:
             raise Exception("Robot Framework not available for normal execution")
-        
-        execution_id = os.path.basename(suite_file).replace("suite_", "").replace(".robot", "")
-        output_dir = os.path.join(self.temp_dir, f"output_{execution_id}")
+
+        track_id = (
+            cleanup_tracking_id
+            if cleanup_tracking_id is not None
+            else os.path.basename(suite_file).replace("suite_", "").replace(".robot", "")
+        )
+        output_dir = os.path.join(self.temp_dir, f"output_{track_id}")
         os.makedirs(output_dir, exist_ok=True)
-        
+
         # Track output directory for cleanup
-        if execution_id in self.active_executions:
-            self.active_executions[execution_id]["dirs"].append(output_dir)
+        if track_id in self.active_executions:
+            self.active_executions[track_id]["dirs"].append(output_dir)
         
         try:
             start_time = datetime.now()
@@ -431,6 +528,11 @@ class SuiteExecutionService:
             (r"No keyword with name '(.+)' found", "missing_keyword", "error"),
             (r"Importing library '(.+)' failed", "import_error", "error"),
             (r"Importing resource '(.+)' failed", "resource_error", "error"),
+            (
+                r"Resource file ['\"](.+)['\"] does not exist",
+                "resource_error",
+                "error",
+            ),
             (r"Invalid number of arguments", "argument_error", "error"),
             (r"Keyword name cannot be empty", "syntax_error", "error"),
             (r"Variable '(.+)' not found", "variable_error", "error"),
@@ -737,6 +839,87 @@ class SuiteExecutionService:
         extract_from_suite(suite)
         return failed_tests
     
+    @staticmethod
+    def _try_parse_full_test_summary_line(line: str) -> Optional[int]:
+        """Parse 'N test[s], X passed, Y failed' from one line (flexible whitespace)."""
+        parts = [p.strip() for p in line.strip().split(",")]
+        if len(parts) < 3:
+            return None
+        head, mid, tail = parts[0], parts[1], parts[2]
+        hl, ml, tl = head.lower(), mid.lower(), tail.lower()
+        if not (hl.endswith(" test") or hl.endswith(" tests")):
+            return None
+        if not ml.endswith(" passed"):
+            return None
+        if not tl.endswith(" failed"):
+            return None
+        s = head.strip()
+        i = 0
+        while i < len(s) and s[i].isspace():
+            i += 1
+        j = i
+        while j < len(s) and s[j].isdigit():
+            j += 1
+        if j == i:
+            return None
+        rest = s[j:].strip().lower()
+        if rest not in ("test", "tests"):
+            return None
+        return int(s[i:j])
+
+    @staticmethod
+    def _combined_has_zero_failed(combined: str) -> bool:
+        """True if output contains a phrase '<n> failed' with n == 0 (not 10, 20, …)."""
+        lower = combined.lower()
+        marker = " failed"
+        pos = 0
+        while True:
+            i = lower.find(marker, pos)
+            if i == -1:
+                return False
+            j = i - 1
+            while j >= 0 and lower[j].isspace():
+                j -= 1
+            end = j
+            while j >= 0 and lower[j].isdigit():
+                j -= 1
+            if end > j:
+                num = int(lower[j + 1 : end + 1])
+                if num == 0 and (j < 0 or not lower[j].isdigit()):
+                    return True
+            pos = i + len(marker)
+
+    @staticmethod
+    def _fallback_tests_count_on_line(line: str) -> Optional[int]:
+        """First integer before a standalone 'test' / 'tests' token on this line."""
+        s = line.strip()
+        lower = s.lower()
+        for needle in (" tests", " test"):
+            idx = lower.find(needle)
+            if idx == -1:
+                continue
+            j = idx - 1
+            while j >= 0 and s[j].isspace():
+                j -= 1
+            end = j
+            while j >= 0 and s[j].isdigit():
+                j -= 1
+            if end > j:
+                return int(s[j + 1 : end + 1])
+        return None
+
+    def _parse_robot_test_count_from_output(self, combined: str) -> int:
+        for line in combined.splitlines():
+            n = self._try_parse_full_test_summary_line(line)
+            if n is not None:
+                return n
+        if self._combined_has_zero_failed(combined):
+            for line in combined.splitlines():
+                n = self._fallback_tests_count_on_line(line)
+                if n is not None:
+                    return n
+        return 0
+
     def _extract_suite_info(self, stdout: str, stderr: str) -> Dict[str, Any]:
         """Extract suite information from Robot Framework output."""
         suite_info = {
@@ -745,17 +928,16 @@ class SuiteExecutionService:
             "keyword_count": 0,
             "libraries_used": []
         }
-        
+
+        combined = f"{stdout}\n{stderr}"
+
         # Try to extract suite name
-        name_match = re.search(r"^(.+?) :: ", stdout, re.MULTILINE)
+        name_match = re.search(r"^(.+?) :: ", combined, re.MULTILINE)
         if name_match:
             suite_info["name"] = name_match.group(1).strip()
-        
-        # Try to extract test count from dry run output
-        test_match = re.search(r"(\d+) test[s]?, (\d+) passed, (\d+) failed", stdout)
-        if test_match:
-            suite_info["test_count"] = int(test_match.group(1))
-        
+
+        suite_info["test_count"] = self._parse_robot_test_count_from_output(combined)
+
         return suite_info
     
     def _format_error_message(self, error_type: str, context: str) -> str:
