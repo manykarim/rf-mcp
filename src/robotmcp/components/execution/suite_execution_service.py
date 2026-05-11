@@ -30,6 +30,37 @@ from robotmcp.models.config_models import ExecutionConfig
 
 logger = logging.getLogger(__name__)
 
+_DRY_RUN_TIMEOUT_OUTPUT_TAIL_MAX = 8000
+
+
+class DryRunSubprocessTimeoutError(Exception):
+    """Raised when the ``robot --dryrun`` subprocess exceeds its timeout."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        timeout_seconds: int,
+        command: List[str],
+        cwd: str,
+        stdout_tail: str,
+        stderr_tail: str,
+    ) -> None:
+        super().__init__(message)
+        self.timeout_seconds = timeout_seconds
+        self.command = command
+        self.cwd = cwd
+        self.stdout_tail = stdout_tail
+        self.stderr_tail = stderr_tail
+
+
+def _truncate_output_tail(text: Optional[str], max_len: int = _DRY_RUN_TIMEOUT_OUTPUT_TAIL_MAX) -> str:
+    if not text:
+        return ""
+    if len(text) <= max_len:
+        return text
+    return text[-max_len:]
+
 
 class SuiteExecutionService:
     """Service for executing Robot Framework test suites in dry run and normal modes."""
@@ -160,7 +191,22 @@ class SuiteExecutionService:
             })
             
             return validation_results
-            
+
+        except DryRunSubprocessTimeoutError as exc:
+            logger.error("Dry run subprocess timeout: %s", exc)
+            return {
+                "success": False,
+                "tool": "run_test_suite_dry",
+                "session_id": session_id,
+                "error": str(exc),
+                "error_type": "execution_error",
+                "timeout": True,
+                "timeout_seconds": exc.timeout_seconds,
+                "command": exc.command,
+                "cwd": exc.cwd,
+                "timeout_stdout_tail": exc.stdout_tail,
+                "timeout_stderr_tail": exc.stderr_tail,
+            }
         except Exception as e:
             logger.error(f"Error in dry run execution for session {session_id}: {e}")
             return {
@@ -318,16 +364,17 @@ class SuiteExecutionService:
             
             # Add the suite file
             rf_options.append(suite_file)
-            
+
+            dry_cmd = [sys.executable, "-m", "robot", *rf_options]
+
             logger.debug(f"Executing dry run with options: {rf_options}")
 
             # Use subprocess so Robot console output is captured reliably (run_cli may
             # write to the underlying stdout fd and bypass contextlib.redirect_stdout).
             def run_robot_dry():
-                cmd = [sys.executable, "-m", "robot", *rf_options]
                 try:
                     proc = subprocess.run(
-                        cmd,
+                        dry_cmd,
                         capture_output=True,
                         text=True,
                         encoding="utf-8",
@@ -335,8 +382,18 @@ class SuiteExecutionService:
                         timeout=timeout_s,
                     )
                     return proc.returncode, proc.stdout or "", proc.stderr or ""
-                except subprocess.TimeoutExpired:
-                    raise
+                except subprocess.TimeoutExpired as exc:
+                    cwd = os.getcwd()
+                    out = _truncate_output_tail(getattr(exc, "output", None))
+                    err = _truncate_output_tail(getattr(exc, "stderr", None))
+                    raise DryRunSubprocessTimeoutError(
+                        f"Dry run subprocess timed out after {timeout_s}s",
+                        timeout_seconds=timeout_s,
+                        command=list(dry_cmd),
+                        cwd=cwd,
+                        stdout_tail=out,
+                        stderr_tail=err,
+                    ) from exc
                 except Exception as e:
                     logger.error(f"Robot Framework dry run error: {e}")
                     return 252, "", str(e)
@@ -354,11 +411,25 @@ class SuiteExecutionService:
             )
 
             return return_code, stdout_content, stderr_content
-            
-        except (asyncio.TimeoutError, subprocess.TimeoutExpired):
-            logger.error(f"Dry run execution timed out after {timeout_s}s")
-            raise Exception(f"Dry run execution timed out after {timeout_s}s")
-        
+
+        except DryRunSubprocessTimeoutError:
+            raise
+        except asyncio.TimeoutError as exc:
+            cwd = os.getcwd()
+            logger.error(
+                "Dry run asyncio wait exceeded outer limit (timeout_s=%s asyncio_cap=%s)",
+                timeout_s,
+                asyncio_cap,
+            )
+            raise DryRunSubprocessTimeoutError(
+                f"Dry run execution timed out after {timeout_s}s",
+                timeout_seconds=timeout_s,
+                command=list(dry_cmd),
+                cwd=cwd,
+                stdout_tail="",
+                stderr_tail="",
+            ) from exc
+
         except Exception as e:
             logger.error(f"Error executing dry run: {e}")
             raise
