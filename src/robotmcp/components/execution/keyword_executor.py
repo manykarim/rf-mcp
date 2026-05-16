@@ -167,6 +167,13 @@ _EVAL_JS_MUTATION_PATTERNS: tuple[_re_evalcurate.Pattern, ...] = tuple(
         r"history\.(pushState|replaceState|back|forward|go)\s*\(",
         r"document\.cookie\s*=",
         r"document\.write\s*\(",
+        # Property-mutations on `document` that the legacy read-only pattern
+        # would otherwise swallow (cookie was already covered; title/domain
+        # were not).  Order before _EVAL_JS_READONLY_PATTERNS so the
+        # mutation classification wins.
+        r"document\.title\s*=",
+        r"document\.domain\s*=",
+        r"document\.location\s*=",
         # idealForms / jQuery mutations that commit form state
         r"\.idealforms\s*\(\s*['\"]validate['\"]",
         r"\.valid\s*\(\s*\)",                 # jQuery Validate triggers state
@@ -207,7 +214,7 @@ _EVAL_JS_READONLY_PATTERNS: tuple[_re_evalcurate.Pattern, ...] = tuple(
         r"\.hasAttribute\s*\(",
         r"window\.(innerWidth|innerHeight|scrollX|scrollY|pageXOffset|pageYOffset)\b",
         r"window\.location\b(?!\s*=)",
-        r"document\.(title|URL|readyState|documentElement|body)\b",
+        r"document\.(title|URL|readyState|documentElement|body)\b(?!\s*=)",
         r"JSON\.stringify\s*\(",
         # idealsteps inspection (the agents inspect step state without mutating)
         r"\.idealsteps-",
@@ -699,6 +706,79 @@ class KeywordExecutor:
                 ],
             })
         return hints
+
+    # Substrings (lower-cased) in an execution-failure error message that
+    # indicate a Playwright actionability problem worth probing for a
+    # visible wrapper element.  When the failure happens AFTER the
+    # pre-validation gate (gate passed, but real keyword execution still
+    # rejected the element), the existing wrapper-suggestion code at the
+    # gate doesn't fire — this list lets us inject the same hint on the
+    # post-gate failure path too.
+    _ACTIONABILITY_FAILURE_MARKERS: tuple = (
+        "intercepted",
+        "overlapping element",
+        "covering the target",
+        "covers the target",
+        "not actionable",
+        "element is not visible",
+        "element is not enabled",
+        "element is not stable",
+        "element is outside of the viewport",
+        "subtree intercepts",
+    )
+
+    async def _add_wrapper_suggestion_on_execution_failure(
+        self,
+        keyword: str,
+        arguments: List[Any],
+        error_text: str,
+        session: "ExecutionSession",
+        hints: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """When a keyword fails AFTER pre-validation with a Playwright
+        actionability error (overlay intercept / hidden element / not
+        stable), probe the ancestor chain for a visible wrapper and append
+        a ``wrapper_suggestion`` hint.
+
+        This complements the gate-side hint already wired in
+        ``_execute_keyword_serialized`` — that path fires only when the
+        500ms gate rejects "missing visible".  When the gate passes (the
+        element IS visible) but execution still fails (e.g. an
+        ``<span class="ideal-radio">`` decorator intercepts the click),
+        no hint was previously emitted.
+
+        Soft-fail: any probe error is swallowed so the failure response is
+        never further degraded.
+        """
+        if not error_text:
+            return hints
+        err_lc = error_text.lower()
+        if not any(marker in err_lc for marker in self._ACTIONABILITY_FAILURE_MARKERS):
+            return hints
+        # If a wrapper hint is already present (e.g. injected by the gate
+        # path), don't add a second one.
+        if any(h.get("type") == "wrapper_suggestion" for h in hints):
+            return hints
+        # Need a locator argument to probe.
+        if not arguments:
+            return hints
+        locator = arguments[0]
+        if not isinstance(locator, str) or not locator:
+            return hints
+        try:
+            wrapper_hint = await WrapperSuggester.suggest(session, locator, keyword)
+        except Exception as exc:
+            logger.debug(
+                "Execution-time wrapper-suggestion probe failed for '%s': %s",
+                locator, exc,
+            )
+            return hints
+        if wrapper_hint is None:
+            return hints
+        # Mark provenance so consumers can tell gate vs. execution path.
+        wrapper_hint = dict(wrapper_hint)
+        wrapper_hint.setdefault("source", "execution_failure")
+        return list(hints) + [wrapper_hint]
 
     async def _pre_validate_element(
         self,
@@ -3248,6 +3328,25 @@ class KeywordExecutor:
             hints = self._add_link_image_locator_guidance(
                 keyword, arguments, hints
             )
+            # P1 (v0.32.5): when the failure happened AFTER the
+            # pre-validation gate with a Playwright actionability error
+            # (overlay intercept, not visible, not stable), probe for a
+            # visible wrapper and inject the same ``wrapper_suggestion``
+            # hint the gate path emits.  No-op when the error doesn't
+            # look like an actionability problem.
+            try:
+                hints = await self._add_wrapper_suggestion_on_execution_failure(
+                    keyword=keyword,
+                    arguments=list(arguments or []),
+                    error_text=str(base_response.get("error") or ""),
+                    session=session,
+                    hints=hints,
+                )
+            except Exception as _ws_err:
+                logger.debug(
+                    "Wrapper-suggestion injection on execution failure suppressed: %s",
+                    _ws_err,
+                )
             # Deduplicate and rank hints: 1 primary + up to 2 secondary
             hints = self._rank_and_deduplicate_hints(hints, detail_level)
             base_response["hints"] = hints
