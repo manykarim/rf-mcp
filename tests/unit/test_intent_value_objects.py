@@ -26,8 +26,8 @@ from robotmcp.domains.intent.value_objects import (
 class TestIntentVerb:
     """Test IntentVerb enum."""
 
-    def test_has_exactly_8_values(self):
-        assert len(IntentVerb) == 8
+    def test_has_exactly_9_values(self):
+        assert len(IntentVerb) == 9
 
     def test_navigate_value(self):
         assert IntentVerb.NAVIGATE.value == "navigate"

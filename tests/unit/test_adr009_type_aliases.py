@@ -87,6 +87,7 @@ _TYPE_ALIASES = {
         [
             "navigate", "click", "fill", "hover",
             "select", "assert_visible", "extract_text", "wait_for",
+            "commit_form",
         ],
     ),
     "KeywordStrategy": (
@@ -520,11 +521,12 @@ class TestSessionActionSpecifics:
 class TestIntentVerbSpecifics:
     """Targeted tests for IntentVerb (used by intent_action tool)."""
 
-    def test_all_8_verbs_accepted(self):
+    def test_all_9_verbs_accepted(self):
         ta = TypeAdapter(IntentVerb)
         verbs = [
             "navigate", "click", "fill", "hover",
             "select", "assert_visible", "extract_text", "wait_for",
+            "commit_form",
         ]
         for verb in verbs:
             assert ta.validate_python(verb) == verb
@@ -532,7 +534,7 @@ class TestIntentVerbSpecifics:
     def test_intent_verb_count(self):
         ta = TypeAdapter(IntentVerb)
         schema = ta.json_schema()
-        assert len(schema["enum"]) == 8
+        assert len(schema["enum"]) == 9
 
     def test_navigate_case_variants(self):
         ta = TypeAdapter(IntentVerb)

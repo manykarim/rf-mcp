@@ -37,13 +37,13 @@ class TestWithBuiltins:
     def test_creates_registry(self, registry):
         assert isinstance(registry, IntentRegistry)
 
-    def test_browser_has_8_mappings(self, registry):
+    def test_browser_has_9_mappings(self, registry):
         intents = registry.get_supported_intents("Browser")
-        assert len(intents) == 8
+        assert len(intents) == 9
 
-    def test_selenium_has_8_mappings(self, registry):
+    def test_selenium_has_9_mappings(self, registry):
         intents = registry.get_supported_intents("SeleniumLibrary")
-        assert len(intents) == 8
+        assert len(intents) == 9
 
     def test_appium_has_6_mappings(self, registry):
         """AppiumLibrary has no HOVER and no SELECT mappings."""

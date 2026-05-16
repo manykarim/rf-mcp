@@ -8,7 +8,7 @@ within an entity or value object.
 from __future__ import annotations
 
 import logging
-from typing import Callable, Dict, List, Optional, Protocol
+from typing import Callable, Dict, FrozenSet, List, Optional, Protocol
 
 from .aggregates import ToolProfile, ProfilePresets
 from .entities import ToolDescriptor
@@ -29,6 +29,86 @@ from .value_objects import (
 )
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_PROFILE_NAME = "full"
+
+
+class SessionToolProfileRegistry:
+    """Per-session tool profile bindings — no global FastMCP side effects.
+
+    Maintains a mapping of session_id -> ToolProfile name. Sessions without
+    an explicit binding inherit the default profile (full). This replaces the
+    global-mutation approach in ToolManagerAdapter: the FastMCP registry is
+    never mutated after startup; instead each tool call consults this registry
+    to decide whether to proceed or return a profile-gated error.
+
+    Thread safety: operated on the asyncio event loop; no locking needed.
+    """
+
+    def __init__(self, profile_registry: Dict[str, ToolProfile]) -> None:
+        self._profile_registry = profile_registry
+        # session_id -> profile_name
+        self._session_bindings: Dict[str, str] = {}
+
+    def bind(self, session_id: str, profile_name: str) -> None:
+        """Bind a session to a named profile.
+
+        Args:
+            session_id: The session identifier.
+            profile_name: Must be a key in the profile registry.
+
+        Raises:
+            KeyError: If profile_name is not in the registry.
+        """
+        if profile_name not in self._profile_registry:
+            raise KeyError(
+                f"Unknown profile: '{profile_name}'. "
+                f"Available: {', '.join(sorted(self._profile_registry))}"
+            )
+        self._session_bindings[session_id] = profile_name
+        logger.debug("Session '%s' bound to profile '%s'", session_id, profile_name)
+
+    def get_profile(self, session_id: str) -> ToolProfile:
+        """Return the active profile for a session.
+
+        Falls back to the default profile when no binding exists.
+
+        Args:
+            session_id: The session identifier (may be empty string).
+
+        Returns:
+            The bound ToolProfile, or the default profile.
+        """
+        profile_name = self._session_bindings.get(session_id, _DEFAULT_PROFILE_NAME)
+        return self._profile_registry[profile_name]
+
+    def get_profile_name(self, session_id: str) -> str:
+        """Return the active profile name for a session."""
+        return self._session_bindings.get(session_id, _DEFAULT_PROFILE_NAME)
+
+    def is_tool_allowed(self, session_id: str, tool_name: str) -> bool:
+        """Check whether a tool is visible in a session's active profile.
+
+        The default profile (full) allows all tools, so this returns True
+        for any session that has not explicitly bound a restricted profile.
+
+        Args:
+            session_id: The session identifier.
+            tool_name: The MCP tool name to check.
+
+        Returns:
+            True if the tool is in the session's profile.
+        """
+        profile = self.get_profile(session_id)
+        return profile.contains_tool(tool_name)
+
+    def unbind(self, session_id: str) -> None:
+        """Remove a session binding, reverting to the default profile."""
+        self._session_bindings.pop(session_id, None)
+
+    def list_bindings(self) -> Dict[str, str]:
+        """Return a snapshot of all current session->profile bindings."""
+        return dict(self._session_bindings)
 
 
 class ToolManagerPort(Protocol):
@@ -108,6 +188,8 @@ class ToolProfileManager:
             "desktop_exec": ProfilePresets.desktop_exec(),
             "slim_exec": ProfilePresets.slim_exec(),
         }
+        # Per-session bindings — no global FastMCP side effects (P1)
+        self._session_registry = SessionToolProfileRegistry(self._profile_registry)
 
     async def activate_profile(
         self,
@@ -380,6 +462,92 @@ class ToolProfileManager:
             Sorted list of profile names.
         """
         return sorted(self._profile_registry.keys())
+
+    def bind_session_profile(
+        self,
+        session_id: str,
+        profile_name: str,
+        trigger: str = "user_request",
+    ) -> ToolProfile:
+        """Bind a session to a named profile without mutating the global tool registry.
+
+        This is the P1 replacement for the global-mutation path: instead of
+        calling remove_tool/add_tool on FastMCP, we record the session's
+        preference in SessionToolProfileRegistry. Each tool call then consults
+        the registry to decide whether the caller's session is allowed.
+
+        Args:
+            session_id: The session that is changing its profile.
+            profile_name: Profile to activate for this session.
+            trigger: What triggered the binding (for event publishing).
+
+        Returns:
+            The bound ToolProfile.
+
+        Raises:
+            KeyError: If profile_name is not registered.
+        """
+        profile = self._profile_registry.get(profile_name)
+        if profile is None:
+            raise KeyError(
+                f"Unknown profile: '{profile_name}'. "
+                f"Available: {', '.join(sorted(self._profile_registry))}"
+            )
+        self._session_registry.bind(session_id, profile_name)
+        self._publish_event(ProfileActivated(
+            profile_name=profile.name,
+            model_tier=profile.model_tier.value,
+            description_mode=profile.description_mode.value,
+            tool_names=profile.tool_names,
+            tool_count=profile.tool_count,
+            estimated_tokens=0,
+            trigger=trigger,
+            session_id=session_id,
+        ))
+        return profile
+
+    def get_session_registry(self) -> SessionToolProfileRegistry:
+        """Return the per-session profile registry (for P1 tool gating)."""
+        return self._session_registry
+
+    def is_tool_allowed_for_session(self, session_id: str, tool_name: str) -> bool:
+        """Check whether tool_name is in the active profile for session_id.
+
+        Sessions with no explicit binding use the default (full) profile,
+        which includes all tools.
+
+        Args:
+            session_id: The session identifier (may be empty).
+            tool_name: The MCP tool name to check.
+
+        Returns:
+            True if the tool is permitted by the session's active profile.
+        """
+        return self._session_registry.is_tool_allowed(session_id, tool_name)
+
+    def profile_gated_error(self, session_id: str, tool_name: str) -> Dict[str, str]:
+        """Return a structured error dict for a profile-gated tool call.
+
+        Args:
+            session_id: The session whose profile blocked the call.
+            tool_name: The tool that was blocked.
+
+        Returns:
+            Dict with success=False and a hint on how to unlock the tool.
+        """
+        active = self._session_registry.get_profile_name(session_id)
+        return {
+            "success": False,
+            "error": "profile_disabled",
+            "tool": tool_name,
+            "profile": active,
+            "hint": (
+                f"Tool '{tool_name}' is not included in the '{active}' profile. "
+                f"Call manage_session(action='set_tool_profile', "
+                f"profile='full') to enable it, or switch to a profile that "
+                f"includes '{tool_name}'."
+            ),
+        }
 
     def auto_select_profile(
         self,

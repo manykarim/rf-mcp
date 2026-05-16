@@ -26,11 +26,30 @@ class IntentVerb(str, Enum):
     ASSERT_VISIBLE = "assert_visible"
     EXTRACT_TEXT = "extract_text"
     WAIT_FOR = "wait_for"
+    COMMIT_FORM = "commit_form"
 
     # Reserved for future expansion (not yet mapped)
     # DRAG = "drag"
     # SCROLL = "scroll"
     # SCREENSHOT = "screenshot"
+
+
+class SelectMatch(str, Enum):
+    """Strategy for resolving select-option intents.
+
+    LABEL:  Match by visible text label (default legacy behaviour).
+    VALUE:  Match by option value attribute. Use for numeric/id values.
+    INDEX:  Match by zero-based integer index.
+    TEXT:   Match by inner-text (synonym for label in most libs).
+    AUTO:   Heuristic: numeric string -> value, else label, then text, then index.
+            Rationale: most LLMs pass the visible text; agents passing a plain
+            integer or a value like "5000000" expect value-matching semantics.
+    """
+    LABEL = "label"
+    VALUE = "value"
+    INDEX = "index"
+    TEXT = "text"
+    AUTO = "auto"
 
 
 class LocatorStrategy(Enum):
@@ -74,6 +93,7 @@ class IntentTarget:
     locator: str
     strategy: LocatorStrategy = LocatorStrategy.AUTO
     original_locator: Optional[str] = None
+    nth: Optional[int] = None
 
     MAX_LOCATOR_LENGTH: ClassVar[int] = 10000
 
@@ -84,6 +104,8 @@ class IntentTarget:
             )
         if "\x00" in self.locator:
             raise ValueError("Locator must not contain null bytes")
+        if self.nth is not None and self.nth < 0:
+            raise ValueError("nth must be non-negative")
 
     @property
     def has_explicit_strategy(self) -> bool:

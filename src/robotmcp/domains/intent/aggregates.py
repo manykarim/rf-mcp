@@ -175,22 +175,40 @@ def _navigate_appium_transformer(target, value, normalized_locator, options):
     return [url]
 
 
+def _resolve_select_match(match_option: str, value: str | None) -> str:
+    """Resolve the effective match strategy from match option + value heuristic.
+
+    AUTO heuristic:
+        1. If value is purely numeric (e.g., "5000000") -> "value"
+        2. Otherwise -> "label"
+    """
+    if match_option in ("label", "value", "index", "text"):
+        return match_option
+    if value and value.strip().lstrip("-").isdigit():
+        return "value"
+    return "label"
+
+
 def _select_browser_transformer(target, value, normalized_locator, options):
-    """Browser Library select: Select Options By <selector> label <value>."""
+    """Browser Library select: Select Options By <selector> <attr> <value>.
+
+    Attribute driven by options["match"] (label/value/index/text/auto).
+    """
     args = []
     if normalized_locator:
         args.append(normalized_locator.value)
     elif target:
         args.append(target.locator)
-    # Browser Library: Select Options By <selector> <attribute> <value>
-    args.append("label")
+    match_opt = (options or {}).get("match", "auto")
+    attr = _resolve_select_match(match_opt, value)
+    args.append(attr)
     if value:
         args.append(value)
     return args
 
 
 def _select_selenium_transformer(target, value, normalized_locator, options):
-    """SeleniumLibrary: Select From List By Label <locator> <label>."""
+    """SeleniumLibrary: Select From List By Label/Value/Index <locator> <v>."""
     args = []
     if normalized_locator:
         args.append(normalized_locator.value)
@@ -199,6 +217,22 @@ def _select_selenium_transformer(target, value, normalized_locator, options):
     if value:
         args.append(value)
     return args
+
+
+def _get_selenium_select_keyword(match_opt: str, value: str | None) -> str:
+    """Return the appropriate SeleniumLibrary select keyword for the match."""
+    strategy = _resolve_select_match(match_opt, value)
+    return {
+        "label": "Select From List By Label",
+        "value": "Select From List By Value",
+        "index": "Select From List By Index",
+        "text": "Select From List By Label",
+    }.get(strategy, "Select From List By Label")
+
+
+def _commit_form_transformer(target, value, normalized_locator, options):
+    """commit_form: no direct RF keyword args (handled specially in server)."""
+    return []
 
 
 def _assert_visible_browser_transformer(target, value, normalized_locator, options):
@@ -263,6 +297,9 @@ def _builtin_browser_mappings() -> List[IntentMapping]:
             requires_target=True,
             requires_value=False,
             timeout_category="action",
+            # Browser's Click(selector, button) signature does not accept force=.
+            # Click With Options(selector, *clickOptions) is the correct escape hatch.
+            force_keyword="Click With Options",
         ),
         IntentMapping(
             intent_verb=IntentVerb.FILL,
@@ -288,7 +325,7 @@ def _builtin_browser_mappings() -> List[IntentMapping]:
             requires_value=True,
             argument_transformer=_select_browser_transformer,
             timeout_category="action",
-            notes="Adds 'label' as default attribute between selector and value",
+            notes="Attribute (label/value/index/text) driven by options['match']; auto heuristic prefers value for numeric strings",
         ),
         IntentMapping(
             intent_verb=IntentVerb.ASSERT_VISIBLE,
@@ -317,6 +354,16 @@ def _builtin_browser_mappings() -> List[IntentMapping]:
             argument_transformer=_wait_for_browser_transformer,
             timeout_category="assertion",
             notes="Waits for 'visible' state by default; timeout from options",
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.COMMIT_FORM,
+            library="Browser",
+            keyword="Evaluate Javascript",
+            requires_target=False,
+            requires_value=False,
+            argument_transformer=_commit_form_transformer,
+            timeout_category="action",
+            notes="Handled specially by intent_action; probes for SPA validation libs",
         ),
     ]
 
@@ -391,6 +438,16 @@ def _builtin_selenium_mappings() -> List[IntentMapping]:
             requires_value=False,
             argument_transformer=_wait_for_selenium_transformer,
             timeout_category="assertion",
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.COMMIT_FORM,
+            library="SeleniumLibrary",
+            keyword="Execute Javascript",
+            requires_target=False,
+            requires_value=False,
+            argument_transformer=_commit_form_transformer,
+            timeout_category="action",
+            notes="Handled specially by intent_action; probes for SPA validation libs",
         ),
     ]
 

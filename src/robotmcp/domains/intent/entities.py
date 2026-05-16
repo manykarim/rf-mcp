@@ -53,6 +53,11 @@ class IntentMapping:
         notes: Human-readable notes about edge cases
         timeout_category: Timeout category for the TimeoutPolicy domain
             ("action", "navigation", "assertion", "read")
+        force_keyword: Alternative keyword to use when force=True is set.
+            When None, the default keyword is used and force=True is appended
+            as a named arg. When set, intent_action swaps to this keyword
+            before appending force=True (e.g. "Click With Options" for Browser
+            Click, which does not accept force= as a positional arg).
     """
     intent_verb: IntentVerb
     library: str
@@ -62,6 +67,7 @@ class IntentMapping:
     argument_transformer: Optional[ArgumentTransformer] = None
     notes: str = ""
     timeout_category: str = "action"
+    force_keyword: Optional[str] = None
 
     @property
     def mapping_key(self) -> Tuple[IntentVerb, str]:

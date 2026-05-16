@@ -86,9 +86,10 @@ class TestModelTier:
     def test_from_model_name_13b(self):
         assert ModelTier.from_model_name("llama-2-13b-chat") == ModelTier.MEDIUM_13B
 
-    def test_from_model_name_hosted(self):
-        assert ModelTier.from_model_name("claude-3-sonnet") == ModelTier.HOSTED
-        assert ModelTier.from_model_name("gpt-4o") == ModelTier.HOSTED
+    def test_from_model_name_large_context(self):
+        # P2: haiku/sonnet/opus and gpt-4o now map to LARGE_CONTEXT (200K context)
+        assert ModelTier.from_model_name("claude-3-sonnet") == ModelTier.LARGE_CONTEXT
+        assert ModelTier.from_model_name("gpt-4o") == ModelTier.LARGE_CONTEXT
 
     def test_from_model_name_fallback(self):
         assert ModelTier.from_model_name("unknown-model") == ModelTier.STANDARD

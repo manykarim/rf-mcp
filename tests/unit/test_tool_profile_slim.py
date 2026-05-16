@@ -604,16 +604,16 @@ class TestSlimExecPreset:
 class TestDesktopExecPreset:
     """Test the desktop_exec profile preset."""
 
-    def test_has_5_tools(self):
+    def test_has_6_tools(self):
         p = ProfilePresets.desktop_exec()
-        assert p.tool_count == 5
+        assert p.tool_count == 6
 
     def test_tool_names(self):
         p = ProfilePresets.desktop_exec()
         expected = frozenset({
             "manage_session", "execute_step",
             "get_session_state", "find_keywords",
-            "intent_action",
+            "intent_action", "build_test_suite",
         })
         assert p.tool_names == expected
 
@@ -726,10 +726,11 @@ class TestBackwardCompatibility:
         assert p.schema_mode == SchemaMode.FULL
 
     def test_existing_profiles_unchanged_tool_count(self):
-        assert ProfilePresets.browser_exec().tool_count == 6
-        assert ProfilePresets.api_exec().tool_count == 5
+        # Updated counts after P3: build_test_suite added to execution profiles
+        assert ProfilePresets.browser_exec().tool_count == 7
+        assert ProfilePresets.api_exec().tool_count == 6
         assert ProfilePresets.discovery().tool_count == 6
-        assert ProfilePresets.minimal_exec().tool_count == 3
+        assert ProfilePresets.minimal_exec().tool_count == 4
 
     def test_existing_profiles_unchanged_description_mode(self):
         assert ProfilePresets.browser_exec().description_mode == ToolDescriptionMode.COMPACT

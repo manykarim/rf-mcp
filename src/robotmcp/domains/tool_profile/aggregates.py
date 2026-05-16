@@ -186,9 +186,9 @@ class ProfilePresets:
 
     @classmethod
     def browser_exec(cls) -> ToolProfile:
-        """6-tool profile for browser execution on small-context models.
+        """7-tool profile for browser execution on small-context models.
 
-        Estimated ~1,600 tokens (compact descriptions).
+        Estimated ~1,750 tokens (compact descriptions, includes build_test_suite).
         """
         return ToolProfile(
             name="browser_exec",
@@ -196,31 +196,32 @@ class ProfilePresets:
                 "manage_session", "execute_step",
                 "get_session_state", "get_locator_guidance",
                 "find_keywords", "intent_action",
+                "build_test_suite",
             }),
             description_mode=ToolDescriptionMode.COMPACT,
             model_tier=ModelTier.SMALL_CONTEXT,
             token_budget=TokenBudget.for_context_window(8192),
-            tags=frozenset({ToolTag.CORE, ToolTag.EXECUTION}),
+            tags=frozenset({ToolTag.CORE, ToolTag.EXECUTION, ToolTag.REPORTING}),
             description="Browser test execution for small-context LLMs",
         )
 
     @classmethod
     def api_exec(cls) -> ToolProfile:
-        """5-tool profile for API testing on small-context models.
+        """6-tool profile for API testing on small-context models.
 
-        Estimated ~1,350 tokens (compact descriptions).
+        Estimated ~1,500 tokens (compact descriptions, includes build_test_suite).
         """
         return ToolProfile(
             name="api_exec",
             tool_names=frozenset({
                 "manage_session", "execute_step",
                 "get_session_state", "find_keywords",
-                "intent_action",
+                "intent_action", "build_test_suite",
             }),
             description_mode=ToolDescriptionMode.COMPACT,
             model_tier=ModelTier.SMALL_CONTEXT,
             token_budget=TokenBudget.for_context_window(8192),
-            tags=frozenset({ToolTag.CORE, ToolTag.EXECUTION}),
+            tags=frozenset({ToolTag.CORE, ToolTag.EXECUTION, ToolTag.REPORTING}),
             description="API test execution for small-context LLMs",
         )
 
@@ -246,19 +247,20 @@ class ProfilePresets:
 
     @classmethod
     def minimal_exec(cls) -> ToolProfile:
-        """3-tool absolute minimum for execution.
+        """4-tool profile for constrained execution with suite generation.
 
-        Estimated ~900 tokens (compact descriptions).
+        Estimated ~1,050 tokens (minimal descriptions, includes build_test_suite).
         """
         return ToolProfile(
             name="minimal_exec",
             tool_names=frozenset({
                 "manage_session", "execute_step", "get_session_state",
+                "build_test_suite",
             }),
             description_mode=ToolDescriptionMode.MINIMAL,
             model_tier=ModelTier.SMALL_CONTEXT,
             token_budget=TokenBudget.for_context_window(4096),
-            tags=frozenset({ToolTag.CORE, ToolTag.EXECUTION}),
+            tags=frozenset({ToolTag.CORE, ToolTag.EXECUTION, ToolTag.REPORTING}),
             description="Absolute minimum tools for test execution",
         )
 
@@ -280,21 +282,21 @@ class ProfilePresets:
 
     @classmethod
     def desktop_exec(cls) -> ToolProfile:
-        """5-tool profile for desktop automation on small-context models.
+        """6-tool profile for desktop automation on small-context models.
 
-        Estimated ~1,400 tokens (compact descriptions).
+        Estimated ~1,550 tokens (compact descriptions, includes build_test_suite).
         """
         return ToolProfile(
             name="desktop_exec",
             tool_names=frozenset({
                 "manage_session", "execute_step",
                 "get_session_state", "find_keywords",
-                "intent_action",
+                "intent_action", "build_test_suite",
             }),
             description_mode=ToolDescriptionMode.COMPACT,
             model_tier=ModelTier.SMALL_CONTEXT,
             token_budget=TokenBudget.for_context_window(8192),
-            tags=frozenset({ToolTag.CORE, ToolTag.EXECUTION}),
+            tags=frozenset({ToolTag.CORE, ToolTag.EXECUTION, ToolTag.REPORTING}),
             description="Desktop test execution for small-context LLMs",
         )
 
