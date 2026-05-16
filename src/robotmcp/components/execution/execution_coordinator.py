@@ -81,6 +81,10 @@ class ExecutionCoordinator:
         assign_to: Union[str, List[str]] = None,
         use_context: bool = False,
         timeout_ms: Optional[int] = None,
+        pre_validate: Optional[bool] = None,
+        pre_validate_timeout_ms: Optional[int] = None,
+        verify_post_action: bool = True,
+        record: bool | None = None,
     ) -> Dict[str, Any]:
         """
         Execute a single Robot Framework keyword step with intelligent library auto-configuration.
@@ -132,6 +136,10 @@ class ExecutionCoordinator:
                 assign_to=assign_to,
                 use_context=use_context,
                 timeout_ms=timeout_ms,
+                pre_validate=pre_validate,
+                pre_validate_timeout_ms=pre_validate_timeout_ms,
+                verify_post_action=verify_post_action,
+                record=record,
             )
 
             return result

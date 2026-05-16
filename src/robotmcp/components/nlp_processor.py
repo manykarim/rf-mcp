@@ -85,20 +85,41 @@ class NaturalLanguageProcessor:
     }
 
     def __init__(self):
+        # Proposal-A (A5/A7 helper): action patterns rewritten so the captured
+        # target is anchored on the right by either a real suffix word OR end of
+        # string. The previous patterns ended with optional groups like
+        # ``(?:\s+button)?`` after a non-greedy ``(.+?)`` capture, which causes
+        # ``.+?`` to collapse to a single character (it prefers the shortest
+        # match satisfying the zero-width optional). New patterns require
+        # at least 2 characters in the captured target.
         self.action_patterns = {
             'navigate': [
-                r'(?:go to|navigate to|open|visit)\s+(.+)',
-                r'open\s+(?:the\s+)?(.+?)(?:\s+page|\s+url)?',
+                # URL first — capture only the URL token (no trailing prose).
+                r'(?:go\s+to|navigate\s+to|open|visit|browse\s+to)\s+(https?://\S+)',
+                # Fallback (no URL): capture a target up to first comma/period
+                # or "in <browser>" prepositional phrase, keeping it bounded.
+                r'open\s+(?:the\s+)?(\S{2,}[^,.]*?)(?:\s+page|\s+url|\s+in\s+|$|\.\s+|,)',
             ],
             'click': [
-                r'click\s+(?:on\s+)?(?:the\s+)?(.+?)(?:\s+button|\s+link|\s+element)?',
-                r'press\s+(?:the\s+)?(.+?)(?:\s+button)?',
-                r'select\s+(?:the\s+)?(.+?)(?:\s+option)?',
+                # Anchor on suffix-word-or-EOL so the non-greedy capture has a
+                # real reason to grow past 1 char.
+                r'click\s+(?:on\s+)?(?:the\s+)?(\S{2,}.*?)(?:\s+(?:button|link|element|icon|tab|item))?(?:\s*$|\s*\.\s+)',
+                r'press\s+(?:the\s+)?(\S{2,}.*?)(?:\s+button)?(?:\s*$|\s*\.\s+)',
+                r'select\s+(?:the\s+)?(\S{2,}.*?)(?:\s+option)?(?:\s*$|\s*\.\s+)',
             ],
             'input': [
-                r'(?:enter|type|input)\s+["\'](.+?)["\'](?:\s+into|\s+in)?\s+(?:the\s+)?(.+?)(?:\s+field|\s+box)?',
-                r'fill\s+(?:in\s+)?(?:the\s+)?(.+?)(?:\s+field|\s+box)?\s+with\s+["\'](.+?)["\']',
-                r'set\s+(?:the\s+)?(.+?)\s+to\s+["\'](.+?)["\']',
+                r'(?:enter|type|input)\s+["\'](.+?)["\'](?:\s+into|\s+in)?\s+(?:the\s+)?(\S{2,}.*?)(?:\s+(?:field|box))?(?:\s*$|\s*\.\s+)',
+                r'fill\s+(?:in\s+)?(?:the\s+)?(\S{2,}.*?)(?:\s+(?:field|box))?\s+with\s+["\'](.+?)["\']',
+                r'set\s+(?:the\s+)?(\S{2,}.*?)\s+to\s+["\'](.+?)["\']',
+                # Bare-target form ("Fill in vehicle details"). Target only,
+                # no value — value is None.
+                r'fill\s+(?:in\s+)?(?:the\s+)?(\S{2,}[^.]*?)(?:\s*$|\s*\.\s+)',
+            ],
+            'submit': [
+                r'(?:submit|send)\s+(?:the\s+)?(\S{2,}[^.]*?)(?:\s*$|\s*\.\s+)',
+            ],
+            'choose': [
+                r'(?:choose|pick)\s+(?:the\s+)?(\S{2,}[^.]*?)(?:\s+(?:option|item))?(?:\s*$|\s*\.\s+)',
             ],
             'verify': [
                 r'(?:verify|check|ensure|confirm)\s+(?:that\s+)?(.+)',
@@ -107,7 +128,7 @@ class NaturalLanguageProcessor:
                 r'assert\s+(.+)',
             ],
             'wait': [
-                r'wait\s+(?:for\s+)?(.+?)(?:\s+to\s+(?:appear|be\s+visible|load))?',
+                r'wait\s+(?:for\s+)?(.+?)(?:\s+to\s+(?:appear|be\s+visible|load))?(?:\s*$|\s*\.\s+)',
                 r'pause\s+(?:for\s+)?(\d+)\s*(?:seconds?|ms|milliseconds?)?',
             ],
             'search': [
@@ -124,11 +145,17 @@ class NaturalLanguageProcessor:
             'database': ['database', 'db', 'table', 'query', 'sql', 'record']
         }
         
+        # Proposal-A (A2/A3): tightened capability keywords.
+        # - RequestsLibrary: 'request' and 'http' alone are too ambiguous
+        #   ("insurance request"; "http://..." matches the protocol of any URL),
+        #   so they are removed.  Specific API tokens only.
+        # - AppiumLibrary: 'app' is removed (matches sampleapp.tricentis.com
+        #   when tokenised). 'mobile'/'android'/'ios'/'appium' remain.
         self.capability_keywords = {
-            'SeleniumLibrary': ['browser', 'web', 'selenium', 'chrome', 'firefox'],
-            'RequestsLibrary': ['api', 'http', 'request', 'endpoint', 'rest'],
-            'DatabaseLibrary': ['database', 'db', 'sql', 'table', 'query'],
-            'AppiumLibrary': ['mobile', 'app', 'android', 'ios', 'appium']
+            'SeleniumLibrary': ['selenium', 'webdriver'],
+            'RequestsLibrary': ['api', 'rest api', 'endpoint', 'graphql', 'webhook'],
+            'DatabaseLibrary': ['database', 'sql', 'mysql', 'postgresql'],
+            'AppiumLibrary': ['mobile', 'android', 'ios', 'appium', 'iphone', 'ipad']
         }
 
     def _stem_word(self, word: str) -> str:
@@ -406,28 +433,90 @@ class NaturalLanguageProcessor:
         return text
 
     def _extract_title(self, scenario: str) -> str:
-        """Extract or generate a title for the test scenario."""
-        # Try to find a title pattern
+        """Extract or generate a title for the test scenario.
+
+        Proposal-A (A6): a leading "Open https://X/..." used to be truncated at
+        the first dot in the URL (yielding "Open https://sampleapp" — a
+        meaningless title). Instead, if the scenario opens with a URL, use the
+        URL's host as the title, optionally prefixed by the verb.
+        """
+        # A6: leading-URL handling — title becomes the host
+        leading_url_match = re.match(
+            r'^\s*(?:open|navigate\s+to|go\s+to|visit|browse\s+to)\s+(https?://([^/\s]+))',
+            scenario,
+            re.IGNORECASE,
+        )
+        if leading_url_match:
+            host = leading_url_match.group(2)
+            return host.capitalize()
+
+        # Try to find a title pattern. Use a sentence terminator that
+        # ignores periods INSIDE a URL (e.g. sampleapp.tricentis.com/101/).
+        # "(?:\.\s+|$)" only matches a period followed by whitespace or EOL.
         title_patterns = [
-            r'^(?:test|verify|check|ensure)\s+(?:that\s+)?(.+?)(?:\.|$)',
-            r'^(.+?)(?:\s+test|\s+scenario|\.)',
+            r'^(?:test|verify|check|ensure)\s+(?:that\s+)?(.+?)(?:\.\s+|$)',
+            r'^(.+?)(?:\s+test|\s+scenario|\.\s+|$)',
         ]
-        
+
         for pattern in title_patterns:
             match = re.search(pattern, scenario.lower())
             if match:
                 title = match.group(1).strip()
-                return title.capitalize()
-        
+                if title:
+                    return title.capitalize()
+
         # Default title based on first few words
         words = scenario.split()[:6]
         return ' '.join(words) + ('...' if len(scenario.split()) > 6 else '')
 
     def _split_sentences(self, text: str) -> List[str]:
-        """Split text into sentences for action extraction."""
-        # Simple sentence splitting - can be enhanced
-        sentences = re.split(r'[.!?]+', text)
-        return [s.strip() for s in sentences if s.strip()]
+        """Split text into sentences for action extraction.
+
+        Proposal-A (A7): the previous implementation split only on .!?,
+        leaving long compound sentences ("Click X, then fill Y, then click Z")
+        as a single sentence and dropping all but one action. We additionally
+        split on sequencing words (then/after/next/finally), semicolons, and
+        commas that precede a verb. Periods inside URLs are preserved by
+        splitting only on a period followed by whitespace.
+        """
+        # Split on real sentence terminators (period must be followed by
+        # whitespace so dots in URLs do not split).
+        parts = re.split(r'(?:[!?]+|\.\s+)', text)
+
+        # Further split each part on explicit sequencing words and semicolons.
+        # Note: "next" as a sequencer must be preceded by a comma/space-only
+        # context, NOT used as the object of a click ("Click Next"). We require
+        # ", next" or "; next" or "then next" — but a bare "Click Next" is left
+        # intact.
+        sequencing = re.compile(
+            r'\s*(?:;|\bthen\b|\bafter\s+that\b|\bafter\b|\bfinally,?\b|\band\s+then\b)\s*',
+            re.IGNORECASE,
+        )
+        action_verb_at_start = re.compile(
+            r'^\s*(?:click|open|navigate|go\s+to|visit|browse|fill|enter|type|input|set|select|press|verify|check|ensure|confirm|expect|assert|wait|search|find|hover|drag|drop|upload|download|submit|send|choose|pick|complete)\b',
+            re.IGNORECASE,
+        )
+        out: List[str] = []
+        for p in parts:
+            p = p.strip()
+            if not p:
+                continue
+            sub_parts = sequencing.split(p)
+            for sp in sub_parts:
+                sp = sp.strip()
+                if not sp:
+                    continue
+                # Commas before an action verb also split.
+                comma_parts = re.split(r',\s+(?=\w)', sp)
+                kept_any = False
+                for cp in comma_parts:
+                    cp = cp.strip().rstrip(',')
+                    if cp and action_verb_at_start.search(cp):
+                        out.append(cp)
+                        kept_any = True
+                if not kept_any:
+                    out.append(sp)
+        return out
 
     def _extract_action(self, sentence: str) -> Optional[TestAction]:
         """Extract action from a sentence."""
@@ -454,6 +543,10 @@ class NaturalLanguageProcessor:
                         )
                     else:
                         target = groups[0] if groups else None
+                        if target:
+                            # Strip trailing punctuation that leaked past the
+                            # boundary regex (e.g. "quote." -> "quote").
+                            target = target.rstrip('.,;: \t')
                         return TestAction(
                             action_type=action_type,
                             description=sentence,
@@ -514,11 +607,16 @@ class NaturalLanguageProcessor:
         elif context == "database":
             required.add("DatabaseLibrary")
         
-        # Add based on keywords found in scenario
+        # Proposal-A (A3): switch from substring containment to whole-word match.
+        # The previous logic matched 'app' inside 'application' and 'rest' inside
+        # 'restroom', polluting required_capabilities with mobile/api libs on
+        # plain web scenarios.
         for library, keywords in self.capability_keywords.items():
-            if any(keyword in scenario_lower for keyword in keywords):
-                required.add(library)
-        
+            for kw in keywords:
+                if re.search(r'\b' + re.escape(kw) + r'\b', scenario_lower):
+                    required.add(library)
+                    break
+
         return list(required)
 
     def _assess_complexity(self, actions: List[TestAction]) -> str:
@@ -641,7 +739,13 @@ class NaturalLanguageProcessor:
         return self._fallback_detect_library_preference(scenario_text)
 
     def _fallback_detect_library_preference(self, scenario_text: str) -> Optional[str]:
-        """Fallback library preference detection using local patterns."""
+        """Fallback library preference detection using local patterns.
+
+        Proposal-A negative-evidence rule (A2): the bare word ``request`` is too
+        ambiguous to imply API testing on its own (it appears in product/business
+        text like "insurance request"). RequestsLibrary is only returned when API
+        vocabulary is present AND a generic web URL is not the dominant signal.
+        """
         if not scenario_text:
             return None
 
@@ -676,9 +780,29 @@ class NaturalLanguageProcessor:
         # Check for other library preferences
         if re.search(r'\b(xml|xpath)\b', text_lower):
             return "XML"
-        if re.search(r'\b(api|http|rest|request)\b', text_lower):
-            return "RequestsLibrary"
 
+        # A1+A2: A web URL is strong evidence of web automation. The bare word
+        # "request" alone (e.g. "insurance request") is not sufficient to imply
+        # API testing. Require a real API vocabulary signal AND tolerate URL
+        # presence only when an API word is also present.
+        has_web_url = bool(re.search(r'https?://\S+', text_lower))
+        api_word_match = re.search(
+            r'\b(api|http|rest|endpoint|graphql|webhook|oauth|jwt|webservice|web\s+service|microservice)\b',
+            text_lower,
+        )
+        if api_word_match and not has_web_url:
+            return "RequestsLibrary"
+        if api_word_match and has_web_url:
+            # Both signals present: API word wins only if it's stronger than a
+            # single ambiguous mention (e.g. "http" or "rest"). Without further
+            # disambiguation we keep "RequestsLibrary" only when the API word
+            # is unambiguous (api/rest/endpoint/graphql/webhook/oauth/jwt).
+            unambiguous = re.search(
+                r'\b(api|rest|endpoint|graphql|webhook|oauth|jwt|webservice|web\s+service|microservice)\b',
+                text_lower,
+            )
+            if unambiguous:
+                return "RequestsLibrary"
         return None
     
     def _detect_session_type(self, scenario: str, context: str) -> str:

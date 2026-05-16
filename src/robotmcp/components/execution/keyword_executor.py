@@ -10,6 +10,9 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
+from robotmcp.components.execution.locator_arg_introspection import (
+    LocatorArgIntrospector,
+)
 from robotmcp.components.execution.rf_native_context_manager import (
     get_rf_native_context_manager,
 )
@@ -28,6 +31,7 @@ from robotmcp.plugins import get_library_plugin_manager
 from robotmcp.domains.timeout import ActionType, TimeoutPolicy, DefaultTimeouts
 from robotmcp.domains.timeout.keyword_classifier import classify_keyword
 from robotmcp.container import get_container
+from robotmcp.components.execution.wrapper_suggester import WrapperSuggester
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +43,223 @@ try:
 except ImportError:
     BuiltIn = None
     ROBOT_AVAILABLE = False
+
+
+# P4: keywords that honour Playwright force=True. When force=True is present
+# in arguments for one of these, rf-mcp skips its own pre-validation gate and
+# leaves the flag in the args list so Playwright also bypasses actionability.
+_FORCE_CAPABLE_KEYWORDS: frozenset[str] = frozenset({
+    "click",
+    "click with options",
+    "fill text",
+    "fill secret",
+    "type text",
+    "type secret",
+    "check checkbox",
+    "uncheck checkbox",
+    "select options",
+    "select options by",
+    "hover",
+    "focus",
+    "tap",
+})
+
+
+# F-N12: keywords that are read-only / inspection-only by nature.
+# When the caller passes record=None, these are auto-flagged record=False
+# so build_test_suite produces a clean narrative instead of every probe.
+_INSPECTION_ONLY_KEYWORDS: frozenset[str] = frozenset({
+    # Browser library reads
+    "get title",
+    "get url",
+    "get text",
+    "get attribute",
+    "get attribute names",
+    "get element count",
+    "get element states",
+    "get property",
+    "get style",
+    "get viewport size",
+    "get classes",
+    "get bounding box",
+    "get table cell element",
+    "get scroll size",
+    "get scroll position",
+    # SeleniumLibrary reads
+    "get location",
+    "get value",
+    "get element attribute",
+    "get element size",
+    "get element tag name",
+    "get list selected labels",
+    "get list selected values",
+    # AppiumLibrary reads (sample)
+    "get capability",
+    "get contexts",
+    "get current context",
+    "get window height",
+    "get window width",
+    "get window size",
+    # BuiltIn read-only / control
+    "log",
+    "log to console",
+    "log many",
+})
+
+
+def _extract_force_flag(keyword: str, arguments: list) -> bool:
+    """Return True iff `force=True` is present in arguments for a force-capable keyword."""
+    if keyword.lower().strip() not in _FORCE_CAPABLE_KEYWORDS:
+        return False
+    for arg in arguments or []:
+        if not isinstance(arg, str):
+            continue
+        token = arg.strip().lower()
+        if token in ("force=true", "force=1"):
+            return True
+    return False
+
+
+# Proposal-B: heuristic curation of `Evaluate JavaScript` calls.
+#
+# F-N12 intentionally excluded Evaluate JavaScript because its semantics depend
+# on the JS body. Empirical evidence from the Tricentis multi-agent runs (7
+# generated suites) shows >100 Evaluate JavaScript probes per run dominated
+# the bloat. Almost all of them were pure read probes:
+# getBoundingClientRect, getComputedStyle, .innerHTML read, etc.
+#
+# Resolution rule (only when keyword == "Evaluate JavaScript" AND record is None):
+#   1. If the JS body matches any mutation pattern -> record (default-on).
+#   2. Else if the JS body matches a read-only pattern -> do not record.
+#   3. Else -> record (conservative default).
+import re as _re_evalcurate
+
+# Mutation patterns. Any match forces recording (default-on action semantics).
+_EVAL_JS_MUTATION_PATTERNS: tuple[_re_evalcurate.Pattern, ...] = tuple(
+    _re_evalcurate.compile(p, _re_evalcurate.IGNORECASE)
+    for p in (
+        r"\.value\s*=",                       # input.value = X
+        r"\.checked\s*=",                     # checkbox.checked = true
+        r"\.style\.[A-Za-z_]+\s*=",          # element.style.display = ...
+        r"\.style\.setProperty\s*\(",         # CSSOM mutation
+        r"\.classList\.(add|remove|toggle|replace)\s*\(",
+        r"\.setAttribute\s*\(",
+        r"\.removeAttribute\s*\(",
+        r"\.innerHTML\s*=",                   # destructive innerHTML write
+        r"\.outerHTML\s*=",
+        r"\.textContent\s*=",
+        r"\.insertAdjacentHTML\s*\(",
+        r"\.appendChild\s*\(",
+        r"\.removeChild\s*\(",
+        r"\.replaceChild\s*\(",
+        r"\.click\s*\(\s*\)",                 # programmatic click
+        r"\.submit\s*\(\s*\)",                # programmatic form submit
+        r"\.dispatchEvent\s*\(",              # synthetic event
+        r"\.focus\s*\(\s*\)",
+        r"\.blur\s*\(\s*\)",
+        r"\.scrollIntoView\s*\(",
+        r"\.reset\s*\(\s*\)",                 # form reset
+        r"\.requestSubmit\s*\(",
+        r"localStorage\.(setItem|removeItem|clear)\s*\(",
+        r"sessionStorage\.(setItem|removeItem|clear)\s*\(",
+        r"window\.location\s*=",              # navigation
+        r"location\.(assign|replace|reload)\s*\(",
+        r"history\.(pushState|replaceState|back|forward|go)\s*\(",
+        r"document\.cookie\s*=",
+        r"document\.write\s*\(",
+        # idealForms / jQuery mutations that commit form state
+        r"\.idealforms\s*\(\s*['\"]validate['\"]",
+        r"\.valid\s*\(\s*\)",                 # jQuery Validate triggers state
+        r"\.trigger\s*\(\s*['\"](change|input|click|submit)['\"]",
+    )
+)
+
+# Read-only patterns. Any match makes the call inspection-only.
+_EVAL_JS_READONLY_PATTERNS: tuple[_re_evalcurate.Pattern, ...] = tuple(
+    _re_evalcurate.compile(p, _re_evalcurate.IGNORECASE)
+    for p in (
+        r"\.getBoundingClientRect\s*\(",
+        r"getComputedStyle\s*\(",
+        r"\.offsetWidth\b",
+        r"\.offsetHeight\b",
+        r"\.offsetTop\b",
+        r"\.offsetLeft\b",
+        r"\.clientWidth\b",
+        r"\.clientHeight\b",
+        r"\.scrollWidth\b",
+        r"\.scrollHeight\b",
+        r"\.innerHTML\b(?!\s*=)",             # innerHTML read (not assignment)
+        r"\.outerHTML\b(?!\s*=)",
+        r"\.textContent\b(?!\s*=)",
+        r"\.innerText\b(?!\s*=)",
+        r"\.value\b(?!\s*=)",                 # input.value read
+        r"\.checked\b(?!\s*=)",
+        r"\.disabled\b(?!\s*=)",
+        r"\.tagName\b",
+        r"\.nodeName\b",
+        r"\.childElementCount\b",
+        r"\.children\b(?!\s*=)",
+        r"\.querySelector\s*\(",              # selector usage often paired w/ read
+        r"\.querySelectorAll\s*\(",
+        r"\.matches\s*\(",
+        r"\.closest\s*\(",
+        r"\.getAttribute\s*\(",
+        r"\.hasAttribute\s*\(",
+        r"window\.(innerWidth|innerHeight|scrollX|scrollY|pageXOffset|pageYOffset)\b",
+        r"window\.location\b(?!\s*=)",
+        r"document\.(title|URL|readyState|documentElement|body)\b",
+        r"JSON\.stringify\s*\(",
+        # idealsteps inspection (the agents inspect step state without mutating)
+        r"\.idealsteps-",
+        # Introspection helpers seen in the diagnostic artefacts
+        r"Object\.keys\s*\(",
+        r"Object\.values\s*\(",
+        r"Object\.entries\s*\(",
+        r"\.toString\s*\(\s*\)",              # function/elem.toString() read
+        r"\$\._data\s*\(",                    # jQuery event-handler introspection
+        r"\$\(\s*['\"][^'\"]+['\"]\s*\)\.data\s*\(",  # $(selector).data(key) read
+        r"Array\.from\s*\(",                  # turning collection into array (read)
+        r"\btypeof\s+",                       # type introspection
+        r"\binstanceof\s+",
+    )
+)
+
+
+def _classify_evaluate_javascript(arguments: list) -> bool | None:
+    """Classify an Evaluate JavaScript call as inspection-only (False) or
+    load-bearing (True). Returns None when no JS body is found.
+
+    Resolution: first JS body argument is inspected. Browser library's
+    signature is ``Evaluate JavaScript    selector    function`` so the JS
+    body is typically the second positional argument; SeleniumLibrary's
+    ``Execute Javascript`` has the JS body as the first.  Both shapes are
+    handled by inspecting all string arguments and choosing the one that
+    looks most like JS (contains ``=>`` or ``function`` or ``(`` after a
+    method name).
+    """
+    if not arguments:
+        return None
+    # Heuristic: pick the argument that looks like JS.
+    js_body: str | None = None
+    for arg in arguments:
+        if not isinstance(arg, str):
+            continue
+        # A locator like "css=html" or "id=foo" is short and uses '='; skip
+        # it unless it also contains a JS-y construct.
+        if "=>" in arg or "function" in arg or arg.strip().startswith(("(", "{")) or "()" in arg:
+            js_body = arg
+            break
+    if js_body is None:
+        # Fallback: longest string argument is most likely the JS body.
+        str_args = [a for a in arguments if isinstance(a, str)]
+        if not str_args:
+            return None
+        js_body = max(str_args, key=len)
+    if any(p.search(js_body) for p in _EVAL_JS_MUTATION_PATTERNS):
+        return True  # mutation -> record
+    if any(p.search(js_body) for p in _EVAL_JS_READONLY_PATTERNS):
+        return False  # inspection -> do not record
+    return None  # unclassified -> caller falls back to conservative default
 
 
 class KeywordExecutor:
@@ -85,9 +306,11 @@ class KeywordExecutor:
         "select from list by index",
         "deselect from list",
         # Keyboard operations
+        # NOTE: Browser.Keyboard Key takes (key, action) — no selector — so it is
+        # intentionally NOT listed here.  Use Press Keys (Selenium: locator-bound)
+        # for element-targeted keystrokes.
         "press keys",
         "press key",
-        "keyboard key",
         # Focus/Hover operations
         "focus",
         "hover",
@@ -137,6 +360,22 @@ class KeywordExecutor:
         "textarea",         # Web fallback: <textarea>
         "textview",         # Some Android variants expose editable TextView
     )
+
+    # P11 (refined): pre-validation policy is driven by the curated
+    # ELEMENT_INTERACTION_KEYWORDS positive list above. The set encodes a
+    # policy decision — only interaction keywords (Click, Fill Text, Select,
+    # ...) benefit from a fast actionability check. Read-only and wait-self
+    # keywords (Get Text, Wait For Elements State, Should Be Visible, ...)
+    # are intentionally excluded even though they accept a locator: they
+    # perform their own waits and don't benefit from a 500ms fast pre-check.
+    #
+    # ``LocatorArgIntrospector`` (see locator_arg_introspection.py) is used
+    # as a VETO over the positive list. It inspects each keyword's actual
+    # argument signature and looks for the canonical locator argument name
+    # for its library (Browser: ``selector*``, SeleniumLibrary: ``locator``,
+    # AppiumLibrary: ``locator`` / ``element``). When the library reports no
+    # locator arg, a positive-list entry is stale and pre-validation is
+    # skipped (catches the original ``Keyboard Key`` mis-classification).
 
     # Required element states for different action types
     REQUIRED_STATES_FOR_ACTION: Dict[str, Set[str]] = {
@@ -202,11 +441,48 @@ class KeywordExecutor:
         # to stderr while FastMCP writes JSON-RPC responses → lost responses.
         # Also prevents concurrent Selenium WebDriver access (not thread-safe).
         self._execution_lock = asyncio.Lock()
+        # P11: library-aware locator-arg introspection. Authoritative source
+        # for "does this keyword take a locator?" — replaces hardcoded list.
+        self._locator_introspector = LocatorArgIntrospector(self.keyword_discovery)
 
-    def _requires_pre_validation(self, keyword: str) -> bool:
-        """Check if a keyword requires element pre-validation."""
+    def _requires_pre_validation(
+        self, keyword: str, session: Optional[ExecutionSession] = None
+    ) -> bool:
+        """Check if a keyword requires element pre-validation.
+
+        Policy (P11 refined): the curated ``ELEMENT_INTERACTION_KEYWORDS``
+        positive list drives the decision.  Read-only / wait-self keywords
+        are intentionally excluded — they perform their own waits and do not
+        benefit from a 500 ms fast pre-check.
+
+        ``LocatorArgIntrospector`` is consulted as a VETO: when the library
+        reports no locator argument for a keyword that IS in the positive
+        list, the list entry is stale (the original ``Keyboard Key`` bug)
+        and pre-validation is skipped.  Introspection cannot promote a
+        keyword to "needs pre-validation" — that is a policy decision
+        encoded in the positive list.
+        """
         keyword_lower = keyword.lower().strip()
-        return keyword_lower in self.ELEMENT_INTERACTION_KEYWORDS
+
+        if keyword_lower not in self.ELEMENT_INTERACTION_KEYWORDS:
+            return False
+
+        # Veto: library says no locator -> positive-list entry is stale.
+        try:
+            takes_locator = self._locator_introspector.keyword_takes_locator(
+                keyword, session=session
+            )
+        except Exception as exc:
+            logger.debug(f"Locator introspection failed for '{keyword}': {exc}")
+            takes_locator = None
+
+        if takes_locator is False:
+            logger.debug(
+                f"Pre-validation skipped: '{keyword}' is in the interaction "
+                f"list but the library reports no locator arg (stale entry)."
+            )
+            return False
+        return True
 
     def _get_action_type_from_keyword_for_states(self, keyword: str) -> str:
         """Extract the action type from a keyword name for state requirements."""
@@ -944,6 +1220,10 @@ class KeywordExecutor:
         assign_to: Union[str, List[str]] = None,
         use_context: bool = False,
         timeout_ms: Optional[int] = None,
+        pre_validate: Optional[bool] = None,
+        pre_validate_timeout_ms: Optional[int] = None,
+        verify_post_action: bool = True,
+        record: bool | None = None,
     ) -> Dict[str, Any]:
         """
         Execute a single Robot Framework keyword step with optional library prefix.
@@ -979,6 +1259,10 @@ class KeywordExecutor:
             return await self._execute_keyword_serialized(
                 session, keyword, arguments, browser_library_manager,
                 detail_level, library_prefix, assign_to, use_context, timeout_ms,
+                pre_validate=pre_validate,
+                pre_validate_timeout_ms=pre_validate_timeout_ms,
+                verify_post_action=verify_post_action,
+                record=record,
             )
 
     async def _execute_keyword_serialized(
@@ -992,8 +1276,24 @@ class KeywordExecutor:
         assign_to: Union[str, List[str]] = None,
         use_context: bool = False,
         timeout_ms: Optional[int] = None,
+        pre_validate: Optional[bool] = None,
+        pre_validate_timeout_ms: Optional[int] = None,
+        verify_post_action: bool = True,
+        record: bool | None = None,
     ) -> Dict[str, Any]:
-        """Inner keyword execution, called under _execution_lock."""
+        """Inner keyword execution, called under _execution_lock.
+
+        P4 params:
+            pre_validate: per-call override for the global pre-validation flag.
+                None  -> respect ``self.pre_validation_enabled`` (default).
+                True  -> force pre-validation even when global flag is off.
+                False -> skip pre-validation for this call only.
+            pre_validate_timeout_ms: per-call override for the pre-validation
+                element-state check timeout (default ``config.PRE_VALIDATION_TIMEOUT``).
+            verify_post_action: when True (default), run PostActionVerifier
+                after a successful action keyword to surface silent passes
+                on hidden parents and value mismatches. P5.
+        """
         try:
             # PHASE 1.2: Pre-execution Library Registration
             # Ensure required library is registered before keyword execution
@@ -1097,16 +1397,38 @@ class KeywordExecutor:
 
             # PRE-VALIDATION: Fast check for element actionability before execution
             # This detects "element not visible/enabled" in ~500ms instead of waiting 10s
-            if self.pre_validation_enabled and self._requires_pre_validation(keyword):
+            #
+            # P4 gating order:
+            #   1. force=True in args   -> bypass (Playwright will also bypass)
+            #   2. pre_validate=False   -> bypass per-call
+            #   3. pre_validate=True    -> force-on even when global flag is off
+            #   4. pre_validate=None    -> respect self.pre_validation_enabled
+            force_flag = _extract_force_flag(keyword, arguments)
+            if force_flag:
+                should_validate = False
+                logger.debug(
+                    f"Pre-validation skipped: force=True in arguments for '{keyword}'"
+                )
+            elif pre_validate is False:
+                should_validate = False
+                logger.debug(
+                    f"Pre-validation skipped: pre_validate=False for '{keyword}'"
+                )
+            elif pre_validate is True:
+                should_validate = True
+            else:
+                should_validate = self.pre_validation_enabled
+
+            if should_validate and self._requires_pre_validation(keyword, session):
                 locator = self._extract_locator_from_args(keyword, arguments)
                 if locator:
-                    # Derive pre-validation timeout from user's timeout_ms:
-                    # - None → use default (config.PRE_VALIDATION_TIMEOUT, 500ms)
-                    # - <= 0 → skip pre-validation (user disabled timeout)
-                    # - > 0 → use min(default, user_timeout) for fast check
+                    # Per-call pre_validate_timeout_ms takes precedence over
+                    # the user's timeout_ms-derived calculation. P4.
                     preval_timeout = None  # will use config default
                     skip_preval = False
-                    if timeout_ms is not None:
+                    if pre_validate_timeout_ms is not None:
+                        preval_timeout = pre_validate_timeout_ms
+                    elif timeout_ms is not None:
                         if timeout_ms <= 0:
                             skip_preval = True
                         else:
@@ -1144,6 +1466,18 @@ class KeywordExecutor:
                                         "suggestion": "Use 'Wait For Elements State' with 'visible' before clicking",
                                         "example": f"Wait For Elements State    {locator}    visible    timeout=5s",
                                     })
+                                    # G1: Probe for a visible wrapper element (label, scoped section, etc.)
+                                    # Wraps in try/except so a failed probe never prevents the step result.
+                                    try:
+                                        wrapper_hint = await WrapperSuggester.suggest(
+                                            session, locator, keyword
+                                        )
+                                        if wrapper_hint is not None:
+                                            hints.append(wrapper_hint)
+                                    except Exception as _wse:
+                                        logger.debug(
+                                            "WrapperSuggester probe suppressed: %s", _wse
+                                        )
                                 if "enabled" in missing:
                                     hints.append({
                                         "type": "enabled_hint",
@@ -1228,9 +1562,58 @@ class KeywordExecutor:
                 if step_result_value is None and "output" in result:
                     step_result_value = result.get("output")
                 step.mark_success(step_result_value)
-                # Only append successful steps to the session for suite generation
-                session.add_step(step)
-                logger.debug(f"Added successful step to session: {keyword}")
+                # F-N12: respect explicit record flag and auto-classification.
+                # When assign_to is set, the step is load-bearing (the recorded
+                # suite needs `${var}= Get Text ...` for subsequent assertions).
+                if record is None:
+                    if assign_to is not None:
+                        record_resolved = True
+                    else:
+                        _kw_norm = keyword.lower().strip()
+                        if _kw_norm in _INSPECTION_ONLY_KEYWORDS:
+                            record_resolved = False
+                        elif _kw_norm in ("evaluate javascript", "execute javascript"):
+                            # Proposal-B: classify the JS body. A read-only
+                            # probe is auto-curated; mutations stay recorded;
+                            # an unclassifiable body defaults to recorded.
+                            _classified = _classify_evaluate_javascript(arguments)
+                            if _classified is None:
+                                record_resolved = True
+                            else:
+                                record_resolved = _classified
+                        else:
+                            record_resolved = True
+                else:
+                    record_resolved = bool(record)
+                if record_resolved:
+                    session.add_step(step)
+                    logger.debug(f"Added successful step to session: {keyword}")
+                else:
+                    logger.debug(f"Step not recorded (inspection-only or record=False): {keyword}")
+                result["recorded"] = record_resolved
+
+                # P5: Post-action verification — surface silent passes on
+                # hidden parents and value mismatches. Soft warnings only.
+                if verify_post_action:
+                    try:
+                        from robotmcp.components.execution.post_action_verifier import (
+                            PostActionVerifier,
+                        )
+                        verify_warnings = await PostActionVerifier.verify(
+                            keyword=keyword,
+                            arguments=arguments,
+                            result=result,
+                            session=session,
+                        )
+                        if verify_warnings:
+                            existing = result.get("warnings") or []
+                            if isinstance(existing, list):
+                                result["warnings"] = existing + list(verify_warnings)
+                            else:
+                                result["warnings"] = list(verify_warnings)
+                    except Exception as exc:
+                        # Verification is best-effort; never fail a step on it.
+                        logger.debug(f"Post-action verification skipped: {exc}")
             else:
                 step.mark_failure(result.get("error"))
                 logger.debug(
@@ -1354,6 +1737,11 @@ class KeywordExecutor:
                     payload=event_payload,
                 )
             )
+            # F-N12: surface the record gate decision in the response so the
+            # caller (and tests) can observe whether the step was added to
+            # session.steps for build_test_suite output.
+            if "recorded" in result:
+                response["recorded"] = result["recorded"]
             return response
 
         except Exception as e:

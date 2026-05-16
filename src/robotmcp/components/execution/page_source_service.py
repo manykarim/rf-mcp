@@ -1,5 +1,6 @@
 """Page source management and filtering service for web and mobile."""
 
+import asyncio
 import logging
 import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional, Union
@@ -19,6 +20,322 @@ except ImportError:
     BeautifulSoup = None
     Comment = None
     BS4_AVAILABLE = False
+
+# ---------------------------------------------------------------------------
+# JavaScript snippet executed in-browser to collect actionable elements.
+# Returns a JSON-serializable array; runs in a single evaluate call.
+# ---------------------------------------------------------------------------
+_ACTIONABLE_ELEMENTS_JS = """
+() => {
+  const TAGS = ['input', 'select', 'button', 'textarea', 'a'];
+
+  function isAncestorHidden(el) {
+    let p = el.parentElement;
+    while (p && p !== document.documentElement) {
+      const st = window.getComputedStyle(p);
+      if (st.display === 'none' || st.visibility === 'hidden') return true;
+      p = p.parentElement;
+    }
+    return false;
+  }
+
+  function displayState(el, st) {
+    const rect = el.getBoundingClientRect();
+    if (st.display === 'none') return 'display:none';
+    if (st.visibility === 'hidden') return 'visibility:hidden';
+    if (rect.width === 0 && rect.height === 0) return 'off-screen';
+    if (rect.bottom < 0 || rect.top > window.innerHeight ||
+        rect.right < 0 || rect.left > window.innerWidth) return 'off-screen';
+    return 'visible';
+  }
+
+  function isElVisible(el) {
+    const st = window.getComputedStyle(el);
+    if (st.display === 'none' || st.visibility === 'hidden') return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
+
+  // Walk up to 6 ancestors to find a visible actionable wrapper for a hidden element.
+  // Returns a surface descriptor or null.
+  function findActionableSurface(el, elId) {
+    let p = el.parentElement;
+    let hops = 0;
+    while (p && p !== document.documentElement && hops < 6) {
+      hops++;
+      const tag = p.tagName.toLowerCase();
+      if (!isElVisible(p)) { p = p.parentElement; continue; }
+
+      // <label> wrapping the element — highest priority for styled-radio/checkbox patterns
+      if (tag === 'label') {
+        const sel = elId ? '*css=label >> id=' + elId : '*css=label';
+        const txt = (p.innerText || p.textContent || '').trim().slice(0, 80);
+        return {selector: sel, wrapper_tag: 'label', wrapper_text: txt || undefined, wrapper_visible: true};
+      }
+
+      // <section> with display:block used by idealsteps/wizard scoping
+      if (tag === 'section') {
+        const inlineStyle = (p.getAttribute('style') || '').replace(/\\s/g, '').toLowerCase();
+        if (inlineStyle.includes('display:block')) {
+          const styleAttr = p.getAttribute('style') || '';
+          const sel = elId ? 'section[style="' + styleAttr + '"] >> id=' + elId : 'css=section';
+          return {selector: sel, wrapper_tag: 'section', wrapper_visible: true, scope_kind: 'wizard_step'};
+        }
+      }
+
+      // Visible button / role=button / onclick element
+      const role = p.getAttribute('role') || '';
+      const hasOnclick = p.hasAttribute('onclick');
+      const ariaLabel = p.getAttribute('aria-label') || '';
+      if (tag === 'button' || role === 'button' || hasOnclick) {
+        const btnSel = elId ? '#' + elId : (ariaLabel ? '[aria-label="' + ariaLabel + '"]' : tag);
+        return {selector: btnSel, wrapper_tag: tag, wrapper_visible: true,
+                wrapper_text: (p.innerText || '').trim().slice(0, 80) || undefined,
+                aria_label: ariaLabel || undefined};
+      }
+
+      p = p.parentElement;
+    }
+    return null;
+  }
+
+  const results = [];
+  const seen = new Set();
+
+  for (const tag of TAGS) {
+    for (const el of document.querySelectorAll(tag)) {
+      if (seen.has(el)) continue;
+      seen.add(el);
+
+      const st = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      const entry = {};
+
+      entry.tag = el.tagName.toLowerCase();
+
+      if (el.id) entry.id = el.id;
+      if (el.name) entry.name = el.name;
+
+      const t = (el.type || '').toLowerCase();
+      if (t) entry.type = t;
+
+      const al = el.getAttribute('aria-label') || null;
+      if (al) entry.aria_label = al;
+
+      const txt = (el.value || el.textContent || el.innerText || '').trim().slice(0, 80);
+      if (txt) entry.text = txt;
+
+      entry.bounding_rect = {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      };
+
+      const ds = displayState(el, st);
+      entry.display_state = ds;
+      entry.disabled = el.disabled === true;
+      entry.parent_hidden = isAncestorHidden(el);
+
+      // Only walk ancestors for elements that are themselves hidden/off-screen.
+      if (ds !== 'visible') {
+        const surface = findActionableSurface(el, el.id || null);
+        if (surface) entry.actionable_surface = surface;
+      }
+
+      results.push(entry);
+    }
+  }
+  return results;
+}
+"""
+
+_ACTIONABLE_ELEMENTS_DEFAULT_LIMIT = 80
+
+
+class ActionableElementsCollector:
+    """Collects an inline summary of actionable elements from a live browser page.
+
+    Supports Browser Library (via Evaluate JavaScript) and SeleniumLibrary/
+    AppiumLibrary (best-effort fallback via BeautifulSoup static parse).
+    """
+
+    def __init__(self, limit: int = _ACTIONABLE_ELEMENTS_DEFAULT_LIMIT):
+        self._limit = limit
+
+    @staticmethod
+    def _run_browser_js_sync() -> Optional[List[Dict[str, Any]]]:
+        """Synchronous inner call: executes Browser.Evaluate JavaScript via BuiltIn.run_keyword.
+
+        Intended to be dispatched via asyncio.to_thread so the event loop is never
+        blocked and the call reaches the RF execution context from a worker thread
+        (which is where RF keyword dispatch works reliably).
+        """
+        try:
+            from robot.libraries.BuiltIn import BuiltIn
+            builtin = BuiltIn()
+            result = builtin.run_keyword(
+                "Browser.Evaluate JavaScript", "css=html", _ACTIONABLE_ELEMENTS_JS
+            )
+            if isinstance(result, list):
+                return result
+        except Exception as exc:
+            logger.debug("ActionableElementsCollector Browser.Evaluate JavaScript failed: %s", exc)
+        return None
+
+    async def _collect_via_browser_js_async(
+        self, session: "ExecutionSession"
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Async wrapper: dispatches the synchronous RF keyword call to a worker thread.
+
+        Running via asyncio.to_thread ensures the event loop is not blocked
+        and avoids the asyncio-bound-executor deadlock that plagued the old path.
+        """
+        try:
+            return await asyncio.to_thread(self._run_browser_js_sync)
+        except Exception as exc:
+            logger.debug("ActionableElementsCollector async Browser JS dispatch failed: %s", exc)
+        return None
+
+    @staticmethod
+    def _bs4_is_hidden(el: Any) -> bool:
+        """Return True when the element has inline display:none / visibility:hidden / hidden attr."""
+        style = (el.get("style", "") or "").lower().replace(" ", "")
+        return (
+            "display:none" in style
+            or "visibility:hidden" in style
+            or el.get("hidden") is not None
+        )
+
+    def _collect_from_html(self, html: str) -> List[Dict[str, Any]]:
+        """Parse static HTML and extract actionable elements without geometry."""
+        if not BS4_AVAILABLE or not html:
+            return []
+        elements: List[Dict[str, Any]] = []
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+
+            # Pre-build a map from input id -> label element for O(1) lookup.
+            label_for_map: Dict[str, Any] = {}
+            for lbl in soup.find_all("label"):
+                for_attr = lbl.get("for") or lbl.get("htmlfor") or lbl.get("htmlFor")
+                if for_attr:
+                    label_for_map[for_attr] = lbl
+
+            for tag_name in ("input", "select", "button", "textarea", "a"):
+                for el in soup.find_all(tag_name):
+                    entry: Dict[str, Any] = {"tag": tag_name}
+                    el_id = el.get("id", "")
+                    if el_id:
+                        entry["id"] = el_id
+                    if el.get("name"):
+                        entry["name"] = el["name"]
+                    t = el.get("type", "")
+                    if t:
+                        entry["type"] = t.lower()
+                    al = el.get("aria-label", "")
+                    if al:
+                        entry["aria_label"] = al
+                    txt = (el.get("value") or el.get_text() or "").strip()[:80]
+                    if txt:
+                        entry["text"] = txt
+
+                    is_hidden = self._bs4_is_hidden(el)
+                    entry["display_state"] = "display:none" if is_hidden else "visible"
+                    entry["disabled"] = el.get("disabled") is not None
+                    entry["parent_hidden"] = False
+                    entry["bounding_rect"] = None
+
+                    # Best-effort actionable_surface via <label> lookup.
+                    # Two distinct patterns produce different correct selectors:
+                    #   1. Wrapping label: <label> <input> </label>
+                    #      → "*css=label >> id=<id>" (Browser library descendant-chain)
+                    #   2. Sibling label: <input id=foo> <label for="foo">
+                    #      → "css=label[for='<id>']" (direct attribute selector)
+                    # Emitted regardless of display_state: BS4 cannot detect computed CSS,
+                    # so an element appearing "visible" may still be CSS-hidden at runtime.
+                    if el_id:
+                        wrapping_label = el.find_parent("label")
+                        sibling_label = label_for_map.get(el_id) if wrapping_label is None else None
+                        if wrapping_label is not None:
+                            lbl_txt = (wrapping_label.get_text() or "").strip()[:80]
+                            entry["actionable_surface"] = {
+                                "selector": f"*css=label >> id={el_id}",
+                                "wrapper_tag": "label",
+                                "wrapper_relation": "ancestor",
+                                "wrapper_text": lbl_txt or None,
+                            }
+                        elif sibling_label is not None:
+                            lbl_txt = (sibling_label.get_text() or "").strip()[:80]
+                            entry["actionable_surface"] = {
+                                "selector": f"css=label[for='{el_id}']",
+                                "wrapper_tag": "label",
+                                "wrapper_relation": "sibling_for",
+                                "wrapper_text": lbl_txt or None,
+                            }
+
+                    elements.append(entry)
+        except Exception as exc:
+            logger.debug("ActionableElementsCollector HTML parse failed: %s", exc)
+        return elements
+
+    async def collect(
+        self,
+        session: "ExecutionSession",
+        page_source: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Return an actionable_elements summary dict.
+
+        Tries Browser Library JS first via an async dispatch (the inner
+        keyword call runs in ``asyncio.to_thread`` so the event loop is
+        never blocked).  Falls back to static HTML parse via BS4 when the
+        JS path returns None.  Always returns a dict with at least
+        'elements', 'count', and 'collection_method' keys.
+        """
+        imported = getattr(session, "imported_libraries", []) or []
+        active_library = None
+        try:
+            active_library = session.get_web_automation_library()
+        except Exception:
+            pass
+        if active_library is None and imported:
+            active_library = imported[0]
+
+        elements: Optional[List[Dict[str, Any]]] = None
+        collection_method = "none"
+
+        if active_library == "Browser" or "Browser" in imported:
+            elements = await self._collect_via_browser_js_async(session)
+            if elements is not None:
+                collection_method = "browser_js"
+
+        if elements is None and page_source:
+            elements = await asyncio.to_thread(self._collect_from_html, page_source)
+            collection_method = "html_static" if elements else "none"
+
+        elements = elements or []
+        total = len(elements)
+        capped = total > self._limit
+        if capped:
+            elements = elements[: self._limit]
+
+        cleaned = []
+        for e in elements:
+            cleaned.append({k: v for k, v in e.items() if v is not None and v != ""})
+
+        result: Dict[str, Any] = {
+            "elements": cleaned,
+            "count": len(cleaned),
+            "collection_method": collection_method,
+        }
+        if capped:
+            result["total_actionable"] = total
+            result["sample_capped"] = True
+        if collection_method == "html_static":
+            result["note"] = (
+                "bounding_rect and parent_hidden not available without live Browser Library."
+            )
+        return result
 
 
 class PageSourceService:

@@ -50,6 +50,7 @@ from robotmcp.domains.shared.kernel import (
     OptionalCoercedStringList,
     PluginAction,
     RecommendMode,
+    SelectMatch,
     SessionAction,
     SuiteRunMode,
     TestStatus,
@@ -81,6 +82,21 @@ _response_optimization_configs: Dict[str, Any] = {}  # session_id -> ResponseOpt
 _memory_hook_service: Any = None  # None=uninitialized, False=disabled
 # ADR-014.2: Track pending memory writes so they aren't lost on shutdown
 _pending_memory_tasks: set = set()
+
+
+def _check_profile_gate(session_id: str, tool_name: str) -> Optional[Dict[str, Any]]:
+    """Return a profile-gated error dict if tool_name is not in the session's profile.
+
+    Returns None when the call should proceed (profile allows the tool or the
+    profile manager is not initialized, in which case all tools are available).
+
+    P1: profile activation is now per-session with no global FastMCP side effects.
+    """
+    if _tool_profile_manager is None:
+        return None
+    if not _tool_profile_manager.is_tool_allowed_for_session(session_id or "", tool_name):
+        return _tool_profile_manager.profile_gated_error(session_id or "", tool_name)
+    return None
 
 
 def _get_memory_hook_service():
@@ -1981,6 +1997,36 @@ async def analyze_scenario(
         except Exception as e:
             logger.debug(f"LLM session config enhancement failed: {e}")
 
+    # Proposal-A (A5): library auto-load invariant. When the detected session
+    # type implies a canonical library, ensure that library is loaded before we
+    # return the response. Previously a web_automation session could be returned
+    # with only BuiltIn loaded if the scenario text was short or ambiguous,
+    # leaving downstream execute_step calls to fail with "Unknown keyword".
+    try:
+        from robotmcp.models.session_models import SessionType as _ST
+
+        _required_by_type = {
+            _ST.WEB_AUTOMATION: ("Browser", "SeleniumLibrary"),
+            _ST.API_TESTING: ("RequestsLibrary",),
+            _ST.MOBILE_TESTING: ("AppiumLibrary",),
+        }
+        _expected = _required_by_type.get(session.session_type, ())
+        _loaded = set(session.loaded_libraries or [])
+        if _expected and not any(lib in _loaded for lib in _expected):
+            # Pick the explicit preference if it matches the expected set, else
+            # the first canonical option (Browser before SeleniumLibrary).
+            _pref = session.explicit_library_preference
+            _to_load = _pref if _pref in _expected else _expected[0]
+            try:
+                session.import_library(_to_load)
+                logger.info(
+                    f"A5: auto-loaded {_to_load} for session_type={session.session_type.value}"
+                )
+            except Exception as _ile:
+                logger.debug(f"A5: auto-load of {_to_load} skipped: {_ile}")
+    except Exception as _a5e:
+        logger.debug(f"A5: library invariant check skipped: {_a5e}")
+
     # Compact session info — verbose guidance removed to reduce token cost
     result["session_type"] = session.session_type.value
     result["libraries_loaded"] = list(session.loaded_libraries)
@@ -2111,6 +2157,8 @@ async def find_keywords(
     library_name: str | None = None,
     current_state: Dict[str, Any] | None = None,
     limit: int | None = None,
+    name_filter: str | None = None,
+    summary_only: bool = False,
 ) -> Dict[str, Any]:
     """Discover Robot Framework keywords using multiple strategies.
 
@@ -2133,6 +2181,13 @@ async def find_keywords(
         library_name: Optional library filter for catalog search.
         current_state: Optional state payload to improve semantic matching.
         limit: Optional maximum number of results to return.
+               For strategy="session" with no query, defaults to 25 when omitted.
+        name_filter: Optional glob pattern applied case-insensitively to keyword names.
+                     Examples: "Click*", "*element*", "Get Page*".
+                     Primarily used with strategy="session".
+        summary_only: When True, each keyword entry contains only {name, library},
+                      omitting docstrings and argument lists. Reduces response size.
+                      Default False.
 
     Returns:
         Dict[str, Any]: Discovery result:
@@ -2140,6 +2195,9 @@ async def find_keywords(
             - strategy: strategy used
             - query: original query
             - result/results: strategy-specific payload
+            - truncated: True when result set was capped at limit
+            - total_matches: total count before truncation (present when truncated=True)
+            - hint: guidance string (present when truncated=True)
             - error: present on failure
 
     Examples:
@@ -2158,6 +2216,15 @@ async def find_keywords(
                 session_id="api_session"
             )
             # Returns: ["GET", "Get Request", "Get Element", ...]
+
+        List session keywords with name filter (compact):
+            find_keywords(
+                query="",
+                strategy="session",
+                session_id="web_session",
+                name_filter="Click*",
+                summary_only=True,
+            )
     """
 
     strategy_norm = (strategy or "semantic").strip().lower()
@@ -2362,6 +2429,53 @@ async def find_keywords(
         mgr = get_rf_native_context_manager()
         payload = mgr.list_available_keywords(session_id)
         payload.update({"strategy": "session", "query": query})
+
+        # P7: Apply name_filter glob, query filter, limit, summary_only
+        import fnmatch as _fnmatch
+        lib_kws: list = payload.get("library_keywords", [])
+        res_kws: list = payload.get("resource_keywords", [])
+        all_kws = lib_kws + res_kws
+
+        query_stripped = (query or "").strip().lower()
+        is_wildcard_query = not query_stripped or query_stripped in ("*", ".*", "")
+        if not is_wildcard_query:
+            all_kws = [k for k in all_kws if query_stripped in k.get("name", "").lower()]
+
+        if name_filter:
+            pattern = name_filter.lower()
+            all_kws = [k for k in all_kws if _fnmatch.fnmatch(k.get("name", "").lower(), pattern)]
+
+        total_matches = len(all_kws)
+
+        effective_limit = limit_value
+        if effective_limit is None and is_wildcard_query and not name_filter:
+            effective_limit = 25
+
+        truncated = False
+        if effective_limit is not None and total_matches > effective_limit:
+            all_kws = all_kws[:effective_limit]
+            truncated = True
+
+        if summary_only:
+            all_kws = [
+                {k: v for k, v in kw.items() if k in ("name", "library", "resource")}
+                for kw in all_kws
+            ]
+
+        payload["library_keywords"] = [k for k in all_kws if "resource" not in k]
+        payload["resource_keywords"] = [k for k in all_kws if "resource" in k]
+        payload["total_matches"] = total_matches
+        if truncated:
+            payload["truncated"] = True
+            payload["hint"] = (
+                f"Results capped at {effective_limit} of {total_matches}. "
+                "Refine with name_filter='Click*' or query='click element'."
+            )
+        if name_filter:
+            payload["name_filter"] = name_filter
+        if summary_only:
+            payload["summary_only"] = True
+
         # ADR-015: Externalize large fields to artifacts
         payload = _externalize_response("find_keywords", session_id, payload)
         # Track for instruction learning
@@ -3155,7 +3269,10 @@ async def manage_session(
                 "error": "Tool profile system not initialized",
             }
         try:
-            profile = await _tool_profile_manager.activate_profile(profile_name)
+            # P1: bind per-session (no global FastMCP registry mutation)
+            profile = _tool_profile_manager.bind_session_profile(
+                session_id or "", profile_name
+            )
             return {
                 "success": True,
                 "action": "set_tool_profile",
@@ -3163,6 +3280,10 @@ async def manage_session(
                 "active_profile": profile.name,
                 "tools_visible": sorted(profile.tool_names),
                 "tool_count": profile.tool_count,
+                "note": (
+                    "Profile applied to this session only. "
+                    "Other sessions retain their own profiles."
+                ),
             }
         except KeyError as e:
             available = _tool_profile_manager.list_profiles()
@@ -3281,6 +3402,7 @@ async def get_session_state(
     dom_chunk_size: int = 65536,
     mode: Literal["full", "delta", "auto", "none"] = "auto",
     since_version: int | None = None,
+    actionable_elements_limit: int = 80,
 ) -> Dict[str, Any]:
     """Retrieve aggregated session state for debugging and visibility.
 
@@ -3292,7 +3414,8 @@ async def get_session_state(
 
     Args:
         session_id: Active session identifier to inspect.
-        sections: Specific data blocks to include (e.g., summary, page_source, variables, application_state).
+        sections: Specific data blocks to include (e.g., summary, page_source, variables,
+                  application_state, actionable_elements).
         state_type: Type of application state to fetch when requesting application_state (dom|api|database|all).
         elements_of_interest: Targeted element identifiers passed to application state collectors.
         page_source_filtered: When True, returns sanitized/filtered DOM text instead of the full source.
@@ -3300,6 +3423,8 @@ async def get_session_state(
         include_reduced_dom: Whether to include lightweight semantic DOM (ARIA snapshots) for quick inspection.
         include_dom_stream: Chunk large page_source payloads into page_source_stream entries for easier transport.
         dom_chunk_size: Maximum size of each DOM chunk when streaming is enabled (minimum 1024 bytes).
+        actionable_elements_limit: Maximum number of actionable elements to include in the inline summary
+                                   (default 80). Applies when actionable_elements or page_source is requested.
 
     Returns:
         Dict[str, Any]: Payload with:
@@ -3307,7 +3432,7 @@ async def get_session_state(
             - session_id: resolved session id.
             - sections: list of sections included.
             - data: per-section content (e.g., variables, page_source/ARIA snapshots, validation, libraries,
-              application_state).
+              application_state, actionable_elements).
             - error: present only on failure, with guidance if available.
     """
 
@@ -3332,6 +3457,8 @@ async def get_session_state(
         )
         payload["sections"]["application_state"] = app_state
 
+    _page_source_html: Optional[str] = None
+
     if "page_source" in requested:
         page_source = await _get_page_source_payload(
             session_id=session_id,
@@ -3349,6 +3476,32 @@ async def get_session_state(
                 page_source["page_source"], max(int(dom_chunk_size), 1024)
             )
         payload["sections"]["page_source"] = page_source
+        if isinstance(page_source, dict):
+            _page_source_html = (
+                page_source.get("page_source")
+                or page_source.get("page_source_preview")
+            )
+
+    # P8: Actionable elements inline summary.
+    if "actionable_elements" in requested or "page_source" in requested:
+        try:
+            from robotmcp.components.execution.page_source_service import (
+                ActionableElementsCollector,
+            )
+            session_obj = execution_engine.session_manager.get_session(session_id)
+            if session_obj is not None:
+                collector = ActionableElementsCollector(limit=int(actionable_elements_limit))
+                ae_result = await collector.collect(
+                    session_obj, _page_source_html
+                )
+                payload["sections"]["actionable_elements"] = ae_result
+        except Exception as _ae_err:
+            logger.debug("actionable_elements collection failed: %s", _ae_err)
+            payload["sections"]["actionable_elements"] = {
+                "elements": [],
+                "count": 0,
+                "error": str(_ae_err),
+            }
 
     if "variables" in requested:
         variables = await _get_context_variables_payload(session_id)
@@ -3447,6 +3600,10 @@ async def execute_step(
     timeout_ms: int | None = None,
     bdd_group: str = "",
     bdd_intent: str = "",
+    pre_validate: bool | None = None,
+    pre_validate_timeout_ms: int | None = None,
+    verify_post_action: bool = True,
+    record: bool | None = None,
 ) -> Dict[str, Any]:
     """Execute a single Robot Framework keyword (or Evaluate) within a session.
 
@@ -3484,6 +3641,48 @@ async def execute_step(
         bdd_intent: BDD intent prefix for the group: "given", "when", "then", "and", "but".
                     Used with bdd_group to assign Given/When/Then prefixes in the
                     generated BDD test suite.
+        pre_validate: ESCAPE HATCH — per-call override for the pre-validation
+                    gate.  When the gate rejects an element with "missing
+                    required states: visible", the response now includes a
+                    ``wrapper_suggestion`` hint pointing at the actionable
+                    wrapper (label, scoped section).  Try that BEFORE setting
+                    ``pre_validate=False``.  Setting False is appropriate
+                    only for elements that are intentionally hidden
+                    (file inputs, honeypot fields, custom widgets that
+                    proxy to a hidden control).  None (default) respects
+                    ``ROBOTMCP_PRE_VALIDATION``.  True forces validation
+                    even when the global flag is off.
+        pre_validate_timeout_ms: Per-call override for the pre-validation
+                    actionability check timeout (default 500 ms).  Useful
+                    for SPAs with deferred layout where the element exists
+                    but is laid out late.  Does NOT override ``timeout_ms``
+                    for the actual keyword execution.
+        verify_post_action: Default True — runs PostActionVerifier after
+                    successful Fill/Type/Click/Select/Check actions to surface
+                    silent passes on hidden parents and value mismatches.
+                    Set False only for performance-critical loops where the
+                    50 ms verification budget is unacceptable.
+        record: F-N12 suite-curation gate. Controls whether the successful
+                    step is appended to the session's recorded steps and shown
+                    in build_test_suite output.
+
+                    - True: always record.
+                    - False: never record. Step still executes and returns its
+                      result. Useful for debug probes, exploratory Evaluate
+                      JavaScript calls, recovery navigations.
+                    - None (default): auto-classify by keyword name.
+                      Read-only inspection keywords (Get Title, Get Url,
+                      Get Text, Log, ...) are NOT recorded. Action keywords
+                      (Click, Fill Text, Go To, ...) are recorded.
+
+                    Important: when assign_to is set, the step is ALWAYS
+                    recorded regardless of keyword name, because the recorded
+                    suite needs the assignment for subsequent assertions
+                    (the canonical "${actual}= Get Text" + "Should Be Equal"
+                    pattern). Pass record=False explicitly to override.
+
+                    The response includes "recorded": bool so callers can
+                    confirm the gating decision.
 
     Returns:
         Dict[str, Any]: Execution result:
@@ -3678,6 +3877,9 @@ async def execute_step(
         assign_to=assign_to,
         use_context=bool(use_context),
         timeout_ms=timeout_ms,
+        pre_validate=pre_validate,
+        pre_validate_timeout_ms=pre_validate_timeout_ms,
+        verify_post_action=verify_post_action,
     )
 
     # ADR-014.2: Augment failed step results with memory hints
@@ -3903,6 +4105,11 @@ async def build_test_suite(
     if tags is None:
         tags = []
 
+    # P1: check session-scoped profile gate before proceeding
+    gate_error = _check_profile_gate(session_id, "build_test_suite")
+    if gate_error is not None:
+        return gate_error
+
     # Import session resolver here to avoid circular imports
     from robotmcp.utils.session_resolution import SessionResolver
 
@@ -3938,11 +4145,17 @@ async def build_test_suite(
 
     # Add session resolution info to result
     if resolution_result.get("fallback_used", False):
+        step_count = resolution_result.get("session_info", {}).get("step_count", 0)
+        # P12: surface fallback as a top-level warning so it is not buried
+        result["warning"] = (
+            f"Original session_id '{session_id}' had no executed steps; "
+            f"auto-resolved to '{resolved_session_id}' with {step_count} steps."
+        )
         result["session_resolution"] = {
             "fallback_used": True,
             "original_session_id": session_id,
             "resolved_session_id": resolved_session_id,
-            "message": f"Automatically used session '{resolved_session_id}' with {resolution_result['session_info']['step_count']} executed steps",
+            "message": f"Automatically used session '{resolved_session_id}' with {step_count} executed steps",
         }
     else:
         result["session_resolution"] = {
@@ -5579,21 +5792,49 @@ async def get_locator_guidance(
     library: str = "browser",
     error_message: str | None = None,
     keyword_name: str | None = None,
+    topic: str | None = None,
 ) -> Dict[str, Any]:
     """Provide locator/selector guidance for Browser, SeleniumLibrary, or AppiumLibrary.
 
+    When ``topic`` is supplied the function dispatches to a pre-built topic
+    cookbook instead of the legacy library/error_message path.
+
     Args:
-        library: Target library ("Browser", "SeleniumLibrary", or "AppiumLibrary"). Case-insensitive.
-        error_message: Optional error text to tailor guidance (e.g., from a failed keyword).
+        library: Target library ("Browser", "SeleniumLibrary", or "AppiumLibrary").
+            Case-insensitive.  Ignored when ``topic`` is set.
+        error_message: Optional error text to tailor guidance (e.g., from a
+            failed keyword).  Ignored when ``topic`` is set.
         keyword_name: Optional keyword name for context-specific hints.
+            Ignored when ``topic`` is set.
+        topic: Named guidance topic.  Supported values:
+            - ``"browser_locators"`` — canonical Browser-library locator
+              cookbook for SPA automation (wrapper-label, scoped CSS, sibling
+              traversal, value-attribute, network-await patterns).
+            - ``"spa_wizards"`` — JS/jQuery SPA wizard interaction guidance.
+            - ``"known_validation_libraries"`` — detection signatures and
+              commit APIs for jQuery Validate, idealForms, formvalidation.io,
+              vee-validate.
 
     Returns:
         Dict[str, Any]: Guidance payload:
             - success: bool
-            - library: resolved library name
-            - tips/warnings/examples: library-specific suggestions
-            - error: present when library is unsupported
+            - topic / library: resolved topic or library name
+            - entries / tips / warnings / examples: content
+            - error: present when topic or library is unsupported
+            - supported_topics: present on topic-not-found errors
     """
+    if topic:
+        from robotmcp.domains.locator_guidance.services import LocatorTopicService
+
+        svc = LocatorTopicService()
+        result = svc.get_topic(topic)
+        if result is not None:
+            return result
+        return {
+            "success": False,
+            "error": f"Unknown topic '{topic}'",
+            "supported_topics": sorted(LocatorTopicService.SUPPORTED_TOPICS),
+        }
 
     from robotmcp.utils.rf_native_type_converter import RobotFrameworkNativeConverter
 
@@ -6236,7 +6477,200 @@ async def manage_attach(action: AttachAction = "status") -> Dict[str, Any]:
     }
 
 
-# ── ADR-007: intent_action MCP tool ───────────────────────────────
+# ── ADR-007 / P6 / P14: intent_action MCP tool ────────────────────
+
+# JavaScript probe for commit_form: detects which SPA validation library is active.
+_COMMIT_FORM_PROBE_JS = """
+(formSelector) => {
+  const $ = window.jQuery || window.$;
+  const form = document.querySelector(formSelector || 'form');
+  if (!form) { return {library: null, fields: [], error: 'form not found'}; }
+  if ($ && (form.classList.contains('idealforms') || ($(form).data && $(form).data('idealforms')))) {
+    const fields = [];
+    form.querySelectorAll('input, select, textarea').forEach(el => { if (el.id) fields.push(el.id); });
+    return {library: 'idealForms', fields: fields};
+  }
+  if (form.dataset && form.dataset.fvConfig) {
+    const fields = [];
+    form.querySelectorAll('[name]').forEach(el => fields.push(el.name));
+    return {library: 'formvalidation.io', fields: fields};
+  }
+  if ($ && $.validator !== undefined) {
+    const fields = [];
+    form.querySelectorAll('input, select, textarea').forEach(el => { if (el.name) fields.push(el.name); });
+    return {library: 'jQuery Validate', fields: fields};
+  }
+  if (window.__VEE_VALIDATE__) { return {library: 'vee-validate', fields: []}; }
+  return {library: null, fields: []};
+}
+""".strip()
+
+_COMMIT_FORM_VALIDATE_JS: Dict[str, str] = {
+    "idealForms": """
+(formSelector, fieldIds) => {
+  const $ = window.jQuery || window.$;
+  const form = $ ? $(formSelector || 'form') : null;
+  if (!form || !form.length) { return {validated: 0, invalid: []}; }
+  const invalid = [];
+  let validated = 0;
+  fieldIds.forEach(id => {
+    try {
+      const ok = form.idealforms('isValid', '#' + id);
+      validated++;
+      if (!ok) invalid.push(id);
+    } catch(e) {
+      try { form.idealforms('validate', '#' + id); validated++; } catch(e2) {}
+    }
+  });
+  return {validated: validated, invalid: invalid};
+}
+""".strip(),
+    "jQuery Validate": """
+(formSelector, fieldNames) => {
+  const $ = window.jQuery || window.$;
+  if (!$ || !$.validator) { return {validated: 0, invalid: []}; }
+  const form = $(formSelector || 'form');
+  if (!form.length) { return {validated: 0, invalid: []}; }
+  const validator = form.validate();
+  const invalid = [];
+  fieldNames.forEach(name => {
+    const el = form.find('[name="' + name + '"]')[0];
+    if (el && !validator.element(el)) invalid.push(name);
+  });
+  return {validated: fieldNames.length, invalid: invalid};
+}
+""".strip(),
+}
+
+
+async def _execute_commit_form(
+    session_id: str,
+    form_selector: str,
+    extra_field_ids: list[str],
+) -> Dict[str, Any]:
+    """Probe for SPA validation library and commit form fields via JS."""
+    import json as _json
+
+    probe_result: Dict[str, Any] | None = None
+    js_keyword: str | None = None
+
+    for kw, js_args in [
+        ("Evaluate Javascript", [_COMMIT_FORM_PROBE_JS, f'"{form_selector}"']),
+        ("Execute Javascript", [
+            f"return ({_COMMIT_FORM_PROBE_JS})(arguments[0]);",
+            form_selector,
+        ]),
+    ]:
+        try:
+            r = await get_tool_fn(execute_step)(
+                keyword=kw,
+                arguments=js_args,
+                session_id=session_id,
+                detail_level="minimal",
+            )
+            if isinstance(r, dict) and r.get("success"):
+                raw = r.get("result") or r.get("return_value") or r.get("output")
+                if isinstance(raw, dict):
+                    probe_result = raw
+                    js_keyword = kw
+                    break
+                elif isinstance(raw, str):
+                    try:
+                        probe_result = _json.loads(raw)
+                        js_keyword = kw
+                        break
+                    except Exception:
+                        pass
+        except Exception:
+            continue
+
+    if probe_result is None:
+        return {
+            "success": False,
+            "error": "commit_form probe failed. Ensure a browser session is active.",
+        }
+
+    detected_library: str | None = probe_result.get("library")
+    fields: list[str] = list(probe_result.get("fields") or [])
+    if extra_field_ids:
+        seen: set[str] = set(fields)
+        for fid in extra_field_ids:
+            if fid not in seen:
+                fields.append(fid)
+                seen.add(fid)
+
+    if not detected_library:
+        return {
+            "success": True,
+            "library_detected": None,
+            "fields_validated": 0,
+            "hint": (
+                "No SPA validation library detected. "
+                "Form likely uses native HTML5 validation."
+            ),
+        }
+
+    validate_js = _COMMIT_FORM_VALIDATE_JS.get(detected_library)
+    if not validate_js:
+        return {
+            "success": True,
+            "library_detected": detected_library,
+            "fields_validated": 0,
+            "hint": (
+                f"Library '{detected_library}' detected but no built-in validator. "
+                "Use execute_step to call the API manually."
+            ),
+        }
+
+    field_json = _json.dumps(fields)
+    if js_keyword == "Evaluate Javascript":
+        validate_args = [validate_js, f'"{form_selector}"', field_json]
+    else:
+        validate_args = [
+            f"return ({validate_js})(arguments[0], arguments[1]);",
+            form_selector,
+            field_json,
+        ]
+
+    val_result: Dict[str, Any] | None = None
+    try:
+        assert js_keyword is not None
+        vr = await get_tool_fn(execute_step)(
+            keyword=js_keyword,
+            arguments=validate_args,
+            session_id=session_id,
+            detail_level="minimal",
+        )
+        if isinstance(vr, dict):
+            raw = vr.get("result") or vr.get("return_value") or vr.get("output")
+            if isinstance(raw, dict):
+                val_result = raw
+            elif isinstance(raw, str):
+                try:
+                    val_result = _json.loads(raw)
+                except Exception:
+                    pass
+    except Exception as exc:
+        logger.debug("commit_form validate call failed: %s", exc)
+
+    if val_result is None:
+        return {
+            "success": True,
+            "library_detected": detected_library,
+            "fields_validated": len(fields),
+            "all_valid": None,
+            "hint": "Validation call succeeded but response was not parseable.",
+        }
+
+    invalid_fields: list[str] = val_result.get("invalid", [])
+    validated_count: int = val_result.get("validated", len(fields))
+    return {
+        "success": True,
+        "library_detected": detected_library,
+        "fields_validated": validated_count,
+        "all_valid": len(invalid_fields) == 0,
+        "invalid_fields": invalid_fields,
+    }
 
 
 @mcp.tool
@@ -6248,20 +6682,71 @@ async def intent_action(
     options: Dict[str, str] | None = None,
     assign_to: str | None = None,
     detail_level: DetailLevel = "standard",
+    match: SelectMatch = "label",
+    nth: int | None = None,
+    force: bool = False,
+    timeout: str | None = None,
+    raw_error: bool = True,
 ) -> Dict[str, Any]:
     """Execute a high-level intent that auto-resolves to the correct library keyword.
 
-    Valid intents: navigate, click, fill, hover, select, assert_visible, extract_text, wait_for.
-    The intent is resolved based on the session's active library (Browser/SeleniumLibrary/AppiumLibrary).
+    Valid intents: navigate, click, fill, hover, select, assert_visible,
+    extract_text, wait_for, commit_form.
+    The intent is resolved based on the session's active library
+    (Browser/SeleniumLibrary/AppiumLibrary).
+
+    Prefer NATURAL locators first.  Many SPA wizards (idealForms, idealsteps,
+    formvalidation.io, ...) hide inputs behind styled <label>/<section>
+    wrappers.  The wrapper is the actionable surface — Browser Library
+    supports clicking it directly via patterns like
+    ``*css=label >> id=<input-id>``, ``Click   text=<wrapper text>``, or
+    ``section[style="display: block;"] >> text=Next »``.  Try those before
+    reaching for ``force=True`` / ``commit_form``.  See
+    ``get_locator_guidance(topic="browser_locators")`` for the cookbook.
 
     Args:
-        intent: Action verb (e.g. "click", "navigate", "fill")
-        target: Locator or URL (e.g. "#submit", "text=Login", "https://example.com")
-        value: Value for fill/select intents
-        session_id: Session to execute against (uses default if not provided)
-        options: Additional options (e.g. {"timeout": "10s"})
-        assign_to: Variable name to capture result
-        detail_level: Response detail level
+        intent: Action verb (e.g. "click", "navigate", "fill", "commit_form").
+        target: Locator or URL (e.g. "#submit", "text=Login", "https://example.com").
+            For commit_form: CSS form selector (default "form").
+        value: Value for fill/select intents.
+            For commit_form: optional JSON array of extra field IDs to validate.
+        session_id: Session to execute against (uses default if not provided).
+        options: Additional keyword options (e.g. {"timeout": "10s"}).
+        assign_to: Variable name to capture result.
+        detail_level: Response detail level.
+        match: Select-match strategy for the 'select' intent.
+            "label" - match by visible text label (default — matches RF semantics).
+            "value" - match by <option value="..."> attribute.
+            "index" - match by zero-based integer index.
+            "text"  - synonym for label in most libraries.
+            "auto"  - heuristic: numeric string -> value, else label. Opt-in only;
+                      false-routes on numeric labels (years, amounts, IDs).
+        nth: Zero-based nth-match index. Disambiguates when multiple elements
+            match the locator.
+            Browser: appends ">> nth=<n>" to the locator.
+            SeleniumLibrary: appends ":nth-of-type(<n+1>)" to CSS locators only.
+        force: ESCAPE HATCH — bypasses actionability checks. Use ONLY for
+            elements that are intentionally hidden (file pickers, honeypots).
+            For typical "element not visible" failures the natural fix is
+            wrapper-locator (e.g. ``*css=label >> id=<id>``); reach for that
+            first via ``get_locator_guidance(topic="browser_locators")`` or
+            the ``wrapper_suggestion`` hint returned in pre-validation
+            failures. When True: Browser Click/Fill Text -> appends
+            ``force=True`` named arg, also sets pre_validate=False to skip
+            the rf-mcp pre-validation gate.
+        timeout: Timeout override for the underlying keyword (e.g. "5s", "10000ms").
+            Passed via options["timeout"] to the argument transformer and
+            appended as "timeout=<value>" for Browser Library.
+        raw_error: When True (default), failed dispatch surfaces the underlying
+            library error in the response under "underlying_error".
+
+    Notes:
+        ``commit_form`` is an experimental intent for the case where you have
+        already filled fields via JavaScript and now need to push idealForms /
+        jQuery-Validate / formvalidation.io into a valid state.  It is NOT
+        the recommended path for natural automation — real ``Click`` /
+        ``Fill Text`` on the visible wrapper labels fires real events and
+        commits validation state automatically, no probe needed.
     """
     global _intent_action_adapter
 
@@ -6283,38 +6768,108 @@ async def intent_action(
     effective_session_id = session_id or "default"
     resolution = None  # Hoisted for fallback access in except block
 
+    # --- P14: commit_form handled entirely here (no execute_step delegation) ---
+    if intent == "commit_form":
+        form_selector = target or "form"
+        extra_ids: list[str] = []
+        if value:
+            import json as _json
+            try:
+                parsed = _json.loads(value)
+                if isinstance(parsed, list):
+                    extra_ids = [str(x) for x in parsed]
+            except Exception:
+                extra_ids = [value]
+        try:
+            result = await _execute_commit_form(
+                session_id=effective_session_id,
+                form_selector=form_selector,
+                extra_field_ids=extra_ids,
+            )
+        except Exception as exc:
+            result = {"success": False, "error": f"commit_form failed: {exc}"}
+            if raw_error:
+                result["underlying_error"] = str(exc)
+        _track_tool_result(
+            effective_session_id,
+            "intent_action",
+            {"intent": intent, "target": target, "value": value},
+            result,
+        )
+        return result
+
     try:
         from robotmcp.domains.intent.services import IntentResolutionError
 
-        # Resolve intent to keyword + arguments
+        # Merge timeout into options so argument transformers can read it
+        merged_options: Dict[str, str] = dict(options or {})
+        if timeout:
+            merged_options["timeout"] = timeout
+
+        # Resolve intent to keyword + arguments (P6: match, nth)
         resolution = _intent_action_adapter.resolve_intent(
             intent=intent,
             target=target,
             value=value,
             session_id=effective_session_id,
-            options=options,
+            options=merged_options,
             assign_to=assign_to,
+            match=match,
+            nth=nth,
         )
 
-        # Delegate to execute_step for actual execution.
-        # execute_step is a FunctionTool (via @mcp.tool decorator),
-        # so we call .fn to get the original async function.
-        result = await get_tool_fn(execute_step)(
-            keyword=resolution["keyword"],
-            arguments=resolution["arguments"],
-            session_id=effective_session_id,
-            assign_to=resolution.get("assign_to"),
-            detail_level=detail_level,
-        )
+        resolved_keyword = resolution["keyword"]
+        resolved_args: list[str] = list(resolution["arguments"])
+        lib = resolution.get("library", "")
+
+        # --- P6 / N1: force=True modifier ---
+        if force and lib == "Browser":
+            # N1: swap to force_keyword when the mapping declares one.
+            # Browser's Click(selector, button) does not accept force= as a named arg;
+            # Click With Options(selector, *clickOptions) is the correct escape hatch.
+            force_keyword = resolution.get("force_keyword")
+            if force_keyword:
+                resolved_keyword = force_keyword
+            if "force=True" not in resolved_args:
+                resolved_args.append("force=True")
+
+        # --- P6: timeout pass-through for Browser Library ---
+        if timeout and lib == "Browser":
+            timeout_arg = f"timeout={timeout}"
+            if timeout_arg not in resolved_args:
+                resolved_args.append(timeout_arg)
+
+        # --- P6: delegate to execute_step ---
+        execute_kwargs: Dict[str, Any] = {
+            "keyword": resolved_keyword,
+            "arguments": resolved_args,
+            "session_id": effective_session_id,
+            "assign_to": resolution.get("assign_to"),
+            "detail_level": detail_level,
+        }
+        if force:
+            # Agent B may have added pre_validate to execute_step.
+            # Defensive: fall back silently if parameter not yet present.
+            execute_kwargs["pre_validate"] = False
+
+        try:
+            result = await get_tool_fn(execute_step)(**execute_kwargs)
+        except TypeError:
+            execute_kwargs.pop("pre_validate", None)
+            result = await get_tool_fn(execute_step)(**execute_kwargs)
 
         # Enrich result with intent metadata
         if isinstance(result, dict):
             result["intent_resolved"] = {
                 "intent": resolution["intent"],
-                "keyword": resolution["keyword"],
-                "library": resolution["library"],
+                "keyword": resolved_keyword,
+                "library": lib,
                 "locator_normalized": resolution.get("locator_normalized", False),
             }
+            # P6: raw_error -- surface underlying error when present
+            if raw_error and not result.get("success", True):
+                if "error" in result and "underlying_error" not in result:
+                    result["underlying_error"] = result["error"]
 
         # Track for instruction learning
         _track_tool_result(
@@ -6333,7 +6888,7 @@ async def intent_action(
             "hint": (
                 "Use execute_step for direct keyword access, or check "
                 "valid intents: navigate, click, fill, hover, select, "
-                "assert_visible, extract_text, wait_for"
+                "assert_visible, extract_text, wait_for, commit_form"
             ),
         }
         _track_tool_result(
@@ -6373,7 +6928,7 @@ async def intent_action(
                         ):
                             break
                     else:
-                        # All fallback steps succeeded — retry navigate
+                        # All fallback steps succeeded -- retry navigate
                         result = await get_tool_fn(execute_step)(
                             keyword=resolution["keyword"],
                             arguments=resolution["arguments"],
@@ -6400,12 +6955,14 @@ async def intent_action(
                         )
                         return result
                 except Exception:
-                    pass  # Fallback failed — fall through to original error
+                    pass  # Fallback failed -- fall through to original error
 
         error_result = {
             "success": False,
             "error": f"Intent execution failed: {error_msg}",
         }
+        if raw_error:
+            error_result["underlying_error"] = error_msg
         _track_tool_result(
             effective_session_id,
             "intent_action",
@@ -6415,7 +6972,7 @@ async def intent_action(
         return error_result
 
 
-# ── End ADR-007 ────────────────────────────────────────────────────
+# ── End ADR-007 / P6 / P14 ──────────────────────────────────────────
 
 
 @mcp.tool(

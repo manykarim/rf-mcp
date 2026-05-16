@@ -592,6 +592,12 @@ class ExecutionSession:
     def _fallback_detect_library(self, scenario_text: str) -> Optional[str]:
         """Fallback library detection if LibraryDetector unavailable or finds nothing.
 
+        Proposal-A negative-evidence rule (A2): the bare word ``request`` is too
+        ambiguous to route to RequestsLibrary on its own — "insurance request",
+        "merge request", "feature request" are all business/product language.
+        Require a specific API token, and demote ``app`` to require ``mobile``
+        evidence in the same scenario (A3 — handled in session-type scoring).
+
         Args:
             scenario_text: The scenario text to analyze
 
@@ -601,12 +607,16 @@ class ExecutionSession:
         text_lower = scenario_text.lower()
 
         # Simple pattern matching fallback (lower confidence)
+        # Note: "request" is deliberately omitted from the RequestsLibrary pattern
+        # because it routes business language ("insurance request") to API testing.
         fallback_patterns = [
             (r"\b(selenium|webdriver)\b", "SeleniumLibrary"),
             (r"\b(browser\s*library|playwright)\b", "Browser"),
             (r"\b(xml|xpath)\b", "XML"),
-            (r"\b(api|http|rest|request)\b", "RequestsLibrary"),
-            (r"\b(mobile|android|ios|device|appium)\b", "AppiumLibrary"),
+            (r"\b(api|rest|endpoint|graphql|webhook|oauth|jwt)\b", "RequestsLibrary"),
+            # AppiumLibrary requires an unambiguous mobile token (no bare "app",
+            # which matches "application", "appear", "appliance").
+            (r"\b(mobile|android|ios|appium)\b", "AppiumLibrary"),
             (r"\b(database|sql|mysql|postgresql)\b", "DatabaseLibrary"),
         ]
 
@@ -648,9 +658,13 @@ class ExecutionSession:
                 (r"\b(chrome|firefox|safari|edge|chromium|webkit)\b", 2),
             ],
             SessionType.API_TESTING: [
-                (r"\b(api|rest|http|endpoint|request)\b", 3),
+                # A2: "request" alone is too ambiguous ("insurance request",
+                # "feature request"). Require "http request" or a get/post verb.
+                (r"\b(api|rest|endpoint)\b", 3),
                 (r"\b(get|post|put|delete|patch)\s+(request|method|call)\b", 4),
-                (r"\b(json|xml|response|status|header)\b", 2),
+                (r"\bhttp\s+(request|response)\b", 3),
+                (r"\b(json|xml)\s+(response|payload|body)\b", 3),
+                (r"\b(response\s+status|status\s+code)\b", 3),
                 (r"\b(oauth|token|authentication|authorization)\b", 2),
                 (r"\bmicroservice|webhook|graphql\b", 2),
                 (r"\bapi\s+(testing|automation|validation)\b", 3),
@@ -684,9 +698,13 @@ class ExecutionSession:
                 (r"\b(ci/?cd|pipeline|devops)\b", 2),
             ],
             SessionType.MOBILE_TESTING: [
-                (r"\b(mobile|android|ios|device|app)\b", 3),
+                # 'app' removed from this pattern: while \bapp\b does not match
+                # 'application', it does match 'app' inside a URL host like
+                # 'sampleapp.tricentis.com' once tokenised — a known noise source.
+                # An explicit mobile token is required for any meaningful score.
+                (r"\b(mobile|android|ios|device)\b", 3),
                 (r"\b(appium|espresso|xcuitest)\b", 4),
-                (r"\b(tap|swipe|scroll|pinch|gesture)\b", 3),
+                (r"\b(tap|swipe|pinch|gesture)\b", 3),
                 (r"\bmobile\s+(testing|automation|app)\b", 4),
                 (r"\b(emulator|simulator|real\s+device)\b", 3),
                 (r"\b(APK|IPA|bundle\s+ID|package\s+name)\b", 3),
@@ -720,6 +738,18 @@ class ExecutionSession:
             for pattern in profile.keywords_patterns:
                 matches = len(re.findall(pattern, text_lower))
                 scores[session_type] += matches  # Default weight of 1
+
+        # Proposal-A (A1): a real HTTP(S) URL is strong evidence of web
+        # automation. Apply a +5 web bonus when present, and only +2 if
+        # API vocabulary co-occurs (likely API testing with a base URL).
+        if re.search(r"https?://\S+", text_lower):
+            has_api_token = bool(
+                re.search(
+                    r"\b(api|rest|endpoint|graphql|webhook|oauth|jwt|microservice)\b",
+                    text_lower,
+                )
+            )
+            scores[SessionType.WEB_AUTOMATION] += 2 if has_api_token else 5
 
         # Find the session type with highest score
         if not scores or max(scores.values()) == 0:

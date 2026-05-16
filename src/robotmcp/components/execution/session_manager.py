@@ -287,33 +287,65 @@ class SessionManager:
     def detect_platform_from_scenario(self, scenario: str) -> PlatformType:
         """
         Detect platform type from scenario description.
-        
+
+        Proposal-A (A3): use whole-word matching (regex \\b) instead of
+        substring containment. The previous implementation matched 'app'
+        inside 'application'/'appear'/'apple', and 'request' inside
+        'insurance request', inflating mobile/api scores on plain web
+        scenarios. A URL is a strong web signal (A1) and is given +2
+        to the web bucket.
+
         Args:
             scenario: Natural language scenario description
-            
+
         Returns:
             Detected platform type
         """
+        import re as _re
+
         scenario_lower = scenario.lower()
-        
-        # Mobile indicators
-        mobile_keywords = ['app', 'mobile', 'android', 'ios', 'iphone', 'ipad', 
-                          'device', 'appium', 'emulator', 'simulator', 'apk',
-                          'bundle', 'tap', 'swipe', 'gesture']
-        
-        # Web indicators  
-        web_keywords = ['browser', 'web', 'website', 'url', 'page', 'chrome',
-                       'firefox', 'safari', 'edge', 'selenium', 'click link']
-        
-        # API indicators
-        api_keywords = ['api', 'rest', 'soap', 'endpoint', 'request', 'response',
-                       'json', 'xml', 'http', 'graphql']
-        
-        # Count keyword matches
-        mobile_score = sum(1 for keyword in mobile_keywords if keyword in scenario_lower)
-        web_score = sum(1 for keyword in web_keywords if keyword in scenario_lower)
-        api_score = sum(1 for keyword in api_keywords if keyword in scenario_lower)
-        
+
+        # Mobile indicators — 'app' is removed because it triggers on
+        # 'application'/'appear'/'apple'. Mobile context must mention
+        # an unambiguous mobile token.
+        mobile_keywords = [
+            'mobile', 'android', 'ios', 'iphone', 'ipad',
+            'appium', 'emulator', 'simulator', 'apk',
+            'bundle id', 'swipe', 'pinch', 'gesture',
+        ]
+
+        # Web indicators
+        web_keywords = [
+            'browser', 'web', 'website', 'url', 'page', 'chrome',
+            'firefox', 'safari', 'edge', 'selenium', 'click link',
+            'form', 'wizard', 'screen', 'tab',
+        ]
+
+        # API indicators — 'request' is removed because it routes business
+        # language ('insurance request') to API testing. Unambiguous
+        # API tokens only.
+        api_keywords = [
+            'api', 'rest', 'soap', 'endpoint',
+            'json response', 'http request', 'http response',
+            'graphql', 'webhook',
+        ]
+
+        # Count whole-word matches (\b around each phrase).
+        def _count(kws: list) -> int:
+            n = 0
+            for kw in kws:
+                if _re.search(r'\b' + _re.escape(kw) + r'\b', scenario_lower):
+                    n += 1
+            return n
+
+        mobile_score = _count(mobile_keywords)
+        web_score = _count(web_keywords)
+        api_score = _count(api_keywords)
+
+        # A1: a real web URL is a strong web signal.
+        if _re.search(r'https?://\S+', scenario_lower):
+            web_score += 2
+
         # Determine platform based on scores
         if mobile_score > web_score and mobile_score > api_score:
             return PlatformType.MOBILE
