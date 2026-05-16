@@ -43,6 +43,8 @@ class ExecutionConfig:
     CAPTURE_PAGE_SOURCE_ON_DOM_CHANGE: bool = True
     CAPTURE_PAGE_SOURCE_ON_ERROR: bool = True
     MAX_EXECUTION_TIME: int = 300  # seconds
+    # Subprocess timeout for ``robot --dryrun`` when validating suites (seconds)
+    DRY_RUN_TIMEOUT: int = 180
     
     # Filtering settings
     REMOVE_SCRIPTS_IN_STANDARD: bool = True

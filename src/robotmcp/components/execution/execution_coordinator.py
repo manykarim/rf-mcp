@@ -674,6 +674,7 @@ class ExecutionCoordinator:
         suite_file_path: str,
         validation_level: str = "standard",
         include_warnings: bool = True,
+        execution_options: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Run test suite from file in dry run mode for validation.
@@ -682,23 +683,24 @@ class ExecutionCoordinator:
             suite_file_path: Path to .robot file
             validation_level: Validation depth ('minimal', 'standard', 'strict')
             include_warnings: Include warnings in validation report
+            execution_options: Optional Robot CLI-oriented options (variables, tags,
+                test selection, pythonpath, dry_run_timeout / timeout, loglevel, etc.)
 
         Returns:
             Structured validation results
         """
         try:
-            # Read suite content from file
-            with open(suite_file_path, "r", encoding="utf-8") as f:
-                suite_content = f.read()
+            abs_path = os.path.abspath(suite_file_path)
 
-            # Execute dry run using suite execution service
-            options = {
-                "validation_level": validation_level,
-                "include_warnings": include_warnings,
-            }
+            merged_opts: Dict[str, Any] = dict(execution_options or {})
+            merged_opts["validation_level"] = validation_level
+            merged_opts["include_warnings"] = include_warnings
 
             result = await self.suite_execution_service.execute_dry_run(
-                suite_content, f"file_{os.path.basename(suite_file_path)}", options
+                "",
+                f"file_{os.path.basename(suite_file_path)}",
+                merged_opts,
+                existing_suite_path=abs_path,
             )
 
             # Update result with file information
@@ -837,11 +839,8 @@ class ExecutionCoordinator:
             if execution_options is None:
                 execution_options = {}
 
-            # Read suite content from file
-            with open(suite_file_path, "r", encoding="utf-8") as f:
-                suite_content = f.read()
+            abs_path = os.path.abspath(suite_file_path)
 
-            # Prepare execution options
             options = execution_options.copy()
             options.update(
                 {
@@ -850,23 +849,15 @@ class ExecutionCoordinator:
                 }
             )
 
-            # ADR-019: Detect companion data files next to the suite file
-            import glob as glob_mod
-
-            suite_dir = os.path.dirname(os.path.abspath(suite_file_path))
-            data_extensions = ["*.csv", "*.xlsx", "*.xls", "*.json"]
-            companion_files: List[str] = []
-            for ext_pattern in data_extensions:
-                companion_files.extend(
-                    glob_mod.glob(os.path.join(suite_dir, ext_pattern))
-                )
-
-            # Execute suite using suite execution service
+            # companion_files is only needed when executing from a temp copy;
+            # existing_suite_path runs from the original location so adjacent
+            # data files are already reachable via normal relative paths.
             result = await self.suite_execution_service.execute_normal(
-                suite_content,
+                "",
                 f"file_{os.path.basename(suite_file_path)}",
                 options,
-                companion_files=companion_files if companion_files else None,
+                companion_files=None,
+                existing_suite_path=abs_path,
             )
 
             # Update result with file information
