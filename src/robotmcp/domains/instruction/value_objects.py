@@ -437,6 +437,34 @@ class InstructionTemplate:
    - Use xpath= only when CSS/text cannot express the predicate.
    - When multiple elements match, disambiguate with intent_action(..., nth=N).
 
+8. WHEN PRE-VALIDATION REJECTS YOUR LOCATOR
+
+   The ~500ms gate sometimes rejects actionable elements (slow load, brief
+   animation, locator strategy unknown to the gate). Don't abandon the step
+   on first rejection. Recovery, in order:
+
+   1. Try the CSS-prefix equivalent. Same element, different syntax:
+        id=submit             → css=#submit
+        name=username         → css=[name='username']
+        Browser only:
+          button[name='Save'] → button:text('Save')   (Playwright text engine)
+          text=Login          → :text('Login')        (text inside CSS)
+        SeleniumLibrary fallback:
+                              → xpath=//button[text()='Save']
+
+   2. Re-inspect via get_session_state(sections=["page_source"],
+      include_reduced_dom=True). The ARIA snapshot may expose a more stable
+      attribute (data-testid, aria-label, role) than the one you first tried.
+
+   3. Last resort, ONLY after 1+2 failed:
+        intent_action(intent="click", target="...", force=True)
+          — Browser only; bypasses actionability for clicks blocked by
+            overlays/sticky elements. ACCEPTABLE escape.
+        execute_step(keyword="...", arguments=[...], timeout_ms=0)
+          — skips the gate AND the keyword timeout for this call.
+      force=True is NOT for making hidden elements visible via DOM
+      mutation — that's an anti-pattern.
+
 Available discovery tools: {available_tools}""",
             description="Encourages discovery-first approach to prevent guessing",
             placeholders=("available_tools",),
