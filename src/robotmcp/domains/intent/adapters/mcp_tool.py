@@ -71,13 +71,23 @@ class IntentActionAdapter:
             assign_to=assign_to,
         )
 
+        # Expose the mapping's `force_keyword` field so the calling layer
+        # (`intent_action` in `server.py`) can substitute the dispatched
+        # keyword when `force=True` is requested. None for mappings whose
+        # default keyword accepts `force=` natively (e.g. Browser.Fill Text).
+        mapping = self._resolver.registry.resolve(intent_verb, resolved.library)
+        force_keyword: Optional[str] = (
+            mapping.force_keyword if mapping is not None else None
+        )
+
         return {
             "keyword": resolved.keyword,
-            "arguments": resolved.arguments,
+            "arguments": list(resolved.arguments),
             "library": resolved.library,
             "intent": resolved.intent_verb.value,
             "assign_to": assign_to,
             "locator_normalized": bool(
                 resolved.normalized_locator and resolved.normalized_locator.was_transformed
             ),
+            "force_keyword": force_keyword,
         }

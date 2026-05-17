@@ -263,6 +263,11 @@ def _builtin_browser_mappings() -> List[IntentMapping]:
             requires_target=True,
             requires_value=False,
             timeout_category="action",
+            # Browser.Click(selector, button) takes no `force=` arg.
+            # Click With Options(selector, *clickOptions) does. When
+            # intent_action is called with force=True we swap to the
+            # latter so the documented escape hatch actually works.
+            force_keyword="Click With Options",
         ),
         IntentMapping(
             intent_verb=IntentVerb.FILL,

@@ -6264,6 +6264,7 @@ async def intent_action(
     options: Dict[str, str] | None = None,
     assign_to: str | None = None,
     detail_level: DetailLevel = "standard",
+    force: bool = False,
 ) -> Dict[str, Any]:
     """Execute a high-level intent that auto-resolves to the correct library keyword.
 
@@ -6278,6 +6279,13 @@ async def intent_action(
         options: Additional options (e.g. {"timeout": "10s"})
         assign_to: Variable name to capture result
         detail_level: Response detail level
+        force: ESCAPE HATCH for Browser Library. When True for a click intent,
+            the dispatched keyword is swapped from ``Click`` to ``Click With
+            Options`` (which accepts ``force=True`` to skip Playwright
+            actionability checks). For other libraries / intents whose
+            default keyword has no force_keyword declared, this flag is
+            silently ignored. Prefer natural locators first; this is the
+            documented fallback for elements that are intentionally hidden.
     """
     global _intent_action_adapter
 
@@ -6312,12 +6320,26 @@ async def intent_action(
             assign_to=assign_to,
         )
 
+        dispatched_keyword = resolution["keyword"]
+        dispatched_arguments: list = list(resolution["arguments"])
+
+        # force=True handling: substitute the dispatched keyword when the
+        # mapping declares a force_keyword (e.g. Browser CLICK ->
+        # Click With Options), then append "force=True" as a named arg
+        # so the underlying library skips its actionability check.
+        if force:
+            fk = resolution.get("force_keyword")
+            if fk:
+                dispatched_keyword = fk
+            if "force=True" not in dispatched_arguments:
+                dispatched_arguments.append("force=True")
+
         # Delegate to execute_step for actual execution.
         # execute_step is a FunctionTool (via @mcp.tool decorator),
         # so we call .fn to get the original async function.
         result = await get_tool_fn(execute_step)(
-            keyword=resolution["keyword"],
-            arguments=resolution["arguments"],
+            keyword=dispatched_keyword,
+            arguments=dispatched_arguments,
             session_id=effective_session_id,
             assign_to=resolution.get("assign_to"),
             detail_level=detail_level,
@@ -6327,9 +6349,10 @@ async def intent_action(
         if isinstance(result, dict):
             result["intent_resolved"] = {
                 "intent": resolution["intent"],
-                "keyword": resolution["keyword"],
+                "keyword": dispatched_keyword,
                 "library": resolution["library"],
                 "locator_normalized": resolution.get("locator_normalized", False),
+                "force_applied": bool(force and resolution.get("force_keyword")),
             }
 
         # Track for instruction learning
