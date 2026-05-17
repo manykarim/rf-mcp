@@ -14,6 +14,40 @@ from ..value_objects import IntentTarget, IntentVerb
 logger = logging.getLogger(__name__)
 
 
+def _apply_nth_to_locator(locator: str, nth: int, library: str) -> str:
+    """Append an nth-match suffix to a locator string.
+
+    Browser library uses Playwright's native ``>> nth=<n>`` filter.
+    SeleniumLibrary supports ``:nth-of-type(<n+1>)`` for CSS locators
+    only — non-CSS locators (xpath/id/text) are returned unchanged with
+    a debug-level warning so the caller can choose a more specific locator.
+
+    Args:
+        locator: The base locator string.
+        nth: Zero-based index of the desired match.
+        library: The active library name ("Browser" / "SeleniumLibrary").
+
+    Returns:
+        The locator with the nth suffix appended where supported, or the
+        input unchanged for unsupported (library, locator-strategy) pairs.
+    """
+    if library == "Browser":
+        return f"{locator} >> nth={nth}"
+    if library == "SeleniumLibrary":
+        css_prefixes = ("css=", "css:")
+        if any(locator.startswith(p) for p in css_prefixes):
+            prefix_len = 4
+            return f"{locator[:prefix_len]}{locator[prefix_len:]}:nth-of-type({nth + 1})"
+        logger.debug(
+            "nth=%d ignored for SeleniumLibrary locator %r: nth-of-type is "
+            "only supported on CSS locators (use css=...)",
+            nth, locator,
+        )
+        return locator
+    # AppiumLibrary and any other library: best-effort Playwright-style.
+    return f"{locator} >> nth={nth}"
+
+
 class IntentActionAdapter:
     """Adapts intent_action MCP tool calls to IntentResolver.
 
@@ -36,6 +70,8 @@ class IntentActionAdapter:
         session_id: str = "default",
         options: Optional[Dict[str, str]] = None,
         assign_to: Optional[str] = None,
+        match: str = "label",
+        nth: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Resolve an intent string to keyword + arguments.
 
@@ -60,24 +96,61 @@ class IntentActionAdapter:
 
         intent_target = None
         if target is not None:
-            intent_target = IntentTarget(locator=target)
+            intent_target = IntentTarget(locator=target, nth=nth)
+
+        # Inject the match strategy into options so the select transformers
+        # can read it. Only meaningful for SELECT intent; ignored for others.
+        merged_options: Dict[str, str] = dict(options or {})
+        if intent_verb == IntentVerb.SELECT and match:
+            merged_options["match"] = match
 
         resolved = self._resolver.resolve(
             intent_verb=intent_verb,
             target=intent_target,
             value=value,
             session_id=session_id,
-            options=options,
+            options=merged_options,
             assign_to=assign_to,
         )
 
+        dispatched_keyword = resolved.keyword
+        dispatched_arguments: list = list(resolved.arguments)
+
+        # SeleniumLibrary SELECT: route to the correct
+        # `Select From List By {Label,Value,Index}` keyword based on the
+        # resolved match strategy. Browser library always uses
+        # `Select Options By <attr> <value>` with the attribute embedded in
+        # the args — no keyword swap needed there.
+        if intent_verb == IntentVerb.SELECT and resolved.library == "SeleniumLibrary":
+            from ..aggregates import _get_selenium_select_keyword
+            dispatched_keyword = _get_selenium_select_keyword(match, value)
+
+        # Apply nth-match suffix to the first argument (the locator) when
+        # requested. Library-specific syntax handled by _apply_nth_to_locator.
+        if nth is not None and dispatched_arguments:
+            first = dispatched_arguments[0]
+            if isinstance(first, str):
+                dispatched_arguments[0] = _apply_nth_to_locator(
+                    first, nth, resolved.library
+                )
+
+        # Expose the mapping's `force_keyword` field so the calling layer
+        # (`intent_action` in `server.py`) can substitute the dispatched
+        # keyword when `force=True` is requested. None for mappings whose
+        # default keyword accepts `force=` natively (e.g. Browser.Fill Text).
+        mapping = self._resolver.registry.resolve(intent_verb, resolved.library)
+        force_keyword: Optional[str] = (
+            mapping.force_keyword if mapping is not None else None
+        )
+
         return {
-            "keyword": resolved.keyword,
-            "arguments": resolved.arguments,
+            "keyword": dispatched_keyword,
+            "arguments": dispatched_arguments,
             "library": resolved.library,
             "intent": resolved.intent_verb.value,
             "assign_to": assign_to,
             "locator_normalized": bool(
                 resolved.normalized_locator and resolved.normalized_locator.was_transformed
             ),
+            "force_keyword": force_keyword,
         }

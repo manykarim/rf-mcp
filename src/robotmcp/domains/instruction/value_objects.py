@@ -409,6 +409,34 @@ class InstructionTemplate:
    - Use 'build_test_suite' to generate .robot file from executed steps
    - Use 'run_test_suite' to execute a .robot file from disk
 
+7. COMMON LOCATOR PATTERNS (cookbook — call get_locator_guidance for full reference)
+
+   Browser library (Playwright-backed):
+     id=submit                       — by id attribute (equivalent to css=[id="submit"])
+     css=button.primary              — CSS selector
+     text=Sign in                    — substring match, case-insensitive (use text="Sign in" for exact)
+     xpath=//input[@type='submit']   — XPath fallback
+     id=item >> nth=2                — Playwright cascaded nth filter (zero-based; also via intent_action nth=2)
+     // and ..                       — auto-routed to xpath (no prefix needed)
+     "Quoted string"                 — auto-routed to exact text= (no prefix needed)
+   For ARIA role + accessible name, use Browser's dedicated keywords
+   (Get Element By Role, Click With Options) — there is no string `role=` engine.
+
+   SeleniumLibrary (= or : both work; : is the doc-preferred form):
+     id=submit                       — by id attribute
+     name=username                   — by name attribute
+     css=button.primary              — CSS selector
+     xpath=//input[@type='submit']   — XPath
+     link=Click here                 — full link text
+     partial link=Click              — partial link text (space inside the prefix)
+     css=tr:nth-of-type(3)           — 1-based CSS nth (also via intent_action nth=2)
+
+   PICKING A LOCATOR
+   - Prefer id= when available (stable, fast).
+   - Fall back to css= or text= for elements without stable ids.
+   - Use xpath= only when CSS/text cannot express the predicate.
+   - When multiple elements match, disambiguate with intent_action(..., nth=N).
+
 Available discovery tools: {available_tools}""",
             description="Encourages discovery-first approach to prevent guessing",
             placeholders=("available_tools",),

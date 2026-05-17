@@ -50,6 +50,7 @@ from robotmcp.domains.shared.kernel import (
     OptionalCoercedStringList,
     PluginAction,
     RecommendMode,
+    SelectMatch,
     SessionAction,
     SuiteRunMode,
     TestStatus,
@@ -3447,6 +3448,7 @@ async def execute_step(
     timeout_ms: int | None = None,
     bdd_group: str = "",
     bdd_intent: str = "",
+    record: bool | None = None,
 ) -> Dict[str, Any]:
     """Execute a single Robot Framework keyword (or Evaluate) within a session.
 
@@ -3484,6 +3486,15 @@ async def execute_step(
         bdd_intent: BDD intent prefix for the group: "given", "when", "then", "and", "but".
                     Used with bdd_group to assign Given/When/Then prefixes in the
                     generated BDD test suite.
+        record: Override the record gate that decides whether a successful step
+                is appended to session.steps for build_test_suite output.
+                - None (default): auto-classify. Read-only inspection keywords
+                  (Get Title, Log, etc.) are NOT recorded; everything else IS.
+                  Carve-outs that always record: ``assign_to`` is set, or a
+                  named test is currently open (after start_test).
+                - True: force-record this step regardless of classification.
+                - False: drop this step regardless of classification.
+                The decision is surfaced as ``recorded: bool`` in the response.
 
     Returns:
         Dict[str, Any]: Execution result:
@@ -3678,6 +3689,7 @@ async def execute_step(
         assign_to=assign_to,
         use_context=bool(use_context),
         timeout_ms=timeout_ms,
+        record=record,
     )
 
     # ADR-014.2: Augment failed step results with memory hints
@@ -6255,6 +6267,62 @@ async def manage_attach(action: AttachAction = "status") -> Dict[str, Any]:
 # ── ADR-007: intent_action MCP tool ───────────────────────────────
 
 
+def _should_commit_after_fill(
+    *,
+    commit: bool,
+    intent: str,
+    result: Dict[str, Any],
+    library: str | None,
+    dispatched_arguments: list,
+) -> bool:
+    """Decide whether the commit=True follow-up Dispatch Event should fire.
+
+    Only fires for a successful Browser FILL with a locator argument.
+    A failed FILL, a non-FILL intent, a non-Browser library, or an
+    empty arg list all skip the follow-up.
+
+    ``intent`` is the literal string the MCP tool receives (e.g. ``"fill"``)
+    since the IntentVerb type alias in ``domains.shared.kernel`` is a
+    Literal, not an Enum.
+    """
+    return bool(
+        commit
+        and result.get("success")
+        and (intent == "fill" or str(intent) == "fill")
+        and library == "Browser"
+        and dispatched_arguments
+    )
+
+
+async def _dispatch_change_after_fill(
+    *, target_locator: str, session_id: str,
+) -> bool:
+    """Fire a real DOM ``change`` event on the just-filled target.
+
+    Many SPAs (Vue, React, Angular, jQuery validate, idealForms) gate
+    form-state validation on the ``change`` event, which Playwright's
+    ``fill`` does not always emit. Best-effort — failures are logged
+    and swallowed so a flaky dispatch never escalates a successful
+    fill into a failed step.
+    """
+    try:
+        await get_tool_fn(execute_step)(
+            keyword="Dispatch Event",
+            arguments=[target_locator, "change"],
+            session_id=session_id,
+            detail_level="minimal",
+            raise_on_failure=False,
+            record=False,
+        )
+        return True
+    except Exception as commit_exc:
+        logger.debug(
+            "intent_action commit=True follow-up dispatch failed: %s",
+            commit_exc,
+        )
+        return False
+
+
 @mcp.tool
 async def intent_action(
     intent: IntentVerb,
@@ -6264,6 +6332,10 @@ async def intent_action(
     options: Dict[str, str] | None = None,
     assign_to: str | None = None,
     detail_level: DetailLevel = "standard",
+    force: bool = False,
+    match: SelectMatch = "label",
+    nth: int | None = None,
+    commit: bool = False,
 ) -> Dict[str, Any]:
     """Execute a high-level intent that auto-resolves to the correct library keyword.
 
@@ -6278,6 +6350,40 @@ async def intent_action(
         options: Additional options (e.g. {"timeout": "10s"})
         assign_to: Variable name to capture result
         detail_level: Response detail level
+        force: ESCAPE HATCH for Browser Library. When True for a click intent,
+            the dispatched keyword is swapped from ``Click`` to ``Click With
+            Options`` (which accepts ``force=True`` to skip Playwright
+            actionability checks). For other libraries / intents whose
+            default keyword has no force_keyword declared, this flag is
+            silently ignored. Prefer natural locators first; this is the
+            documented fallback for elements that are intentionally hidden.
+        match: Select-match strategy for the ``select`` intent.
+            ``"label"`` (default) - match by visible option text. Mirrors RF
+                semantics for ``Select Options By label``.
+            ``"value"`` - match by ``<option value="X">`` attribute.
+            ``"index"`` - match by zero-based integer index.
+            ``"text"`` - synonym for ``"label"`` (most libraries).
+            ``"auto"`` - OPT-IN heuristic. Numeric value -> ``"value"``,
+                otherwise ``"label"``. Use with care: numeric visible
+                labels (years, amounts) mis-route.
+            For SeleniumLibrary, this also picks the dispatched keyword
+            (``Select From List By Label`` / ``Value`` / ``Index``).
+            Ignored for non-select intents.
+        nth: Zero-based nth-match index. Disambiguates when multiple
+            elements match the same locator (e.g., an id duplicated across
+            mobile vs desktop nav). Browser library appends
+            ``>> nth=<n>``; SeleniumLibrary appends ``:nth-of-type(<n+1>)``
+            for CSS locators only (other locator types are unaffected and
+            log a debug-level warning).
+        commit: When True AND the intent is ``fill`` AND the library is
+            ``Browser`` AND the fill succeeds, dispatch a real DOM
+            ``change`` event on the target (via Browser's
+            ``Dispatch Event`` keyword). Many SPAs (Vue, React, Angular,
+            jQuery validate, idealForms) only commit form state in
+            response to a ``change`` event, which Playwright's ``fill``
+            does not always emit. The follow-up failure is logged and
+            ignored — never breaks the original fill result. Off by
+            default to preserve backwards-compatible behaviour.
     """
     global _intent_action_adapter
 
@@ -6310,26 +6416,55 @@ async def intent_action(
             session_id=effective_session_id,
             options=options,
             assign_to=assign_to,
+            match=match,
+            nth=nth,
         )
+
+        dispatched_keyword = resolution["keyword"]
+        dispatched_arguments: list = list(resolution["arguments"])
+
+        # force=True handling: substitute the dispatched keyword when the
+        # mapping declares a force_keyword (e.g. Browser CLICK ->
+        # Click With Options), then append "force=True" as a named arg
+        # so the underlying library skips its actionability check.
+        if force:
+            fk = resolution.get("force_keyword")
+            if fk:
+                dispatched_keyword = fk
+            if "force=True" not in dispatched_arguments:
+                dispatched_arguments.append("force=True")
 
         # Delegate to execute_step for actual execution.
         # execute_step is a FunctionTool (via @mcp.tool decorator),
         # so we call .fn to get the original async function.
         result = await get_tool_fn(execute_step)(
-            keyword=resolution["keyword"],
-            arguments=resolution["arguments"],
+            keyword=dispatched_keyword,
+            arguments=dispatched_arguments,
             session_id=effective_session_id,
             assign_to=resolution.get("assign_to"),
             detail_level=detail_level,
         )
 
         # Enrich result with intent metadata
+        commit_applied = False
         if isinstance(result, dict):
+            if _should_commit_after_fill(
+                commit=commit, intent=intent, result=result,
+                library=resolution.get("library"),
+                dispatched_arguments=dispatched_arguments,
+            ):
+                commit_applied = await _dispatch_change_after_fill(
+                    target_locator=dispatched_arguments[0],
+                    session_id=effective_session_id,
+                )
+
             result["intent_resolved"] = {
                 "intent": resolution["intent"],
-                "keyword": resolution["keyword"],
+                "keyword": dispatched_keyword,
                 "library": resolution["library"],
                 "locator_normalized": resolution.get("locator_normalized", False),
+                "force_applied": bool(force and resolution.get("force_keyword")),
+                "commit_applied": commit_applied,
             }
 
         # Track for instruction learning

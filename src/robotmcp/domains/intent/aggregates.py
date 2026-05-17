@@ -175,22 +175,64 @@ def _navigate_appium_transformer(target, value, normalized_locator, options):
     return [url]
 
 
+def _resolve_select_match(match_option: str, value: str | None) -> str:
+    """Resolve the effective select-match strategy.
+
+    Explicit strategies (label/value/index/text) pass through unchanged.
+    The opt-in ``auto`` heuristic resolves to ``value`` for purely-numeric
+    values and ``label`` otherwise — but is OPT-IN only because numeric
+    visible labels (years, amounts, ids) would mis-route. Default is
+    ``label`` to match Robot Framework's "select by visible text" semantics.
+    """
+    if match_option in ("label", "value", "index", "text"):
+        return match_option
+    # AUTO heuristic (opt-in). Strip leading minus so negative integers
+    # like "-1" still classify as numeric.
+    if value and value.strip().lstrip("-").isdigit():
+        return "value"
+    return "label"
+
+
+_SELENIUM_SELECT_KEYWORDS: Dict[str, str] = {
+    "label": "Select From List By Label",
+    "text": "Select From List By Label",
+    "value": "Select From List By Value",
+    "index": "Select From List By Index",
+}
+
+
+def _get_selenium_select_keyword(match_opt: str, value: str | None) -> str:
+    """Return the appropriate SeleniumLibrary select keyword for the
+    resolved match strategy."""
+    strategy = _resolve_select_match(match_opt, value)
+    return _SELENIUM_SELECT_KEYWORDS.get(strategy, "Select From List By Label")
+
+
 def _select_browser_transformer(target, value, normalized_locator, options):
-    """Browser Library select: Select Options By <selector> label <value>."""
+    """Browser Library select: ``Select Options By <selector> <attr> <value>``.
+
+    The attribute is driven by ``options["match"]`` (passed via the
+    ``intent_action(match=...)`` parameter). Defaults to ``label``.
+    """
     args = []
     if normalized_locator:
         args.append(normalized_locator.value)
     elif target:
         args.append(target.locator)
-    # Browser Library: Select Options By <selector> <attribute> <value>
-    args.append("label")
+    match_opt = (options or {}).get("match", "label")
+    args.append(_resolve_select_match(match_opt, value))
     if value:
         args.append(value)
     return args
 
 
 def _select_selenium_transformer(target, value, normalized_locator, options):
-    """SeleniumLibrary: Select From List By Label <locator> <label>."""
+    """SeleniumLibrary: builds args for the chosen Select From List By X.
+
+    The adapter selects the actual keyword name via
+    ``_get_selenium_select_keyword`` based on ``options["match"]``; this
+    transformer just produces the args (locator + value).
+    """
     args = []
     if normalized_locator:
         args.append(normalized_locator.value)
@@ -263,6 +305,11 @@ def _builtin_browser_mappings() -> List[IntentMapping]:
             requires_target=True,
             requires_value=False,
             timeout_category="action",
+            # Browser.Click(selector, button) takes no `force=` arg.
+            # Click With Options(selector, *clickOptions) does. When
+            # intent_action is called with force=True we swap to the
+            # latter so the documented escape hatch actually works.
+            force_keyword="Click With Options",
         ),
         IntentMapping(
             intent_verb=IntentVerb.FILL,

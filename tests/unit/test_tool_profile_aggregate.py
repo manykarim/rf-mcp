@@ -255,9 +255,11 @@ class TestToolProfileBudget:
 class TestProfilePresets:
     """Test built-in profile configurations."""
 
-    def test_browser_exec_has_6_tools(self):
+    def test_browser_exec_has_7_tools(self):
+        # v0.32: build_test_suite added so end-of-workflow suite generation
+        # works without manual profile escalation.
         p = ProfilePresets.browser_exec()
-        assert p.tool_count == 6
+        assert p.tool_count == 7
 
     def test_browser_exec_tools(self):
         p = ProfilePresets.browser_exec()
@@ -265,6 +267,7 @@ class TestProfilePresets:
             "manage_session", "execute_step",
             "get_session_state", "get_locator_guidance",
             "find_keywords", "intent_action",
+            "build_test_suite",
         })
         assert p.tool_names == expected
 
@@ -274,16 +277,16 @@ class TestProfilePresets:
         assert p.model_tier == ModelTier.SMALL_CONTEXT
         assert p.token_budget is not None
 
-    def test_api_exec_has_5_tools(self):
+    def test_api_exec_has_6_tools(self):
         p = ProfilePresets.api_exec()
-        assert p.tool_count == 5
+        assert p.tool_count == 6
 
     def test_api_exec_tools(self):
         p = ProfilePresets.api_exec()
         expected = frozenset({
             "manage_session", "execute_step",
             "get_session_state", "find_keywords",
-            "intent_action",
+            "intent_action", "build_test_suite",
         })
         assert p.tool_names == expected
 
@@ -309,14 +312,15 @@ class TestProfilePresets:
         assert p.description_mode == ToolDescriptionMode.COMPACT
         assert p.model_tier == ModelTier.SMALL_CONTEXT
 
-    def test_minimal_exec_has_3_tools(self):
+    def test_minimal_exec_has_4_tools(self):
         p = ProfilePresets.minimal_exec()
-        assert p.tool_count == 3
+        assert p.tool_count == 4
 
     def test_minimal_exec_tools(self):
         p = ProfilePresets.minimal_exec()
         expected = frozenset({
             "manage_session", "execute_step", "get_session_state",
+            "build_test_suite",
         })
         assert p.tool_names == expected
 

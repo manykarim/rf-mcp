@@ -10,6 +10,9 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
+from robotmcp.components.execution.locator_arg_introspection import (
+    LocatorArgIntrospector,
+)
 from robotmcp.components.execution.rf_native_context_manager import (
     get_rf_native_context_manager,
 )
@@ -39,6 +42,98 @@ try:
 except ImportError:
     BuiltIn = None
     ROBOT_AVAILABLE = False
+
+
+# F-N12: keywords that are TRULY inspection-only — they take no locator,
+# return ambient page/session state, and cannot serve as an implicit
+# existence assertion. When the caller passes record=None (the default),
+# these are auto-flagged record=False so build_test_suite produces a
+# clean narrative instead of every page-state probe an LLM does between
+# actions.
+#
+# IMPORTANT — what is NOT in this set, and why:
+#
+#   Locator-taking getters (Get Text, Get Value, Get Attribute,
+#   Get Element Count, Get Element States, Get Property, Get Style,
+#   Get Classes, Get Bounding Box, Get Element Attribute, Get Element
+#   Size, Get Element Tag Name, Get List Selected Labels, Get List
+#   Selected Values, ...) are deliberately RECORDED by default because
+#   in Robot Framework they double as implicit existence assertions:
+#   they raise on missing element, and the RF assertion-engine pattern
+#   lets a call like
+#       Get Text    id=cart-badge    ==    2 items
+#   serve as an explicit assertion. Silently dropping such calls would
+#   remove load-bearing assertions from the generated suite.
+#
+#   Log / Log To Console / Log Many are RECORDED because they emit
+#   intentional narrative into the test report — agents and humans
+#   both use them as deliberate test steps, not probes.
+#
+# CARVE-OUTS preserved even when keyword is in this set:
+#   - assign_to is set (the recorded suite needs `${var}= Get Text ...`).
+#   - A named test is currently open (after start_test). The user
+#     explicitly opened a multi-test scope; steps inside it must NOT be
+#     dropped silently — that produced empty test cases in CI (F3/F4).
+_INSPECTION_ONLY_KEYWORDS: frozenset[str] = frozenset({
+    # Browser — page/viewport ambient state (no locator, never throws)
+    "get title",
+    "get url",
+    "get viewport size",
+    "get scroll size",
+    # SeleniumLibrary — page ambient state (no locator)
+    "get location",
+    # AppiumLibrary — session/window ambient state (no locator)
+    "get capability",
+    "get contexts",
+    "get current context",
+    "get window height",
+    "get window width",
+    "get window size",
+})
+
+
+def _resolve_record_gate(
+    *,
+    keyword: str,
+    record: bool | None,
+    assign_to: Union[str, List[str]] | None,
+    session: Any,
+) -> bool:
+    """Decide whether a successful step should be appended to session.steps.
+
+    Explicit ``record`` wins over everything. When ``record`` is ``None``
+    (the default), the gate auto-classifies, with two CARVE-OUTS that
+    always preserve the step:
+
+    1. ``assign_to`` is set — the recorded suite needs ``${var}= Get Text``
+       for subsequent assertions to compile.
+    2. A named test is currently open (after ``start_test``) — the user
+       explicitly opened a multi-test scope; dropping inspection-only
+       steps inside it produces empty test cases (CI F3/F4 regression).
+
+    Outside the carve-outs, keywords in ``_INSPECTION_ONLY_KEYWORDS`` are
+    dropped; everything else is recorded (conservative default-on).
+
+    Note: locator-taking getters (Get Text, Get Value, Get Attribute,
+    Get Element Count, ...) are deliberately NOT in the inspection set
+    even though they "read" — in Robot Framework they double as implicit
+    existence assertions (raise on missing element, and the assertion-
+    engine pattern ``Get Text  id=foo  ==  bar`` makes them explicit
+    assertions). They are recorded by default to preserve load-bearing
+    test logic. See ``_INSPECTION_ONLY_KEYWORDS`` in this module for
+    the full rationale.
+    """
+    if record is not None:
+        return bool(record)
+    if assign_to is not None:
+        return True
+    try:
+        if session.test_registry.get_current_test() is not None:
+            return True
+    except Exception:
+        # Defensive: a malformed session must not crash the executor.
+        pass
+    return keyword.lower().strip() not in _INSPECTION_ONLY_KEYWORDS
 
 
 class KeywordExecutor:
@@ -202,11 +297,43 @@ class KeywordExecutor:
         # to stderr while FastMCP writes JSON-RPC responses → lost responses.
         # Also prevents concurrent Selenium WebDriver access (not thread-safe).
         self._execution_lock = asyncio.Lock()
+        # Library-aware locator-arg introspector. Used as a CONFIDENT VETO
+        # over the curated ELEMENT_INTERACTION_KEYWORDS positive list:
+        # when the introspector resolves the keyword to a SPECIFIC library
+        # and that library's signature explicitly has no locator-style arg,
+        # the entry is stale and pre-validation is skipped.  Ambiguous or
+        # unresolved lookups (no session context, multiple libraries match,
+        # keyword name not found) do NOT veto — we trust the positive list.
+        self._locator_introspector = LocatorArgIntrospector(self.keyword_discovery)
 
-    def _requires_pre_validation(self, keyword: str) -> bool:
-        """Check if a keyword requires element pre-validation."""
+    def _requires_pre_validation(
+        self,
+        keyword: str,
+        session: object | None = None,
+    ) -> bool:
+        """Check if a keyword requires element pre-validation.
+
+        Policy: the curated ``ELEMENT_INTERACTION_KEYWORDS`` set is the
+        source of truth. The library-aware introspector vetoes ONLY when
+        it returns a definitive False (keyword resolved to a specific
+        library whose signature has no locator-style arg). On ``None``
+        (ambiguous / not found / unresolved), the positive list wins.
+        """
         keyword_lower = keyword.lower().strip()
-        return keyword_lower in self.ELEMENT_INTERACTION_KEYWORDS
+        if keyword_lower not in self.ELEMENT_INTERACTION_KEYWORDS:
+            return False
+        # Definitive veto only: if the introspector confidently says the
+        # keyword's library has no locator arg, skip pre-validation. None /
+        # ambiguous results do NOT veto — preserves the curated list.
+        try:
+            takes_locator = self._locator_introspector.keyword_takes_locator(
+                keyword, session=session,
+            )
+        except Exception:
+            takes_locator = None
+        if takes_locator is False:
+            return False
+        return True
 
     def _get_action_type_from_keyword_for_states(self, keyword: str) -> str:
         """Extract the action type from a keyword name for state requirements."""
@@ -944,6 +1071,7 @@ class KeywordExecutor:
         assign_to: Union[str, List[str]] = None,
         use_context: bool = False,
         timeout_ms: Optional[int] = None,
+        record: bool | None = None,
     ) -> Dict[str, Any]:
         """
         Execute a single Robot Framework keyword step with optional library prefix.
@@ -979,6 +1107,7 @@ class KeywordExecutor:
             return await self._execute_keyword_serialized(
                 session, keyword, arguments, browser_library_manager,
                 detail_level, library_prefix, assign_to, use_context, timeout_ms,
+                record=record,
             )
 
     async def _execute_keyword_serialized(
@@ -992,6 +1121,7 @@ class KeywordExecutor:
         assign_to: Union[str, List[str]] = None,
         use_context: bool = False,
         timeout_ms: Optional[int] = None,
+        record: bool | None = None,
     ) -> Dict[str, Any]:
         """Inner keyword execution, called under _execution_lock."""
         try:
@@ -1097,7 +1227,7 @@ class KeywordExecutor:
 
             # PRE-VALIDATION: Fast check for element actionability before execution
             # This detects "element not visible/enabled" in ~500ms instead of waiting 10s
-            if self.pre_validation_enabled and self._requires_pre_validation(keyword):
+            if self.pre_validation_enabled and self._requires_pre_validation(keyword, session):
                 locator = self._extract_locator_from_args(keyword, arguments)
                 if locator:
                     # Derive pre-validation timeout from user's timeout_ms:
@@ -1228,9 +1358,22 @@ class KeywordExecutor:
                 if step_result_value is None and "output" in result:
                     step_result_value = result.get("output")
                 step.mark_success(step_result_value)
-                # Only append successful steps to the session for suite generation
-                session.add_step(step)
-                logger.debug(f"Added successful step to session: {keyword}")
+                # F-N12: gate step recording so build_test_suite emits a clean
+                # narrative instead of every page-state probe.
+                record_resolved = _resolve_record_gate(
+                    keyword=keyword,
+                    record=record,
+                    assign_to=assign_to,
+                    session=session,
+                )
+                if record_resolved:
+                    session.add_step(step)
+                    logger.debug(f"Added successful step to session: {keyword}")
+                else:
+                    logger.debug(
+                        f"Step not recorded (inspection-only or record=False): {keyword}"
+                    )
+                result["recorded"] = record_resolved
             else:
                 step.mark_failure(result.get("error"))
                 logger.debug(
@@ -1354,6 +1497,11 @@ class KeywordExecutor:
                     payload=event_payload,
                 )
             )
+            # F-N12: surface the record gate decision so callers (and tests)
+            # can observe whether the step was added to session.steps for
+            # build_test_suite output.
+            if "recorded" in result:
+                response["recorded"] = result["recorded"]
             return response
 
         except Exception as e:
