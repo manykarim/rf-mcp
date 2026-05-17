@@ -409,6 +409,32 @@ class InstructionTemplate:
    - Use 'build_test_suite' to generate .robot file from executed steps
    - Use 'run_test_suite' to execute a .robot file from disk
 
+7. COMMON LOCATOR PATTERNS (cookbook — call get_locator_guidance for full reference)
+
+   Browser library (Playwright-backed):
+     id=submit                       — by id attribute (preferred when stable)
+     css=button.primary              — CSS selector
+     text=Sign in                    — visible text match (case-insensitive)
+     role=button[name="Sign in"]     — ARIA role + accessible name (most resilient)
+     xpath=//input[@type='submit']   — XPath fallback
+     id=item >> nth=2                — Playwright nth filter (also via intent_action nth=2)
+
+   SeleniumLibrary:
+     id=submit                       — by id attribute
+     name=username                   — by name attribute
+     css=button.primary              — CSS selector
+     xpath=//input[@type='submit']   — XPath
+     link=Click here                 — full link text
+     partial link=Click              — partial link text
+     css=tr:nth-of-type(3)           — 1-based CSS nth (also via intent_action nth=2)
+
+   PICKING A LOCATOR
+   - Prefer id= when available (stable, fast).
+   - For Browser library, prefer role=... when the element has an accessible name.
+   - Fall back to css= or text= for elements without stable ids.
+   - Use xpath= only when CSS/text cannot express the predicate.
+   - When multiple elements match, disambiguate with intent_action(..., nth=N).
+
 Available discovery tools: {available_tools}""",
             description="Encourages discovery-first approach to prevent guessing",
             placeholders=("available_tools",),
