@@ -471,6 +471,11 @@ class InstructionTemplate:
       force=True is NOT for making hidden elements visible via DOM
       mutation — that's an anti-pattern.
 
+   See also: intent_action(commit=True) for FILL on Vue / React / Angular
+   reactive forms / jQuery validate / idealForms — dispatches a real DOM
+   change event after fill so framework validators commit. Symptom:
+   form submit rejected despite fields appearing filled.
+
 Available discovery tools: {available_tools}""",
             description="Encourages discovery-first approach to prevent guessing",
             placeholders=("available_tools",),

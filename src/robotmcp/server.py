@@ -6371,13 +6371,27 @@ async def intent_action(
         assign_to: Variable name to capture result (esp. useful for extract:
                    the extracted text/count/attribute is assigned to this var).
         detail_level: Response detail level
-        force: ESCAPE HATCH for Browser Library. When True for a click intent,
-            the dispatched keyword is swapped from ``Click`` to ``Click With
-            Options`` (which accepts ``force=True`` to skip Playwright
-            actionability checks). For other libraries / intents whose
-            default keyword has no force_keyword declared, this flag is
-            silently ignored. Prefer natural locators first; this is the
-            documented fallback for elements that are intentionally hidden.
+        force: Use when: the element is visible but Playwright reports it
+            "blocked by another element" — overlay, sticky header,
+            cookie-consent banner, modal backdrop, animation still
+            running. Symptom: ``Click intercepted`` or
+            ``element is not stable`` / ``outside of the viewport``
+            errors despite the element appearing correct in the ARIA
+            snapshot. Example: a "Submit" button covered by a sticky
+            consent banner the user can't dismiss programmatically.
+
+            What it does: for a Browser-library click intent, swaps
+            ``Click`` for ``Click With Options force=True``, which
+            skips Playwright's actionability checks. For other
+            libraries / intents whose mapping declares no
+            ``force_keyword``, the flag is silently ignored.
+
+            Caveat: do NOT use ``force=True`` to drive elements that
+            are genuinely hidden (display:none, visibility:hidden) —
+            that's an anti-pattern; the resulting click won't behave
+            like a real user click. Prefer natural locators first;
+            fall through to ``force=True`` only when an overlay is
+            the genuine cause.
         match: Select-match strategy for the ``select`` intent.
             ``"label"`` (default) - match by visible option text. Mirrors RF
                 semantics for ``Select Options By label``.
@@ -6396,15 +6410,22 @@ async def intent_action(
             ``>> nth=<n>``; SeleniumLibrary appends ``:nth-of-type(<n+1>)``
             for CSS locators only (other locator types are unaffected and
             log a debug-level warning).
-        commit: When True AND the intent is ``fill`` AND the library is
-            ``Browser`` AND the fill succeeds, dispatch a real DOM
-            ``change`` event on the target (via Browser's
-            ``Dispatch Event`` keyword). Many SPAs (Vue, React, Angular,
-            jQuery validate, idealForms) only commit form state in
-            response to a ``change`` event, which Playwright's ``fill``
-            does not always emit. The follow-up failure is logged and
-            ignored — never breaks the original fill result. Off by
-            default to preserve backwards-compatible behaviour.
+        commit: Use when: the page uses Vue, React, Angular reactive
+            forms, jQuery validate, idealForms, formvalidation.io, or
+            any framework that gates validation on the DOM ``change``
+            event. Symptom: a form submit is rejected with a "required"
+            or validation error despite every visible field appearing
+            correctly filled; the framework's internal model still
+            thinks the inputs are empty because Playwright's ``fill``
+            didn't fire a real ``change``.
+
+            What it does: after a successful Browser-library FILL,
+            dispatches a real DOM ``change`` event on the target via
+            Browser's ``Dispatch Event`` keyword. Off by default — the
+            follow-up is best-effort and any failure is logged and
+            ignored (it never escalates a successful fill into a
+            failed step). No effect for non-FILL intents, non-Browser
+            libraries, or failed fills.
         mode: For ``intent="extract"`` only. Selects what to read from
             the page; ignored for other intents.
               "text"      — element text content      (default)

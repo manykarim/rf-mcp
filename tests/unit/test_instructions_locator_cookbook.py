@@ -240,19 +240,21 @@ class TestPreValidationRecoveryRecipe:
         )
 
     def test_recipe_under_token_budget(self, rendered_default):
-        # OBS-05 / OBS-02 acceptance: section must stay terse — the
-        # instructions are loaded into every MCP session, so token cost
-        # is per-session. Budget bumped from 1500 to 1800 chars (~450
-        # tokens, ~5% of a typical 8K-token context) when OBS-02 added
-        # the pre_validate_timeout_ms step. The trade-off: ~75 extra
-        # chars in instructions vs. saving 3-12 wasted tool calls per
-        # transient pre-validation failure that the section's recipe
-        # now teaches the LLM to recover from.
+        # OBS-05 / OBS-02 / OBS-07 acceptance: section must stay terse —
+        # the instructions are loaded into every MCP session, so token
+        # cost is per-session. Budget history:
+        #   OBS-05  : 1500 chars (initial 3-step recipe)
+        #   OBS-02  : 1800 chars (+pre_validate_timeout_ms step)
+        #   OBS-07  : 2000 chars (+commit=True cross-reference)
+        # 2000 chars ≈ 500 tokens ≈ 6% of an 8K-token context. Each bump
+        # has bought concrete agent behaviour (Haiku-tier abandonment
+        # avoidance, SPA-form-fix discovery); further growth should be
+        # justified by similar evidence.
         start = rendered_default.index("WHEN PRE-VALIDATION REJECTS")
         end = rendered_default.index("Available discovery tools")
         section_length = end - start
-        assert section_length < 1800, (
+        assert section_length < 2000, (
             f"Pre-validation recovery section is {section_length} chars "
-            f"(>=1800 char budget). Tighten it — the instructions are loaded "
+            f"(>=2000 char budget). Tighten it — the instructions are loaded "
             f"into every session."
         )
