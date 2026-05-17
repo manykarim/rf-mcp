@@ -600,7 +600,161 @@ class TestExcludedKeywordsCompaction:
 
 
 # ---------------------------------------------------------------------------
-# 10. Docstring contract — the parameter is reachable and named
+# 10. Recommendations rebuild — recommendations follow post-filter matches
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestRecommendationsRebuild:
+    """``KeywordMatcher.discover_keywords`` computes ``recommendations``
+    BEFORE the library filter runs in ``find_keywords``. Without a
+    rebuild, the "Best match: X" line can name an excluded keyword,
+    contradicting the post-filter ``matches`` list and pointing the
+    agent at an unavailable keyword.
+
+    Reproduced 2026-05-17 with ``library_name="Browser"`` and query
+    "open browser page navigate to url": matches contained only
+    Browser keywords but recommendations[0] was "Best match: Get
+    Browser Aliases (confidence: 0.84)" — a SeleniumLibrary keyword
+    that had just been filtered out."""
+
+    async def test_recommendations_reference_post_filter_top_match(self, patched_engines):
+        # Build a discovery payload where the pre-filter top match is
+        # an SL keyword (Set Window Position, the matcher's first
+        # entry in ``_semantic_matches``) and the pre-filter
+        # recommendations name it.
+        payload = {
+            "success": True,
+            "action_description": "test",
+            "action_type": "click",
+            "matches": _semantic_matches(),  # SL top, Browser later
+            "total_matches": len(_semantic_matches()),
+            "recommendations": [
+                "Best match: Set Window Position (confidence: 0.82)",
+                "Required arguments: x, y",
+                "Alternative options: Click, Click Element, Select Options By",
+            ],
+        }
+        patched_engines["discover_mock"].return_value = payload
+
+        result = await _async_tool_fn(find_keywords)(
+            query="anything",
+            strategy="semantic",
+            library_name="Browser",
+        )
+        recs = result["result"]["recommendations"]
+        # Top recommendation must reference a kept keyword, not an
+        # excluded one.
+        assert recs, "recommendations must not be empty"
+        assert "Set Window Position" not in recs[0], (
+            f"recommendations[0] still references excluded keyword: {recs[0]!r}"
+        )
+        # The post-filter top match is the Browser ``Click`` entry
+        # (confidence 0.80).
+        assert "Click" in recs[0]
+        assert "confidence: 0.80" in recs[0]
+
+    async def test_recommendations_carry_post_filter_arguments(self, patched_engines):
+        """The "Required arguments" line in recommendations must
+        reflect the post-filter top match's arguments — not the
+        pre-filter top match's arguments."""
+        result = await _async_tool_fn(find_keywords)(
+            query="anything",
+            strategy="semantic",
+            library_name="Browser",
+        )
+        recs = result["result"]["recommendations"]
+        # Browser ``Click`` takes (selector, button); SL ``Set Window
+        # Position`` took (x, y). After filtering, the args line must
+        # be Click's, not Set Window Position's.
+        args_line = next((r for r in recs if r.startswith("Required arguments")), None)
+        assert args_line is not None
+        assert "selector" in args_line
+        assert "x, y" not in args_line, (
+            f"args line still reflects pre-filter top match: {args_line!r}"
+        )
+
+    async def test_recommendations_alternatives_only_kept_keywords(self, patched_engines):
+        """The "Alternative options" line must only contain post-filter
+        keyword names — no excluded SL keywords leaking in."""
+        result = await _async_tool_fn(find_keywords)(
+            query="anything",
+            strategy="semantic",
+            library_name="Browser",
+        )
+        recs = result["result"]["recommendations"]
+        alt_line = next((r for r in recs if r.startswith("Alternative options")), None)
+        if alt_line is not None:
+            for excluded_name in (
+                "Set Window Position", "Click Element",
+                "Select From List By Label",
+            ):
+                assert excluded_name not in alt_line, (
+                    f"alt line leaks excluded keyword {excluded_name!r}: {alt_line!r}"
+                )
+
+    async def test_recommendations_empty_no_matches_message_when_all_filtered(
+        self, patched_engines,
+    ):
+        """When the filter excludes ALL matches, recommendations must
+        show the no-matches guidance (matching the matcher's behaviour
+        for the empty case) — NOT a stale top match from the pre-filter
+        list."""
+        # Build a payload where every match is SL.
+        all_sl = [m for m in _semantic_matches() if m["library"] == "SeleniumLibrary"]
+        payload = {
+            "success": True,
+            "action_description": "test",
+            "action_type": "click",
+            "matches": all_sl,
+            "total_matches": len(all_sl),
+            "recommendations": [
+                f"Best match: {all_sl[0]['keyword_name']} (confidence: 0.82)",
+            ],
+        }
+        patched_engines["discover_mock"].return_value = payload
+
+        result = await _async_tool_fn(find_keywords)(
+            query="anything",
+            strategy="semantic",
+            library_name="Browser",
+        )
+        recs = result["result"]["recommendations"]
+        # All matches filtered out — recommendations now show the
+        # no-matches guidance.
+        assert any("No matching keywords found" in r for r in recs), recs
+        # The pre-filter top match name must NOT appear.
+        for sl in all_sl:
+            assert sl["keyword_name"] not in " ".join(recs), (
+                f"stale pre-filter name {sl['keyword_name']!r} in recs: {recs!r}"
+            )
+
+    async def test_recommendations_unchanged_when_no_filter_applied(self, patched_engines):
+        """When no filter applies (no library_name + no session
+        preference), the matcher's original recommendations pass
+        through unchanged — no rebuild work."""
+        sentinel_recs = ["Best match: Set Window Position (confidence: 0.82)"]
+        payload = {
+            "success": True,
+            "action_description": "test",
+            "action_type": "click",
+            "matches": _semantic_matches(),
+            "total_matches": len(_semantic_matches()),
+            "recommendations": list(sentinel_recs),
+        }
+        patched_engines["discover_mock"].return_value = payload
+
+        result = await _async_tool_fn(find_keywords)(
+            query="anything",
+            strategy="semantic",
+        )
+        # No filter → recommendations are byte-identical to what the
+        # matcher emitted. Pinned via the sentinel string.
+        assert result["result"]["recommendations"] == sentinel_recs
+
+
+# ---------------------------------------------------------------------------
+# 11. Docstring contract — the parameter is reachable and named
 # ---------------------------------------------------------------------------
 
 

@@ -2104,6 +2104,60 @@ def _filter_keywords_by_session_library(
     return filtered_keywords, excluded_with_alternatives
 
 
+def _rebuild_post_filter_recommendations(
+    matches: List[Dict[str, Any]],
+) -> List[str]:
+    """Regenerate the semantic matcher's usage recommendations using
+    post-filter matches.
+
+    ``KeywordMatcher.discover_keywords`` computes ``recommendations``
+    inline from the *pre-filter* ranked matches and embeds them in its
+    response. When ``find_keywords`` applies a library filter, the
+    pre-filter top match (the "Best match: X (confidence: Y)" line)
+    can reference an excluded keyword — contradicting the post-filter
+    ``matches`` list and pointing the agent at an unavailable keyword.
+
+    Reproduced 2026-05-17: with ``library_name="Browser"`` and query
+    "open browser page navigate to url", the matches list contained
+    only Browser keywords (Go To, New Page, Open Browser) but
+    recommendations[0] was ``"Best match: Get Browser Aliases
+    (confidence: 0.84)"`` — a SeleniumLibrary keyword that had just
+    been filtered out.
+
+    This helper mirrors the matcher's format
+    (``KeywordMatcher._generate_usage_recommendations``) but operates
+    on the post-filter dict shape (matches come in as dicts with
+    ``keyword_name``, ``confidence``, ``arguments`` rather than
+    ``KeywordMatch`` dataclasses). Kept in server.py rather than the
+    matcher because the matcher has no visibility into the filter.
+    """
+    if not matches:
+        return [
+            "No matching keywords found. Consider:",
+            "- Check if required libraries are imported",
+            "- Rephrase the action description",
+            "- Use more specific terms",
+        ]
+    recs: List[str] = []
+    top = matches[0]
+    name = top.get("keyword_name") or top.get("name") or "<unknown>"
+    confidence = top.get("confidence")
+    if isinstance(confidence, (int, float)):
+        recs.append(f"Best match: {name} (confidence: {confidence:.2f})")
+    else:
+        recs.append(f"Best match: {name}")
+    args = top.get("arguments") or []
+    if args:
+        recs.append(f"Required arguments: {', '.join(args)}")
+    if len(matches) > 1:
+        alt_names = [
+            (m.get("keyword_name") or m.get("name") or "<unknown>")
+            for m in matches[1:4]
+        ]
+        recs.append(f"Alternative options: {', '.join(alt_names)}")
+    return recs
+
+
 def _build_filter_diagnostics(
     excluded: List[Dict[str, Any]],
     applied: str,
@@ -2299,6 +2353,19 @@ async def find_keywords(
                 for m in filtered_matches
             ]
             discovery["filtered_count"] = len(excluded)
+            # Regenerate recommendations against the post-filter
+            # matches — the matcher emits its recommendations BEFORE
+            # we apply the library filter, so without this fix the
+            # ``Best match: X`` line can name an excluded keyword.
+            # Only rebuild when the filter actually trimmed entries —
+            # if ``excluded`` is empty, the matcher's recommendations
+            # are still accurate and we avoid the no-op work.
+            if excluded:
+                discovery["recommendations"] = (
+                    _rebuild_post_filter_recommendations(
+                        discovery["matches"]
+                    )
+                )
 
         result = {
             "success": bool(discovery.get("success", True)),

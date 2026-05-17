@@ -444,3 +444,98 @@ Three new tests in ``TestExcludedKeywordsCompaction``:
 Plus the existing ``test_verbose_legacy_fields_dropped`` test pins
 that ``excluded_keywords`` and entry-level ``session_library`` are not
 in the response.
+
+## Stale-recommendations fix (2026-05-17)
+
+While verifying the compaction, the externalized ``result.recommendations``
+field was found to contain stale references to pre-filter top
+matches. Reproduced with the same payload that exposed the original
+defect:
+
+```json
+"matches": [
+  {"library": "Browser", "keyword_name": "Go To", ...},
+  {"library": "Browser", "keyword_name": "New Page", ...},
+  {"library": "Browser", "keyword_name": "Open Browser", ...}
+],
+"recommendations": [
+  "Best match: Get Browser Aliases (confidence: 0.84)",          ✗ STALE — SL keyword excluded
+  "Alternative options: Get Browser Ids, Close Browser, Go To"   ✗ all SL except Go To
+]
+```
+
+Root cause: ``KeywordMatcher.discover_keywords`` (keyword_matcher.py:
+325) computes ``recommendations`` inline from the *pre-filter* ranked
+matches and embeds them in its response payload. ``find_keywords``
+applies the library filter afterward, mutating ``discovery["matches"]``
+but leaving ``discovery["recommendations"]`` referencing the pre-filter
+top match. The matcher has no visibility into the filter, so the fix
+has to live on the ``find_keywords`` side.
+
+For an agent reading the response, the recommendations field is
+typically the FIRST thing scanned. Reading "Best match: Get Browser
+Aliases" when ``Get Browser Aliases`` doesn't appear in the matches
+list (because it was just excluded) is more confusing than no
+recommendation at all — the agent has to reconcile the contradiction
+before getting useful guidance.
+
+### Fix
+
+New helper ``_rebuild_post_filter_recommendations`` (server.py, sits
+beside ``_build_filter_diagnostics``) mirrors the format used by
+``KeywordMatcher._generate_usage_recommendations`` (same prose:
+"Best match: X (confidence: Y)", "Required arguments: …",
+"Alternative options: …") but operates on the post-filter dict
+shape (matches arrive as dicts, not ``KeywordMatch`` dataclasses).
+When the matcher returns no matches post-filter the helper emits
+the same "No matching keywords found" guidance the matcher would
+have, so the contract stays consistent for the all-filtered case.
+
+The semantic branch in ``find_keywords`` calls the rebuild only
+when the filter actually trimmed entries (``if excluded:``). When
+no filter ran, the matcher's recommendations pass through
+byte-identical — no work, no risk of regression on the
+unmodified-path.
+
+### Verification
+
+Re-running the original repro after the rebuild:
+
+```
+Matches (post-filter):
+  - Browser.Go To (conf=0.80)
+  - Browser.New Page (conf=0.80)
+  - Browser.Open Browser (conf=0.77)
+
+Recommendations:
+  - Best match: Go To (confidence: 0.80)              ✓ Browser keyword
+  - Required arguments: url, timeout, wait_until      ✓ Go To's real args
+  - Alternative options: New Page, Open Browser       ✓ Browser-only
+```
+
+### Tests
+
+Five new tests in ``TestRecommendationsRebuild``:
+
+- ``test_recommendations_reference_post_filter_top_match``: injects a
+  payload where pre-filter recs name an SL keyword; asserts the
+  post-filter top recommendation references a Browser keyword instead.
+- ``test_recommendations_carry_post_filter_arguments``: pins that the
+  "Required arguments" line reflects the post-filter top match's
+  args, not the pre-filter top match's args (catches the line-by-line
+  rebuild correctness).
+- ``test_recommendations_alternatives_only_kept_keywords``: pins that
+  no excluded SL keyword name leaks into the "Alternative options"
+  line.
+- ``test_recommendations_empty_no_matches_message_when_all_filtered``:
+  pins the edge case where the filter excludes ALL matches —
+  recommendations show the "No matching keywords found" guidance
+  rather than a stale pre-filter top match.
+- ``test_recommendations_unchanged_when_no_filter_applied``: pins
+  byte-identical pass-through when no filter ran — uses a sentinel
+  string the rebuild would never produce.
+
+### Test totals
+
+5914 passed (+22 vs v0.32.5 baseline = +5 for the recommendations fix
+on top of +17 for the compaction).
