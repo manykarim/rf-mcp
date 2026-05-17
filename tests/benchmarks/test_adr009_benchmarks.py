@@ -381,7 +381,10 @@ class TestSchemaGeneration:
         assert avg_ms < 0.5, f"Schema generation too slow: {avg_ms:.4f}ms"
 
     def test_bench_intent_verb_schema_generation(self, benchmark_reporter):
-        """IntentVerb JSON Schema generation should be < 0.5ms."""
+        """IntentVerb JSON Schema generation should be < 0.5ms.
+
+        OBS-06 added ``extract`` (mode-aware getter); the enum is now 9 verbs.
+        """
         ta = TypeAdapter(IntentVerb)
         iterations = 5000
         t0 = time.perf_counter()
@@ -395,7 +398,7 @@ class TestSchemaGeneration:
         )
         avg_ms = elapsed_ms / iterations
         assert "enum" in schema, "Schema must contain 'enum' key"
-        assert len(schema["enum"]) == 8, f"Expected 8 enum values, got {len(schema['enum'])}"
+        assert len(schema["enum"]) == 9, f"Expected 9 enum values, got {len(schema['enum'])}"
         assert avg_ms < 0.5, f"Schema generation too slow: {avg_ms:.4f}ms"
 
     def test_bench_detail_level_schema_generation(self, benchmark_reporter):
@@ -853,13 +856,17 @@ class TestADR009Correctness:
         ]
 
     def test_intent_verb_schema_has_flat_enum(self):
-        """IntentVerb schema must be flat {enum: [...]} without anyOf."""
+        """IntentVerb schema must be flat {enum: [...]} without anyOf.
+
+        OBS-06 added ``extract`` (mode-aware getter); the enum is now 9 verbs.
+        """
         schema = TypeAdapter(IntentVerb).json_schema()
         assert "enum" in schema
         assert "anyOf" not in schema
         assert schema["enum"] == [
             "navigate", "click", "fill", "hover",
             "select", "assert_visible", "extract_text", "wait_for",
+            "extract",
         ]
 
     def test_detail_level_schema_has_flat_enum(self):
