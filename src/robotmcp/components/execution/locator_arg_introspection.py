@@ -110,8 +110,18 @@ class LocatorArgIntrospector:
     * ``True``   keyword resolves to a library/keyword that has a locator arg.
     * ``False``  keyword resolves to a library/keyword that has no locator arg
                  (e.g. ``Sleep``, ``Keyboard Key``, ``Go To``).
-    * ``None``   keyword could not be resolved (unloaded library, unit-test
-                 context, typo).  Caller should fall back to its own policy.
+    * ``None``   no confident decision possible — caller should fall back to
+                 its own policy. Returned in three cases:
+                 (a) keyword could not be resolved (unloaded library, typo);
+                 (b) keyword discovery service is unavailable;
+                 (c) NO library context — neither an active_library nor any
+                     session_libraries are known. Without context, the
+                     underlying find_keyword would do a global libdoc fuzzy
+                     search that is both slow (~500x the positive-list
+                     membership check) and prone to ambient-state false
+                     vetoes. The "confident veto" contract requires
+                     confidence, and there is no confidence in a global
+                     fuzzy match.
     """
 
     def __init__(self, keyword_discovery: Optional[object] = None) -> None:
@@ -130,10 +140,10 @@ class LocatorArgIntrospector:
         """Return True / False / None per the class docstring.
 
         The session, when provided, is used to scope the resolution to its
-        imported libraries / search order.  Without a session, the classifier
-        scans all libraries currently known to the discovery service and
-        returns True if ANY match has a locator arg.  This conservatism is
-        deliberate: when in doubt, allow pre-validation to run.
+        imported libraries / search order. Without library context
+        (no session, or a session without ``imported_libraries`` /
+        ``browser_state.active_library``), the classifier returns
+        ``None`` — see the class docstring for why.
         """
         kd = self._kd
         if kd is None:
@@ -166,6 +176,18 @@ class LocatorArgIntrospector:
                     session_libraries = list(imported)
             except Exception:
                 pass
+
+        # CONFIDENT-VETO guard: without library context we cannot make a
+        # confident decision. The underlying find_keyword would fall back
+        # to a global libdoc fuzzy search across every loaded library,
+        # which (a) is ~500x slower than the executor's positive-list
+        # membership check (~100us vs ~0.2us per call) and (b) can
+        # fuzzy-match against ambient state and return a False verdict
+        # that wrongly vetoes a curated positive-list entry. Returning
+        # None here lets the caller fall through to its own policy
+        # (the curated ELEMENT_INTERACTION_KEYWORDS set in the executor).
+        if not session_libraries and not active_library:
+            return None
 
         try:
             info = kd.find_keyword(

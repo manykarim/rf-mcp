@@ -44,10 +44,30 @@ except ImportError:
     ROBOT_AVAILABLE = False
 
 
-# F-N12: keywords that are read-only / inspection-only by nature.
-# When the caller passes record=None (the default), these are auto-flagged
-# record=False so build_test_suite produces a clean narrative instead of
-# every page-state probe an LLM does between actions.
+# F-N12: keywords that are TRULY inspection-only — they take no locator,
+# return ambient page/session state, and cannot serve as an implicit
+# existence assertion. When the caller passes record=None (the default),
+# these are auto-flagged record=False so build_test_suite produces a
+# clean narrative instead of every page-state probe an LLM does between
+# actions.
+#
+# IMPORTANT — what is NOT in this set, and why:
+#
+#   Locator-taking getters (Get Text, Get Value, Get Attribute,
+#   Get Element Count, Get Element States, Get Property, Get Style,
+#   Get Classes, Get Bounding Box, Get Element Attribute, Get Element
+#   Size, Get Element Tag Name, Get List Selected Labels, Get List
+#   Selected Values, ...) are deliberately RECORDED by default because
+#   in Robot Framework they double as implicit existence assertions:
+#   they raise on missing element, and the RF assertion-engine pattern
+#   lets a call like
+#       Get Text    id=cart-badge    ==    2 items
+#   serve as an explicit assertion. Silently dropping such calls would
+#   remove load-bearing assertions from the generated suite.
+#
+#   Log / Log To Console / Log Many are RECORDED because they emit
+#   intentional narrative into the test report — agents and humans
+#   both use them as deliberate test steps, not probes.
 #
 # CARVE-OUTS preserved even when keyword is in this set:
 #   - assign_to is set (the recorded suite needs `${var}= Get Text ...`).
@@ -55,41 +75,20 @@ except ImportError:
 #     explicitly opened a multi-test scope; steps inside it must NOT be
 #     dropped silently — that produced empty test cases in CI (F3/F4).
 _INSPECTION_ONLY_KEYWORDS: frozenset[str] = frozenset({
-    # Browser library reads
+    # Browser — page/viewport ambient state (no locator, never throws)
     "get title",
     "get url",
-    "get text",
-    "get attribute",
-    "get attribute names",
-    "get element count",
-    "get element states",
-    "get property",
-    "get style",
     "get viewport size",
-    "get classes",
-    "get bounding box",
-    "get table cell element",
     "get scroll size",
-    "get scroll position",
-    # SeleniumLibrary reads
+    # SeleniumLibrary — page ambient state (no locator)
     "get location",
-    "get value",
-    "get element attribute",
-    "get element size",
-    "get element tag name",
-    "get list selected labels",
-    "get list selected values",
-    # AppiumLibrary reads (sample)
+    # AppiumLibrary — session/window ambient state (no locator)
     "get capability",
     "get contexts",
     "get current context",
     "get window height",
     "get window width",
     "get window size",
-    # BuiltIn read-only / control
-    "log",
-    "log to console",
-    "log many",
 })
 
 
@@ -114,6 +113,15 @@ def _resolve_record_gate(
 
     Outside the carve-outs, keywords in ``_INSPECTION_ONLY_KEYWORDS`` are
     dropped; everything else is recorded (conservative default-on).
+
+    Note: locator-taking getters (Get Text, Get Value, Get Attribute,
+    Get Element Count, ...) are deliberately NOT in the inspection set
+    even though they "read" — in Robot Framework they double as implicit
+    existence assertions (raise on missing element, and the assertion-
+    engine pattern ``Get Text  id=foo  ==  bar`` makes them explicit
+    assertions). They are recorded by default to preserve load-bearing
+    test logic. See ``_INSPECTION_ONLY_KEYWORDS`` in this module for
+    the full rationale.
     """
     if record is not None:
         return bool(record)
