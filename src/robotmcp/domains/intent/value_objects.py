@@ -24,8 +24,17 @@ class IntentVerb(str, Enum):
     HOVER = "hover"
     SELECT = "select"
     ASSERT_VISIBLE = "assert_visible"
+    # DEPRECATED — superseded by EXTRACT with mode="text". Kept for
+    # backward compat; emits a DeprecationWarning when used. Scheduled
+    # for removal in a future release. See
+    # docs/reviews/extract_vs_extract_text_overlap.md for rationale.
     EXTRACT_TEXT = "extract_text"
     WAIT_FOR = "wait_for"
+    # OBS-06: structured DOM/page-state extraction. Generalises
+    # EXTRACT_TEXT — accepts a ``mode`` option to dispatch to text /
+    # attribute / count / value / url / title getters. PREFER this
+    # verb for new code; ``EXTRACT_TEXT`` is deprecated.
+    EXTRACT = "extract"
 
     # Reserved for future expansion (not yet mapped)
     # DRAG = "drag"

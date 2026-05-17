@@ -72,6 +72,8 @@ class IntentActionAdapter:
         assign_to: Optional[str] = None,
         match: str = "label",
         nth: Optional[int] = None,
+        mode: str = "text",
+        attribute_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Resolve an intent string to keyword + arguments.
 
@@ -94,6 +96,24 @@ class IntentActionAdapter:
                 f"For direct keyword access, use execute_step."
             )
 
+        # Deprecation: ``extract_text`` is a strict subset of
+        # ``extract(mode="text")`` and produces identical RF dispatch.
+        # See docs/reviews/extract_vs_extract_text_overlap.md for the
+        # empirical comparison. Emit a DeprecationWarning so callers
+        # see the migration path; resolution proceeds normally.
+        if intent_verb == IntentVerb.EXTRACT_TEXT:
+            import warnings as _warnings
+            _warnings.warn(
+                "intent_action(intent='extract_text', ...) is deprecated and "
+                "will be removed in a future release. Use "
+                "intent_action(intent='extract', mode='text', ...) — same RF "
+                "dispatch (Get Text), plus surfaces extracted_value at the "
+                "top level of the response and supports other modes "
+                "(attribute/count/value/url/title).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         intent_target = None
         if target is not None:
             intent_target = IntentTarget(locator=target, nth=nth)
@@ -103,6 +123,12 @@ class IntentActionAdapter:
         merged_options: Dict[str, str] = dict(options or {})
         if intent_verb == IntentVerb.SELECT and match:
             merged_options["match"] = match
+        # OBS-06 — inject mode + attribute_name into options so the extract
+        # transformers can build the right per-mode argument shape.
+        if intent_verb == IntentVerb.EXTRACT:
+            merged_options["mode"] = (mode or "text").lower()
+            if attribute_name is not None:
+                merged_options["attribute_name"] = attribute_name
 
         resolved = self._resolver.resolve(
             intent_verb=intent_verb,
@@ -124,6 +150,21 @@ class IntentActionAdapter:
         if intent_verb == IntentVerb.SELECT and resolved.library == "SeleniumLibrary":
             from ..aggregates import _get_selenium_select_keyword
             dispatched_keyword = _get_selenium_select_keyword(match, value)
+
+        # OBS-06 EXTRACT: swap the dispatched keyword based on (library, mode).
+        # The mapping ships with a default keyword (Get Text) but the actual
+        # keyword the runner calls depends on the requested mode.
+        if intent_verb == IntentVerb.EXTRACT:
+            extract_mode = merged_options.get("mode", "text")
+            if resolved.library == "Browser":
+                from ..aggregates import _get_browser_extract_keyword
+                dispatched_keyword = _get_browser_extract_keyword(extract_mode)
+            elif resolved.library == "SeleniumLibrary":
+                from ..aggregates import _get_selenium_extract_keyword
+                dispatched_keyword = _get_selenium_extract_keyword(extract_mode)
+            elif resolved.library == "AppiumLibrary":
+                from ..aggregates import _get_appium_extract_keyword
+                dispatched_keyword = _get_appium_extract_keyword(extract_mode)
 
         # Apply nth-match suffix to the first argument (the locator) when
         # requested. Library-specific syntax handled by _apply_nth_to_locator.
@@ -153,4 +194,11 @@ class IntentActionAdapter:
                 resolved.normalized_locator and resolved.normalized_locator.was_transformed
             ),
             "force_keyword": force_keyword,
+            # OBS-06: surface the resolved extract mode so the server layer
+            # can (a) bypass pre-validation for multi-match modes (count)
+            # and (b) attach an `extracted_value` field to the response.
+            "extract_mode": (
+                merged_options.get("mode") if intent_verb == IntentVerb.EXTRACT
+                else None
+            ),
         }

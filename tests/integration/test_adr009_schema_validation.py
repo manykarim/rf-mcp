@@ -162,12 +162,17 @@ class TestIntentActionSchema:
 
     @pytest.mark.asyncio
     async def test_intent_has_enum(self, tools):
-        """intent_action.intent should have enum constraint."""
+        """intent_action.intent should have enum constraint.
+
+        OBS-06 added ``extract`` (generalised mode-aware getter); the
+        Literal alias now has 9 verbs total.
+        """
         tool = _get_tool(tools, "intent_action")
         schema = _get_param_schema(tool, "intent")
         expected = [
             "navigate", "click", "fill", "hover",
             "select", "assert_visible", "extract_text", "wait_for",
+            "extract",
         ]
         _assert_has_enum(schema, expected, "intent_action.intent")
 

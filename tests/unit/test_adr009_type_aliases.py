@@ -87,6 +87,8 @@ _TYPE_ALIASES = {
         [
             "navigate", "click", "fill", "hover",
             "select", "assert_visible", "extract_text", "wait_for",
+            # OBS-06 — generalised, mode-aware extraction verb.
+            "extract",
         ],
     ),
     "KeywordStrategy": (
@@ -525,14 +527,17 @@ class TestIntentVerbSpecifics:
         verbs = [
             "navigate", "click", "fill", "hover",
             "select", "assert_visible", "extract_text", "wait_for",
+            # OBS-06 — generalised extract verb with mode parameter.
+            "extract",
         ]
         for verb in verbs:
             assert ta.validate_python(verb) == verb
 
     def test_intent_verb_count(self):
+        # OBS-06 added "extract" (9 total verbs).
         ta = TypeAdapter(IntentVerb)
         schema = ta.json_schema()
-        assert len(schema["enum"]) == 8
+        assert len(schema["enum"]) == 9
 
     def test_navigate_case_variants(self):
         ta = TypeAdapter(IntentVerb)

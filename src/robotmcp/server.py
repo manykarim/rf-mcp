@@ -42,6 +42,7 @@ from robotmcp.domains.shared.kernel import (
     DEPRECATED_KEYWORD_ALIASES,
     DetailLevel,
     ExecutionMode,
+    ExtractMode,
     FilteringLevel,
     FlowStructure,
     IntentVerb,
@@ -3449,6 +3450,7 @@ async def execute_step(
     bdd_group: str = "",
     bdd_intent: str = "",
     record: bool | None = None,
+    pre_validate_timeout_ms: int | None = None,
 ) -> Dict[str, Any]:
     """Execute a single Robot Framework keyword (or Evaluate) within a session.
 
@@ -3495,6 +3497,20 @@ async def execute_step(
                 - True: force-record this step regardless of classification.
                 - False: drop this step regardless of classification.
                 The decision is surfaced as ``recorded: bool`` in the response.
+        pre_validate_timeout_ms: Override the pre-validation gate's timeout
+                for this single call. Pre-validation is the fast
+                ~500ms-default check that verifies an element is visible /
+                enabled before the keyword runs; it auto-retries once with
+                a 200ms backoff on transient failures.
+                - None (default): use ``ExecutionConfig.PRE_VALIDATION_TIMEOUT``
+                  (500ms) for slow-loading pages this is sometimes too tight.
+                - A positive int (e.g. 2000): extend the gate to this many
+                  milliseconds for this call only. Useful when a page
+                  legitimately takes ~1–2s to settle.
+                - 0 or negative: skip pre-validation entirely for this call
+                  (last resort — also disables the keyword timeout).
+                Failure responses include a ``pre_validate_timeout_hint``
+                entry explaining how to use this when the gate trips.
 
     Returns:
         Dict[str, Any]: Execution result:
@@ -3690,6 +3706,7 @@ async def execute_step(
         use_context=bool(use_context),
         timeout_ms=timeout_ms,
         record=record,
+        pre_validate_timeout_ms=pre_validate_timeout_ms,
     )
 
     # ADR-014.2: Augment failed step results with memory hints
@@ -6336,27 +6353,54 @@ async def intent_action(
     match: SelectMatch = "label",
     nth: int | None = None,
     commit: bool = False,
+    mode: ExtractMode = "text",
+    attribute_name: str | None = None,
 ) -> Dict[str, Any]:
     """Execute a high-level intent that auto-resolves to the correct library keyword.
 
-    Valid intents: navigate, click, fill, hover, select, assert_visible, extract_text, wait_for.
+    Valid intents: navigate, click, fill, hover, select, assert_visible,
+    extract, wait_for.
+
+    Also accepted but DEPRECATED:
+    - extract_text — equivalent to ``extract`` with ``mode="text"``. The
+      ``extract`` verb is the canonical mode-aware getter (text /
+      attribute / count / value / url / title) and additionally surfaces
+      ``extracted_value`` at the top level of the response. ``extract_text``
+      will be removed in a future release; prefer ``intent="extract"`` for
+      new code.
+
     The intent is resolved based on the session's active library (Browser/SeleniumLibrary/AppiumLibrary).
 
     Args:
-        intent: Action verb (e.g. "click", "navigate", "fill")
-        target: Locator or URL (e.g. "#submit", "text=Login", "https://example.com")
+        intent: Action verb (e.g. "click", "navigate", "fill", "extract")
+        target: Locator or URL (e.g. "#submit", "text=Login", "https://example.com"). Optional for extract mode="url"/mode="title".
         value: Value for fill/select intents
         session_id: Session to execute against (uses default if not provided)
         options: Additional options (e.g. {"timeout": "10s"})
-        assign_to: Variable name to capture result
+        assign_to: Variable name to capture result (esp. useful for extract:
+                   the extracted text/count/attribute is assigned to this var).
         detail_level: Response detail level
-        force: ESCAPE HATCH for Browser Library. When True for a click intent,
-            the dispatched keyword is swapped from ``Click`` to ``Click With
-            Options`` (which accepts ``force=True`` to skip Playwright
-            actionability checks). For other libraries / intents whose
-            default keyword has no force_keyword declared, this flag is
-            silently ignored. Prefer natural locators first; this is the
-            documented fallback for elements that are intentionally hidden.
+        force: Use when: the element is visible but Playwright reports it
+            "blocked by another element" — overlay, sticky header,
+            cookie-consent banner, modal backdrop, animation still
+            running. Symptom: ``Click intercepted`` or
+            ``element is not stable`` / ``outside of the viewport``
+            errors despite the element appearing correct in the ARIA
+            snapshot. Example: a "Submit" button covered by a sticky
+            consent banner the user can't dismiss programmatically.
+
+            What it does: for a Browser-library click intent, swaps
+            ``Click`` for ``Click With Options force=True``, which
+            skips Playwright's actionability checks. For other
+            libraries / intents whose mapping declares no
+            ``force_keyword``, the flag is silently ignored.
+
+            Caveat: do NOT use ``force=True`` to drive elements that
+            are genuinely hidden (display:none, visibility:hidden) —
+            that's an anti-pattern; the resulting click won't behave
+            like a real user click. Prefer natural locators first;
+            fall through to ``force=True`` only when an overlay is
+            the genuine cause.
         match: Select-match strategy for the ``select`` intent.
             ``"label"`` (default) - match by visible option text. Mirrors RF
                 semantics for ``Select Options By label``.
@@ -6375,15 +6419,39 @@ async def intent_action(
             ``>> nth=<n>``; SeleniumLibrary appends ``:nth-of-type(<n+1>)``
             for CSS locators only (other locator types are unaffected and
             log a debug-level warning).
-        commit: When True AND the intent is ``fill`` AND the library is
-            ``Browser`` AND the fill succeeds, dispatch a real DOM
-            ``change`` event on the target (via Browser's
-            ``Dispatch Event`` keyword). Many SPAs (Vue, React, Angular,
-            jQuery validate, idealForms) only commit form state in
-            response to a ``change`` event, which Playwright's ``fill``
-            does not always emit. The follow-up failure is logged and
-            ignored — never breaks the original fill result. Off by
-            default to preserve backwards-compatible behaviour.
+        commit: Use when: the page uses Vue, React, Angular reactive
+            forms, jQuery validate, idealForms, formvalidation.io, or
+            any framework that gates validation on the DOM ``change``
+            event. Symptom: a form submit is rejected with a "required"
+            or validation error despite every visible field appearing
+            correctly filled; the framework's internal model still
+            thinks the inputs are empty because Playwright's ``fill``
+            didn't fire a real ``change``.
+
+            What it does: after a successful Browser-library FILL,
+            dispatches a real DOM ``change`` event on the target via
+            Browser's ``Dispatch Event`` keyword. Off by default — the
+            follow-up is best-effort and any failure is logged and
+            ignored (it never escalates a successful fill into a
+            failed step). No effect for non-FILL intents, non-Browser
+            libraries, or failed fills.
+        mode: For ``intent="extract"`` only. Selects what to read from
+            the page; ignored for other intents.
+              "text"      — element text content      (default)
+              "attribute" — element attribute value (requires attribute_name)
+              "count"     — number of matching elements (multi-match OK)
+              "value"     — DOM property "value" (input values)
+              "url"       — current page URL (no target needed)
+              "title"     — current page title (no target needed)
+            The extracted value is surfaced as ``result["extracted_value"]``
+            and assigned to ``assign_to`` if provided. mode="count"
+            additionally skips pre-validation for this call — counting is
+            the only mode where matching zero/multiple elements is the
+            expected outcome rather than a failure.
+        attribute_name: Required when ``intent="extract"`` and
+            ``mode="attribute"``; the HTML attribute name to read
+            (e.g. ``"href"``, ``"data-testid"``, ``"value"``).
+            Ignored for other modes.
     """
     global _intent_action_adapter
 
@@ -6418,6 +6486,8 @@ async def intent_action(
             assign_to=assign_to,
             match=match,
             nth=nth,
+            mode=mode,
+            attribute_name=attribute_name,
         )
 
         dispatched_keyword = resolution["keyword"]
@@ -6434,16 +6504,25 @@ async def intent_action(
             if "force=True" not in dispatched_arguments:
                 dispatched_arguments.append("force=True")
 
+        # OBS-06 — extract mode=count intentionally accepts multi-match.
+        # Pre-validation would reject the locator when it matches zero
+        # or many elements; that's the wrong question for counting.
+        # Pass pre_validate_timeout_ms=0 to skip the gate for this call.
+        extract_mode = resolution.get("extract_mode")
+        execute_kwargs = {
+            "keyword": dispatched_keyword,
+            "arguments": dispatched_arguments,
+            "session_id": effective_session_id,
+            "assign_to": resolution.get("assign_to"),
+            "detail_level": detail_level,
+        }
+        if extract_mode == "count":
+            execute_kwargs["pre_validate_timeout_ms"] = 0
+
         # Delegate to execute_step for actual execution.
         # execute_step is a FunctionTool (via @mcp.tool decorator),
         # so we call .fn to get the original async function.
-        result = await get_tool_fn(execute_step)(
-            keyword=dispatched_keyword,
-            arguments=dispatched_arguments,
-            session_id=effective_session_id,
-            assign_to=resolution.get("assign_to"),
-            detail_level=detail_level,
-        )
+        result = await get_tool_fn(execute_step)(**execute_kwargs)
 
         # Enrich result with intent metadata
         commit_applied = False
@@ -6465,7 +6544,21 @@ async def intent_action(
                 "locator_normalized": resolution.get("locator_normalized", False),
                 "force_applied": bool(force and resolution.get("force_keyword")),
                 "commit_applied": commit_applied,
+                "extract_mode": extract_mode,
             }
+
+            # OBS-06: for intent=extract, surface the read value at a
+            # predictable top-level key so callers don't have to dig
+            # through ``result["result"]`` / ``result["output"]`` /
+            # ``result["assigned_values"][var]``. The underlying RF
+            # keyword's return value is what we want — it lives in
+            # ``result["result"]`` (preferred) or ``result["output"]``
+            # (stringified fallback).
+            if intent == "extract" and result.get("success"):
+                extracted_value = result.get("result")
+                if extracted_value is None:
+                    extracted_value = result.get("output")
+                result["extracted_value"] = extracted_value
 
         # Track for instruction learning
         _track_tool_result(
@@ -6484,7 +6577,9 @@ async def intent_action(
             "hint": (
                 "Use execute_step for direct keyword access, or check "
                 "valid intents: navigate, click, fill, hover, select, "
-                "assert_visible, extract_text, wait_for"
+                "assert_visible, extract, wait_for "
+                "(extract_text is also accepted but deprecated — "
+                "prefer extract with mode='text')"
             ),
         }
         _track_tool_result(

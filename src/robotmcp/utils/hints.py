@@ -146,13 +146,110 @@ def _check_strict_mode_violation(ctx: HintContext, err: str) -> List[Hint]:
 
 
 def _check_invalid_selector(ctx: HintContext, err: str) -> List[Hint]:
-    if not re.search(r"invalid selector|not a valid XPath expression|Unexpected token|selector syntax error", err, re.IGNORECASE):
+    # NB: ``Unsupported token`` (Browser library / Playwright wording)
+    # is included alongside ``Unexpected token`` because Playwright's
+    # actual error string for an unparseable CSS selector starts with
+    # "Unsupported token" \u2014 Sonnet hit this on the 2026-05-17 Tricentis
+    # Obstacle 3 and the existing regex missed it entirely (OBS-03).
+    if not re.search(
+        r"invalid selector|not a valid XPath expression|"
+        r"Unexpected token|Unsupported token|selector syntax error",
+        err,
+        re.IGNORECASE,
+    ):
         return []
     return [Hint(
         title="Invalid selector syntax",
         message="The locator expression has a syntax error. Verify the XPath or CSS selector syntax. This cannot be fixed at runtime \u2014 the locator itself must be corrected.",
         examples=[],
         relevance=90,
+    )]
+
+
+# ---------------------------------------------------------------------------
+# OBS-03 \u2014 Evaluate JavaScript called with the JS body as the sole arg.
+# ---------------------------------------------------------------------------
+
+# Names matched against ctx.keyword (lower-cased, stripped). Includes the
+# bare RF keyword names as the LLM typically writes them. The Browser
+# library exposes "Evaluate JavaScript" / "Execute Javascript"; both
+# forms appear in agent traces.
+_EVALUATE_JS_KEYWORDS: frozenset = frozenset({
+    "evaluate javascript",
+    "execute javascript",
+    "browser.evaluate javascript",
+    "browser.execute javascript",
+})
+
+# A string "looks like a JS expression" when ANY of the following hold:
+#   - it starts with an arrow function header: ``() =>`` / ``(arg) =>``
+#   - it starts with a function expression: ``function(...) {...}``
+#   - the first 200 chars contain ``{`` (block / object literal) or ``=>``
+#     (arrow operator). Both are unambiguous JS tokens that essentially
+#     never appear in legitimate CSS/XPath/text locators.
+_JS_LIKE_START_PATTERN = re.compile(
+    r"^\s*(\(\s*\)|\([^)]*\))\s*=>|^\s*function\s*\("
+)
+_JS_LIKE_BODY_PATTERN = re.compile(r"[{]|=>")
+_JS_LIKE_BODY_SCAN_LIMIT: int = 200
+
+
+def _arg_looks_like_javascript(arg) -> bool:
+    """Heuristic: True if ``arg`` looks like a JS expression rather
+    than a locator string. False positives are deliberately rare \u2014
+    the patterns key on JS-only tokens (``{``, ``=>``, ``function(``)
+    that don't appear in normal CSS/XPath/text locators."""
+    if not isinstance(arg, str):
+        return False
+    if _JS_LIKE_START_PATTERN.match(arg):
+        return True
+    sample = arg[:_JS_LIKE_BODY_SCAN_LIMIT]
+    return bool(_JS_LIKE_BODY_PATTERN.search(sample))
+
+
+def _check_evaluate_javascript_misuse(ctx: HintContext, err: str) -> List[Hint]:
+    """OBS-03 \u2014 Evaluate JavaScript called with one arg that looks like JS.
+
+    The Browser library's ``Evaluate JavaScript`` keyword takes
+    ``(selector, expression)``. When the caller passes only the JS
+    body, RF interprets that single argument as the selector and
+    the underlying parser produces the misleading
+    ``Unsupported token '{' while parsing css selector`` error.
+
+    Detect this shape ANY time the keyword fails (regardless of the
+    specific error text) so the LLM sees a clear shape-mismatch hint
+    instead of having to decode the CSS-tokenizer message. The
+    ``_check_invalid_selector`` checker still fires on the same error
+    text and acts as a complementary lower-priority hint; this
+    checker wins on relevance because the diagnosis is specific.
+    """
+    if (ctx.keyword or "").strip().lower() not in _EVALUATE_JS_KEYWORDS:
+        return []
+    args = ctx.arguments or []
+    if len(args) != 1:
+        return []
+    if not _arg_looks_like_javascript(args[0]):
+        return []
+    return [Hint(
+        title="Evaluate JavaScript: argument-shape mismatch",
+        message=(
+            "Evaluate JavaScript expects (selector, expression) \u2014 got 1 arg "
+            "that looks like a JS expression. The single argument is being "
+            "interpreted as a CSS selector, producing a cryptic "
+            "'parsing css selector' error. Pass None (or a real selector) "
+            "as the first arg and the JS body as the second."
+        ),
+        examples=[
+            {
+                "label": "page-scoped evaluation (no element)",
+                "rf": "Evaluate JavaScript    None    () => document.title",
+            },
+            {
+                "label": "element-scoped evaluation",
+                "rf": "Evaluate JavaScript    css=body    () => window.scrollY",
+            },
+        ],
+        relevance=95,
     )]
 
 
@@ -551,6 +648,10 @@ def _check_element_interaction_errors(ctx: HintContext) -> List[Hint]:
     checkers = [
         _check_click_intercepted,
         _check_strict_mode_violation,
+        # OBS-03: more specific than invalid_selector — diagnoses the
+        # JS-body-as-single-arg shape mismatch rather than just flagging
+        # the resulting CSS-tokenizer error.
+        _check_evaluate_javascript_misuse,
         _check_invalid_selector,
         _check_element_outside_viewport,
         _check_element_not_interactable,

@@ -437,6 +437,45 @@ class InstructionTemplate:
    - Use xpath= only when CSS/text cannot express the predicate.
    - When multiple elements match, disambiguate with intent_action(..., nth=N).
 
+8. WHEN PRE-VALIDATION REJECTS YOUR LOCATOR
+
+   The ~500ms gate sometimes rejects actionable elements (slow load, brief
+   animation, locator strategy unknown to the gate). Don't abandon the step
+   on first rejection. Recovery, in order:
+
+   1. Try the CSS-prefix equivalent. Same element, different syntax:
+        id=submit             → css=#submit
+        name=username         → css=[name='username']
+        Browser only:
+          button[name='Save'] → button:text('Save')   (Playwright text engine)
+          text=Login          → :text('Login')        (text inside CSS)
+        SeleniumLibrary fallback:
+                              → xpath=//button[text()='Save']
+
+   2. Re-inspect via get_session_state(sections=["page_source"],
+      include_reduced_dom=True). The ARIA snapshot may expose a more stable
+      attribute (data-testid, aria-label, role) than the one you first tried.
+
+   3. Extend the gate for a genuinely slow-settling page:
+        execute_step(..., pre_validate_timeout_ms=2000)
+          — keeps pre-validation ON, just gives it more time for THIS call.
+            The gate already auto-retries once with a 200ms backoff; if a
+            page reliably needs >1.5s to settle, this is the right knob.
+
+   4. Last resort, ONLY after 1+2+3 failed:
+        intent_action(intent="click", target="...", force=True)
+          — Browser only; bypasses actionability for clicks blocked by
+            overlays/sticky elements. ACCEPTABLE escape.
+        execute_step(..., timeout_ms=0)
+          — skips gate AND keyword timeout. Use sparingly.
+      force=True is NOT for making hidden elements visible via DOM
+      mutation — that's an anti-pattern.
+
+   See also: intent_action(commit=True) for FILL on Vue / React / Angular
+   reactive forms / jQuery validate / idealForms — dispatches a real DOM
+   change event after fill so framework validators commit. Symptom:
+   form submit rejected despite fields appearing filled.
+
 Available discovery tools: {available_tools}""",
             description="Encourages discovery-first approach to prevent guessing",
             placeholders=("available_tools",),

@@ -419,10 +419,20 @@ class TestInstructionOverhead:
                 overhead_percent=overhead_percent,
             )
 
-        # With 50+ tool calls, overhead should be <5%
+        # With 50+ tool calls, instruction overhead should be modest.
+        # Limit history (each bump justified by the test pin attached
+        # to the content that grew):
+        #   v0.30 baseline : < 25% (template ~830 tokens)
+        #   v0.33 cookbook : < 30% (template ~1500 tokens, after the
+        #     OBS-05 pre-validation recovery recipe + OBS-02
+        #     pre_validate_timeout_ms step + OBS-07 commit=True
+        #     cross-reference landed cumulatively)
+        # Each bump corresponds to ~1000 chars of cookbook content that's
+        # individually pinned by 5+ behaviour tests in
+        # test_instructions_locator_cookbook.py.
         final_overhead = instruction_tokens / (instruction_tokens + avg_tokens_per_tool_call * 50) * 100
-        assert final_overhead < 25, (
-            f"Instruction overhead with 50 calls is {final_overhead:.1f}%, expected <25%"
+        assert final_overhead < 30, (
+            f"Instruction overhead with 50 calls is {final_overhead:.1f}%, expected <30%"
         )
 
 
@@ -463,7 +473,19 @@ class TestCharacterLimits:
         standard_context: Dict[str, str],
         benchmark_reporter,
     ):
-        """Verify standard template character count."""
+        """Verify standard template character count.
+
+        Limit history (each bump justified by content pinned in
+        test_instructions_locator_cookbook.py):
+          v0.30 baseline : < 5000 chars (cookbook didn't exist)
+          v0.33 cookbook : < 6500 chars (after OBS-05 + OBS-02 + OBS-07
+            added the pre-validation recovery recipe, the
+            pre_validate_timeout_ms step, and the commit=True cross-
+            reference — all load-bearing for Haiku-tier recovery from
+            pre-validation rejections, per the 2026-05-17 Tricentis
+            benchmark).
+        """
+        target_chars = 6500
         template = InstructionTemplate.discovery_first()
         content = template.render(standard_context)
         char_count = len(content.value)
@@ -471,13 +493,13 @@ class TestCharacterLimits:
         benchmark_reporter.record(
             name="standard_chars",
             duration_ms=0,
-            tokens_before=5000,  # Target char limit
+            tokens_before=target_chars,
             tokens_after=char_count,
             target_reduction=0,
         )
 
-        assert char_count < 5000, (
-            f"Standard template has {char_count} chars, expected <5000"
+        assert char_count < target_chars, (
+            f"Standard template has {char_count} chars, expected <{target_chars}"
         )
 
     @pytest.mark.benchmark
