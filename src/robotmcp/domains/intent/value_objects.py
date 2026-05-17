@@ -74,6 +74,7 @@ class IntentTarget:
     locator: str
     strategy: LocatorStrategy = LocatorStrategy.AUTO
     original_locator: Optional[str] = None
+    nth: Optional[int] = None
 
     MAX_LOCATOR_LENGTH: ClassVar[int] = 10000
 
@@ -84,6 +85,8 @@ class IntentTarget:
             )
         if "\x00" in self.locator:
             raise ValueError("Locator must not contain null bytes")
+        if self.nth is not None and self.nth < 0:
+            raise ValueError("nth must be a non-negative integer")
 
     @property
     def has_explicit_strategy(self) -> bool:

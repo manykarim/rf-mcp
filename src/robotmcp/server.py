@@ -6267,6 +6267,7 @@ async def intent_action(
     detail_level: DetailLevel = "standard",
     force: bool = False,
     match: SelectMatch = "label",
+    nth: int | None = None,
 ) -> Dict[str, Any]:
     """Execute a high-level intent that auto-resolves to the correct library keyword.
 
@@ -6300,6 +6301,12 @@ async def intent_action(
             For SeleniumLibrary, this also picks the dispatched keyword
             (``Select From List By Label`` / ``Value`` / ``Index``).
             Ignored for non-select intents.
+        nth: Zero-based nth-match index. Disambiguates when multiple
+            elements match the same locator (e.g., an id duplicated across
+            mobile vs desktop nav). Browser library appends
+            ``>> nth=<n>``; SeleniumLibrary appends ``:nth-of-type(<n+1>)``
+            for CSS locators only (other locator types are unaffected and
+            log a debug-level warning).
     """
     global _intent_action_adapter
 
@@ -6333,6 +6340,7 @@ async def intent_action(
             options=options,
             assign_to=assign_to,
             match=match,
+            nth=nth,
         )
 
         dispatched_keyword = resolution["keyword"]
