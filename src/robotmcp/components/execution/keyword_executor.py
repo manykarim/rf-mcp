@@ -10,6 +10,9 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
+from robotmcp.components.execution.locator_arg_introspection import (
+    LocatorArgIntrospector,
+)
 from robotmcp.components.execution.rf_native_context_manager import (
     get_rf_native_context_manager,
 )
@@ -202,11 +205,43 @@ class KeywordExecutor:
         # to stderr while FastMCP writes JSON-RPC responses → lost responses.
         # Also prevents concurrent Selenium WebDriver access (not thread-safe).
         self._execution_lock = asyncio.Lock()
+        # Library-aware locator-arg introspector. Used as a CONFIDENT VETO
+        # over the curated ELEMENT_INTERACTION_KEYWORDS positive list:
+        # when the introspector resolves the keyword to a SPECIFIC library
+        # and that library's signature explicitly has no locator-style arg,
+        # the entry is stale and pre-validation is skipped.  Ambiguous or
+        # unresolved lookups (no session context, multiple libraries match,
+        # keyword name not found) do NOT veto — we trust the positive list.
+        self._locator_introspector = LocatorArgIntrospector(self.keyword_discovery)
 
-    def _requires_pre_validation(self, keyword: str) -> bool:
-        """Check if a keyword requires element pre-validation."""
+    def _requires_pre_validation(
+        self,
+        keyword: str,
+        session: object | None = None,
+    ) -> bool:
+        """Check if a keyword requires element pre-validation.
+
+        Policy: the curated ``ELEMENT_INTERACTION_KEYWORDS`` set is the
+        source of truth. The library-aware introspector vetoes ONLY when
+        it returns a definitive False (keyword resolved to a specific
+        library whose signature has no locator-style arg). On ``None``
+        (ambiguous / not found / unresolved), the positive list wins.
+        """
         keyword_lower = keyword.lower().strip()
-        return keyword_lower in self.ELEMENT_INTERACTION_KEYWORDS
+        if keyword_lower not in self.ELEMENT_INTERACTION_KEYWORDS:
+            return False
+        # Definitive veto only: if the introspector confidently says the
+        # keyword's library has no locator arg, skip pre-validation. None /
+        # ambiguous results do NOT veto — preserves the curated list.
+        try:
+            takes_locator = self._locator_introspector.keyword_takes_locator(
+                keyword, session=session,
+            )
+        except Exception:
+            takes_locator = None
+        if takes_locator is False:
+            return False
+        return True
 
     def _get_action_type_from_keyword_for_states(self, keyword: str) -> str:
         """Extract the action type from a keyword name for state requirements."""
@@ -1097,7 +1132,7 @@ class KeywordExecutor:
 
             # PRE-VALIDATION: Fast check for element actionability before execution
             # This detects "element not visible/enabled" in ~500ms instead of waiting 10s
-            if self.pre_validation_enabled and self._requires_pre_validation(keyword):
+            if self.pre_validation_enabled and self._requires_pre_validation(keyword, session):
                 locator = self._extract_locator_from_args(keyword, arguments)
                 if locator:
                     # Derive pre-validation timeout from user's timeout_ms:
