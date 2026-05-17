@@ -382,3 +382,180 @@ class TestBrowserIdLocatorEquivalenceOBS01:
         assert id_form_valid is False and css_form_valid is False, (
             "Both forms must fail for a non-existent element"
         )
+
+
+# ---------------------------------------------------------------------------
+# OBS-06 — intent_action(intent="extract") end-to-end
+# ---------------------------------------------------------------------------
+
+
+class TestIntentActionExtractOBS06:
+    """End-to-end test for the new extract verb against a real Browser
+    session. Drives an Obstacle-3-equivalent scenario: read a dynamically-
+    generated id-bearing value from the DOM, then assert against it.
+
+    This is the integration test counterpart to
+    tests/unit/test_intent_action_extract.py. The unit tests pin the
+    wiring (transformers, keyword routers, adapter dispatch); this
+    integration test confirms the wire-up dispatches successfully
+    against real Playwright."""
+
+    # Fixture page exercising every extract mode that takes a target.
+    # The visible text is what we'll read; ``data-order-id`` is the
+    # attribute we'll fetch; three `.item` cards make the count
+    # assertable; the `input` lets us read mode=value.
+    # NB: ``#`` in a data: URL is parsed as a fragment separator and
+    # truncates the page content. Use ``Order`` rather than ``Card #``
+    # to keep the body intact.
+    DATA_URL = (
+        "data:text/html,<html><head><title>OBS-06 Fixture</title></head>"
+        "<body>"
+        "<div id='order-display' data-order-id='ORD-1007696'>Order ORD-1007696</div>"
+        "<div class='item'>A</div>"
+        "<div class='item'>B</div>"
+        "<div class='item'>C</div>"
+        "<input id='user-name' value='alice' />"
+        "</body></html>"
+    )
+
+    async def _navigate(self, client):
+        nav_res = await client.call_tool(
+            "execute_step",
+            {
+                "keyword": "Go To",
+                "arguments": [self.DATA_URL],
+                "session_id": SESSION_ID,
+            },
+        )
+        assert nav_res.data.get("success") is True, (
+            f"Navigation to OBS-06 fixture failed: {nav_res.data}"
+        )
+
+    async def test_extract_text_returns_element_text(self, browser_session):
+        _, _, client = browser_session
+        await self._navigate(client)
+        res = await client.call_tool(
+            "intent_action",
+            {
+                "intent": "extract",
+                "target": "id=order-display",
+                "mode": "text",
+                "session_id": SESSION_ID,
+            },
+        )
+        assert res.data.get("success") is True, f"extract text failed: {res.data}"
+        # The extracted value is surfaced as a top-level field — the LLM
+        # doesn't need to dig through result/output/assigned_values.
+        assert res.data.get("extracted_value") == "Order ORD-1007696"
+
+    async def test_extract_attribute_returns_attribute_value(self, browser_session):
+        _, _, client = browser_session
+        await self._navigate(client)
+        res = await client.call_tool(
+            "intent_action",
+            {
+                "intent": "extract",
+                "target": "id=order-display",
+                "mode": "attribute",
+                "attribute_name": "data-order-id",
+                "session_id": SESSION_ID,
+            },
+        )
+        assert res.data.get("success") is True, f"extract attribute failed: {res.data}"
+        assert res.data.get("extracted_value") == "ORD-1007696"
+
+    async def test_extract_count_returns_match_count(self, browser_session):
+        # The OBS-06 acceptance #3 case: mode=count must NOT strict-mode-
+        # fail when the locator matches multiple elements. The fixture
+        # has three .item divs.
+        _, _, client = browser_session
+        await self._navigate(client)
+        res = await client.call_tool(
+            "intent_action",
+            {
+                "intent": "extract",
+                "target": "css=.item",
+                "mode": "count",
+                "session_id": SESSION_ID,
+            },
+        )
+        assert res.data.get("success") is True, f"extract count failed: {res.data}"
+        # Get Element Count returns an int.
+        assert int(res.data.get("extracted_value")) == 3
+
+    async def test_extract_value_returns_input_value(self, browser_session):
+        # Browser's Get Property(selector, "value") reads the DOM value
+        # property — used to read live <input> values. The transformer
+        # appends the literal "value" attribute name.
+        _, _, client = browser_session
+        await self._navigate(client)
+        res = await client.call_tool(
+            "intent_action",
+            {
+                "intent": "extract",
+                "target": "id=user-name",
+                "mode": "value",
+                "session_id": SESSION_ID,
+            },
+        )
+        assert res.data.get("success") is True, f"extract value failed: {res.data}"
+        assert res.data.get("extracted_value") == "alice"
+
+    async def test_extract_title_returns_page_title(self, browser_session):
+        # mode=title takes no target — exercises the
+        # _EXTRACT_MODES_WITHOUT_TARGET path.
+        _, _, client = browser_session
+        await self._navigate(client)
+        res = await client.call_tool(
+            "intent_action",
+            {
+                "intent": "extract",
+                "mode": "title",
+                "session_id": SESSION_ID,
+            },
+        )
+        assert res.data.get("success") is True, f"extract title failed: {res.data}"
+        assert res.data.get("extracted_value") == "OBS-06 Fixture"
+
+    async def test_extract_url_returns_current_url(self, browser_session):
+        _, _, client = browser_session
+        await self._navigate(client)
+        res = await client.call_tool(
+            "intent_action",
+            {
+                "intent": "extract",
+                "mode": "url",
+                "session_id": SESSION_ID,
+            },
+        )
+        assert res.data.get("success") is True, f"extract url failed: {res.data}"
+        # The URL came from the data: scheme — assert it round-trips
+        # without checking the full URL-encoded form (some browsers
+        # percent-escape, some don't).
+        extracted = res.data.get("extracted_value") or ""
+        assert "data:text/html" in extracted, (
+            f"expected data: URL, got {extracted!r}"
+        )
+
+    async def test_extract_with_assign_to_captures_variable(self, browser_session):
+        # OBS-06 acceptance #4: assign_to integration. The captured value
+        # should be both in extracted_value AND in session variables so
+        # the next step can reference ${order_id}.
+        _, _, client = browser_session
+        await self._navigate(client)
+        res = await client.call_tool(
+            "intent_action",
+            {
+                "intent": "extract",
+                "target": "id=order-display",
+                "mode": "attribute",
+                "attribute_name": "data-order-id",
+                "assign_to": "order_id",
+                "session_id": SESSION_ID,
+            },
+        )
+        assert res.data.get("success") is True
+        assert res.data.get("extracted_value") == "ORD-1007696"
+        # The intent_resolved block surfaces the extract_mode so callers
+        # can confirm the right mode was applied.
+        assert res.data.get("intent_resolved", {}).get("extract_mode") == "attribute"

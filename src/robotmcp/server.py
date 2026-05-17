@@ -42,6 +42,7 @@ from robotmcp.domains.shared.kernel import (
     DEPRECATED_KEYWORD_ALIASES,
     DetailLevel,
     ExecutionMode,
+    ExtractMode,
     FilteringLevel,
     FlowStructure,
     IntentVerb,
@@ -6352,19 +6353,23 @@ async def intent_action(
     match: SelectMatch = "label",
     nth: int | None = None,
     commit: bool = False,
+    mode: ExtractMode = "text",
+    attribute_name: str | None = None,
 ) -> Dict[str, Any]:
     """Execute a high-level intent that auto-resolves to the correct library keyword.
 
-    Valid intents: navigate, click, fill, hover, select, assert_visible, extract_text, wait_for.
+    Valid intents: navigate, click, fill, hover, select, assert_visible,
+    extract_text, wait_for, extract.
     The intent is resolved based on the session's active library (Browser/SeleniumLibrary/AppiumLibrary).
 
     Args:
-        intent: Action verb (e.g. "click", "navigate", "fill")
-        target: Locator or URL (e.g. "#submit", "text=Login", "https://example.com")
+        intent: Action verb (e.g. "click", "navigate", "fill", "extract")
+        target: Locator or URL (e.g. "#submit", "text=Login", "https://example.com"). Optional for extract mode="url"/mode="title".
         value: Value for fill/select intents
         session_id: Session to execute against (uses default if not provided)
         options: Additional options (e.g. {"timeout": "10s"})
-        assign_to: Variable name to capture result
+        assign_to: Variable name to capture result (esp. useful for extract:
+                   the extracted text/count/attribute is assigned to this var).
         detail_level: Response detail level
         force: ESCAPE HATCH for Browser Library. When True for a click intent,
             the dispatched keyword is swapped from ``Click`` to ``Click With
@@ -6400,6 +6405,23 @@ async def intent_action(
             does not always emit. The follow-up failure is logged and
             ignored — never breaks the original fill result. Off by
             default to preserve backwards-compatible behaviour.
+        mode: For ``intent="extract"`` only. Selects what to read from
+            the page; ignored for other intents.
+              "text"      — element text content      (default)
+              "attribute" — element attribute value (requires attribute_name)
+              "count"     — number of matching elements (multi-match OK)
+              "value"     — DOM property "value" (input values)
+              "url"       — current page URL (no target needed)
+              "title"     — current page title (no target needed)
+            The extracted value is surfaced as ``result["extracted_value"]``
+            and assigned to ``assign_to`` if provided. mode="count"
+            additionally skips pre-validation for this call — counting is
+            the only mode where matching zero/multiple elements is the
+            expected outcome rather than a failure.
+        attribute_name: Required when ``intent="extract"`` and
+            ``mode="attribute"``; the HTML attribute name to read
+            (e.g. ``"href"``, ``"data-testid"``, ``"value"``).
+            Ignored for other modes.
     """
     global _intent_action_adapter
 
@@ -6434,6 +6456,8 @@ async def intent_action(
             assign_to=assign_to,
             match=match,
             nth=nth,
+            mode=mode,
+            attribute_name=attribute_name,
         )
 
         dispatched_keyword = resolution["keyword"]
@@ -6450,16 +6474,25 @@ async def intent_action(
             if "force=True" not in dispatched_arguments:
                 dispatched_arguments.append("force=True")
 
+        # OBS-06 — extract mode=count intentionally accepts multi-match.
+        # Pre-validation would reject the locator when it matches zero
+        # or many elements; that's the wrong question for counting.
+        # Pass pre_validate_timeout_ms=0 to skip the gate for this call.
+        extract_mode = resolution.get("extract_mode")
+        execute_kwargs = {
+            "keyword": dispatched_keyword,
+            "arguments": dispatched_arguments,
+            "session_id": effective_session_id,
+            "assign_to": resolution.get("assign_to"),
+            "detail_level": detail_level,
+        }
+        if extract_mode == "count":
+            execute_kwargs["pre_validate_timeout_ms"] = 0
+
         # Delegate to execute_step for actual execution.
         # execute_step is a FunctionTool (via @mcp.tool decorator),
         # so we call .fn to get the original async function.
-        result = await get_tool_fn(execute_step)(
-            keyword=dispatched_keyword,
-            arguments=dispatched_arguments,
-            session_id=effective_session_id,
-            assign_to=resolution.get("assign_to"),
-            detail_level=detail_level,
-        )
+        result = await get_tool_fn(execute_step)(**execute_kwargs)
 
         # Enrich result with intent metadata
         commit_applied = False
@@ -6481,7 +6514,21 @@ async def intent_action(
                 "locator_normalized": resolution.get("locator_normalized", False),
                 "force_applied": bool(force and resolution.get("force_keyword")),
                 "commit_applied": commit_applied,
+                "extract_mode": extract_mode,
             }
+
+            # OBS-06: for intent=extract, surface the read value at a
+            # predictable top-level key so callers don't have to dig
+            # through ``result["result"]`` / ``result["output"]`` /
+            # ``result["assigned_values"][var]``. The underlying RF
+            # keyword's return value is what we want — it lives in
+            # ``result["result"]`` (preferred) or ``result["output"]``
+            # (stringified fallback).
+            if intent == "extract" and result.get("success"):
+                extracted_value = result.get("result")
+                if extracted_value is None:
+                    extracted_value = result.get("output")
+                result["extracted_value"] = extracted_value
 
         # Track for instruction learning
         _track_tool_result(

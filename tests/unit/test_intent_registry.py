@@ -37,18 +37,21 @@ class TestWithBuiltins:
     def test_creates_registry(self, registry):
         assert isinstance(registry, IntentRegistry)
 
-    def test_browser_has_8_mappings(self, registry):
+    def test_browser_has_9_mappings(self, registry):
+        # OBS-06 added EXTRACT, bringing Browser from 8 to 9.
         intents = registry.get_supported_intents("Browser")
-        assert len(intents) == 8
+        assert len(intents) == 9
 
-    def test_selenium_has_8_mappings(self, registry):
+    def test_selenium_has_9_mappings(self, registry):
+        # OBS-06 added EXTRACT, bringing SeleniumLibrary from 8 to 9.
         intents = registry.get_supported_intents("SeleniumLibrary")
-        assert len(intents) == 8
+        assert len(intents) == 9
 
-    def test_appium_has_6_mappings(self, registry):
-        """AppiumLibrary has no HOVER and no SELECT mappings."""
+    def test_appium_has_7_mappings(self, registry):
+        """AppiumLibrary has no HOVER and no SELECT mappings.
+        OBS-06 added EXTRACT, bringing it from 6 to 7."""
         intents = registry.get_supported_intents("AppiumLibrary")
-        assert len(intents) == 6
+        assert len(intents) == 7
 
     def test_appium_missing_hover(self, registry):
         assert not registry.has_mapping(IntentVerb.HOVER, "AppiumLibrary")
@@ -166,19 +169,24 @@ class TestHasMapping:
 class TestGetSupportedIntents:
     """Test intent enumeration per library."""
 
-    def test_browser_all_8(self, registry):
+    def test_browser_all_9(self, registry):
+        # Browser supports every intent verb after OBS-06's EXTRACT.
         intents = registry.get_supported_intents("Browser")
         assert set(intents) == set(IntentVerb)
 
-    def test_selenium_all_8(self, registry):
+    def test_selenium_all_9(self, registry):
+        # SeleniumLibrary supports every intent verb after OBS-06's EXTRACT.
         intents = registry.get_supported_intents("SeleniumLibrary")
         assert set(intents) == set(IntentVerb)
 
-    def test_appium_6(self, registry):
+    def test_appium_7(self, registry):
+        # AppiumLibrary still lacks HOVER + SELECT. After OBS-06 it gains
+        # EXTRACT, bringing the supported-intent count to 7.
         intents = registry.get_supported_intents("AppiumLibrary")
         expected = {
             IntentVerb.NAVIGATE, IntentVerb.CLICK, IntentVerb.FILL,
-            IntentVerb.ASSERT_VISIBLE, IntentVerb.EXTRACT_TEXT, IntentVerb.WAIT_FOR,
+            IntentVerb.ASSERT_VISIBLE, IntentVerb.EXTRACT_TEXT,
+            IntentVerb.EXTRACT, IntentVerb.WAIT_FOR,
         }
         assert set(intents) == expected
 

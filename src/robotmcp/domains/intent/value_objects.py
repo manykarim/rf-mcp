@@ -26,6 +26,10 @@ class IntentVerb(str, Enum):
     ASSERT_VISIBLE = "assert_visible"
     EXTRACT_TEXT = "extract_text"
     WAIT_FOR = "wait_for"
+    # OBS-06: structured DOM/page-state extraction. Generalises
+    # EXTRACT_TEXT — accepts a ``mode`` option to dispatch to text /
+    # attribute / count / value / url / title getters.
+    EXTRACT = "extract"
 
     # Reserved for future expansion (not yet mapped)
     # DRAG = "drag"

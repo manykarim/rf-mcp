@@ -282,6 +282,173 @@ def _wait_for_selenium_transformer(target, value, normalized_locator, options):
 
 
 # ============================================================
+# OBS-06: extract intent — DOM/page-state read with mode-aware dispatch
+# ============================================================
+
+# Mode → keyword name per library. Looked up by the adapter to substitute
+# the dispatched keyword after the registry returns the default mapping.
+_BROWSER_EXTRACT_KEYWORDS: Dict[str, str] = {
+    "text":      "Get Text",
+    "attribute": "Get Attribute",
+    "count":     "Get Element Count",
+    "value":     "Get Property",
+    "url":       "Get Url",
+    "title":     "Get Title",
+}
+
+_SELENIUM_EXTRACT_KEYWORDS: Dict[str, str] = {
+    "text":      "Get Text",
+    "attribute": "Get Element Attribute",
+    "count":     "Get Element Count",
+    "value":     "Get Value",
+    "url":       "Get Location",
+    "title":     "Get Title",
+}
+
+_APPIUM_EXTRACT_KEYWORDS: Dict[str, str] = {
+    # AppiumLibrary is more limited; only the universally-supported reads
+    # are exposed. Other modes fall back to "text" with a warning.
+    "text":      "Get Text",
+    "attribute": "Get Element Attribute",
+    "count":     "Get Matching Xpath Count",
+}
+
+# Modes that do NOT take a target. The transformer omits the locator
+# from the args list; the resolver tolerates missing target because the
+# EXTRACT mapping is registered with requires_target=False.
+_EXTRACT_MODES_WITHOUT_TARGET: frozenset[str] = frozenset({"url", "title"})
+
+
+def _get_browser_extract_keyword(mode: str) -> str:
+    """Map an extract mode to its Browser library keyword.
+
+    Unknown modes default to ``Get Text`` (safe fallback — same as the
+    EXTRACT_TEXT intent's behaviour). Callers should validate ``mode``
+    against the ``ExtractMode`` Literal first, so this fallback only
+    fires for direct-test inputs.
+    """
+    return _BROWSER_EXTRACT_KEYWORDS.get((mode or "text").lower(), "Get Text")
+
+
+def _get_selenium_extract_keyword(mode: str) -> str:
+    """Map an extract mode to its SeleniumLibrary keyword."""
+    return _SELENIUM_EXTRACT_KEYWORDS.get((mode or "text").lower(), "Get Text")
+
+
+def _get_appium_extract_keyword(mode: str) -> str:
+    """Map an extract mode to its AppiumLibrary keyword.
+
+    Unsupported modes (value/url/title) fall back to ``Get Text`` — those
+    aren't first-class in AppiumLibrary. Callers should normally restrict
+    extract to web sessions; this is a defensive fallback.
+    """
+    return _APPIUM_EXTRACT_KEYWORDS.get((mode or "text").lower(), "Get Text")
+
+
+def _extract_browser_transformer(target, value, normalized_locator, options):
+    """Browser Library extract: builds args based on ``options["mode"]``.
+
+    Per-mode argument shapes:
+        text:      [locator]
+        attribute: [locator, attribute_name]
+        count:     [locator]
+        value:     [locator, "value"]    — Browser uses Get Property(sel, attr)
+        url:       []
+        title:     []
+
+    Raises:
+        ValueError: when a mode that requires a target is invoked without one,
+            or when mode=attribute is used without ``options["attribute_name"]``.
+    """
+    opts = options or {}
+    mode = (opts.get("mode") or "text").lower()
+    args: List[str] = []
+
+    if mode in _EXTRACT_MODES_WITHOUT_TARGET:
+        return args  # no locator, no other args
+
+    # All other modes require a target.
+    locator: Optional[str] = None
+    if normalized_locator is not None:
+        locator = normalized_locator.value
+    elif target is not None:
+        locator = target.locator
+    if locator is None:
+        raise ValueError(
+            f"intent_action(intent='extract', mode='{mode}') requires a target; "
+            f"only mode='url' and mode='title' may omit it."
+        )
+    args.append(locator)
+
+    if mode == "attribute":
+        attr_name = opts.get("attribute_name")
+        if not attr_name:
+            raise ValueError(
+                "intent_action(intent='extract', mode='attribute') requires "
+                "the attribute_name parameter (e.g. attribute_name='href')."
+            )
+        args.append(attr_name)
+    elif mode == "value":
+        # Browser's Get Property takes (selector, attribute). For the
+        # `value` mode we hard-wire attribute="value" — that's the DOM
+        # property name for input values.
+        args.append("value")
+    # text / count: no further args.
+
+    return args
+
+
+def _extract_selenium_transformer(target, value, normalized_locator, options):
+    """SeleniumLibrary extract: builds args based on ``options["mode"]``.
+
+    Per-mode argument shapes (SeleniumLibrary keyword signatures):
+        text:      [locator]                — Get Text(locator)
+        attribute: [locator, attribute_name] — Get Element Attribute(locator, attribute)
+        count:     [locator]                — Get Element Count(locator)
+        value:     [locator]                — Get Value(locator)
+        url:       []                       — Get Location()
+        title:     []                       — Get Title()
+    """
+    opts = options or {}
+    mode = (opts.get("mode") or "text").lower()
+    args: List[str] = []
+
+    if mode in _EXTRACT_MODES_WITHOUT_TARGET:
+        return args
+
+    locator: Optional[str] = None
+    if normalized_locator is not None:
+        locator = normalized_locator.value
+    elif target is not None:
+        locator = target.locator
+    if locator is None:
+        raise ValueError(
+            f"intent_action(intent='extract', mode='{mode}') requires a target; "
+            f"only mode='url' and mode='title' may omit it."
+        )
+    args.append(locator)
+
+    if mode == "attribute":
+        attr_name = opts.get("attribute_name")
+        if not attr_name:
+            raise ValueError(
+                "intent_action(intent='extract', mode='attribute') requires "
+                "the attribute_name parameter (e.g. attribute_name='value')."
+            )
+        args.append(attr_name)
+    # text / count / value: no further args. SeleniumLibrary's Get Value
+    # takes only the locator (no attribute name, unlike Browser).
+
+    return args
+
+
+# Modes that intentionally accept multi-match (count) — pre-validation
+# would falsely reject these because the test "an element matches the
+# locator" is the wrong question when you're counting matches.
+EXTRACT_MULTI_MATCH_MODES: frozenset[str] = frozenset({"count"})
+
+
+# ============================================================
 # Built-in mapping definitions
 # ============================================================
 
@@ -354,6 +521,26 @@ def _builtin_browser_mappings() -> List[IntentMapping]:
             requires_target=True,
             requires_value=False,
             timeout_category="read",
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.EXTRACT,
+            library="Browser",
+            # Default keyword for the most common mode (text). The adapter
+            # overrides this based on ``options["mode"]`` via
+            # ``_get_browser_extract_keyword``.
+            keyword="Get Text",
+            # Target is OPTIONAL — modes url/title don't need one. The
+            # transformer raises if a target-requiring mode is invoked
+            # without one, so the validation is mode-aware.
+            requires_target=False,
+            requires_value=False,
+            argument_transformer=_extract_browser_transformer,
+            timeout_category="read",
+            notes=(
+                "OBS-06. mode={text,attribute,count,value,url,title} dispatches "
+                "to Get Text / Get Attribute / Get Element Count / Get Property "
+                "/ Get Url / Get Title."
+            ),
         ),
         IntentMapping(
             intent_verb=IntentVerb.WAIT_FOR,
@@ -431,6 +618,20 @@ def _builtin_selenium_mappings() -> List[IntentMapping]:
             timeout_category="read",
         ),
         IntentMapping(
+            intent_verb=IntentVerb.EXTRACT,
+            library="SeleniumLibrary",
+            keyword="Get Text",  # default; adapter swaps based on mode
+            requires_target=False,
+            requires_value=False,
+            argument_transformer=_extract_selenium_transformer,
+            timeout_category="read",
+            notes=(
+                "OBS-06. mode={text,attribute,count,value,url,title} dispatches "
+                "to Get Text / Get Element Attribute / Get Element Count / "
+                "Get Value / Get Location / Get Title."
+            ),
+        ),
+        IntentMapping(
             intent_verb=IntentVerb.WAIT_FOR,
             library="SeleniumLibrary",
             keyword="Wait Until Element Is Visible",
@@ -487,6 +688,24 @@ def _builtin_appium_mappings() -> List[IntentMapping]:
             requires_target=True,
             requires_value=False,
             timeout_category="read",
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.EXTRACT,
+            library="AppiumLibrary",
+            keyword="Get Text",  # default; adapter swaps based on mode
+            requires_target=False,
+            requires_value=False,
+            # AppiumLibrary uses the same arg shape as SeleniumLibrary for
+            # the modes it supports (text / attribute / count). The
+            # unsupported modes (value, url, title) fall back to Get Text
+            # — see _get_appium_extract_keyword.
+            argument_transformer=_extract_selenium_transformer,
+            timeout_category="read",
+            notes=(
+                "OBS-06. mode={text,attribute,count} supported; value/url/title "
+                "fall back to Get Text (AppiumLibrary has no first-class "
+                "equivalents in mobile context)."
+            ),
         ),
         IntentMapping(
             intent_verb=IntentVerb.WAIT_FOR,

@@ -26,8 +26,11 @@ from robotmcp.domains.intent.value_objects import (
 class TestIntentVerb:
     """Test IntentVerb enum."""
 
-    def test_has_exactly_8_values(self):
-        assert len(IntentVerb) == 8
+    def test_has_exactly_9_values(self):
+        # OBS-06 — added EXTRACT (generalised, mode-aware getter). The
+        # set is still deliberately small; growth requires updating the
+        # tool-profile + adapter wiring.
+        assert len(IntentVerb) == 9
 
     def test_navigate_value(self):
         assert IntentVerb.NAVIGATE.value == "navigate"
@@ -52,6 +55,10 @@ class TestIntentVerb:
 
     def test_wait_for_value(self):
         assert IntentVerb.WAIT_FOR.value == "wait_for"
+
+    def test_extract_value(self):
+        # OBS-06.
+        assert IntentVerb.EXTRACT.value == "extract"
 
     def test_string_subclass(self):
         """IntentVerb is a str enum so it can be used directly as a string."""

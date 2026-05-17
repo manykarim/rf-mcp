@@ -434,6 +434,9 @@ IntentVerb = Annotated[
     Literal[
         "navigate", "click", "fill", "hover",
         "select", "assert_visible", "extract_text", "wait_for",
+        # OBS-06: structured DOM/page-state extraction. The mode parameter
+        # selects what to read (text/attribute/count/value/url/title).
+        "extract",
     ],
     BeforeValidator(_normalize_str),
 ]
@@ -445,6 +448,19 @@ IntentVerb = Annotated[
 # numeric-string heuristic.
 SelectMatch = Annotated[
     Literal["label", "value", "index", "text", "auto"],
+    BeforeValidator(_normalize_str),
+]
+
+# OBS-06: mode selector for ``intent_action(intent="extract", ...)``.
+# Each mode dispatches to a library-native getter:
+#   text       → Browser.Get Text         / SeleniumLibrary.Get Text
+#   attribute  → Browser.Get Attribute    / SeleniumLibrary.Get Element Attribute
+#   count      → Browser.Get Element Count / SeleniumLibrary.Get Element Count
+#   value      → Browser.Get Property(target, "value") / SeleniumLibrary.Get Value
+#   url        → Browser.Get Url          / SeleniumLibrary.Get Location
+#   title      → Browser.Get Title        / SeleniumLibrary.Get Title
+ExtractMode = Annotated[
+    Literal["text", "attribute", "count", "value", "url", "title"],
     BeforeValidator(_normalize_str),
 ]
 
