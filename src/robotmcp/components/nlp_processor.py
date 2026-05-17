@@ -406,27 +406,49 @@ class NaturalLanguageProcessor:
         return text
 
     def _extract_title(self, scenario: str) -> str:
-        """Extract or generate a title for the test scenario."""
-        # Try to find a title pattern
+        """Extract or generate a title for the test scenario.
+
+        If the scenario starts with a navigation verb followed by a URL
+        ("Open https://sampleapp.tricentis.com/101/"), use the URL's
+        host as the title. The previous logic truncated at the first
+        dot — yielding "Open https://sampleapp", a meaningless title.
+
+        For non-URL openings, the title-pattern regexes use ``\\.\\s+``
+        instead of bare ``\\.`` so that periods inside URLs in the
+        middle of the text do not prematurely terminate the match.
+        """
+        leading_url_match = re.match(
+            r"^\s*(?:open|navigate\s+to|go\s+to|visit|browse\s+to)\s+https?://([^/\s]+)",
+            scenario,
+            re.IGNORECASE,
+        )
+        if leading_url_match:
+            return leading_url_match.group(1).capitalize()
+
         title_patterns = [
-            r'^(?:test|verify|check|ensure)\s+(?:that\s+)?(.+?)(?:\.|$)',
-            r'^(.+?)(?:\s+test|\s+scenario|\.)',
+            r"^(?:test|verify|check|ensure)\s+(?:that\s+)?(.+?)(?:\.\s+|$)",
+            r"^(.+?)(?:\s+test|\s+scenario|\.\s+|$)",
         ]
-        
+
         for pattern in title_patterns:
             match = re.search(pattern, scenario.lower())
             if match:
                 title = match.group(1).strip()
-                return title.capitalize()
-        
+                if title:
+                    return title.capitalize()
+
         # Default title based on first few words
         words = scenario.split()[:6]
         return ' '.join(words) + ('...' if len(scenario.split()) > 6 else '')
 
     def _split_sentences(self, text: str) -> List[str]:
-        """Split text into sentences for action extraction."""
-        # Simple sentence splitting - can be enhanced
-        sentences = re.split(r'[.!?]+', text)
+        """Split text into sentences for action extraction.
+
+        Periods are only treated as terminators when followed by
+        whitespace, so dots inside URLs ("https://sampleapp.tricentis.com/")
+        do not fragment the sentence and lose subsequent actions.
+        """
+        sentences = re.split(r"(?:[!?]+|\.\s+)", text)
         return [s.strip() for s in sentences if s.strip()]
 
     def _extract_action(self, sentence: str) -> Optional[TestAction]:
