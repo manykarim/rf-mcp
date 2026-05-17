@@ -253,6 +253,73 @@ def _check_evaluate_javascript_misuse(ctx: HintContext, err: str) -> List[Hint]:
     )]
 
 
+# ---------------------------------------------------------------------------
+# OBS-12 — Browser-library locator using a SeleniumLibrary role prefix.
+# ---------------------------------------------------------------------------
+
+# Locator prefixes that mean "find element by role" in SeleniumLibrary
+# but are NOT supported by the Browser library. When the ARIA snapshot
+# renders an element as ``button "Calculate"``, agents (especially
+# small ones) sometimes encode that as ``button=Calculate`` — valid
+# SL, rejected by Browser. Match the prefix exactly to avoid colliding
+# with the Playwright-engine ``button:text-is('Calculate')`` form.
+_BROWSER_ROLE_PREFIX_PATTERN = re.compile(
+    r"^\s*(button|link|input|select|textarea)\s*=\s*(?P<value>\S.*?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _check_browser_role_prefix_misuse(ctx: HintContext, err: str) -> List[Hint]:
+    """OBS-12 — ``button=LABEL`` / ``link=LABEL`` etc. against Browser library.
+
+    Surfaces a focused hint pointing the agent at the working
+    alternative spelling. The same prefixes against SeleniumLibrary
+    are valid and the checker must NOT fire there.
+
+    Triggers on the locator-string shape (not on error text), so the
+    hint fires reliably no matter what the underlying rejection
+    message is. Relevance 92 — below OBS-03's 95 (extremely specific
+    JS-arg-shape mismatch) but ABOVE the generic invalid-selector hint
+    (90), because OBS-12 diagnoses the root cause (wrong-library
+    locator syntax) while invalid-selector flags the downstream
+    parser-error symptom.
+    """
+    lib = _detect_library(ctx)
+    if lib != "Browser":
+        return []
+    first = _first_arg(ctx)
+    if not isinstance(first, str):
+        return []
+    match = _BROWSER_ROLE_PREFIX_PATTERN.match(first)
+    if not match:
+        return []
+    role = first.split("=", 1)[0].strip().lower()
+    value = match.group("value")
+    return [Hint(
+        title=f"Browser library does not support the `{role}=` role prefix",
+        message=(
+            f"`{role}={value}` is SeleniumLibrary-style role-prefix locator "
+            f"syntax. Browser library does NOT support these prefixes; the "
+            f"only documented explicit-strategy prefixes are id=, css=, "
+            f"text=, and xpath=. The ARIA snapshot rendering an element "
+            f"as `{role} \"{value}\"` is the accessibility tree's "
+            f"role+name format, not a locator. Use one of the Browser-"
+            f"library-supported alternatives below."
+        ),
+        examples=[
+            {
+                "label": "Browser text engine (case-insensitive substring by default)",
+                "rf": f"intent_action    intent=click    target=text={value}",
+            },
+            {
+                "label": "Playwright text-inside-CSS (exact, tag-scoped)",
+                "rf": f"intent_action    intent=click    target=css={role}:text-is('{value}')",
+            },
+        ],
+        relevance=92,
+    )]
+
+
 def _check_element_outside_viewport(ctx: HintContext, err: str) -> List[Hint]:
     if not re.search(r"element is outside of the viewport|outside.*viewport", err, re.IGNORECASE):
         return []
@@ -652,6 +719,11 @@ def _check_element_interaction_errors(ctx: HintContext) -> List[Hint]:
         # JS-body-as-single-arg shape mismatch rather than just flagging
         # the resulting CSS-tokenizer error.
         _check_evaluate_javascript_misuse,
+        # OBS-12: more specific than the generic "not visible" hint —
+        # diagnoses Selenium-style role-prefix locators against Browser
+        # library before the agent burns a recovery cycle on a vague
+        # "element not visible" message.
+        _check_browser_role_prefix_misuse,
         _check_invalid_selector,
         _check_element_outside_viewport,
         _check_element_not_interactable,
