@@ -6267,6 +6267,62 @@ async def manage_attach(action: AttachAction = "status") -> Dict[str, Any]:
 # ── ADR-007: intent_action MCP tool ───────────────────────────────
 
 
+def _should_commit_after_fill(
+    *,
+    commit: bool,
+    intent: str,
+    result: Dict[str, Any],
+    library: str | None,
+    dispatched_arguments: list,
+) -> bool:
+    """Decide whether the commit=True follow-up Dispatch Event should fire.
+
+    Only fires for a successful Browser FILL with a locator argument.
+    A failed FILL, a non-FILL intent, a non-Browser library, or an
+    empty arg list all skip the follow-up.
+
+    ``intent`` is the literal string the MCP tool receives (e.g. ``"fill"``)
+    since the IntentVerb type alias in ``domains.shared.kernel`` is a
+    Literal, not an Enum.
+    """
+    return bool(
+        commit
+        and result.get("success")
+        and (intent == "fill" or str(intent) == "fill")
+        and library == "Browser"
+        and dispatched_arguments
+    )
+
+
+async def _dispatch_change_after_fill(
+    *, target_locator: str, session_id: str,
+) -> bool:
+    """Fire a real DOM ``change`` event on the just-filled target.
+
+    Many SPAs (Vue, React, Angular, jQuery validate, idealForms) gate
+    form-state validation on the ``change`` event, which Playwright's
+    ``fill`` does not always emit. Best-effort — failures are logged
+    and swallowed so a flaky dispatch never escalates a successful
+    fill into a failed step.
+    """
+    try:
+        await get_tool_fn(execute_step)(
+            keyword="Dispatch Event",
+            arguments=[target_locator, "change"],
+            session_id=session_id,
+            detail_level="minimal",
+            raise_on_failure=False,
+            record=False,
+        )
+        return True
+    except Exception as commit_exc:
+        logger.debug(
+            "intent_action commit=True follow-up dispatch failed: %s",
+            commit_exc,
+        )
+        return False
+
+
 @mcp.tool
 async def intent_action(
     intent: IntentVerb,
@@ -6279,6 +6335,7 @@ async def intent_action(
     force: bool = False,
     match: SelectMatch = "label",
     nth: int | None = None,
+    commit: bool = False,
 ) -> Dict[str, Any]:
     """Execute a high-level intent that auto-resolves to the correct library keyword.
 
@@ -6318,6 +6375,15 @@ async def intent_action(
             ``>> nth=<n>``; SeleniumLibrary appends ``:nth-of-type(<n+1>)``
             for CSS locators only (other locator types are unaffected and
             log a debug-level warning).
+        commit: When True AND the intent is ``fill`` AND the library is
+            ``Browser`` AND the fill succeeds, dispatch a real DOM
+            ``change`` event on the target (via Browser's
+            ``Dispatch Event`` keyword). Many SPAs (Vue, React, Angular,
+            jQuery validate, idealForms) only commit form state in
+            response to a ``change`` event, which Playwright's ``fill``
+            does not always emit. The follow-up failure is logged and
+            ignored — never breaks the original fill result. Off by
+            default to preserve backwards-compatible behaviour.
     """
     global _intent_action_adapter
 
@@ -6380,13 +6446,25 @@ async def intent_action(
         )
 
         # Enrich result with intent metadata
+        commit_applied = False
         if isinstance(result, dict):
+            if _should_commit_after_fill(
+                commit=commit, intent=intent, result=result,
+                library=resolution.get("library"),
+                dispatched_arguments=dispatched_arguments,
+            ):
+                commit_applied = await _dispatch_change_after_fill(
+                    target_locator=dispatched_arguments[0],
+                    session_id=effective_session_id,
+                )
+
             result["intent_resolved"] = {
                 "intent": resolution["intent"],
                 "keyword": dispatched_keyword,
                 "library": resolution["library"],
                 "locator_normalized": resolution.get("locator_normalized", False),
                 "force_applied": bool(force and resolution.get("force_keyword")),
+                "commit_applied": commit_applied,
             }
 
         # Track for instruction learning

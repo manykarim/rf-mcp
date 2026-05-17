@@ -40,19 +40,28 @@ class TestCookbookPresence:
 
 
 class TestBrowserPatterns:
-    """Browser library (Playwright) locator examples — the patterns most
-    likely to be misremembered as plain CSS."""
+    """Browser library (Playwright) locator examples — only the prefixes
+    documented in the Browser library's own explicit-strategies table:
+    css, xpath, text, id. (No `role=` string engine — Playwright exposes
+    role via API, not the locator string.)"""
 
     @pytest.mark.parametrize("snippet", [
-        "id=submit",                  # bare prefix
+        "id=submit",                  # canonical id locator
         "css=button.primary",         # css prefix
         "text=",                      # text prefix
-        "role=",                      # role prefix (Browser-specific, often missed)
         "xpath=",                     # xpath fallback
-        ">> nth=",                    # Playwright nth filter syntax
+        ">> nth=",                    # Playwright cascaded nth filter
     ])
     def test_browser_pattern_present(self, rendered_default, snippet):
         assert snippet in rendered_default, f"missing Browser pattern: {snippet!r}"
+
+    def test_no_invalid_role_string_engine(self, rendered_default):
+        # The Browser library does NOT expose a `role=` string locator
+        # engine. Listing it tricks the LLM into shipping locators the
+        # library cannot resolve. If you want ARIA-role lookup, use the
+        # `Get Element By Role` keyword instead.
+        assert "role=button[name=" not in rendered_default
+        assert "role=link[name=" not in rendered_default
 
 
 class TestSeleniumPatterns:
@@ -76,7 +85,7 @@ class TestPickingGuidance:
 
     @pytest.mark.parametrize("phrase", [
         "Prefer id= when available",
-        "prefer role=",
+        "Fall back to css= or text=",
         "intent_action(..., nth=N)",
     ])
     def test_picking_guidance_present(self, rendered_default, phrase):
