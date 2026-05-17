@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -711,13 +712,71 @@ class KeywordExecutor:
 
         return False, error_msg, details
 
+    # OBS-01 — pattern matching `id=X` where X is a single non-whitespace
+    # id value (no cascaded `>>` separators, no embedded spaces from
+    # multi-token expressions). Composite forms like ``id=foo >> nth=0``
+    # are caught by the `_CASCADED_SEPARATOR` guard before this regex
+    # ever runs.
+    _ID_LOCATOR_PATTERN = re.compile(r"^\s*id\s*=\s*(?P<value>\S.*?)\s*$")
+    # Playwright's cascaded-selector separator — when present, the
+    # locator is a compound that the Browser library's own selector
+    # parser handles, NOT a plain ``id=X`` form.
+    _CASCADED_SEPARATOR: str = ">>"
+
+    @classmethod
+    def _normalize_locator_for_browser_prevalidation(cls, locator: str) -> str:
+        """Rewrite ``id=X`` to its CSS attribute-selector equivalent
+        ``[id="X"]`` for the Browser-library pre-validation call only.
+
+        The Browser library documents ``id=X`` and ``css=[id="X"]`` as
+        equivalent (per its libdoc explicit-strategies table). In practice
+        they take different code paths through the selector parser and
+        have been observed to produce DIFFERENT pre-validation verdicts
+        on the same DOM element under slow-load conditions (see OBS-01 /
+        2026-05-17 Tricentis Obstacle 3 — ``id=generate`` reported
+        'detached' while ``css=#generate`` passed immediately).
+
+        This rewrite forces ``id=X`` through the CSS engine path, the
+        same path ``css=#X`` (rewritten to bare ``#X`` by the locator
+        converter) already uses. The attribute-selector form
+        ``[id="X"]`` is safer than ``#X`` because it handles id values
+        containing CSS-special characters (dots, colons) without
+        needing per-char escapes — the double-quoted attribute value
+        accepts them literally.
+
+        Important: this rewrite is local to the pre-validation gate.
+        The original ``id=X`` form is still what the actual keyword
+        executes against AND what ``build_test_suite`` records — RF
+        suite convention is preserved.
+        """
+        if not locator:
+            return locator
+        # Cascaded forms (`id=foo >> nth=0`) go through Browser library's
+        # own selector parser — that path doesn't have the `id=` flake,
+        # and trying to rewrite would mangle the cascade. Leave alone.
+        if cls._CASCADED_SEPARATOR in locator:
+            return locator
+        match = cls._ID_LOCATOR_PATTERN.match(locator)
+        if not match:
+            return locator
+        value = match.group("value")
+        # Escape embedded double quotes; ids containing literal " are
+        # vanishingly rare but the rewrite must not produce malformed CSS.
+        escaped = value.replace('"', '\\"')
+        return f'[id="{escaped}"]'
+
     async def _pre_validate_browser_element(
         self, locator: str, required_states: Set[str], timeout_ms: int
     ) -> Dict[str, Any]:
         """Pre-validate element using Browser Library's Get Element States."""
         try:
             timeout_str = f"{timeout_ms}ms"
-            result, error_info = await asyncio.to_thread(self._run_browser_get_states, locator, timeout_str)
+            # OBS-01: normalize id=X → [id="X"] so the pre-validation
+            # gate's verdict is identical for id=X and css=#X / css=[id="X"].
+            # The original `locator` is preserved for error messages
+            # (constructed by the caller from the unmodified parameter).
+            pv_locator = self._normalize_locator_for_browser_prevalidation(locator)
+            result, error_info = await asyncio.to_thread(self._run_browser_get_states, pv_locator, timeout_str)
 
             if result is None:
                 # Use the actual error message if available, otherwise generic message

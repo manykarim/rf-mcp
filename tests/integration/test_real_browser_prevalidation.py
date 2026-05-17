@@ -261,3 +261,124 @@ class TestBrowserPageSourceService:
         # Context uses "page_title" key from extract_page_context()
         title = context.get("page_title", "")
         assert title, f"Expected non-empty page_title in context, got: {context}"
+
+
+# ---------------------------------------------------------------------------
+# OBS-01 — id=X vs css=#X verdict equivalence (live Browser)
+# ---------------------------------------------------------------------------
+
+
+class TestBrowserIdLocatorEquivalenceOBS01:
+    """OBS-01 — pre-validation verdicts must agree for ``id=X`` and
+    ``css=#X`` against the same DOM element.
+
+    The 2026-05-17 Tricentis benchmark exposed a real flake: the same
+    ``<button id="generate">`` element was reported 'detached' when
+    targeted as ``id=generate`` but passed pre-validation when targeted
+    as ``css=#generate``. The fix
+    (``_normalize_locator_for_browser_prevalidation``) rewrites
+    ``id=X`` to ``[id="X"]`` for the pre-validation call only, forcing
+    both forms through Playwright's CSS engine.
+
+    This integration test runs against a real headless Chromium browser
+    via Browser Library / Playwright using a ``data:text/html`` fixture
+    URL with buttons in every id-shape variant the story's acceptance
+    criteria #2 calls out. The unit-test counterpart lives in
+    ``tests/unit/test_prevalidation_id_equivalence.py``.
+    """
+
+    # Fixture page with one button per id-shape variant. data: URL so
+    # we don't need a static HTML file or a local web server.
+    DATA_URL = (
+        "data:text/html,"
+        "<html><body>"
+        "<button id='simple'>Simple</button>"
+        "<button id='with-hyphen'>Hyphen</button>"
+        "<button id='with_underscore'>Underscore</button>"
+        "<button id='Camel123'>Camel</button>"
+        "<button id='generate'>Generate</button>"
+        "</body></html>"
+    )
+
+    @pytest.mark.parametrize("id_value", [
+        "simple",
+        "with-hyphen",       # the form most likely to trip a naive #X shortcut
+        "with_underscore",
+        "Camel123",
+        "generate",          # Sonnet's actual repro id from Obstacle 3
+    ])
+    async def test_id_and_css_hash_produce_same_verdict(
+        self, browser_session, id_value,
+    ):
+        session, executor, client = browser_session
+
+        # Navigate to the fixture page. Per-test navigation keeps each
+        # case isolated and stops earlier tests in this module (which
+        # use example.com) from interacting with our fixture state.
+        nav_res = await client.call_tool(
+            "execute_step",
+            {
+                "keyword": "Go To",
+                "arguments": [self.DATA_URL],
+                "session_id": SESSION_ID,
+            },
+        )
+        assert nav_res.data.get("success") is True, (
+            f"Failed to navigate to fixture page: {nav_res.data}"
+        )
+
+        # ``hover`` requires only {visible}; using it keeps the test
+        # focused on the locator-equivalence question without bringing
+        # the {enabled} state into play (all the fixture buttons are
+        # enabled but the test reads cleaner without that dependency).
+        id_form_valid, id_err, id_details = await executor._pre_validate_element(
+            f"id={id_value}", session, "hover",
+        )
+        css_form_valid, css_err, css_details = await executor._pre_validate_element(
+            f"css=#{id_value}", session, "hover",
+        )
+
+        # Equivalence — the verdict MUST match across the two forms.
+        # This is the OBS-01 acceptance #1 assertion.
+        assert id_form_valid == css_form_valid, (
+            f"Verdict mismatch for id={id_value!r}: "
+            f"id-form valid={id_form_valid} (err={id_err!r}) vs "
+            f"css-form valid={css_form_valid} (err={css_err!r}). "
+            f"id-details={id_details}, css-details={css_details}"
+        )
+        # And both should pass — these fixture elements are visible.
+        # If they don't pass it means the page didn't load or the data:
+        # URL isn't being honoured, not that the equivalence is wrong.
+        assert id_form_valid is True, (
+            f"Both forms failed for id={id_value!r}; "
+            f"check the data: URL navigation: err={id_err!r}"
+        )
+
+    async def test_missing_id_fails_consistently_across_forms(
+        self, browser_session,
+    ):
+        """When the element genuinely does NOT exist, both forms must
+        fail in the same way — equivalent failure mode is just as
+        important as equivalent success mode (otherwise an LLM that
+        observes 'css=#X failed' can't conclude anything about whether
+        'id=X' would have succeeded)."""
+        session, executor, client = browser_session
+        nav_res = await client.call_tool(
+            "execute_step",
+            {
+                "keyword": "Go To",
+                "arguments": [self.DATA_URL],
+                "session_id": SESSION_ID,
+            },
+        )
+        assert nav_res.data.get("success") is True
+
+        id_form_valid, id_err, _ = await executor._pre_validate_element(
+            "id=definitely-not-on-this-page", session, "hover",
+        )
+        css_form_valid, css_err, _ = await executor._pre_validate_element(
+            "css=#definitely-not-on-this-page", session, "hover",
+        )
+        assert id_form_valid is False and css_form_valid is False, (
+            "Both forms must fail for a non-existent element"
+        )
