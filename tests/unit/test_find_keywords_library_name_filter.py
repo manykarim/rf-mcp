@@ -220,7 +220,11 @@ class TestReproducerSemanticBrowser:
         assert "Browser" in libs
         assert "BuiltIn" in libs
 
-    async def test_excluded_keywords_populated(self, patched_engines):
+    async def test_library_filter_reports_count_and_from_library(self, patched_engines):
+        """The compact response carries an exclusion count and the
+        from_library label, without re-listing every excluded keyword
+        name (those would already be missing from ``matches``, so the
+        list is informationally redundant and just inflates tokens)."""
         result = await _async_tool_fn(find_keywords)(
             query="select dropdown option by label or text",
             strategy="semantic",
@@ -228,12 +232,10 @@ class TestReproducerSemanticBrowser:
             library_name="Browser",
             limit=10,
         )
-        excluded = result.get("excluded_keywords", [])
-        assert excluded, "excluded_keywords must be populated"
-        excluded_names = {e["keyword"] for e in excluded}
-        assert {"Set Window Position", "Click Element", "Select From List By Label"}.issubset(
-            excluded_names
-        ), excluded_names
+        lf = result.get("library_filter")
+        assert lf is not None
+        assert lf["count"] == 3  # 3 SL keywords in the fixture
+        assert lf["from_library"] == "SeleniumLibrary"
 
     async def test_library_filter_indicates_source(self, patched_engines):
         result = await _async_tool_fn(find_keywords)(
@@ -246,15 +248,22 @@ class TestReproducerSemanticBrowser:
         assert lf["applied"] == "Browser"
         assert lf["source"] == "library_name"
 
-    async def test_session_library_field_preserved_for_backcompat(self, patched_engines):
-        """Legacy callers read ``session_library``. The new param must keep
-        this populated whenever filtering applies."""
+    async def test_verbose_legacy_fields_dropped(self, patched_engines):
+        """Both ``excluded_keywords`` (verbose per-entry list) and
+        ``session_library`` (redundant with library_filter.applied) are
+        dropped from the response. Token budget: ~75 vs ~1100 in the
+        pre-compaction shape."""
         result = await _async_tool_fn(find_keywords)(
             query="anything",
             strategy="semantic",
             library_name="Browser",
         )
-        assert result.get("session_library") == "Browser"
+        assert "excluded_keywords" not in result, (
+            "verbose excluded_keywords list must be dropped"
+        )
+        assert "session_library" not in result, (
+            "redundant session_library field must be dropped"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -299,11 +308,13 @@ class TestStrategyParityPattern:
         assert "SeleniumLibrary" not in libs, libs
         assert "Browser" in libs
         assert "BuiltIn" in libs
-        # Response shape consistent with semantic branch.
-        assert result.get("library_filter") == {
-            "applied": "Browser",
-            "source": "library_name",
-        }
+        # Response shape consistent with semantic branch (compact shape).
+        lf = result.get("library_filter")
+        assert lf is not None
+        assert lf["applied"] == "Browser"
+        assert lf["source"] == "library_name"
+        assert lf["count"] >= 1
+        assert lf["from_library"] == "SeleniumLibrary"
 
 
 # ---------------------------------------------------------------------------
@@ -458,7 +469,138 @@ class TestSiblingLibrariesPreserved:
 
 
 # ---------------------------------------------------------------------------
-# 9. Docstring contract — the parameter is reachable and named
+# 9. Compaction: only actionable alternatives surface; verbose fields dropped
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestExcludedKeywordsCompaction:
+    """The pre-compaction response carried 7+ verbose entries × ~150
+    tokens each (with redundant ``incompatible_library`` /
+    ``session_library`` / ``reason`` fields repeated identically). The
+    compact response keeps only the actionable translations (entries
+    that carry an ``alternative`` from the plugin's KEYWORD_ALTERNATIVES
+    table) and surfaces the rest as a single ``count`` field.
+
+    The fixture data above has no ``alternative`` entries because the
+    synthetic matches don't trip any plugin-table mappings. We patch
+    the filter function to inject a realistic actionable entry and
+    pin the response shape."""
+
+    async def test_alternatives_surface_when_plugin_provides_them(self, patched_engines):
+        # Inject an actionable alternative via the underlying filter.
+        # KEYWORD_ALTERNATIVES on browser_plugin maps "close all browsers"
+        # → {"alternative": "Close Browser ALL", "example": "Close Browser    ALL"}
+        with patch(
+            "robotmcp.server._filter_keywords_by_session_library",
+        ) as mock_filter:
+            mock_filter.return_value = (
+                [{"name": "Click", "library": "Browser"}],
+                [
+                    {
+                        "keyword": "Close All Browsers",
+                        "incompatible_library": "SeleniumLibrary",
+                        "session_library": "Browser",
+                        "reason": "...",
+                        "alternative": "Close Browser    ALL",
+                        "example": "Close Browser    ALL",
+                    },
+                    {
+                        "keyword": "Set Window Position",
+                        "incompatible_library": "SeleniumLibrary",
+                        "session_library": "Browser",
+                        "reason": "...",
+                        # NB: no alternative key — should NOT appear in the
+                        # compact ``excluded_alternatives`` list.
+                    },
+                ],
+            )
+            result = await _async_tool_fn(find_keywords)(
+                query="anything",
+                strategy="pattern",
+                library_name="Browser",
+            )
+        # library_filter carries count for ALL excluded entries (2).
+        assert result["library_filter"]["count"] == 2
+        assert result["library_filter"]["from_library"] == "SeleniumLibrary"
+        # excluded_alternatives only carries the actionable one.
+        alts = result.get("excluded_alternatives", [])
+        assert len(alts) == 1
+        assert alts[0]["keyword"] == "Close All Browsers"
+        assert alts[0]["alternative"] == "Close Browser    ALL"
+        # The non-actionable entry's bare keyword name does NOT appear
+        # anywhere in the response — the agent learns it was filtered
+        # from its absence in the matches list.
+        flat = repr(result)
+        assert "Set Window Position" not in flat
+
+    async def test_excluded_alternatives_filters_by_actionability(self, patched_engines):
+        """The fixture's SL keywords are:
+          - Set Window Position           (no plugin mapping → silent)
+          - Click Element                 (mapped → "Click", surfaces)
+          - Select From List By Label     (no plugin mapping → silent)
+
+        Only the mapped entry appears in ``excluded_alternatives``.
+        The other two are silently dropped from the inline response —
+        the agent learns they were filtered from their absence in the
+        ``matches`` list."""
+        result = await _async_tool_fn(find_keywords)(
+            query="anything",
+            strategy="semantic",
+            library_name="Browser",
+        )
+        # 3 total excluded entries (matches the fixture count).
+        assert result["library_filter"]["count"] == 3
+        assert result["library_filter"]["from_library"] == "SeleniumLibrary"
+        # Only the Click Element mapping surfaces.
+        alts = result.get("excluded_alternatives", [])
+        assert len(alts) == 1, (
+            f"only Click Element has a plugin mapping; got {alts!r}"
+        )
+        assert alts[0]["keyword"] == "Click Element"
+        assert alts[0]["alternative"] == "Click"
+        # The non-actionable SL names do NOT appear in the response.
+        flat = repr(result)
+        assert "Set Window Position" not in flat
+        assert "Select From List By Label" not in flat
+
+    async def test_excluded_alternatives_absent_when_no_mappings_at_all(self, patched_engines):
+        """If NO excluded keyword has a plugin mapping, the
+        ``excluded_alternatives`` key is absent (not present-but-empty).
+        Pinned by injecting two non-mapped SL keywords."""
+        with patch(
+            "robotmcp.server._filter_keywords_by_session_library",
+        ) as mock_filter:
+            mock_filter.return_value = (
+                [{"name": "Click", "library": "Browser"}],
+                [
+                    {
+                        "keyword": "Set Window Position",
+                        "incompatible_library": "SeleniumLibrary",
+                        "session_library": "Browser",
+                        "reason": "...",
+                    },
+                    {
+                        "keyword": "Maximize Browser Window",
+                        "incompatible_library": "SeleniumLibrary",
+                        "session_library": "Browser",
+                        "reason": "...",
+                    },
+                ],
+            )
+            result = await _async_tool_fn(find_keywords)(
+                query="anything",
+                strategy="pattern",
+                library_name="Browser",
+            )
+        assert "excluded_alternatives" not in result
+        # But the count + from_library are still surfaced.
+        assert result["library_filter"]["count"] == 2
+        assert result["library_filter"]["from_library"] == "SeleniumLibrary"
+
+
+# ---------------------------------------------------------------------------
+# 10. Docstring contract — the parameter is reachable and named
 # ---------------------------------------------------------------------------
 
 

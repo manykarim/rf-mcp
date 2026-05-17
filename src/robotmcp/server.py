@@ -2104,6 +2104,66 @@ def _filter_keywords_by_session_library(
     return filtered_keywords, excluded_with_alternatives
 
 
+def _build_filter_diagnostics(
+    excluded: List[Dict[str, Any]],
+    applied: str,
+    source: str,
+) -> Dict[str, Any]:
+    """Build compact response diagnostics for a library filter pass.
+
+    Replaces the legacy verbose ``excluded_keywords`` shape (7+ entries
+    × ~150 tokens each, with ``incompatible_library``/``session_library``/
+    ``reason`` fields repeated identically) with a compact summary:
+
+      library_filter: {applied, source, from_library, count}
+      excluded_alternatives: [{keyword, alternative, example}, ...]
+        — only entries that carry actionable SL→Browser (or vice versa)
+        translation info from the plugin's KEYWORD_ALTERNATIVES table.
+
+    For the typical Browser-filter-applied response (~7 excluded SL
+    keywords with one or two alternatives), this cuts the inline
+    response from ~1100 tokens to ~75 tokens. Bare excluded keyword
+    names are dropped — the agent already learns "X was filtered" from
+    X's absence in the ``matches`` list, so re-listing them adds zero
+    information.
+    """
+    # Derive the unique-incompatible-library label. In practice it's a
+    # single library (Browser ↔ SeleniumLibrary in current plugins) but
+    # the table semantics allow multiples; surface as a comma-joined
+    # label rather than a list, since the agent reads a string.
+    libs = sorted({
+        e.get("incompatible_library")
+        for e in excluded
+        if e.get("incompatible_library")
+    })
+    from_library: str | None = libs[0] if len(libs) == 1 else (
+        ", ".join(libs) if libs else None
+    )
+
+    diagnostics: Dict[str, Any] = {
+        "library_filter": {
+            "applied": applied,
+            "source": source,
+            "count": len(excluded),
+        }
+    }
+    if from_library:
+        diagnostics["library_filter"]["from_library"] = from_library
+
+    actionable = [
+        {
+            "keyword": e["keyword"],
+            "alternative": e["alternative"],
+            "example": e.get("example"),
+        }
+        for e in excluded
+        if e.get("alternative")
+    ]
+    if actionable:
+        diagnostics["excluded_alternatives"] = actionable
+    return diagnostics
+
+
 @mcp.tool
 async def find_keywords(
     query: str,
@@ -2247,17 +2307,13 @@ async def find_keywords(
             "result": discovery,
         }
         if excluded:
-            result["excluded_keywords"] = excluded
-            # session_library: preserved for backward compatibility with
-            # callers reading the pre-OBS-defect response shape.
-            result["session_library"] = effective_library_preference
-            # library_filter: forward-looking shape that disambiguates
-            # whether the filter came from the per-call parameter or the
-            # session's preference.
-            result["library_filter"] = {
-                "applied": effective_library_preference,
-                "source": library_filter_source,
-            }
+            result.update(
+                _build_filter_diagnostics(
+                    excluded,
+                    effective_library_preference,
+                    library_filter_source,
+                )
+            )
         # ADR-015: Externalize large fields to artifacts
         if session_id:
             result = _externalize_response("find_keywords", session_id, result)
@@ -2306,12 +2362,13 @@ async def find_keywords(
             "results": matches,
         }
         if excluded:
-            result["excluded_keywords"] = excluded
-            result["session_library"] = effective_library_preference
-            result["library_filter"] = {
-                "applied": effective_library_preference,
-                "source": library_filter_source,
-            }
+            result.update(
+                _build_filter_diagnostics(
+                    excluded,
+                    effective_library_preference,
+                    library_filter_source,
+                )
+            )
         # ADR-015: Externalize large fields to artifacts
         if session_id:
             result = _externalize_response("find_keywords", session_id, result)
@@ -2375,12 +2432,13 @@ async def find_keywords(
             "results": catalog,
         }
         if excluded:
-            result["excluded_keywords"] = excluded
-            result["session_library"] = effective_library_preference
-            result["library_filter"] = {
-                "applied": effective_library_preference,
-                "source": library_filter_source,
-            }
+            result.update(
+                _build_filter_diagnostics(
+                    excluded,
+                    effective_library_preference,
+                    library_filter_source,
+                )
+            )
 
         # ADR-010 I3: Hint when catalog returns empty without active session
         if not catalog and not session_id:

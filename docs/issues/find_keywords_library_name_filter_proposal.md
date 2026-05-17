@@ -352,4 +352,95 @@ across 9 layers covering the matrix listed under "Tests to add":
 
 ### Test totals
 
-5906 unit tests passed, 1 skipped, 0 failures (+14 net).
+5906 unit tests passed, 1 skipped, 0 failures (+14 net) after the
+initial fix; 5909 passed (+17 net) after the follow-on compaction
+(see next section).
+
+## Follow-on compaction (2026-05-17)
+
+User feedback after the first fix: *"the excluded_keywords just blow up
+the token consumption"*. In the user's reproduction the filter excluded
+7 SeleniumLibrary keywords; each entry in the legacy
+``excluded_keywords`` list carried four fields (``keyword``,
+``incompatible_library``, ``session_library``, ``reason``) plus
+optional ``alternative`` / ``example``. The first three of those four
+fields were **identical for every entry in a given response** —
+``incompatible_library`` was always "SeleniumLibrary",
+``session_library`` was always "Browser", ``reason`` was a verbose
+restatement of the other two. Total inline cost: ~1100 tokens of
+mostly-redundant information.
+
+The redundancy is structural, not just verbose:
+- ``incompatible_library``: same for all entries → move to a single
+  top-level ``library_filter.from_library`` field.
+- ``session_library`` (entry-level): redundant with
+  ``library_filter.applied``.
+- ``reason``: verbose restatement of the two fields above.
+- ``keyword`` (bare name, no alternative): the agent learns "X was
+  filtered" from X's absence in the ``matches`` list, so re-listing
+  it adds zero information.
+
+Only entries that carry a plugin-table ``alternative`` (SL→Browser or
+Browser→SL translation mapping) are actually actionable. For the
+typical Browser-filter response with 7 SL exclusions, this is usually
+1-2 entries (e.g., "Close All Browsers" → "Close Browser    ALL";
+"Click Element" → "Click").
+
+### Compacted response shape
+
+```json
+"library_filter": {
+  "applied": "Browser",
+  "source": "library_name",
+  "count": 7,
+  "from_library": "SeleniumLibrary"
+},
+"excluded_alternatives": [
+  {
+    "keyword": "Close All Browsers",
+    "alternative": "Close Browser    ALL",
+    "example": "Close Browser    ALL"
+  }
+]
+```
+
+Token cost: ~75 tokens vs ~1100 tokens before. **93% reduction.**
+
+When no excluded keyword carries an ``alternative`` mapping,
+``excluded_alternatives`` is absent (not present-but-empty). The
+``library_filter`` still surfaces the count so the agent knows the
+filter ran.
+
+### Backward compatibility
+
+The legacy ``excluded_keywords`` and entry-level ``session_library``
+fields are dropped from the response. Audit confirmed no production
+reader consumes them — only e2e metric dumps (historical records,
+won't break) and the new unit tests reference them. The
+``library_filter`` top-level field provides the same diagnostic
+information in a 14x more compact shape.
+
+### Helper
+
+Compaction logic lives in ``_build_filter_diagnostics()`` (server.py,
+just above ``find_keywords``). All three strategy branches call it
+identically — single source of truth for the response shape. Future
+filter-using endpoints can pick up the helper without redoing the
+shape design.
+
+### Tests for compaction
+
+Three new tests in ``TestExcludedKeywordsCompaction``:
+- ``test_alternatives_surface_when_plugin_provides_them``: injects a
+  mixed excluded list (one with alternative, one without) and pins the
+  filter behavior — alternative surfaces, non-actionable entry's bare
+  name does not appear anywhere in the response.
+- ``test_excluded_alternatives_filters_by_actionability``: uses the
+  real plugin to verify "Click Element" maps to "Click" while
+  "Set Window Position" silently drops out.
+- ``test_excluded_alternatives_absent_when_no_mappings_at_all``: pins
+  the absent-field shape when zero entries carry a mapping.
+
+Plus the existing ``test_verbose_legacy_fields_dropped`` test pins
+that ``excluded_keywords`` and entry-level ``session_library`` are not
+in the response.
