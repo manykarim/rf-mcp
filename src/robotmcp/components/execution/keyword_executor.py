@@ -44,6 +44,90 @@ except ImportError:
     ROBOT_AVAILABLE = False
 
 
+# F-N12: keywords that are read-only / inspection-only by nature.
+# When the caller passes record=None (the default), these are auto-flagged
+# record=False so build_test_suite produces a clean narrative instead of
+# every page-state probe an LLM does between actions.
+#
+# CARVE-OUTS preserved even when keyword is in this set:
+#   - assign_to is set (the recorded suite needs `${var}= Get Text ...`).
+#   - A named test is currently open (after start_test). The user
+#     explicitly opened a multi-test scope; steps inside it must NOT be
+#     dropped silently — that produced empty test cases in CI (F3/F4).
+_INSPECTION_ONLY_KEYWORDS: frozenset[str] = frozenset({
+    # Browser library reads
+    "get title",
+    "get url",
+    "get text",
+    "get attribute",
+    "get attribute names",
+    "get element count",
+    "get element states",
+    "get property",
+    "get style",
+    "get viewport size",
+    "get classes",
+    "get bounding box",
+    "get table cell element",
+    "get scroll size",
+    "get scroll position",
+    # SeleniumLibrary reads
+    "get location",
+    "get value",
+    "get element attribute",
+    "get element size",
+    "get element tag name",
+    "get list selected labels",
+    "get list selected values",
+    # AppiumLibrary reads (sample)
+    "get capability",
+    "get contexts",
+    "get current context",
+    "get window height",
+    "get window width",
+    "get window size",
+    # BuiltIn read-only / control
+    "log",
+    "log to console",
+    "log many",
+})
+
+
+def _resolve_record_gate(
+    *,
+    keyword: str,
+    record: bool | None,
+    assign_to: Union[str, List[str]] | None,
+    session: Any,
+) -> bool:
+    """Decide whether a successful step should be appended to session.steps.
+
+    Explicit ``record`` wins over everything. When ``record`` is ``None``
+    (the default), the gate auto-classifies, with two CARVE-OUTS that
+    always preserve the step:
+
+    1. ``assign_to`` is set — the recorded suite needs ``${var}= Get Text``
+       for subsequent assertions to compile.
+    2. A named test is currently open (after ``start_test``) — the user
+       explicitly opened a multi-test scope; dropping inspection-only
+       steps inside it produces empty test cases (CI F3/F4 regression).
+
+    Outside the carve-outs, keywords in ``_INSPECTION_ONLY_KEYWORDS`` are
+    dropped; everything else is recorded (conservative default-on).
+    """
+    if record is not None:
+        return bool(record)
+    if assign_to is not None:
+        return True
+    try:
+        if session.test_registry.get_current_test() is not None:
+            return True
+    except Exception:
+        # Defensive: a malformed session must not crash the executor.
+        pass
+    return keyword.lower().strip() not in _INSPECTION_ONLY_KEYWORDS
+
+
 class KeywordExecutor:
     """Handles keyword execution with proper library routing and error handling."""
 
@@ -979,6 +1063,7 @@ class KeywordExecutor:
         assign_to: Union[str, List[str]] = None,
         use_context: bool = False,
         timeout_ms: Optional[int] = None,
+        record: bool | None = None,
     ) -> Dict[str, Any]:
         """
         Execute a single Robot Framework keyword step with optional library prefix.
@@ -1014,6 +1099,7 @@ class KeywordExecutor:
             return await self._execute_keyword_serialized(
                 session, keyword, arguments, browser_library_manager,
                 detail_level, library_prefix, assign_to, use_context, timeout_ms,
+                record=record,
             )
 
     async def _execute_keyword_serialized(
@@ -1027,6 +1113,7 @@ class KeywordExecutor:
         assign_to: Union[str, List[str]] = None,
         use_context: bool = False,
         timeout_ms: Optional[int] = None,
+        record: bool | None = None,
     ) -> Dict[str, Any]:
         """Inner keyword execution, called under _execution_lock."""
         try:
@@ -1263,9 +1350,22 @@ class KeywordExecutor:
                 if step_result_value is None and "output" in result:
                     step_result_value = result.get("output")
                 step.mark_success(step_result_value)
-                # Only append successful steps to the session for suite generation
-                session.add_step(step)
-                logger.debug(f"Added successful step to session: {keyword}")
+                # F-N12: gate step recording so build_test_suite emits a clean
+                # narrative instead of every page-state probe.
+                record_resolved = _resolve_record_gate(
+                    keyword=keyword,
+                    record=record,
+                    assign_to=assign_to,
+                    session=session,
+                )
+                if record_resolved:
+                    session.add_step(step)
+                    logger.debug(f"Added successful step to session: {keyword}")
+                else:
+                    logger.debug(
+                        f"Step not recorded (inspection-only or record=False): {keyword}"
+                    )
+                result["recorded"] = record_resolved
             else:
                 step.mark_failure(result.get("error"))
                 logger.debug(
@@ -1389,6 +1489,11 @@ class KeywordExecutor:
                     payload=event_payload,
                 )
             )
+            # F-N12: surface the record gate decision so callers (and tests)
+            # can observe whether the step was added to session.steps for
+            # build_test_suite output.
+            if "recorded" in result:
+                response["recorded"] = result["recorded"]
             return response
 
         except Exception as e:

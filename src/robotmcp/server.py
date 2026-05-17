@@ -3448,6 +3448,7 @@ async def execute_step(
     timeout_ms: int | None = None,
     bdd_group: str = "",
     bdd_intent: str = "",
+    record: bool | None = None,
 ) -> Dict[str, Any]:
     """Execute a single Robot Framework keyword (or Evaluate) within a session.
 
@@ -3485,6 +3486,15 @@ async def execute_step(
         bdd_intent: BDD intent prefix for the group: "given", "when", "then", "and", "but".
                     Used with bdd_group to assign Given/When/Then prefixes in the
                     generated BDD test suite.
+        record: Override the record gate that decides whether a successful step
+                is appended to session.steps for build_test_suite output.
+                - None (default): auto-classify. Read-only inspection keywords
+                  (Get Title, Log, etc.) are NOT recorded; everything else IS.
+                  Carve-outs that always record: ``assign_to`` is set, or a
+                  named test is currently open (after start_test).
+                - True: force-record this step regardless of classification.
+                - False: drop this step regardless of classification.
+                The decision is surfaced as ``recorded: bool`` in the response.
 
     Returns:
         Dict[str, Any]: Execution result:
@@ -3679,6 +3689,7 @@ async def execute_step(
         assign_to=assign_to,
         use_context=bool(use_context),
         timeout_ms=timeout_ms,
+        record=record,
     )
 
     # ADR-014.2: Augment failed step results with memory hints
