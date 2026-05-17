@@ -96,6 +96,24 @@ class IntentActionAdapter:
                 f"For direct keyword access, use execute_step."
             )
 
+        # Deprecation: ``extract_text`` is a strict subset of
+        # ``extract(mode="text")`` and produces identical RF dispatch.
+        # See docs/reviews/extract_vs_extract_text_overlap.md for the
+        # empirical comparison. Emit a DeprecationWarning so callers
+        # see the migration path; resolution proceeds normally.
+        if intent_verb == IntentVerb.EXTRACT_TEXT:
+            import warnings as _warnings
+            _warnings.warn(
+                "intent_action(intent='extract_text', ...) is deprecated and "
+                "will be removed in a future release. Use "
+                "intent_action(intent='extract', mode='text', ...) — same RF "
+                "dispatch (Get Text), plus surfaces extracted_value at the "
+                "top level of the response and supports other modes "
+                "(attribute/count/value/url/title).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         intent_target = None
         if target is not None:
             intent_target = IntentTarget(locator=target, nth=nth)

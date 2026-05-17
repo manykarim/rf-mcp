@@ -6359,7 +6359,16 @@ async def intent_action(
     """Execute a high-level intent that auto-resolves to the correct library keyword.
 
     Valid intents: navigate, click, fill, hover, select, assert_visible,
-    extract_text, wait_for, extract.
+    extract, wait_for.
+
+    Also accepted but DEPRECATED:
+    - extract_text — equivalent to ``extract`` with ``mode="text"``. The
+      ``extract`` verb is the canonical mode-aware getter (text /
+      attribute / count / value / url / title) and additionally surfaces
+      ``extracted_value`` at the top level of the response. ``extract_text``
+      will be removed in a future release; prefer ``intent="extract"`` for
+      new code.
+
     The intent is resolved based on the session's active library (Browser/SeleniumLibrary/AppiumLibrary).
 
     Args:
@@ -6568,7 +6577,9 @@ async def intent_action(
             "hint": (
                 "Use execute_step for direct keyword access, or check "
                 "valid intents: navigate, click, fill, hover, select, "
-                "assert_visible, extract_text, wait_for"
+                "assert_visible, extract, wait_for "
+                "(extract_text is also accepted but deprecated — "
+                "prefer extract with mode='text')"
             ),
         }
         _track_tool_result(

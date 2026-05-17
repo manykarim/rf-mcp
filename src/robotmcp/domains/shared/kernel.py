@@ -433,9 +433,16 @@ AttachAction = Annotated[
 IntentVerb = Annotated[
     Literal[
         "navigate", "click", "fill", "hover",
-        "select", "assert_visible", "extract_text", "wait_for",
+        "select", "assert_visible",
+        # DEPRECATED — superseded by "extract" with mode="text". Kept in
+        # the Literal alias for backward-compat acceptance; emits a
+        # DeprecationWarning when used. See
+        # docs/reviews/extract_vs_extract_text_overlap.md.
+        "extract_text",
+        "wait_for",
         # OBS-06: structured DOM/page-state extraction. The mode parameter
         # selects what to read (text/attribute/count/value/url/title).
+        # PREFER this verb for new code.
         "extract",
     ],
     BeforeValidator(_normalize_str),
