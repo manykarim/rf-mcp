@@ -36,6 +36,7 @@ class IntentActionAdapter:
         session_id: str = "default",
         options: Optional[Dict[str, str]] = None,
         assign_to: Optional[str] = None,
+        match: str = "label",
     ) -> Dict[str, Any]:
         """Resolve an intent string to keyword + arguments.
 
@@ -62,14 +63,31 @@ class IntentActionAdapter:
         if target is not None:
             intent_target = IntentTarget(locator=target)
 
+        # Inject the match strategy into options so the select transformers
+        # can read it. Only meaningful for SELECT intent; ignored for others.
+        merged_options: Dict[str, str] = dict(options or {})
+        if intent_verb == IntentVerb.SELECT and match:
+            merged_options["match"] = match
+
         resolved = self._resolver.resolve(
             intent_verb=intent_verb,
             target=intent_target,
             value=value,
             session_id=session_id,
-            options=options,
+            options=merged_options,
             assign_to=assign_to,
         )
+
+        dispatched_keyword = resolved.keyword
+
+        # SeleniumLibrary SELECT: route to the correct
+        # `Select From List By {Label,Value,Index}` keyword based on the
+        # resolved match strategy. Browser library always uses
+        # `Select Options By <attr> <value>` with the attribute embedded in
+        # the args — no keyword swap needed there.
+        if intent_verb == IntentVerb.SELECT and resolved.library == "SeleniumLibrary":
+            from ..aggregates import _get_selenium_select_keyword
+            dispatched_keyword = _get_selenium_select_keyword(match, value)
 
         # Expose the mapping's `force_keyword` field so the calling layer
         # (`intent_action` in `server.py`) can substitute the dispatched
@@ -81,7 +99,7 @@ class IntentActionAdapter:
         )
 
         return {
-            "keyword": resolved.keyword,
+            "keyword": dispatched_keyword,
             "arguments": list(resolved.arguments),
             "library": resolved.library,
             "intent": resolved.intent_verb.value,

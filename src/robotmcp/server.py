@@ -50,6 +50,7 @@ from robotmcp.domains.shared.kernel import (
     OptionalCoercedStringList,
     PluginAction,
     RecommendMode,
+    SelectMatch,
     SessionAction,
     SuiteRunMode,
     TestStatus,
@@ -6265,6 +6266,7 @@ async def intent_action(
     assign_to: str | None = None,
     detail_level: DetailLevel = "standard",
     force: bool = False,
+    match: SelectMatch = "label",
 ) -> Dict[str, Any]:
     """Execute a high-level intent that auto-resolves to the correct library keyword.
 
@@ -6286,6 +6288,18 @@ async def intent_action(
             default keyword has no force_keyword declared, this flag is
             silently ignored. Prefer natural locators first; this is the
             documented fallback for elements that are intentionally hidden.
+        match: Select-match strategy for the ``select`` intent.
+            ``"label"`` (default) - match by visible option text. Mirrors RF
+                semantics for ``Select Options By label``.
+            ``"value"`` - match by ``<option value="X">`` attribute.
+            ``"index"`` - match by zero-based integer index.
+            ``"text"`` - synonym for ``"label"`` (most libraries).
+            ``"auto"`` - OPT-IN heuristic. Numeric value -> ``"value"``,
+                otherwise ``"label"``. Use with care: numeric visible
+                labels (years, amounts) mis-route.
+            For SeleniumLibrary, this also picks the dispatched keyword
+            (``Select From List By Label`` / ``Value`` / ``Index``).
+            Ignored for non-select intents.
     """
     global _intent_action_adapter
 
@@ -6318,6 +6332,7 @@ async def intent_action(
             session_id=effective_session_id,
             options=options,
             assign_to=assign_to,
+            match=match,
         )
 
         dispatched_keyword = resolution["keyword"]
