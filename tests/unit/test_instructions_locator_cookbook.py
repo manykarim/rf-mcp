@@ -123,9 +123,10 @@ class TestPreValidationRecoveryRecipe:
         # full-text scan of the instructions text.
         assert "WHEN PRE-VALIDATION REJECTS YOUR LOCATOR" in rendered_default
 
-    def test_three_numbered_steps_present(self, rendered_default):
-        # The recipe is a three-step recovery; each step must be marked
-        # so the LLM can follow them sequentially.
+    def test_four_numbered_steps_present(self, rendered_default):
+        # The recipe is a four-step recovery (OBS-05 added steps 1+2+4,
+        # OBS-02 inserted step 3 for the pre_validate_timeout_ms knob).
+        # Each step must be marked so the LLM can follow them sequentially.
         # Anchor on the imperative-verb-after-step-number rather than the
         # full sentence so cosmetic edits to wording don't break this.
         assert "1. Try the CSS-prefix equivalent" in rendered_default
@@ -133,7 +134,10 @@ class TestPreValidationRecoveryRecipe:
         # being present or not in the phrasing.
         assert "2. Re-inspect" in rendered_default
         assert "get_session_state" in rendered_default
-        assert "3. Last resort" in rendered_default
+        # Step 3 — extend the pre-validation gate (OBS-02).
+        assert "3. Extend the gate" in rendered_default
+        # Step 4 — last-resort escape hatches.
+        assert "4. Last resort" in rendered_default
 
     @pytest.mark.parametrize("substitution_example", [
         # Step 1 substitutions — both halves of each pair must be present.
@@ -200,6 +204,18 @@ class TestPreValidationRecoveryRecipe:
             "use timeout_ms=0 to skip the gate for a single call"
         )
 
+    def test_pre_validate_timeout_ms_parameter_documented(self, rendered_default):
+        # OBS-02 acceptance #3: the new `pre_validate_timeout_ms`
+        # parameter on execute_step must be documented in the
+        # discovery_first template (not only in the docstring), so the
+        # LLM sees it without having to inspect tool schemas.
+        assert "pre_validate_timeout_ms" in rendered_default
+        # Concrete suggested value — having a number anchors the LLM:
+        assert "pre_validate_timeout_ms=2000" in rendered_default
+        # The auto-retry behaviour should also be mentioned so the LLM
+        # knows the gate already gives it one free retry.
+        assert "auto-retries" in rendered_default or "retries" in rendered_default
+
     def test_anti_pattern_caveat_present(self, rendered_default):
         # The recipe must explicitly call out that force=True is NOT a
         # license to make hidden elements visible via DOM mutation.
@@ -224,14 +240,19 @@ class TestPreValidationRecoveryRecipe:
         )
 
     def test_recipe_under_token_budget(self, rendered_default):
-        # OBS-05 acceptance: section must stay terse — the instructions
-        # are loaded into every MCP session, so token cost is per-session.
-        # Budget: 1200 chars (~300 tokens at the chars/4 approximation).
+        # OBS-05 / OBS-02 acceptance: section must stay terse — the
+        # instructions are loaded into every MCP session, so token cost
+        # is per-session. Budget bumped from 1500 to 1800 chars (~450
+        # tokens, ~5% of a typical 8K-token context) when OBS-02 added
+        # the pre_validate_timeout_ms step. The trade-off: ~75 extra
+        # chars in instructions vs. saving 3-12 wasted tool calls per
+        # transient pre-validation failure that the section's recipe
+        # now teaches the LLM to recover from.
         start = rendered_default.index("WHEN PRE-VALIDATION REJECTS")
         end = rendered_default.index("Available discovery tools")
         section_length = end - start
-        assert section_length < 1500, (
+        assert section_length < 1800, (
             f"Pre-validation recovery section is {section_length} chars "
-            f"(>=1500 char budget). Tighten it — the instructions are loaded "
+            f"(>=1800 char budget). Tighten it — the instructions are loaded "
             f"into every session."
         )

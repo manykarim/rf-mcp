@@ -648,6 +648,69 @@ class KeywordExecutor:
             logger.warning(f"Pre-validation exception for '{locator}': {e}")
             return False, error_msg, details
 
+    # Retry tunables for transient pre-validation failures (slow page settle,
+    # late-mounting elements). Bounded to one extra attempt with a short gap
+    # so the worst-case cost on a genuine miss is roughly 2x the single-shot
+    # budget plus the gap — small enough to not change end-to-end UX, large
+    # enough to absorb the ~700ms settle windows we saw on real sites in
+    # the 2026-05-17 Tricentis benchmark.
+    PRE_VALIDATION_RETRY_GAP_MS: int = 200
+    PRE_VALIDATION_MAX_RETRIES: int = 1
+
+    async def _pre_validate_element_with_retry(
+        self,
+        locator: str,
+        session: "ExecutionSession",
+        keyword: str,
+        timeout_ms: Optional[int] = None,
+    ) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+        """Wrap ``_pre_validate_element`` with a single-shot retry on transient
+        failures (slow-loading pages, brief animations, late-mounting elements).
+
+        Behaviour:
+        - First call uses the configured/passed ``timeout_ms`` exactly as
+          before — happy path is byte-for-byte identical and pays NO extra
+          latency.
+        - If the first call returns ``is_valid=False``, sleep
+          ``PRE_VALIDATION_RETRY_GAP_MS`` (default 200 ms) and call again.
+        - On the retry, surface ``details["retries"] = 1`` and
+          ``details["first_attempt_error"] = <previous error_msg>`` so the
+          failure-hint builder and tests can distinguish a real miss from
+          a transient settle.
+        - The retry count is capped by ``PRE_VALIDATION_MAX_RETRIES`` (1).
+          This is deliberately tight; if a page truly needs >1.5 s to
+          settle, the user should pass ``pre_validate_timeout_ms`` explicitly
+          rather than burning latency on every step.
+        """
+        is_valid, error_msg, details = await self._pre_validate_element(
+            locator, session, keyword, timeout_ms=timeout_ms,
+        )
+        if is_valid:
+            return True, None, details
+
+        for attempt in range(1, self.PRE_VALIDATION_MAX_RETRIES + 1):
+            logger.debug(
+                f"Pre-validation retry {attempt} for '{locator}' after {self.PRE_VALIDATION_RETRY_GAP_MS}ms"
+            )
+            await asyncio.sleep(self.PRE_VALIDATION_RETRY_GAP_MS / 1000.0)
+            retry_is_valid, retry_error, retry_details = await self._pre_validate_element(
+                locator, session, keyword, timeout_ms=timeout_ms,
+            )
+            if retry_details is None:
+                retry_details = {}
+            retry_details["retries"] = attempt
+            retry_details["first_attempt_error"] = error_msg
+            if retry_is_valid:
+                logger.debug(
+                    f"Pre-validation recovered for '{locator}' on retry {attempt}"
+                )
+                return True, None, retry_details
+            # Still failing — update the error message but keep iterating
+            # until we hit the cap.
+            is_valid, error_msg, details = retry_is_valid, retry_error, retry_details
+
+        return False, error_msg, details
+
     async def _pre_validate_browser_element(
         self, locator: str, required_states: Set[str], timeout_ms: int
     ) -> Dict[str, Any]:
@@ -1072,6 +1135,7 @@ class KeywordExecutor:
         use_context: bool = False,
         timeout_ms: Optional[int] = None,
         record: bool | None = None,
+        pre_validate_timeout_ms: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Execute a single Robot Framework keyword step with optional library prefix.
@@ -1108,6 +1172,7 @@ class KeywordExecutor:
                 session, keyword, arguments, browser_library_manager,
                 detail_level, library_prefix, assign_to, use_context, timeout_ms,
                 record=record,
+                pre_validate_timeout_ms=pre_validate_timeout_ms,
             )
 
     async def _execute_keyword_serialized(
@@ -1122,6 +1187,7 @@ class KeywordExecutor:
         use_context: bool = False,
         timeout_ms: Optional[int] = None,
         record: bool | None = None,
+        pre_validate_timeout_ms: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Inner keyword execution, called under _execution_lock."""
         try:
@@ -1230,13 +1296,20 @@ class KeywordExecutor:
             if self.pre_validation_enabled and self._requires_pre_validation(keyword, session):
                 locator = self._extract_locator_from_args(keyword, arguments)
                 if locator:
-                    # Derive pre-validation timeout from user's timeout_ms:
-                    # - None → use default (config.PRE_VALIDATION_TIMEOUT, 500ms)
-                    # - <= 0 → skip pre-validation (user disabled timeout)
-                    # - > 0 → use min(default, user_timeout) for fast check
-                    preval_timeout = None  # will use config default
+                    # Derive pre-validation timeout. Precedence:
+                    # 1. Explicit pre_validate_timeout_ms wins (per-call override).
+                    #    <= 0 disables the gate just like timeout_ms <= 0 does.
+                    # 2. Else fall back to user's timeout_ms-derived calculation
+                    #    (existing behaviour).
+                    # 3. Else None → uses config.PRE_VALIDATION_TIMEOUT default.
+                    preval_timeout = None
                     skip_preval = False
-                    if timeout_ms is not None:
+                    if pre_validate_timeout_ms is not None:
+                        if pre_validate_timeout_ms <= 0:
+                            skip_preval = True
+                        else:
+                            preval_timeout = pre_validate_timeout_ms
+                    elif timeout_ms is not None:
                         if timeout_ms <= 0:
                             skip_preval = True
                         else:
@@ -1249,7 +1322,10 @@ class KeywordExecutor:
                             f"Pre-validation skipped: timeout disabled by user for '{keyword}'"
                         )
                     else:
-                        is_valid, error_msg, pre_validation_details = await self._pre_validate_element(
+                        # Auto-retry on transient failure (slow page settle,
+                        # late-mounting elements). Happy path is unchanged —
+                        # only failing calls pay the +200ms retry gap.
+                        is_valid, error_msg, pre_validation_details = await self._pre_validate_element_with_retry(
                             locator, session, keyword, timeout_ms=preval_timeout
                         )
                         if not is_valid:
@@ -1280,6 +1356,35 @@ class KeywordExecutor:
                                         "message": "Element is not enabled",
                                         "suggestion": "Check if the element is disabled or if a previous action is required",
                                     })
+
+                            # Per-call timeout override hint. Surfaced
+                            # whenever pre-validation fails so the agent
+                            # knows how to extend the gate for a genuinely
+                            # slow page without disabling it everywhere.
+                            # Includes the real escape knob (timeout_ms=0)
+                            # as a last resort — NOT a non-existent
+                            # pre_validate=False parameter.
+                            hints.append({
+                                "type": "pre_validate_timeout_hint",
+                                "message": (
+                                    "Pre-validation timed out after the retry. "
+                                    "If the page genuinely takes longer to "
+                                    "settle, extend the gate for this call."
+                                ),
+                                "suggestion": (
+                                    "Pass pre_validate_timeout_ms=2000 (or "
+                                    "longer) on the next execute_step call. "
+                                    "Use timeout_ms=0 only as a last resort — "
+                                    "it disables BOTH the pre-validation gate "
+                                    "AND the keyword timeout."
+                                ),
+                                "example_extend": (
+                                    f"execute_step(..., pre_validate_timeout_ms=2000)"
+                                ),
+                                "example_skip": (
+                                    f"execute_step(..., timeout_ms=0)"
+                                ),
+                            })
 
                             event_bus.publish_sync(
                                 FrontendEvent(

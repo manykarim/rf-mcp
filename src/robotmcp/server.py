@@ -3449,6 +3449,7 @@ async def execute_step(
     bdd_group: str = "",
     bdd_intent: str = "",
     record: bool | None = None,
+    pre_validate_timeout_ms: int | None = None,
 ) -> Dict[str, Any]:
     """Execute a single Robot Framework keyword (or Evaluate) within a session.
 
@@ -3495,6 +3496,20 @@ async def execute_step(
                 - True: force-record this step regardless of classification.
                 - False: drop this step regardless of classification.
                 The decision is surfaced as ``recorded: bool`` in the response.
+        pre_validate_timeout_ms: Override the pre-validation gate's timeout
+                for this single call. Pre-validation is the fast
+                ~500ms-default check that verifies an element is visible /
+                enabled before the keyword runs; it auto-retries once with
+                a 200ms backoff on transient failures.
+                - None (default): use ``ExecutionConfig.PRE_VALIDATION_TIMEOUT``
+                  (500ms) for slow-loading pages this is sometimes too tight.
+                - A positive int (e.g. 2000): extend the gate to this many
+                  milliseconds for this call only. Useful when a page
+                  legitimately takes ~1–2s to settle.
+                - 0 or negative: skip pre-validation entirely for this call
+                  (last resort — also disables the keyword timeout).
+                Failure responses include a ``pre_validate_timeout_hint``
+                entry explaining how to use this when the gate trips.
 
     Returns:
         Dict[str, Any]: Execution result:
@@ -3690,6 +3705,7 @@ async def execute_step(
         use_context=bool(use_context),
         timeout_ms=timeout_ms,
         record=record,
+        pre_validate_timeout_ms=pre_validate_timeout_ms,
     )
 
     # ADR-014.2: Augment failed step results with memory hints

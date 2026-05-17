@@ -456,12 +456,18 @@ class InstructionTemplate:
       include_reduced_dom=True). The ARIA snapshot may expose a more stable
       attribute (data-testid, aria-label, role) than the one you first tried.
 
-   3. Last resort, ONLY after 1+2 failed:
+   3. Extend the gate for a genuinely slow-settling page:
+        execute_step(..., pre_validate_timeout_ms=2000)
+          — keeps pre-validation ON, just gives it more time for THIS call.
+            The gate already auto-retries once with a 200ms backoff; if a
+            page reliably needs >1.5s to settle, this is the right knob.
+
+   4. Last resort, ONLY after 1+2+3 failed:
         intent_action(intent="click", target="...", force=True)
           — Browser only; bypasses actionability for clicks blocked by
             overlays/sticky elements. ACCEPTABLE escape.
-        execute_step(keyword="...", arguments=[...], timeout_ms=0)
-          — skips the gate AND the keyword timeout for this call.
+        execute_step(..., timeout_ms=0)
+          — skips gate AND keyword timeout. Use sparingly.
       force=True is NOT for making hidden elements visible via DOM
       mutation — that's an anti-pattern.
 
