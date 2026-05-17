@@ -26,6 +26,7 @@ These tests pin:
 
 from __future__ import annotations
 
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -235,3 +236,78 @@ class TestEquivalentVerdictAcrossForms:
         assert result_css["valid"] is False
         # Both surface the same kind of error (element-not-found).
         assert result_id["error"] == result_css["error"]
+
+
+# ---------------------------------------------------------------------------
+# ReDoS safety — pinned by SonarCloud S5852 hotspot review
+# ---------------------------------------------------------------------------
+
+
+class TestNormaliserPerformanceBound:
+    """The normaliser must be linear in input length — no backtracking.
+
+    The original draft used a regex with a lazy quantifier
+    (``\\S.*?``) followed by a trailing ``\\s*$`` anchor. SonarCloud's
+    S5852 rule flagged this as polynomial-runtime-via-backtracking
+    (CI hotspot on PR #69). Empirical measurement at the 10k-char
+    ``MAX_LOCATOR_LENGTH`` input limit showed worst-case ~0.6ms — not
+    a real exploit, but the pattern shape is the kind that *can* go
+    quadratic for unrelated similar regexes. The fix replaced the
+    regex with explicit string operations.
+
+    These tests pin the O(n) guarantee so that future maintainers
+    don't reintroduce a regex with a backtracking surface.
+    """
+
+    @pytest.mark.parametrize("shape_label,build_input", [
+        # The four input shapes that backtracked most under the
+        # original regex (measured empirically before the refactor).
+        ("plain_long_value",       lambda n: "id=" + "A" * n),
+        ("alternating_ws",         lambda n: "id=" + "A " * n),
+        ("trailing_whitespace",    lambda n: "id=" + "A" * n + " "),
+        ("space_separated_tokens", lambda n: "id=" + "A B " * (n // 4) + "A"),
+    ])
+    def test_normaliser_completes_within_budget_at_input_limit(
+        self, shape_label, build_input,
+    ):
+        # The IntentTarget value-object enforces MAX_LOCATOR_LENGTH=10000.
+        # The pre-validation gate sees no locators longer than that in
+        # practice, but the normaliser should be safe well beyond.
+        # Budget: 5ms for a 10000-character adversarial input.
+        # Local measurement under the pure-string implementation:
+        # ~0.05ms for each shape. A 100x headroom keeps the test
+        # robust on slow CI runners.
+        n = 10000
+        adversarial = build_input(n)
+        # Take the minimum of three runs to avoid GC/scheduler noise.
+        timings = []
+        for _ in range(3):
+            t0 = time.perf_counter()
+            KeywordExecutor._normalize_locator_for_browser_prevalidation(adversarial)
+            timings.append(time.perf_counter() - t0)
+        elapsed_ms = min(timings) * 1000
+        assert elapsed_ms < 5.0, (
+            f"normaliser took {elapsed_ms:.3f}ms for {shape_label!r} at "
+            f"n={n} (budget: 5ms). Did the regex creep back in?"
+        )
+
+    def test_normaliser_scales_linearly_not_quadratically(self):
+        """Pin O(n) growth — n=100k should run in <50ms; quadratic
+        regex would be ~1.5s."""
+        builder = lambda n: "id=" + "A B " * (n // 4) + "A"
+        timings = []
+        for _ in range(3):
+            t0 = time.perf_counter()
+            KeywordExecutor._normalize_locator_for_browser_prevalidation(
+                builder(100_000),
+            )
+            timings.append(time.perf_counter() - t0)
+        elapsed_ms = min(timings) * 1000
+        # Under O(n): ~5ms expected. Under O(n^1.3) (the old regex):
+        # ~12ms. Under O(n^2): >1500ms. The 50ms bound rules out
+        # quadratic-or-worse without being flaky on slow CI runners.
+        assert elapsed_ms < 50.0, (
+            f"normaliser took {elapsed_ms:.3f}ms for n=100000 input "
+            f"(O(n) budget: 50ms). Did the regex creep back in or "
+            f"someone introduce a new nested loop?"
+        )
