@@ -309,20 +309,37 @@ class ModelTier(Enum):
         """
         name = model_name.lower().strip()
 
-        # Hosted API models
-        hosted_patterns = (
-            "claude", "gpt-4", "gpt-3.5", "o1-", "o3-",
-            "gemini-pro", "gemini-1.5", "gemini-2",
+        # Explicit small-hosted override first (before wider pattern matching).
+        # gpt-4o-mini must be checked before gpt-4o so the suffix wins.
+        explicit_standard_hosted = ("gpt-4o-mini",)
+        if any(p in name for p in explicit_standard_hosted):
+            return cls.STANDARD
+
+        # Large-context hosted models. Anthropic Claude 3+ (haiku/sonnet/opus)
+        # all ship with 128K-200K context windows; OpenAI gpt-4o/turbo and
+        # Google Gemini 1.5+ are similarly large. Map them to LARGE_CONTEXT so
+        # the auto-selected tool profile is `full` rather than a small one.
+        large_context_hosted = (
+            "claude-opus", "claude-sonnet", "claude-haiku",
+            "opus", "sonnet", "haiku",
+            "gpt-4o", "gpt-4-turbo",
+            "gemini-1.5", "gemini-2",
+            "o1-", "o3-",
         )
-        if any(p in name for p in hosted_patterns):
-            return cls.HOSTED
+        if any(p in name for p in large_context_hosted):
+            return cls.LARGE_CONTEXT
 
-        # Small hosted models (still capable but cost-optimized)
-        small_hosted = ("haiku", "flash", "mini", "nano", "gpt-4o-mini")
+        # Remaining Claude / GPT-4 / GPT-3.5 family defaults to large context.
+        large_context_families = ("claude", "gpt-4", "gpt-3.5")
+        if any(p in name for p in large_context_families):
+            return cls.LARGE_CONTEXT
+
+        # Cost-optimised micro models — still hosted but smaller context.
+        small_hosted = ("flash", "nano")
         if any(p in name for p in small_hosted):
-            return cls.HOSTED
+            return cls.STANDARD
 
-        # Extract parameter count
+        # Extract parameter count for open-weight models.
         param_match = re.search(r"(\d+\.?\d*)\s*[bB]", name)
         if param_match:
             param_b = float(param_match.group(1))
@@ -335,11 +352,13 @@ class ModelTier(Enum):
             else:
                 return cls.LARGE_CONTEXT
 
-        # Known small model families without explicit param count
+        # Known small model families without explicit param count.
         small_families = ("phi-3", "phi-2", "glm-4.5-air", "qwen2.5-coder")
         if any(f in name for f in small_families):
             return cls.SMALL_7B
 
+        # Default: STANDARD (not HOSTED) for unknown models. HOSTED previously
+        # implied a too-small tool profile for hosted-but-large-context models.
         return cls.STANDARD
 
 
@@ -416,6 +435,16 @@ IntentVerb = Annotated[
         "navigate", "click", "fill", "hover",
         "select", "assert_visible", "extract_text", "wait_for",
     ],
+    BeforeValidator(_normalize_str),
+]
+
+# Strategy for resolving select-option intents in `intent_action`. The
+# default `label` mirrors Robot Framework's `Select Options By label`
+# semantics ("the LLM provides the visible text"). `value` and `index`
+# are explicit overrides; `text` is a label synonym; `auto` is opt-in
+# numeric-string heuristic.
+SelectMatch = Annotated[
+    Literal["label", "value", "index", "text", "auto"],
     BeforeValidator(_normalize_str),
 ]
 

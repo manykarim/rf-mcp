@@ -86,9 +86,13 @@ class TestModelTier:
     def test_from_model_name_13b(self):
         assert ModelTier.from_model_name("llama-2-13b-chat") == ModelTier.MEDIUM_13B
 
-    def test_from_model_name_hosted(self):
-        assert ModelTier.from_model_name("claude-3-sonnet") == ModelTier.HOSTED
-        assert ModelTier.from_model_name("gpt-4o") == ModelTier.HOSTED
+    def test_from_model_name_hosted_large_context(self):
+        # v0.32 remap: hosted Claude / GPT-4 models all ship with 128K-200K
+        # context windows, so they map to LARGE_CONTEXT (not the pre-remap
+        # HOSTED tier, which auto-selected a small `browser_exec` profile
+        # and produced the v0.32.0 "Unknown tool: build_test_suite" surprise).
+        assert ModelTier.from_model_name("claude-3-sonnet") == ModelTier.LARGE_CONTEXT
+        assert ModelTier.from_model_name("gpt-4o") == ModelTier.LARGE_CONTEXT
 
     def test_from_model_name_fallback(self):
         assert ModelTier.from_model_name("unknown-model") == ModelTier.STANDARD
