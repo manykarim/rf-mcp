@@ -14,6 +14,8 @@ invocation from test_real_selenium_prevalidation.py.
 """
 
 import os
+from typing import Any, Optional
+
 import pytest
 import pytest_asyncio
 from fastmcp import Client
@@ -559,3 +561,150 @@ class TestIntentActionExtractOBS06:
         # The intent_resolved block surfaces the extract_mode so callers
         # can confirm the right mode was applied.
         assert res.data.get("intent_resolved", {}).get("extract_mode") == "attribute"
+
+
+# ---------------------------------------------------------------------------
+# OBS-10 — Drag And Drop pre-scrolls off-screen source/target
+# ---------------------------------------------------------------------------
+
+
+class TestDragAndDropPrescrollOBS10:
+    """OBS-10 — Browser Drag And Drop silently no-ops when source or
+    target is outside the viewport (Playwright dispatches drag events
+    but the drop doesn't fire). The 2026-05-17 post-OBS Tricentis
+    benchmark Obstacle 10 (Todolist) cost Sonnet ~27 tool calls
+    debugging this exact pattern.
+
+    The fix: a Browser-plugin override pre-scrolls source + target
+    into view via ``Browser.Scroll To Element`` BEFORE dispatching
+    the actual Drag And Drop. Override returns ``None`` so normal
+    dispatch proceeds — only difference is the elements are now
+    guaranteed visible.
+
+    This integration test runs against a real headless Chromium and
+    uses a ``data:text/html`` fixture with:
+      - A drop zone at the top of the page
+      - A 2000px spacer pushing the draggable source below the viewport
+    Without OBS-10's pre-scroll, the drag would silently no-op (the
+    source's bounding box is off-screen at first call). With OBS-10,
+    the override scrolls the source into view before the drag fires."""
+
+    # Fixture: target at the top, then a 2200px spacer, then the
+    # draggable source. The source's top edge starts ~2240px below
+    # the viewport's top — well outside any reasonable browser height.
+    # OBS-10's pre-scroll must bring it into view before Playwright's
+    # drag mechanics can fire correctly.
+    DATA_URL = (
+        "data:text/html,<html><head><title>OBS-10 Fixture</title></head>"
+        "<body>"
+        "<div id='target' style='width:200px;height:80px;border:2px dashed "
+        "blue;background:lightyellow'>drop here</div>"
+        "<div style='height:2200px'></div>"
+        "<div id='source' draggable='true' style='width:120px;height:40px;"
+        "background:lightblue;cursor:grab'>drag me</div>"
+        "</body></html>"
+    )
+
+    async def test_drag_and_drop_pre_scrolls_off_screen_source(
+        self, browser_session,
+    ):
+        """OBS-10 contract: when the source element is off-screen,
+        ``Drag And Drop`` must pre-scroll it into the viewport.
+
+        We assert on the WINDOW scroll position (``top`` coord) before
+        and after the drag — without OBS-10's pre-scroll, the page
+        stays at scroll-top=0 even after Drag And Drop returns
+        success (this was Sonnet's 27-call debug cycle on Tricentis
+        Obstacle 10). With the pre-scroll override, the source
+        scrolls into view → scroll-top > 0.
+
+        We deliberately don't assert on drop-side semantics
+        (HTML5 vs pointer events have library- and browser-specific
+        quirks orthogonal to OBS-10). The unit tests in
+        ``test_browser_drag_and_drop_prescroll.py`` pin the override
+        wiring; this test confirms the wiring fires end-to-end
+        against a real Browser session."""
+        _, _, client = browser_session
+        nav_res = await client.call_tool(
+            "execute_step",
+            {
+                "keyword": "Go To",
+                "arguments": [self.DATA_URL],
+                "session_id": SESSION_ID,
+            },
+        )
+        assert nav_res.data.get("success") is True
+
+        # Pre-condition: the page is at scroll-top=0 (source is
+        # below the viewport). Get Scroll Position returns a dict
+        # ``{top, left, bottom, right}``.
+        pre_scroll = await client.call_tool(
+            "execute_step",
+            {
+                "keyword": "Get Scroll Position",
+                "arguments": [],
+                "session_id": SESSION_ID,
+            },
+        )
+        assert pre_scroll.data.get("success") is True
+        pre_top = _extract_scroll_top(pre_scroll.data.get("output"))
+        assert pre_top is not None and pre_top < 100, (
+            f"Fixture precondition: page should start at scroll-top=0; "
+            f"got top={pre_top!r}"
+        )
+
+        # The OBS-10 call: Drag And Drop with off-screen source. The
+        # override pre-scrolls; the drag itself can then proceed.
+        drag_res = await client.call_tool(
+            "execute_step",
+            {
+                "keyword": "Drag And Drop",
+                "arguments": ["id=source", "id=target"],
+                "session_id": SESSION_ID,
+            },
+        )
+        assert drag_res.data.get("success") is True, (
+            f"Drag And Drop should succeed; got {drag_res.data}"
+        )
+
+        # Post-condition: page has scrolled down to bring the
+        # off-screen source into view. The source's top edge is
+        # ~2280px down (target 80px + spacer 2200px); after
+        # Scroll To Element, scroll-top should be a substantial
+        # value > 1000 (Playwright scrolls to center the element).
+        post_scroll = await client.call_tool(
+            "execute_step",
+            {
+                "keyword": "Get Scroll Position",
+                "arguments": [],
+                "session_id": SESSION_ID,
+            },
+        )
+        assert post_scroll.data.get("success") is True
+        post_top = _extract_scroll_top(post_scroll.data.get("output"))
+        assert post_top is not None, (
+            f"Get Scroll Position failed: {post_scroll.data!r}"
+        )
+        assert post_top > 1000, (
+            f"OBS-10 contract: page should scroll down to bring the "
+            f"off-screen source into view. pre_top={pre_top}, "
+            f"post_top={post_top}. Without the pre-scroll override "
+            f"the page would stay at scroll-top=0 and Drag And Drop "
+            f"would silently no-op on drop semantics."
+        )
+
+
+def _extract_scroll_top(scroll: Any) -> Optional[float]:
+    """Browser.Get Scroll Position returns a dict ``{top, left, bottom,
+    right}`` (or a stringified equivalent depending on the response
+    serialisation path). Extract the ``top`` value defensively."""
+    if isinstance(scroll, dict):
+        v = scroll.get("top")
+        if isinstance(v, (int, float)):
+            return float(v)
+    if isinstance(scroll, str):
+        import re
+        m = re.search(r"['\"]top['\"]\s*:\s*([\d.]+)", scroll)
+        if m:
+            return float(m.group(1))
+    return None

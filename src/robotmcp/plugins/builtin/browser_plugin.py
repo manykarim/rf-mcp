@@ -261,10 +261,22 @@ class BrowserLibraryPlugin(StaticLibraryPlugin):
             "get page source": "Browser",
             "get url": "Browser",
             "get title": "Browser",
+            # OBS-10 — anchor the override lookup so it fires even when
+            # keyword_info hasn't resolved the library yet at the
+            # executor's get_keyword_override() call site.
+            "drag and drop": "Browser",
+            "browser.drag and drop": "Browser",
         }
 
     def get_keyword_overrides(self) -> Dict[str, KeywordOverrideHandler]:  # type: ignore[override]
-        return {"open browser": self._override_open_browser}
+        return {
+            "open browser": self._override_open_browser,
+            # OBS-10 — scroll source + target into view before dispatch.
+            # Playwright drag silently no-ops when either element is
+            # off-screen; the override pre-scrolls so the drop fires
+            # for real. Returns None to delegate to normal dispatch.
+            "drag and drop": self._override_drag_and_drop,
+        }
 
     def get_locator_normalizer(self):
         def normalize(locator: str) -> str:
@@ -420,6 +432,87 @@ class BrowserLibraryPlugin(StaticLibraryPlugin):
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("Open Browser override failed: %s", exc)
             return None
+
+    # OBS-10 — locators that aren't string-shaped should not trip the
+    # pre-scroll path (e.g. someone routes ``Drag And Drop By
+    # Coordinates`` here by mistake; coords are floats/strs of numbers,
+    # not selectors). Only attempt scroll on plausible locator strings.
+    @staticmethod
+    def _looks_like_locator(arg: Any) -> bool:
+        return isinstance(arg, str) and bool(arg.strip())
+
+    async def _override_drag_and_drop(
+        self,
+        session: "ExecutionSession",
+        keyword_name: str,
+        arguments: list[str],
+        keyword_info: Optional[Any] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """OBS-10 — pre-scroll SOURCE before Browser.Drag And Drop.
+
+        Playwright's drag mechanics dispatch a drag from the source
+        element's bounding-box. When the source is outside the
+        viewport, the drag silently no-ops: the keyword returns
+        success but the DOM doesn't move. The 2026-05-17 post-OBS
+        Tricentis benchmark Obstacle 10 (Todolist) cost Sonnet
+        ~5 minutes + 27 tool calls on this exact pattern; the
+        working recovery was a single ``Scroll To Element`` call on
+        the source before the drag (matches what Sonnet documented).
+
+        This override does that automatically. We deliberately scroll
+        ONLY the source (not the target):
+
+        1. Scrolling target THEN source is a no-op net effect when
+           both are far apart — the second scroll undoes the first.
+        2. Playwright handles dynamic scrolling for the drop side
+           during the drag motion; pre-scrolling target isn't needed.
+        3. Sonnet's working obstacle-10 recovery scrolled only the
+           source. Match that proven pattern.
+
+        Returns ``None`` so the normal Drag And Drop dispatch proceeds.
+
+        Failure modes:
+        - ``Scroll To Element`` on a locator that doesn't match: the
+          underlying RF call raises; we swallow + log it. The drag
+          will fail with its own (more useful) error message.
+        - First arg isn't a locator string (e.g. someone routes
+          ``Drag And Drop By Coordinates`` through here): no-op.
+        - Cascaded ``>>`` locators: still try to scroll — Browser's
+          Scroll To Element accepts the same locator syntax.
+        """
+        try:
+            from robot.libraries.BuiltIn import BuiltIn
+        except Exception as exc:
+            logger.debug(
+                "OBS-10 pre-scroll skipped: BuiltIn unavailable (%s)", exc,
+            )
+            return None
+
+        # Browser library Drag And Drop signature:
+        #   Drag And Drop    selector_from    selector_to    [steps]
+        # Pre-scroll only the source (arg 0). See docstring rationale.
+        if not arguments:
+            return None
+        source_locator = arguments[0]
+        if not self._looks_like_locator(source_locator):
+            return None
+
+        try:
+            BuiltIn().run_keyword("Browser.Scroll To Element", source_locator)
+            logger.debug(
+                "OBS-10 pre-scrolled Drag And Drop source: %r",
+                source_locator,
+            )
+        except Exception as exc:
+            logger.debug(
+                "OBS-10 pre-scroll of %r failed (continuing): %s",
+                source_locator, exc,
+            )
+
+        # Return None to delegate to the normal Drag And Drop dispatch.
+        # The actual drag now runs with the source in the viewport;
+        # Playwright handles target-side scrolling during drag motion.
+        return None
 
 
 try:  # pragma: no cover
