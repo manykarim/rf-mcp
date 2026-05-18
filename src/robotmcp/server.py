@@ -5234,6 +5234,15 @@ async def get_keyword_info(
             return {"success": False, "error": "keyword_name is required"}
         result = await _get_keyword_documentation_payload(keyword_name, library_name)
         result["mode"] = "keyword"
+        # OBS-21 — externalise large keyword.doc / matches payloads.
+        # The keyword-mode payload is usually small (200-400 tokens),
+        # but verbose docstrings (e.g., New Persistent Context with
+        # 40 args) can exceed the inline threshold. Gated on session_id
+        # per the existing externalisation contract.
+        if session_id:
+            result = _externalize_response(
+                "get_keyword_info", session_id, result
+            )
         return result
 
     if mode_norm in {"library", "libdoc"}:
@@ -5241,6 +5250,15 @@ async def get_keyword_info(
             return {"success": False, "error": "library_name is required"}
         result = await _get_library_documentation_payload(library_name)
         result["mode"] = "library"
+        # OBS-21 — library mode is the major token whale (benchmark
+        # K06 returned 71,521 tokens for full Browser libdoc).
+        # Externalise the heavy fields (library.doc + library.keywords)
+        # so the inline payload stays compact when session_id is
+        # provided.
+        if session_id:
+            result = _externalize_response(
+                "get_keyword_info", session_id, result
+            )
         return result
 
     if mode_norm in {"session", "namespace"}:
@@ -5253,6 +5271,11 @@ async def get_keyword_info(
             session_id, keyword_name
         )
         result["mode"] = "session"
+        # OBS-21 — session-mode keyword payload may carry verbose doc
+        # for library keywords; externalise on the same gate.
+        result = _externalize_response(
+            "get_keyword_info", session_id, result
+        )
         return result
 
     if mode_norm in {"parse", "signature"}:
