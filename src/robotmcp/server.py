@@ -2497,6 +2497,35 @@ async def find_keywords(
                 catalog, session_id, effective_library_preference
             )
 
+        # OBS-25 — Hard-cap unscoped catalog dumps to prevent the 97k
+        # token whale observed in benchmark S20
+        # (find_keywords(strategy="catalog") with no session, no
+        # library_name, no query returns 658 keywords across 10
+        # libraries). The cap only applies when ALL three scoping
+        # mechanisms are absent — a scoped catalog call is intentional
+        # and shouldn't be truncated.
+        catalog_truncated = False
+        full_catalog_size = 0
+        if (
+            not session_id
+            and not library_name
+            and not query
+            and not effective_library_preference
+        ):
+            hard_cap = int(os.getenv("ROBOTMCP_CATALOG_HARD_CAP", "100"))
+            if len(catalog) > hard_cap:
+                full_catalog_size = len(catalog)
+                libraries = sorted({c.get("library", "?") for c in catalog})
+                catalog = catalog[:hard_cap]
+                catalog_truncated = True
+                catalog_hint = (
+                    f"Catalog returned {full_catalog_size} keywords across "
+                    f"{len(libraries)} libraries. Use library_name= or a "
+                    f"query= filter to narrow the result, or pass "
+                    f"session_id= to enable externalisation. First "
+                    f"{hard_cap} entries returned."
+                )
+
         if limit_value is not None:
             catalog = catalog[:limit_value]
 
@@ -2529,6 +2558,14 @@ async def find_keywords(
                     library_filter_source,
                 )
             )
+
+        # OBS-25: surface the hard-cap diagnostic + full size when the
+        # cap fired so the agent knows the response was truncated and
+        # how to scope down.
+        if catalog_truncated:
+            result["catalog_truncated"] = True
+            result["full_catalog_size"] = full_catalog_size
+            result["hint"] = catalog_hint
 
         # ADR-010 I3: Hint when catalog returns empty without active session
         if not catalog and not session_id:
