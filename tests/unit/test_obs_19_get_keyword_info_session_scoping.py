@@ -103,6 +103,65 @@ class TestSessionScopedLookup:
         assert "Collections" in allowed
         assert "String" in allowed
 
+    async def test_empty_imported_libraries_still_scopes(self, patched_engines):
+        """Codex round-3 bug: when a real session exists but
+        ``imported_libraries=[]`` (fresh session, no libraries loaded
+        yet), the resolver must STILL scope to neutral helpers — not
+        silently fall through to global lookup. The session_id is
+        load-bearing."""
+        sess = MagicMock()
+        sess.imported_libraries = []  # empty!
+        sess.explicit_library_preference = None
+        patched_engines["sess_mgr"].get_session = MagicMock(return_value=sess)
+        patched_engines["engine"].get_keyword_documentation = MagicMock(
+            return_value={"success": True, "matches": []}
+        )
+        await _fn(get_keyword_info)(
+            mode="keyword", keyword_name="Click", session_id="sess-empty",
+        )
+        _, kwargs = patched_engines["engine"].get_keyword_documentation.call_args
+        allowed = kwargs.get("allowed_libraries")
+        assert allowed is not None, (
+            "session-scoped lookup must NOT fall through to allowed_libraries=None "
+            "even when imported_libraries is empty"
+        )
+        # Neutral helpers still scope the lookup (BuiltIn, Collections, …).
+        assert "BuiltIn" in allowed
+        assert "Collections" in allowed
+        # Browser is NOT in allowed (it wasn't imported).
+        assert "Browser" not in allowed
+
+    async def test_ambiguous_within_allowed_returns_matches_array(
+        self, patched_engines,
+    ):
+        """AC #2b — when an ambiguous keyword (e.g. Go To) is present
+        in MULTIPLE allowed libraries, the response is matches[] with
+        all matching entries (mirrors LibDoc path's multi-match shape
+        at execution_coordinator.py:1067-1090)."""
+        sess = MagicMock()
+        sess.imported_libraries = ["Browser", "SeleniumLibrary"]
+        sess.explicit_library_preference = None
+        patched_engines["sess_mgr"].get_session = MagicMock(return_value=sess)
+        # The engine returns both matches (the OBS-19 filter keeps
+        # both because both are in allowed).
+        patched_engines["engine"].get_keyword_documentation = MagicMock(
+            return_value={
+                "success": True,
+                "matches": [
+                    {"name": "Go To", "library": "Browser"},
+                    {"name": "Go To", "library": "SeleniumLibrary"},
+                ],
+            }
+        )
+        result = await _fn(get_keyword_info)(
+            mode="keyword", keyword_name="Go To", session_id="sess-x",
+        )
+        assert result["success"] is True
+        assert "matches" in result
+        assert len(result["matches"]) == 2
+        libs = {m["library"] for m in result["matches"]}
+        assert libs == {"Browser", "SeleniumLibrary"}
+
     async def test_keyword_in_allowed_lib_returns_match(self, patched_engines):
         """Click is in Browser; session imports Browser → success."""
         sess = MagicMock()

@@ -114,6 +114,7 @@ uv pip install rf-mcp[api]       # RequestsLibrary
 uv pip install rf-mcp[database]  # DatabaseLibrary
 uv pip install rf-mcp[frontend]  # Django-based web frontend dashboard
 uv pip install rf-mcp[memory]    # Persistent semantic memory (sqlite-vec + model2vec)
+uv pip install rf-mcp[semantic]  # Sentence-transformers for find_keywords embedding ranking
 uv pip install rf-mcp[all]       # All optional Robot Framework libraries
 
 # Alternatively, add to an existing uv project
@@ -139,6 +140,7 @@ pip install rf-mcp[api]       # RequestsLibrary
 pip install rf-mcp[database]  # DatabaseLibrary
 pip install rf-mcp[frontend]  # Django-based web frontend dashboard
 pip install rf-mcp[memory]    # Persistent semantic memory (sqlite-vec + model2vec)
+pip install rf-mcp[semantic]  # Sentence-transformers for find_keywords embedding ranking
 pip install rf-mcp[all]       # All optional Robot Framework libraries
 
 # Browser Library still needs Playwright browsers

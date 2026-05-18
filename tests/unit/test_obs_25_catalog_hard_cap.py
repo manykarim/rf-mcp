@@ -169,6 +169,47 @@ class TestSmallCatalogNotCapped:
 
 
 @pytest.mark.asyncio
+class TestEnvVarSafety:
+    """Codex round-3 review: ``int(os.getenv(...))`` raised on invalid
+    env values, turning a discovery call into an exception. The fixed
+    code falls back to 100 and logs a warning."""
+
+    async def test_invalid_env_value_falls_back_to_default(
+        self, patched_catalog, monkeypatch, caplog,
+    ):
+        import logging
+        monkeypatch.setenv("ROBOTMCP_CATALOG_HARD_CAP", "not-a-number")
+        patched_catalog["catalog_mock"].return_value = _stub_catalog(658)
+        caplog.set_level(logging.WARNING, logger="robotmcp")
+        result = await _fn(find_keywords)(query="", strategy="catalog")
+        # Falls back to default 100; doesn't raise.
+        assert result["catalog_truncated"] is True
+        assert len(result["results"]) == 100
+        # Log carries the bad value.
+        log_text = "\n".join(r.getMessage() for r in caplog.records)
+        assert "Invalid ROBOTMCP_CATALOG_HARD_CAP" in log_text
+
+    async def test_zero_env_value_falls_back_to_default(
+        self, patched_catalog, monkeypatch,
+    ):
+        monkeypatch.setenv("ROBOTMCP_CATALOG_HARD_CAP", "0")
+        patched_catalog["catalog_mock"].return_value = _stub_catalog(658)
+        result = await _fn(find_keywords)(query="", strategy="catalog")
+        # 0 is treated as invalid; default 100 applies.
+        assert result["catalog_truncated"] is True
+        assert len(result["results"]) == 100
+
+    async def test_negative_env_value_falls_back_to_default(
+        self, patched_catalog, monkeypatch,
+    ):
+        monkeypatch.setenv("ROBOTMCP_CATALOG_HARD_CAP", "-50")
+        patched_catalog["catalog_mock"].return_value = _stub_catalog(658)
+        result = await _fn(find_keywords)(query="", strategy="catalog")
+        assert result["catalog_truncated"] is True
+        assert len(result["results"]) == 100
+
+
+@pytest.mark.asyncio
 class TestCapInteractionWithLimit:
     """Caller-supplied ``limit`` interacts predictably with the cap:
     hard cap applies first (truncating to 100); limit then trims the

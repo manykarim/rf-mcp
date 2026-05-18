@@ -180,6 +180,57 @@ class TestInspectionFallbackUsesAllMatches:
         assert result["success"] is False
         assert "NoSuchKeyword" in result["error"]
 
+    def test_fallback_honours_allowed_libraries_filter(self):
+        """Codex round-3 caught OBS-19+OBS-32 drift: the inspection
+        fallback path ignored ``allowed_libraries``, so session-scoped
+        lookups in LibDoc-unavailable environments leaked cross-library
+        matches. Fixed in the follow-up commit."""
+        from robotmcp.components.execution.execution_coordinator import (
+            ExecutionCoordinator,
+        )
+        coord = ExecutionCoordinator.__new__(ExecutionCoordinator)
+        coord.rf_doc_storage = MagicMock()
+        coord.rf_doc_storage.is_available = MagicMock(return_value=False)
+        ki_browser = _make_keyword_info("Go To", "Browser")
+        ki_sl = _make_keyword_info("Go To", "SeleniumLibrary")
+        coord.keyword_executor = MagicMock()
+        coord.keyword_executor.keyword_discovery = MagicMock()
+        coord.keyword_executor.keyword_discovery.find_all_keywords = MagicMock(
+            return_value=[ki_browser, ki_sl]
+        )
+        # Allowed = Browser only → SL excluded.
+        result = coord.get_keyword_documentation(
+            "Go To", allowed_libraries=["Browser", "BuiltIn"],
+        )
+        assert result["success"] is True
+        libs = {m["library"] for m in result["matches"]}
+        assert libs == {"Browser"}, (
+            f"inspection fallback must filter by allowed_libraries; "
+            f"got libs={libs!r}"
+        )
+
+    def test_fallback_reports_found_in_other_libraries_when_none_allowed(self):
+        """When the keyword exists only in non-allowed libraries, the
+        inspection fallback returns the same not-found-but-found-elsewhere
+        shape as the LibDoc path so server-side hint enrichment can fire."""
+        from robotmcp.components.execution.execution_coordinator import (
+            ExecutionCoordinator,
+        )
+        coord = ExecutionCoordinator.__new__(ExecutionCoordinator)
+        coord.rf_doc_storage = MagicMock()
+        coord.rf_doc_storage.is_available = MagicMock(return_value=False)
+        ki_sl = _make_keyword_info("Click Element", "SeleniumLibrary")
+        coord.keyword_executor = MagicMock()
+        coord.keyword_executor.keyword_discovery = MagicMock()
+        coord.keyword_executor.keyword_discovery.find_all_keywords = MagicMock(
+            return_value=[ki_sl]
+        )
+        result = coord.get_keyword_documentation(
+            "Click Element", allowed_libraries=["Browser", "BuiltIn"],
+        )
+        assert result["success"] is False
+        assert "SeleniumLibrary" in result.get("found_in_other_libraries", [])
+
     def test_scoped_lookup_path_unchanged(self):
         """When library_name is provided, behaviour is the existing
         per-library path — single keyword shape, not matches[]."""

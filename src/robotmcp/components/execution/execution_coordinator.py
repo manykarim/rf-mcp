@@ -1155,6 +1155,19 @@ class ExecutionCoordinator:
             # single keyword can still take matches[0]; callers reading
             # the ambiguity correctly now see every option.
             all_matches = keyword_discovery.find_all_keywords(keyword_name)
+            # OBS-19 + OBS-32 drift fix: honour ``allowed_libraries``
+            # in the inspection fallback too. Previously this path
+            # ignored the filter, so session-scoped lookups in
+            # LibDoc-unavailable environments leaked cross-library
+            # matches.
+            excluded_in_other_libs: List[str] = []
+            if all_matches and allowed_libraries is not None:
+                allowed_set = {lib for lib in allowed_libraries}
+                kept = [ki for ki in all_matches if ki.library in allowed_set]
+                excluded_in_other_libs = sorted(
+                    {ki.library for ki in all_matches if ki.library not in allowed_set}
+                )
+                all_matches = kept
             if all_matches:
                 return {
                     "success": True,
@@ -1173,6 +1186,19 @@ class ExecutionCoordinator:
                         }
                         for ki in all_matches
                     ],
+                }
+            if excluded_in_other_libs:
+                # Keyword exists in other libraries; surface the same
+                # not-found-but-found-elsewhere shape as the LibDoc
+                # path so the server-side hint enrichment can fire.
+                return {
+                    "success": False,
+                    "error": (
+                        f"Keyword '{keyword_name}' is not available in this "
+                        f"session's libraries ({sorted(allowed_libraries or [])}). "
+                        f"Found in: {excluded_in_other_libs}."
+                    ),
+                    "found_in_other_libraries": excluded_in_other_libs,
                 }
             return {"success": False, "error": f"Keyword '{keyword_name}' not found"}
 

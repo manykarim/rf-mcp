@@ -2524,7 +2524,21 @@ async def find_keywords(
             and not query
             and not effective_library_preference
         ):
-            hard_cap = int(os.getenv("ROBOTMCP_CATALOG_HARD_CAP", "100"))
+            # Codex round-3 review caught: raw ``int()`` raises on
+            # invalid env values (e.g., ``ROBOTMCP_CATALOG_HARD_CAP="abc"``),
+            # turning a discovery call into a 500. Fall back to 100
+            # on parse failure with a single WARNING-level log so
+            # operators see the misconfiguration.
+            try:
+                hard_cap = int(os.getenv("ROBOTMCP_CATALOG_HARD_CAP", "100"))
+                if hard_cap <= 0:
+                    raise ValueError("must be > 0")
+            except (TypeError, ValueError) as _e:
+                logger.warning(
+                    "Invalid ROBOTMCP_CATALOG_HARD_CAP=%r; falling back to 100",
+                    os.getenv("ROBOTMCP_CATALOG_HARD_CAP"),
+                )
+                hard_cap = 100
             if len(catalog) > hard_cap:
                 full_catalog_size = len(catalog)
                 libraries = sorted({c.get("library", "?") for c in catalog})
@@ -5231,6 +5245,14 @@ async def get_keyword_info(
                       the global lookup (cross-library matches[]).
                     - mode="session" / "namespace": required to address
                       the live RF namespace.
+                    - **Externalisation gate (OBS-21)**: any mode with
+                      ``session_id`` provided enables artifact
+                      externalisation for large payloads (``library.doc``,
+                      ``library.keywords``, ``keyword.doc``, ``matches``).
+                      Without ``session_id``, payloads stay inline
+                      regardless of size — there's no artifact store
+                      to write to, so sessionless callers get the full
+                      content. Preserves backwards compat.
         arguments: Optional arguments to parse when mode="parse".
 
     Returns:
@@ -5240,6 +5262,9 @@ async def get_keyword_info(
             - doc/signature data or error on failure
             - hint: plugin library-mismatch hint when applicable
               (OBS-19 mode="keyword" + session-scope mismatch)
+            - Large fields may be replaced by "Content saved to ..."
+              artifact summary strings when ``session_id`` is provided
+              and the field exceeds the inline threshold (OBS-21).
     """
 
     mode_norm = (mode or "keyword").strip().lower()
@@ -5342,17 +5367,23 @@ async def _get_keyword_documentation_payload(
                 "error": f"Session '{session_id}' not found",
             }
         # imported_libraries is a list/set on ExecutionSession.
+        # Neutral helpers always visible alongside the UI library —
+        # mirrors keyword_discovery.py:264 neutral set so session-
+        # scoped lookups still find BuiltIn helpers.
+        # NB: even when ``imported`` is empty (fresh session, no
+        # libraries imported yet), session_id is load-bearing — we
+        # still scope to neutral libraries rather than silently fall
+        # through to the global lookup. (Codex round-3 caught this:
+        # the old ``if imported:`` guard let an empty list become a
+        # de facto "no scoping" path, contradicting the session
+        # contract.)
         imported = list(getattr(session, "imported_libraries", []) or [])
-        if imported:
-            # Always keep neutral libraries visible alongside the UI
-            # library. Mirrors keyword_discovery.py:264 neutral set so
-            # session-scoped lookups still find BuiltIn helpers.
-            neutral = {
-                "BuiltIn", "Collections", "String", "DateTime",
-                "OperatingSystem", "Process", "XML",
-            }
-            allowed_libraries = sorted(set(imported) | neutral)
-            session_for_hint = session
+        neutral = {
+            "BuiltIn", "Collections", "String", "DateTime",
+            "OperatingSystem", "Process", "XML",
+        }
+        allowed_libraries = sorted(set(imported) | neutral)
+        session_for_hint = session
 
     result = execution_engine.get_keyword_documentation(
         keyword_name, library_name, allowed_libraries=allowed_libraries,
