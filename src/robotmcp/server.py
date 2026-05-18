@@ -2296,6 +2296,29 @@ async def find_keywords(
                 f"'{bdd_query_result.original_name}' -> '{query}'"
             )
 
+    # OBS-24 — Empty/whitespace-only queries against semantic/pattern
+    # strategies fall through to the matcher and produce bogus low-
+    # confidence "hits" (e.g. confidence=0.35 against an empty action
+    # description). Short-circuit before that with a clear hint to
+    # use catalog strategy when an unfiltered listing is needed.
+    # Catalog + session strategies handle empty queries by design
+    # (list everything in scope) and are intentionally not gated.
+    if strategy_norm in {"semantic", "intent", "pattern", "search"}:
+        if not query or not query.strip():
+            return {
+                "success": False,
+                "strategy": strategy_norm,
+                "query": query,
+                "error": (
+                    f"Query string is required for strategy='{strategy_norm}'"
+                ),
+                "hint": (
+                    "Use strategy='catalog' to list available keywords "
+                    "without a query, or strategy='session' if a session is "
+                    "active."
+                ),
+            }
+
     current_state = current_state or {}
     limit_value: int | None = None
     if limit is not None:
