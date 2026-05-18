@@ -2240,7 +2240,14 @@ async def find_keywords(
         query: Search text or intent description.
                Examples: "click a button", "validate json", "get*request"
         strategy: Discovery approach:
-                  - "semantic": Natural language search (best for exploring)
+                  - "semantic": Hybrid keyword search combining name/doc
+                    pattern matching, tag/action-class classification, and
+                    (when installed) sentence-transformers embedding
+                    similarity. For best semantic ranking, install the
+                    optional extra: ``uv add robotmcp[semantic]``. Without
+                    the extra, falls back to pattern + tag + difflib
+                    SequenceMatcher ranking; the strategy is still useful
+                    but ranking quality is reduced.
                   - "pattern": Glob/regex matching (best when you know partial name)
                   - "catalog": List all available keywords
                   - "session": List keywords from session's loaded libraries

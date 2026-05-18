@@ -67,15 +67,35 @@ class KeywordMatcher:
         self.embeddings_model = None
         self.keyword_embeddings: Dict[str, np.ndarray] = {}
         self._initialized = False
-        
-        # Initialize embeddings model if available
+
+        # OBS-30 — Initialize embeddings model if the optional
+        # ``[semantic]`` extra is installed. Log the mode clearly so
+        # operators can tell whether semantic ranking is using
+        # embeddings or the difflib + tag-based fallback.
         if EMBEDDINGS_AVAILABLE:
             try:
                 self.embeddings_model = SentenceTransformer('all-MiniLM-L6-v2')
-                logger.info("Loaded sentence transformer model for semantic matching")
+                logger.info(
+                    "find_keywords semantic strategy: embedding similarity "
+                    "ACTIVE (sentence-transformers installed; model "
+                    "all-MiniLM-L6-v2)"
+                )
             except Exception as e:
                 logger.warning(f"Could not load embeddings model: {e}")
                 self.embeddings_model = None
+                logger.info(
+                    "find_keywords semantic strategy: embedding similarity "
+                    "DISABLED (load error). Falling back to pattern + tag "
+                    "+ difflib SequenceMatcher ranking."
+                )
+        else:
+            logger.info(
+                "find_keywords semantic strategy: embedding similarity "
+                "DISABLED (sentence-transformers not installed). Falling "
+                "back to pattern + tag + difflib SequenceMatcher ranking. "
+                "Install via ``uv add robotmcp[semantic]`` for embedding-"
+                "based ranking."
+            )
         
         # Common keyword patterns for different actions
         self.action_keyword_mapping = {
