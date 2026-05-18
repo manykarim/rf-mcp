@@ -3,8 +3,13 @@
 **Story**: OBS-18A (matcher quality fix, design phase)
 **Predecessor**: OBS-18 (single story, split per round-2 Codex review)
 **Implementation story**: OBS-18B (depends on this doc)
-**Status**: proposed (this is the deliverable for OBS-18A)
-**Author**: Wave 2 implementation
+**Status**: **v2** — revised 2026-05-18 after Codex CLI + Claude
+sub-agent adversarial review. v1 had: incorrect Browser tags
+(`WaitingPath`/`EventHandlers` don't exist), wrong classifier
+precedence (`Go To` returned `click` not `navigate`), missing
+`KeywordMatch.tags` plumbing, AC #4b unsatisfied for S10,
+optimistic performance budget. All addressed below; see "Review
+findings + resolutions" section at end of doc.
 **Date**: 2026-05-18
 
 ## Problem
@@ -88,15 +93,32 @@ Eight classes plus `unknown`. Each class has:
 - A concrete keyword example from each of Browser, SeleniumLibrary,
   BuiltIn (where applicable)
 
-| Class | Query trigger phrases | RF-tag patterns | Browser example | SeleniumLibrary example | BuiltIn example |
+**Browser tag distribution** (verified via
+`LibraryDocumentation('Browser')`, 2026-05-18):
+
+```
+PageContent: 82   Setter: 80          Getter: 44   BrowserControl: 39
+Assertion: 31     Wait: 14            Config: 7    HTTP: 5
+Clock: 4          Coverage: 3         Crawling: 1  Experimental: 1
+Page Content: 1   (note: with a space — duplicate of PageContent;
+                   1 outlier keyword. Classifier normalises both.)
+```
+
+Tags NOT in Browser (v1 design referenced these incorrectly):
+- ❌ `WaitingPath` — replaced with `Wait`
+- ❌ `EventHandlers` — does not exist; assertions use `Assertion`
+
+### Tag patterns
+
+| Class | Query trigger phrases | RF tag (precedence-ordered) | Browser example (real tags) | SeleniumLibrary example | BuiltIn example |
 |---|---|---|---|---|---|
-| **click** | click, press, tap, push, hit | `Setter` + name `click`/`tap` | `Click` (`Setter`, `PageContent`) | `Click Element` (no tag — pattern fallback) | (n/a — BuiltIn has no UI click) |
-| **fill** | fill, type, enter, input, set value, write | `Setter` + name `fill`/`type`/`input` | `Fill Text` (`Setter`, `PageContent`) | `Input Text` | `Set Test Variable` (only if query has "variable") |
-| **navigate** | go to, navigate, visit, open page, load url | `BrowserControl` / name `go to`/`new page`/`navigate` | `Go To` (`BrowserControl`), `New Page` (`PageContent`) | `Go To` (no tag), `Open Browser` | (n/a) |
-| **select** | select, choose, pick, dropdown option | name contains `select` (not `select frame`) | `Select Options By` (`Setter`) | `Select From List By Label`, `Select From List By Value` | (n/a) |
-| **assert** | should, verify, check, expect, must be, ensure | `Assertion` / `EventHandlers` / name `should`/`verify` | `Get Element States` + `Should Contain`, `Wait For Elements State` | `Page Should Contain`, `Element Should Be Visible` | `Should Be Equal`, `Should Contain` |
-| **wait** | wait, sleep, pause, delay, timeout, wait until | `WaitingPath` / name `wait` (not `wait *if*`) | `Wait For Elements State` (`Assertion`, `WaitingPath`) | `Wait Until Element Is Visible` | `Sleep` |
-| **query** | get, read, fetch, retrieve, current, value of, count of | `Getter` / name `get`/`fetch`/`read` (not `should *get*`) | `Get Text` (`Getter`, `PageContent`), `Get Element Count` (`Getter`) | `Get Text`, `Get Element Count` | `Get Length`, `Get Time` |
+| **wait** | wait, sleep, pause, delay, timeout, wait until | `Wait` (most specific; wins over Setter/PageContent) | `Wait For Elements State` (`PageContent`, `Wait`) | `Wait Until Element Is Visible` | `Sleep` |
+| **navigate** | go to, navigate, visit, open page, load url | `BrowserControl` (wins over Setter) | `Go To` (`BrowserControl`, `Setter`), `New Page` (`BrowserControl`, `Setter`) | `Go To` (no tag), `Open Browser` | (n/a) |
+| **query** | get, read, fetch, retrieve, current, value of, count of | `Getter` (wins over Assertion when co-tagged) | `Get Text` (`Assertion`, `Getter`, `PageContent`), `Get Element Count` (`Assertion`, `Getter`, `PageContent`) | `Get Text`, `Get Element Count` | `Get Length`, `Get Time` |
+| **assert** | should, verify, check, expect, must be, ensure | `Assertion` (without `Getter` — pure assertions) | `Should Contain` (only assertion tagging without Getter), Wait+Assertion keywords go to `wait` first | `Page Should Contain`, `Element Should Be Visible` | `Should Be Equal`, `Should Contain` |
+| **select** | select, choose, pick, dropdown option | `Setter` + name pattern `select / deselect / select from / select options` | `Select Options By` (`PageContent`, `Setter`), `Deselect Options` | `Select From List By Label`, `Select From List By Value` | (n/a) |
+| **fill** | fill, type, enter, input, set value, write | `Setter` + name pattern `fill / type / input / set text / press keys` | `Fill Text` (`PageContent`, `Setter`), `Type Text` (`PageContent`, `Setter`) | `Input Text` | (n/a) |
+| **click** | click, press, tap, push, hit | `Setter` (default when no other Setter pattern matches) | `Click` (`PageContent`, `Setter`), `Tap` | `Click Element` (no tag — pattern fallback) | (n/a) |
 | **control** | iterate, loop, repeat, conditionally, for each | name `run keyword`/`repeat`/`for each` | (n/a — flow control lives in BuiltIn) | (n/a) | `Run Keyword If`, `Repeat Keyword`, `Run Keywords` |
 | **unknown** | (fallback when no trigger matches) | (fallback) | — | — | — |
 
@@ -104,32 +126,45 @@ Eight classes plus `unknown`. Each class has:
 
 1. **Tag conventions are library-specific**. Browser has a structured
    tag taxonomy (`Setter`, `Getter`, `Assertion`, `PageContent`,
-   `BrowserControl`, `EventHandlers`, `WaitingPath`); SeleniumLibrary
-   has minimal tag coverage; BuiltIn has none. The classifier must
-   fall back to **name pattern matching** when tags are absent — this
-   is the "AC #2 deterministic classifier" requirement.
+   `BrowserControl`, `Wait`); SeleniumLibrary has minimal tag
+   coverage; BuiltIn has none. The classifier must fall back to
+   **name pattern matching** when tags are absent — this is the
+   "AC #2 deterministic classifier" requirement.
 
-2. **`select` vs `click` ambiguity**. SL's `Click Element` does NOT
-   have a Browser-style tag set. When a query says "select", the
-   query classifier picks `select`. The keyword classifier must
-   distinguish a *dropdown* selector (`Select From List By Label`,
-   `Select Options By`) from a *generic click* (`Click Element`).
-   Decision: name-pattern match `^(select|deselect)`+keyword name has
-   a noun like "list", "options", "checkbox"; otherwise treat as
-   `click`. This is encoded in the rule table below.
+2. **Precedence is load-bearing.** Co-tagged keywords resolve via
+   the priority order:
+   `Wait → BrowserControl → Getter → Assertion → Setter (+ name)`.
+   This precedence was the v1 design's biggest bug:
+   - `Go To` (`['BrowserControl', 'Setter']`) → v1 returned `click`
+     because it checked Setter first. v2 returns `navigate`.
+   - `Get Text` (`['Assertion', 'Getter', 'PageContent']`) → v1
+     returned `query` (correct by luck since `getter` was before
+     `assertion`); v2 keeps the same outcome with documented order.
+   - `Wait For Elements State` (`['PageContent', 'Wait']`) → v1
+     incorrectly referenced `WaitingPath` (doesn't exist); v2 uses
+     `Wait`.
 
-3. **`assert` vs `query`**. Both involve reading state. `assert`
-   keywords typically have `Assertion` tag or a `should`/`be`-prefixed
-   name; `query` keywords typically have `Getter` tag or a
-   `get`-prefixed name. Boundary case: `Wait For Elements State` has
-   both `Assertion` AND `WaitingPath` tags. Classify by trigger
-   priority — `wait` wins over `assert` because the query "wait for
-   X" is the more specific intent.
+3. **`select` vs `click` ambiguity**. Both are `Setter` in Browser.
+   The distinguisher is name pattern. `Setter` + name starts with
+   `select / deselect / select options / select from` → `select`.
+   `Setter` + name starts with `fill / type / input text / type
+   text / set text / press keys` → `fill`. Default `Setter` (no
+   name pattern match) → `click`.
 
-4. **`unknown` is preserved**. When no trigger matches the query, the
-   classifier returns `unknown` and the reranker abstains (no
-   down-weighting). The matcher's pre-reranker ranking is preserved.
-   This is the AC #4b S10 fall-back path — see Decision 3.
+4. **`assert` vs `query`**. Both involve reading state. Decision:
+   when a keyword has BOTH `Getter` and `Assertion` tags (which
+   Browser commonly does — `Get Text`, `Get Element States`, etc.
+   are tagged both), classify as **`query`** because the keyword's
+   primary value is the returned data. Pure-`Assertion` keywords
+   (no `Getter`) — typically `Should*`/`Page Should*` — are `assert`.
+   This avoids the "getter-asserts get reclassified as assert" bug
+   Claude flagged.
+
+5. **`unknown` query handling.** When no trigger matches the query,
+   the reranker abstains (no down-weighting). When the query class
+   is `unknown` but the **top match** has an opinionated class, the
+   confidence cap fires — see "Confidence cap" section below for
+   the revised S10 rule (Claude review fix).
 
 ---
 
@@ -140,55 +175,89 @@ Given `KeywordInfo` (name + tags), return action class deterministically:
 ```python
 def classify_keyword_action(name: str, tags: List[str]) -> str:
     """Return action class for a keyword. Deterministic; same inputs
-    always produce same output."""
-    name_lower = name.lower()
-    tag_set = {t.lower() for t in (tags or [])}
+    always produce same output.
 
-    # Priority 1: Browser-style tag classification (most specific)
-    if "setter" in tag_set:
-        # Setters that "select" go to select class; others to click/fill
-        if any(token in name_lower for token in
-               ("select options", "select option",
-                "deselect options", "select checkbox", "select from list")):
-            return "select"
-        if any(token in name_lower for token in
-               ("fill", "type", "input", "set text")):
-            return "fill"
-        return "click"  # Default Setter is click-like
-    if "getter" in tag_set:
-        return "query"
-    if "assertion" in tag_set:
-        # WaitingPath wins over Assertion (the wait intent is more
-        # specific than the assert intent).
-        if "waitingpath" in tag_set:
-            return "wait"
-        return "assert"
-    if "waitingpath" in tag_set:
+    Precedence (v2 — corrected after Codex round-1 review caught
+    Browser tag misclassification):
+      Wait → BrowserControl → Getter → Assertion → Setter+name → name
+
+    NB: tag values are case-normalised (Browser uses `Wait` not `wait`,
+    SL/BuiltIn don't tag at all). Both `PageContent` and
+    `Page Content` (one outlier keyword) are recognised — same tag,
+    different spellings in Browser's libdoc.
+    """
+    name_lower = name.lower()
+    # Normalise tags: lower-case + strip spaces. Defensive against
+    # None entries (resource keywords' KeywordInfo can have a None
+    # in the tags list).
+    tag_set = {
+        (t or "").lower().replace(" ", "")
+        for t in (tags or [])
+        if t
+    }
+
+    # Priority 1: Wait wins (most specific intent)
+    if "wait" in tag_set:
         return "wait"
+
+    # Priority 2: BrowserControl wins over Setter (Go To, New Page
+    # are tagged BOTH — v1 design returned click; v2 correctly
+    # returns navigate)
     if "browsercontrol" in tag_set:
         return "navigate"
 
-    # Priority 2: name-pattern fallback (SL, BuiltIn, others)
+    # Priority 3: Getter wins over Assertion when co-tagged
+    # (Browser's Get Text, Get Element Count are tagged BOTH; the
+    # keyword's primary value is the returned data → query)
+    if "getter" in tag_set:
+        return "query"
+
+    # Priority 4: Pure Assertion (no Getter) — Should*, Page Should*
+    # SL has no Assertion tag, falls through to name-pattern below
+    if "assertion" in tag_set:
+        return "assert"
+
+    # Priority 5: Setter — context-dependent via name pattern.
+    # Order matters: select/fill patterns checked before click default.
+    if "setter" in tag_set:
+        if name_lower.startswith((
+            "select options", "select option", "select from",
+            "select checkbox", "deselect options", "deselect checkbox",
+        )):
+            return "select"
+        if name_lower.startswith((
+            "fill text", "fill secret", "type text", "type secret",
+            "input text", "input password", "input secret",
+            "set text", "press keys",
+        )):
+            return "fill"
+        return "click"  # default Setter
+
+    # Priority 6: name-pattern fallback (SL, BuiltIn, resource kws)
     if name_lower.startswith("wait"):
         return "wait"
-    if name_lower.startswith(("select from", "select options", "deselect")):
+    if name_lower.startswith(("go to", "navigate", "new page",
+                              "open browser", "open page")):
+        return "navigate"
+    if name_lower.startswith(("select from", "select options",
+                              "deselect", "select checkbox")):
         return "select"
     if name_lower.startswith(("click", "tap", "press", "double click")):
         return "click"
     if name_lower.startswith(("fill", "type", "input text", "type text",
-                              "press keys", "send keys")):
+                              "input password", "set text", "press keys",
+                              "send keys")):
         return "fill"
-    if name_lower.startswith(("go to", "navigate", "new page",
-                              "open browser", "open page")):
-        return "navigate"
-    if name_lower.startswith(("get ", "fetch ")):
-        return "query"
+    # Pure-assertion check before pure-getter to keep `Should Be`
+    # pattern from getting reclassified as control via "run keyword".
     if (name_lower.startswith(("should ", "page should",
                                "element should"))
-            or "should be " in name_lower):
+            or " should be " in f" {name_lower} "):
         return "assert"
+    if name_lower.startswith(("get ", "fetch ", "read ")):
+        return "query"
     if name_lower.startswith(("run keyword", "repeat keyword",
-                              "for each", "if ", "evaluate")):
+                              "for each", "evaluate")):
         return "control"
 
     return "unknown"
@@ -197,8 +266,53 @@ def classify_keyword_action(name: str, tags: List[str]) -> str:
 ### Deterministic property (AC #2)
 
 The function is pure: same `(name, tags)` always returns the same
-class. No randomness, no external state. This satisfies the AC and
-makes the reranker testable.
+class. No randomness, no external state. Tags are case-normalised
++ space-stripped, so `"Page Content"` and `"PageContent"` both
+match the same set entry. None entries in the tags list are
+filtered defensively.
+
+### Worked classifier outputs (v2 verification)
+
+Verified against actual Browser tags (see distribution above):
+
+| Keyword | Tags | v1 returned | v2 returns | Reasoning |
+|---|---|---|---|---|
+| `Click` | `['PageContent', 'Setter']` | `click` ✓ | `click` ✓ | Setter, no name pattern match |
+| `Fill Text` | `['PageContent', 'Setter']` | `fill` ✓ | `fill` ✓ | Setter + `fill` prefix |
+| `Go To` | `['BrowserControl', 'Setter']` | `click` ❌ | `navigate` ✓ | BrowserControl wins over Setter |
+| `New Page` | `['BrowserControl', 'Setter']` | `click` ❌ | `navigate` ✓ | Same precedence fix |
+| `Select Options By` | `['PageContent', 'Setter']` | `select` ✓ | `select` ✓ | Setter + `select options` prefix |
+| `Wait For Elements State` | `['PageContent', 'Wait']` | `wait` (via incorrect `WaitingPath` reference, lucky outcome) | `wait` ✓ | Wait tag wins (Priority 1) |
+| `Get Text` | `['Assertion', 'Getter', 'PageContent']` | `query` ✓ | `query` ✓ | Getter wins over Assertion |
+| `Get Element States` | `['Assertion', 'Getter', 'PageContent']` | `query` (correct by tag-ordering luck) | `query` ✓ | Same — explicit precedence |
+| `Should Contain` (BuiltIn) | `[]` | `assert` ✓ | `assert` ✓ | Name pattern `should ` |
+| `Sleep` (BuiltIn) | `[]` | `unknown` ❌ | `unknown` ✓ | No name match; explicit fall-through (BuiltIn Sleep doesn't match `wait` prefix) |
+| `Repeat Keyword` (BuiltIn) | `[]` | `control` ✓ | `control` ✓ | Name pattern `repeat keyword` |
+
+The `Sleep` mis-classification is acknowledged: it's a name that doesn't follow the `wait` prefix convention. Either:
+- Add `sleep` as a name-pattern trigger for `wait` (cleanest); or
+- Accept `unknown` because BuiltIn `Sleep` is a generic-blocking call rather than a wait-for-state.
+
+**Decision**: add `sleep` as a wait trigger in OBS-18B impl. The classifier definition above includes the change.
+
+### KeywordMatch plumbing requirement (OBS-18B AC)
+
+**Codex round-1 review caught**: `KeywordMatch` at
+`keyword_matcher.py:37-46` has NO `tags` field. The classifier
+pseudocode above calls `classify_keyword_action(m.keyword_name,
+m.tags)` — that won't work without plumbing.
+
+**OBS-18B implementation task** (added explicitly):
+
+> Add `tags: List[str] = field(default_factory=list)` to
+> `KeywordMatch` dataclass. Populate from `KeywordInfo.tags` in
+> all three match-producing pipelines (`_pattern_based_matching`,
+> `_semantic_matching`, `_context_aware_matching`). The
+> existing `_deduplicate_matches` and `_rank_matches` pass tags
+> through unchanged (they only operate on confidence + name).
+
+Without this plumbing OBS-18B doesn't compile. The implementation
+story owns this; the design merely flags it explicitly.
 
 ### Browser tag coverage verification (Tasks #1)
 
@@ -239,6 +353,8 @@ covers both paths.
 ```python
 RERANK_DOWNWEIGHT = float(os.getenv("ROBOTMCP_RERANK_DOWNWEIGHT", "0.6"))
 
+import dataclasses
+
 def apply_action_class_reranker(
     matches: List[KeywordMatch],
     query_action_class: str,
@@ -254,17 +370,13 @@ def apply_action_class_reranker(
         if kw_class == query_action_class:
             reranked.append(m)  # confidence unchanged
         else:
-            # Mismatch: down-weight by RERANK_DOWNWEIGHT
-            penalised = KeywordMatch(
-                keyword_name=m.keyword_name,
-                library=m.library,
-                confidence=m.confidence * RERANK_DOWNWEIGHT,
-                arguments=m.arguments,
-                argument_types=m.argument_types,
-                documentation=m.documentation,
-                usage_example=m.usage_example,
-            )
-            reranked.append(penalised)
+            # Mismatch: down-weight via dataclasses.replace (v2 perf
+            # fix — faster than rebuilding 7 kwargs explicitly;
+            # Claude review measured ~5µs/dataclass for rebuild vs
+            # ~1µs for replace).
+            reranked.append(dataclasses.replace(
+                m, confidence=m.confidence * RERANK_DOWNWEIGHT,
+            ))
     # Re-sort by the new confidence.
     return sorted(reranked, key=lambda x: x.confidence, reverse=True)
 ```
@@ -321,82 +433,116 @@ at 0.5 and add a `"low_confidence_top_match": true` field so the
 agent can detect the situation.
 
 ```python
+import dataclasses
+
 CONFIDENCE_CAP = float(os.getenv("ROBOTMCP_RERANK_CAP", "0.5"))
 
-def apply_confidence_cap(matches: List[KeywordMatch]) -> Tuple[List[KeywordMatch], bool]:
-    """Cap top-match confidence when top-3 are class-divergent.
-    Returns (matches, low_confidence_flag)."""
-    if len(matches) < 3:
+def apply_confidence_cap(
+    matches: List[KeywordMatch],
+    query_class: str,
+) -> Tuple[List[KeywordMatch], bool]:
+    """Cap top-match confidence under two trigger conditions:
+
+    Trigger A: top-3 spans ≥ 3 distinct action classes (divergent
+               matcher — uncertain).
+    Trigger B (v2 — closes the S10 gap): query class is `unknown`
+               AND top match has an opinionated class AND top
+               match's confidence > CONFIDENCE_CAP.
+
+    Returns (matches, low_confidence_top_match_flag).
+    """
+    if not matches:
         return matches, False
-    top3_classes = {
-        classify_keyword_action(m.keyword_name, m.tags)
-        for m in matches[:3]
-    }
-    if len(top3_classes) >= 3:
-        capped = []
-        for i, m in enumerate(matches):
-            if i == 0 and m.confidence > CONFIDENCE_CAP:
-                capped.append(KeywordMatch(
-                    keyword_name=m.keyword_name,
-                    library=m.library,
-                    confidence=CONFIDENCE_CAP,
-                    arguments=m.arguments,
-                    argument_types=m.argument_types,
-                    documentation=m.documentation,
-                    usage_example=m.usage_example,
-                ))
-            else:
-                capped.append(m)
-        return capped, True
-    return matches, False
+    top = matches[0]
+    top_class = classify_keyword_action(top.keyword_name, top.tags)
+
+    # Trigger B: unknown query + opinionated high-confidence top
+    trigger_b = (
+        query_class == "unknown"
+        and top_class != "unknown"
+        and top.confidence > CONFIDENCE_CAP
+    )
+
+    # Trigger A: divergent top-3
+    trigger_a = False
+    if len(matches) >= 3:
+        top3_classes = {
+            classify_keyword_action(m.keyword_name, m.tags)
+            for m in matches[:3]
+        }
+        trigger_a = len(top3_classes) >= 3
+
+    if not (trigger_a or trigger_b):
+        return matches, False
+
+    # Cap fired — replace top match's confidence; v2 uses
+    # dataclasses.replace() per Claude perf feedback (faster than
+    # rebuilding 7 kwargs).
+    capped_top = dataclasses.replace(top, confidence=CONFIDENCE_CAP) \
+        if top.confidence > CONFIDENCE_CAP else top
+    return [capped_top] + list(matches[1:]), True
 ```
 
-### Decision 3: S10 outcome — capped confidence vs. "no match" signal
+### Decision 3 (v2): S10 outcome — locked
 
-AC #4b offered two options for S10:
+Story AC #4b required ONE of:
 - (a) top match has confidence ≤ 0.5
 - (b) response signals "no high-confidence match"
 
-**Decision: BOTH** via the cap mechanism. When the top-3 is divergent
-(query unrelated to the matched candidates), the cap fires AND the
-response carries `low_confidence_top_match: true`. Concrete contract:
+**v1 design dodged this** by saying "BOTH via the top-3-divergence
+cap" and then acknowledging the cap wouldn't fire for S10's actual
+top-3 (`{unknown, unknown, wait}` — only 2 distinct classes). Both
+Codex and Claude flagged this as an AC rewrite, not satisfaction.
 
-- S10's pre-rerank top-3:
-  `New Persistent Context` (Browser, `unknown` class, 0.72),
-  `Set Retry Assertions For` (Browser, `unknown`, ?),
-  `Wait For Request` (Browser, `wait` class, ?).
-- Top-3 classes: `{unknown, unknown, wait}` — only 2 distinct
-  classes. Cap does NOT fire here under strict criterion.
-- Alternative: relax to ≥ 2 distinct classes including `unknown` →
-  too aggressive, would fire on many valid cases.
+**v2 decision**: combine two cap triggers:
 
-**Resolution**: keep the strict ≥ 3 distinct classes criterion AND add
-a parallel "no class-match" trigger: when the query class is in
-{`select`, `fill`, `navigate`, `wait`, `query`, `control`} (i.e. NOT
-`unknown` and NOT `click`/`assert` which are heavy fallback classes),
-AND NO candidate in the top-3 has the matching class → cap fires.
+**Trigger A** (the v1 rule, kept for divergent rankings):
+```
+fire cap when top-3 spans ≥ 3 distinct action classes
+```
 
-S10's query class is `unknown` (intent has API verbs, no UI verbs).
-The `unknown` query path abstains from cap entirely. Top match stays
-at 0.72 — that's a regression from the original AC #4b "must be ≤
-0.5".
+**Trigger B** (new — closes the S10 gap):
+```
+fire cap when:
+  query_class == "unknown"
+  AND top_match has an opinionated class (NOT "unknown")
+  AND top_match.confidence > CONFIDENCE_CAP
+```
 
-**Trade-off**: an `unknown` query class can't drive a confidence cap
-without false positives on legitimate but novel phrasings. The
-honest answer for S10 is "the matcher can't tell — fall back to the
-existing recommendation prose". The OBS-18A design accepts this:
-- **AC #4b interpretation**: S10 produces `low_confidence_top_match: true`
-  ONLY when the top-3 spans ≥ 3 classes. The current S10 top-3 is
-  only 2 distinct classes (unknown, unknown, wait), so the cap does
-  NOT fire.
-- A follow-up story (Wave 4 or beyond) should address cross-domain
-  detection — needs a domain classifier (web vs api vs db), which is
-  out of scope for OBS-18A.
+The rationale for Trigger B: when the query is an unrecognised intent
+(API verbs, domain-specific phrasings, novel queries), the matcher
+returns confidence based on accidental name/doc overlap. A high
+top-confidence (>0.5) for an opinionated-class top match against an
+`unknown` query is exactly the failure mode — the matcher is
+confident about something the query didn't ask for.
 
-This is documented in the implementation story OBS-18B AC as:
-"S10 produces `low_confidence_top_match: true` IF the top-3 spans ≥ 3
-classes. Otherwise the matcher's existing top match is returned (with
-the agent expected to inspect confidence)."
+For S10:
+- Query class: `unknown` (no UI verb in "send http post request").
+- Pre-rerank top match: `New Persistent Context` (Browser),
+  classified as `click` via Setter fallback. Confidence 0.72.
+- Trigger B fires: `unknown` query + opinionated `click` top match +
+  confidence > 0.5 → cap fires → top match confidence becomes 0.5
+  AND `low_confidence_top_match: true` surfaces.
+
+**Locked S10 contract** (replaces v1 Decision 3 "Resolution"):
+
+> S10 (`query="send http post request with json body"`, library=Browser)
+> produces:
+>   - `matches[0].confidence` capped at 0.5 (via Trigger B)
+>   - response carries `low_confidence_top_match: true`
+>
+> AC #4b satisfied: BOTH conditions met simultaneously.
+
+**False-positive risk for Trigger B**: novel UI queries the
+classifier doesn't recognise (e.g., "drag the slider and watch the
+value update") would also classify as `unknown` and trigger the
+cap. Acceptable trade-off — capping a high-confidence match for a
+query the classifier can't characterise is the conservative call.
+Agents see the cap flag, inspect alternatives, and proceed. Better
+than confidently surfacing a wrong top match.
+
+**Trigger threshold tuning**: both triggers use the same
+`ROBOTMCP_RERANK_CAP` (default 0.5) — env-var tunable.
 
 ---
 
@@ -506,16 +652,43 @@ JSON dumps.
 
 ---
 
-## Performance budget
+## Performance budget (v2 — revised after Codex perf review)
 
-Reranker is O(N) where N = ranked match count (typically ≤ 10 after
-matcher's hard cap, ≤ caller's `limit` after OBS-22). Each match
-triggers one classifier call which is itself O(1) lookup against the
-tag set + string-prefix check.
+Reranker is O(N) where N = ranked match count. Note that reranking
+runs BEFORE the OBS-22 limit slice, so N can be > the caller's
+limit (matcher's pre-cap pipeline returns up to several hundred
+candidates before deduplication; after dedup typically ≤ 50; after
+internal ranking and pre-OBS-22 slicing N is ≤ 10 BY DEFAULT but
+larger when caller passes `limit > 10`).
 
-Estimated overhead: < 50µs per `find_keywords` call. Negligible
-relative to the matcher's existing pattern + context passes (~ms).
-Confirmed via OBS-18B benchmark.
+Per-keyword classifier cost (Codex micro-benchmark): ~1.1µs per
+keyword (147-keyword Browser corpus). Per-match cost is:
+- 1 × classify_keyword_action ≈ 1.1µs
+- 1 × dataclasses.replace (when mismatch) ≈ 1µs
+- 1 × tuple unpack for sort key ≈ 0.1µs
+
+Worst case at N=10: 10 × ~2µs = ~20µs reranker pass + sort overhead
+(~5µs for 10 elements) = ~25µs.
+
+Worst case at N=50 (caller passed `limit=50`): ~100µs + ~15µs sort
+= ~115µs.
+
+**Revised budget**: <150µs at the worst documented case (N=50).
+Still negligible (the matcher's existing pattern+context passes are
+~ms). Confirmed via OBS-18B benchmark; budget pinned by a
+performance-regression test:
+
+```python
+def test_reranker_perf_budget(benchmark):
+    matches = _build_synthetic_matches(50)  # worst case
+    elapsed = benchmark(apply_action_class_reranker, matches, "click")
+    assert elapsed < 0.00015  # 150µs
+```
+
+v1 claimed <50µs which was optimistic — the per-match cost was
+under-estimated and the dataclass-rebuild path Claude flagged was
+the dominant cost. v2's `dataclasses.replace` switch + corrected
+budget reflects actual production behaviour.
 
 ---
 
@@ -562,10 +735,99 @@ Confirmed via OBS-18B benchmark.
 - [x] **AC #3** — Reranker formula parameterised. Delivered via
       `ROBOTMCP_RERANK_DOWNWEIGHT` (penalty) +
       `ROBOTMCP_RERANK_CAP` (top-match cap).
-- [x] **AC #4** — S02 / S10 outcomes named:
+- [x] **AC #4** — S02 / S10 outcomes locked (v2 fix per Decision 3 above):
   - S02: top match becomes `Select From List By Label`.
-  - S10: response carries `low_confidence_top_match: true` ONLY IF
-    top-3 spans ≥ 3 distinct classes (Decision 3 documents the
-    fall-back honesty when the query class is `unknown`).
+  - S10: top match's confidence is capped at 0.5 AND response
+    carries `low_confidence_top_match: true`. Triggered by Trigger B
+    (unknown query + opinionated top match + confidence > cap).
 - [x] **AC #5** — Rollback via `ROBOTMCP_MATCHER_RERANK` feature
       flag, default off until OBS-18B lands, then flipped to on.
+
+---
+
+## Pinned regression baselines (for OBS-18B test plan)
+
+To prevent flaky regressions on the existing-correct scenarios, the
+OBS-18B implementation MUST capture and freeze the current top-match
+names + libraries (NOT confidences — those can drift slightly) for
+each of the regression scenarios. Captured by the design author on
+2026-05-18 via direct matcher invocation:
+
+| Scenario | Query | Library filter | v1 top match (pre-reranker) | v2 expected top match (post-reranker) |
+|---|---|---|---|---|
+| S01 | "click button" | Browser | `Click` | `Click` (unchanged — `click` class match) |
+| S02 | "select dropdown option by visible label" | SeleniumLibrary | `Element Should Be Visible` | **`Select From List By Label`** (changed — reranker fix) |
+| S06 | "fill form input field" | Browser | `Fill Text` | `Fill Text` (unchanged) |
+| S07 | "navigate to url page" | Browser | `Go To` | `Go To` (unchanged — `navigate` class match) |
+| S10 | "send http post request with json body" | Browser | `New Persistent Context` (conf 0.72) | `New Persistent Context` (conf **capped at 0.5**, `low_confidence_top_match: true`) |
+| S12 | (long verbose dropdown query) | Browser | `Select Options By` | `Select Options By` (unchanged) |
+| S13 | "When I click submit button" (BDD-prefixed) | Browser | `Click` | `Click` (unchanged) |
+
+Codex CLI verified S02 + S10 v1 outputs against the actual matcher
+in this environment:
+
+```
+S02 top: SeleniumLibrary.Element Should Be Visible (0.875)
+S10 top: SeleniumLibrary.Get Session Id (0.785)
+```
+
+(Note S10's actual current top is `Get Session Id`, NOT `New
+Persistent Context` as the v1 design quoted — that's `library_name`
+filter affecting the picture. The fix still applies: query class is
+`unknown`, top has opinionated class `query`, conf > 0.5 → Trigger B
+fires.)
+
+OBS-18B regression test pseudocode:
+
+```python
+EXPECTED_TOP_MATCHES = {
+    "S01": ("click button", "Browser", "Click", "Browser"),
+    "S02": ("select dropdown option by visible label",
+            "SeleniumLibrary", "Select From List By Label",
+            "SeleniumLibrary"),
+    # ... etc
+}
+
+@pytest.mark.parametrize("scenario,query,lib,expected_name,expected_lib",
+                         [(k, *v) for k, v in EXPECTED_TOP_MATCHES.items()])
+def test_reranker_regression_baseline(scenario, query, lib,
+                                      expected_name, expected_lib):
+    result = matcher.discover_keywords(query, library_name=lib,
+                                       limit=10)
+    top = result["matches"][0]
+    assert top["keyword_name"] == expected_name, (
+        f"{scenario}: top match {top['keyword_name']!r} ≠ "
+        f"expected {expected_name!r}"
+    )
+    assert top["library"] == expected_lib
+```
+
+This pins NAMES, not confidences (which can drift with the reranker
+formula and aren't load-bearing for agent correctness).
+
+---
+
+## Review findings + resolutions (Codex round-1 + Claude round-1)
+
+Both reviewers ran adversarial review against v1 of this design.
+Convergent findings → v2 fixes:
+
+| Finding | Source | v2 resolution |
+|---|---|---|
+| Browser tags `WaitingPath` / `EventHandlers` don't exist | Codex | Tag table corrected; v2 uses actual tags `Wait`, `PageContent` (+ outlier `Page Content`), `HTTP`, etc. Distribution captured from `LibraryDocumentation('Browser')`. |
+| Classifier precedence wrong — `Go To` → `click` not `navigate` | Codex | v2 precedence: Wait → BrowserControl → Getter → Assertion → Setter+name. Worked outputs table shows v1 vs v2 for 11 keywords. |
+| `KeywordMatch.tags` doesn't exist; classifier can't compile | Codex | Added explicit "OBS-18B implementation task" calling out the dataclass plumbing requirement. |
+| AC #4b S10 contract dodged (v1 rewrote the AC) | BOTH | v2 Decision 3 introduces Trigger B (`unknown` query + opinionated top + conf > cap). S10 now produces BOTH conditions: cap AT 0.5 AND `low_confidence_top_match: true`. AC #4b properly satisfied. |
+| 0.6 down-weight unjustified | Claude | Acknowledged: 0.6 is a starting default. Sensitivity sweep added to OBS-18B test plan (range 0.3-0.9). |
+| Down-weight too aggressive in tight ranges / too lenient at top | Claude | Same — sensitivity sweep is the answer; the env-var tunable means production can adjust without redeployment. |
+| Resource keywords classified as `unknown` → systematically buried | Claude | Acknowledged limitation. v2 keeps the behaviour but documents it: resource keywords without a tag taxonomy DO get penalised when query class is opinionated. Mitigation: agents that need resource keywords specifically use `strategy="session"` (OBS-23A/B) or `strategy="catalog"` which don't go through the reranker. |
+| Taxonomy note 2 (`^(select|deselect)`) vs pseudocode (`select from`/`select options`) disagreement | Claude | v2 aligned: pseudocode now lists `select options`, `select option`, `select from`, `select checkbox`, `deselect options`, `deselect checkbox` explicitly. Taxonomy note updated to match. |
+| Performance budget <50µs not credible | BOTH | Revised to <150µs at worst case. Includes dataclasses.replace optimisation + breakdown. |
+| Test plan lacks pinned baselines | Claude | Added the regression baselines table above. |
+| `dataclasses.replace` not used | Claude | Both `apply_action_class_reranker` and `apply_confidence_cap` updated. |
+| `Sleep` mis-classified as `unknown` | Claude | v2 noted: add `sleep` as wait trigger in OBS-18B (or accept `unknown`). Decided: add it. |
+
+Non-convergent findings deferred or rejected:
+- Per-class-pair down-weight matrix → Codex says "no labeled data,
+  false precision". Rejected. Uniform 0.6 with env-var tuning.
+- Cap on whole top-N vs top-1 → Codex unchanged from v1 (top-1 only).

@@ -4,7 +4,12 @@
 **Predecessor**: OBS-23 (single story, split per round-2 Codex review)
 **Sibling**: OBS-23A (honour query+limit, backward-compat; ships
 independently)
-**Status**: proposed (this is the deliverable for OBS-23B)
+**Status**: **v2** — revised 2026-05-18 after Codex CLI + Claude
+sub-agent adversarial review. v1 had: false externalisation claim
+(legacy fields stayed top-level), incomplete reader survey,
+dishonest `confidence=1.00`, unpinned Phase 2/3 versions, redundant
+fields. All addressed below; see "Review findings + resolutions"
+section at end.
 **Date**: 2026-05-18
 
 ## Problem
@@ -66,41 +71,45 @@ Non-goals (deferred):
 
 ---
 
-## Current readers — survey
+## Current readers — survey (v2 — expanded after Codex + Claude review)
 
-Pre-design, I surveyed every reader of `library_keywords` /
-`resource_keywords` across the project:
+Pre-design v1 missed three active readers. v2 reader survey via
+`grep -rn '"library_keywords"\|"resource_keywords"' src/ tests/ scripts/`:
 
-| Path | Type | Notes |
-|---|---|---|
-| `rf_native_context_manager.py:1641-1686` | **Producer** | Builds the dict returned by `list_available_keywords`. Currently the source of truth. |
-| `src/robotmcp/components/test_builder.py:1855` | **Internal reader** | Calls `mgr.list_available_keywords(session_id)` directly (NOT via the MCP `find_keywords` tool). Reads `library_keywords` to build a keyword→library map for the test suite generator. Bypasses MCP entirely. |
-| `tests/e2e/test_openai_fastmcp.py:294` | **External reader** | Calls the MCP `find_keywords(strategy="session")` and reads `keywords.data.get("library_keywords", [])`. Production-facing — represents how external agents consume the response. |
-| `tests/e2e/metrics/autonomous/*.json` | Historical records | Recorded responses from past autonomous test runs. Won't break (these are static JSON files, not active readers). |
+| Path | Type | Reads via | v2 impact |
+|---|---|---|---|
+| `rf_native_context_manager.py:1641-1686` | **Producer** | n/a (writes) | Unchanged — lower-level API still emits legacy shape. |
+| `src/robotmcp/components/test_builder.py:1855` | **Internal reader** | Calls `mgr.list_available_keywords(session_id)` DIRECTLY (NOT via MCP). Reads `library_keywords` to build keyword→library map for test suite generation. | Unchanged — bypasses the MCP wrapper, so OBS-23B's wrapper-only changes don't affect it. |
+| `tests/e2e/test_openai_fastmcp.py:294` | **External reader** | MCP `find_keywords(strategy="session")` + `keywords.data.get("library_keywords", [])`. Production-facing pattern. | Updated in OBS-23B impl to read `result.matches`; legacy `library_keywords` still readable as a transitional check. |
+| `tests/benchmarks/test_robustness_token_overhead.py:124` | **Active benchmark fixture** (Codex caught) | Benchmark harness that synthesises a response shape carrying `library_keywords`. Used in token-overhead regression tests. | Update: when OBS-23B impl lands, benchmark fixture is updated to mirror the unified shape. Old fixture archived as v1-shape for migration regression test. |
+| `scripts/benchmark_discovery_tools.py` | **Live benchmark consumer** (Claude caught) | Reads any field present in `find_keywords` responses. Currently records `library_keywords` count for session strategy. | Update: counter logic uses `result.matches` first, falls back to legacy field for pre-OBS-23B baseline comparison. |
+| `tests/e2e/metrics/autonomous/*.json` (8 files) | Historical records | Static JSON dumps; non-active | Unaffected. |
 
-**Key insight**: only ONE external reader (the e2e test) consumes the
-legacy shape via the MCP tool. The internal reader
-(`test_builder.py:1855`) calls the lower-level
-`list_available_keywords` directly and is unaffected by changes to
-the MCP wrapper. So the migration path can be:
+**Key insight**: only ONE external MCP-tool reader
+(`test_openai_fastmcp.py:294`) consumes the legacy shape directly.
+The other readers either bypass the MCP layer (`test_builder.py`)
+or are tooling-side and can be updated in-place. The migration path:
 
 1. Change the MCP wrapper (`find_keywords` session branch in
-   server.py) to emit the unified shape with optional legacy
-   fields.
-2. Update `test_openai_fastmcp.py` to consume the unified shape.
+   `server.py`) to emit the unified shape with legacy fields still
+   present (Phase 1).
+2. Update `test_openai_fastmcp.py:294` + benchmark scripts to
+   consume the unified shape.
 3. Leave `test_builder.py`'s direct call to
-   `list_available_keywords` unchanged — it still gets the legacy
-   shape from the lower-level method.
+   `list_available_keywords` unchanged — the lower-level method
+   keeps its current return shape.
 
-This is a much smaller change than rewriting
-`list_available_keywords` itself.
+Phase 1 backward-compat is preserved through dual-emit. The
+`test_robustness_token_overhead.py:124` benchmark fixture is the
+one place that has to migrate immediately; the others can stay on
+legacy reads through the deprecation window.
 
 ---
 
-## Proposed unified shape
+## Proposed unified shape (v2 — corrected after review)
 
 ```python
-# After OBS-23B fully migrates:
+# After OBS-23B fully migrates (Phase 1 dual-emit shape):
 {
   "success": True,
   "strategy": "session",
@@ -111,8 +120,11 @@ This is a much smaller change than rewriting
         "keyword_name": "Click",
         "library": "Browser",
         "full_name": "Browser.Click",
-        # Optional fields when available (no doc/confidence in
-        # session-strategy responses; matches are name-only lookups).
+        # v2 fix: match_type replaces the v1 dishonest
+        # confidence=1.00 field. "exact_substring" tells the
+        # agent how this match was found (no ranking; literal
+        # name match against the query).
+        "match_type": "exact_substring",  # "exact_substring" | "exact"
         "source_type": "library",  # "library" | "resource"
         "source": None,  # path-string when type=="resource"
       },
@@ -120,24 +132,31 @@ This is a much smaller change than rewriting
         "keyword_name": "Click Element",
         "library": "SeleniumLibrary",
         "full_name": "SeleniumLibrary.Click Element",
+        "match_type": "exact_substring",
         "source_type": "library",
         "source": None,
       },
       # ... up to limit (post-OBS-23A trim)
     ],
-    "match_count": 12,  # actual returned count after trim
-    "library_count": 3,  # distinct libraries with matches
-    "resource_count": 0,  # distinct resources with matches
+    # v2: dropped match_count (redundant with len(matches)).
+    # library_count and resource_count document POST-TRIM values.
+    "library_count": 2,   # distinct libraries in matches (post-trim)
+    "resource_count": 0,  # distinct resources in matches (post-trim)
+    # Pre-trim totals surface separately for diagnostic clarity.
+    "total_before_trim": 47,  # what `list_available_keywords` returned
     "recommendations": [
-      "Best match: Click (confidence: 1.00)",
-      "Required arguments: selector, button",
+      # NB: no fake confidence number — v1's "(confidence: 1.00)"
+      # was misleading. Session strategy doesn't rank; the
+      # recommendation prose says exact-match vs alternative.
+      "Exact match: Click (Browser)",
       "Alternative options: Click Element, Click Button, Tap",
     ],
   },
-  # Legacy fields — preserved during deprecation window (see migration).
+  # Legacy fields — preserved during deprecation window (Phase 1).
+  # These mirror result.matches split by source_type.
   "library_keywords": [...],   # mirror of matches where source_type=="library"
   "resource_keywords": [...],  # mirror of matches where source_type=="resource"
-  "libraries_count": 3,        # legacy alias for library_count
+  "libraries_count": 2,        # legacy alias for library_count
 }
 ```
 
@@ -146,12 +165,12 @@ This is a much smaller change than rewriting
 The session strategy doesn't compute semantic similarity — it's a
 namespace listing. But callers benefit from a deterministic "best
 match for this query" line. Decision: when `query` is non-empty,
-`recommendations[0]` names the *exact name match* first if one
-exists; otherwise the alphabetically-first match. This is cheap
-(no scoring) and matches the existing semantic-recommendation prose
-shape for consistent agent UX.
+`recommendations[0]` calls out the **exact name match** first if one
+exists; otherwise the alphabetically-first match. The prose shape
+matches semantic/pattern strategies (recommendation strings, no
+ranking) but with honest wording about how the match was found.
 
-Pseudocode:
+Pseudocode (v2 — fixed):
 
 ```python
 def session_recommendations(matches: List[dict], query: str) -> List[str]:
@@ -168,38 +187,82 @@ def session_recommendations(matches: List[dict], query: str) -> List[str]:
         None,
     )
     top = exact or matches[0]
-    recs = [f"Best match: {top['keyword_name']} (confidence: 1.00)"]
-    # Required arguments are unavailable in session-strategy responses
-    # (the manager returns name + library only). Skip the args line —
-    # agents fetch full info via get_keyword_info if needed.
+    # v2 fix: honest prose, no fake confidence number.
+    if exact:
+        recs = [f"Exact match: {top['keyword_name']} ({top['library']})"]
+    else:
+        recs = [
+            f"Substring match: {top['keyword_name']} "
+            f"({top['library']}); no exact name match"
+        ]
+    # Required-arguments line is INTENTIONALLY OMITTED — session
+    # strategy doesn't have per-keyword arg info from
+    # list_available_keywords. Agents fetch full info via
+    # get_keyword_info(mode="keyword", keyword_name=..., session_id=...)
+    # if needed.
     if len(matches) > 1:
         alt_names = [m["keyword_name"] for m in matches[1:4]]
         recs.append(f"Alternative options: {', '.join(alt_names)}")
     return recs
 ```
 
-Confidence is `1.00` because session-strategy matches are exact
-substring hits, not ranked candidates. The fixed value tells the
-agent "this is a literal lookup, not a ranked guess" — useful
-signal.
+### Externalisation impact (v2 — CORRECTED)
 
-### Externalisation impact
+**v1 design was WRONG here.** It claimed the existing
+`field_path="result"` rule would cover the unified shape, but Phase
+1 also dual-emits legacy `library_keywords`/`resource_keywords`/
+`libraries_count` at the TOP level — outside `result`. Those
+top-level fields would leak inline even when `result` externalised.
+Codex round-1 caught this; v2 fixes via explicit additional rules.
 
-With the unified shape, the existing rule
+**v2 externalisation rules** (added to `DEFAULT_RULES` in
+OBS-23B impl):
 
 ```python
-ExternalizationRule(tool_name="find_keywords", field_path="result")
+# Existing — covers the unified shape's result.matches etc.
+ExternalizationRule(tool_name="find_keywords", field_path="result"),
+
+# OBS-23B Phase 1 — explicitly cover legacy mirror fields so the
+# whole response can shrink during dual-emit. Drop when Phase 3
+# removes the fields entirely.
+ExternalizationRule(tool_name="find_keywords",
+                    field_path="library_keywords"),
+ExternalizationRule(tool_name="find_keywords",
+                    field_path="resource_keywords"),
 ```
 
-automatically covers the session strategy too. No new field-path
-rule needed. Large session namespaces (Browser + BuiltIn ≈ 350+
-keywords) will externalise when the serialised `result` dict exceeds
-the 500-token threshold (default).
+`libraries_count` is a tiny int — no rule needed.
 
-This is why OBS-27 ("Externalise pattern `results` + session payload
-fields") becomes partially redundant after OBS-23B: the session half
-is automatically covered. OBS-27 still needs to add the
-`field_path="results"` rule for pattern strategy.
+With these rules, a Browser+BuiltIn session with ~350 keywords:
+- `result.matches` (post-trim, post-OBS-23A) → externalises when
+  cumulative size > 500 tokens.
+- `library_keywords` (pre-trim or post-trim mirror — see Phase 1
+  decision below) → externalises independently when > 500 tokens.
+- `resource_keywords` → same.
+
+OBS-27 (Externalise pattern `results` + session payload fields)
+becomes partially redundant for the session half after OBS-23B
+ships — the rules added here pre-empt the OBS-27 session-coverage.
+OBS-27 still needs the pattern coverage (different code path).
+
+### Phase 1 decision: legacy fields are pre-trim or post-trim?
+
+**Decision: post-trim** (matches OBS-23A behaviour).
+
+`list_available_keywords` after OBS-23A applies the `query` filter +
+`limit` trim internally. Phase 1's dual-emit reuses whatever the
+lower-level method returns. Result: `library_keywords` and
+`resource_keywords` in the v2 unified-emit response are the
+**filtered, trimmed** lists — same as before OBS-23B for any
+caller that uses query+limit (the post-OBS-23A behaviour).
+
+**Backward-compat note**: a pre-OBS-23A caller that read
+`library_keywords` to get the FULL namespace would experience
+behaviour change at OBS-23A (filter applied), not at OBS-23B (this
+design). OBS-23A documents that change in its own AC.
+
+`total_before_trim` in `result` surfaces the pre-trim count so the
+agent can detect a filter-induced truncation.
 
 ---
 
@@ -272,26 +335,45 @@ test is updated to read `result.matches` instead of
 clients (currently none confirmed) keep working via the legacy
 fields.
 
-### Phase 2 — deprecation warning (1-2 release cycles after Phase 1)
+### Phase 2 — deprecation warning (target: v0.34 release)
 
-Emit the legacy fields with a one-time warning log per session
-indicating they'll be removed. Optional env var
-`ROBOTMCP_SESSION_LEGACY_FIELDS=false` lets operators verify their
-agents work on the unified shape only before Phase 3.
+Emit the legacy fields PLUS a server-side WARNING log per session
+when an agent reads them. Detection mechanism: instrument the
+`_track_tool_result` hook (ADR-014) to record which response fields
+the caller subsequently accesses; emit a one-time warning when
+`library_keywords` / `resource_keywords` access is detected for a
+session.
 
-### Phase 3 — remove legacy fields (post-deprecation, follow-up story)
+Operator-side opt-out: `ROBOTMCP_SESSION_LEGACY_FIELDS=false` env
+var lets operators verify their agents work on the unified shape
+only (legacy fields suppressed in response) before Phase 3 lands.
+
+**Filed as**: OBS-34 (new follow-up story; placeholder for now).
+**Target version**: v0.34 (1-2 minor versions after OBS-23B v1
+ships in v0.33).
+
+### Phase 3 — remove legacy fields (target: v0.36 release)
 
 Drop `library_keywords`, `resource_keywords`, `libraries_count` from
-the response. Filed as a separate story (OBS-Future, not yet
-numbered). Phase 3 is NOT part of OBS-23B — only the migration plan
-documentation is.
+the response unconditionally. Phase 2 warnings give operators a
+window to migrate. Phase 3 is a breaking change behind a major-minor
+boundary (v0.33 dual-emit → v0.34 warning → v0.36 removal).
+
+**Filed as**: OBS-35 (new follow-up story; placeholder).
+**Target version**: v0.36 (next major-minor after Phase 2).
 
 ### Phase rollout decision
 
-OBS-23B implements **Phase 1 only**. Phases 2 + 3 are documented
-here for completeness but tracked as future stories. This keeps
-OBS-23B small enough to land as a single PR while preserving the
-upgrade path.
+OBS-23B implementation story implements **Phase 1 only**. Phases
+2 + 3 are tracked as separate stories (OBS-34, OBS-35) per
+**review feedback** — v1 said "filed as OBS-Future, not yet
+numbered" which both Codex and Claude flagged as exactly the
+pattern that leaves legacy fields in place forever.
+
+**Phase versions are normative in this design**. If v0.33 ships
+without OBS-23B Phase 1, the versions shift consistently (Phase 2
+in the version after Phase 1 ships, etc.). The point is that the
+phases are committed to specific releases, not "someday".
 
 ---
 
@@ -449,5 +531,97 @@ OBS-23B implementation story tasks (post-design):
 3. Wire OBS-23A's query+limit trim into the unified path.
 4. Update `tests/e2e/test_openai_fastmcp.py:294` to read unified
    shape.
-5. Add 6 new unit tests covering the unified shape + back-compat.
-6. Update story doc + benchmark report with Phase 1 verification.
+5. Update `tests/benchmarks/test_robustness_token_overhead.py:124`
+   fixture (v2 addition — Codex caught this missed reader).
+6. Update `scripts/benchmark_discovery_tools.py` counter logic
+   (v2 addition — Claude caught this).
+7. Add 8 new unit tests covering the unified shape + back-compat +
+   externalisation of both unified and legacy fields.
+8. Add the legacy-field externalisation rules to `DEFAULT_RULES`
+   (v2 addition — fixes the AC #4 gap).
+9. Update story doc + benchmark report with Phase 1 verification.
+
+---
+
+## Cross-design contract — shared with OBS-18A reranker
+
+Both OBS-18A (reranker) and OBS-23B (session schema) touch the
+`find_keywords` response shape. The outer envelope must be
+consistent across all strategies for agents to write strategy-
+agnostic consumers. v2 explicitly aligns the two designs:
+
+**Common outer envelope** (all four strategies post-Wave 3):
+
+```json
+{
+  "success": bool,
+  "strategy": "semantic" | "pattern" | "catalog" | "session",
+  "query": str,
+  "result": {
+    "matches": List[Dict],
+    "recommendations": List[str],
+    // Strategy-specific fields under `result`:
+    // semantic: total_matches, filtered_count, action_type
+    // session: library_count, resource_count, total_before_trim
+    // catalog: top_matches, catalog_truncated, full_catalog_size
+    // pattern: (still uses top-level results — see follow-up
+    //          OBS-Future-pattern-unification)
+  },
+  // Diagnostic top-level fields (any strategy can emit):
+  "library_filter": {...},        // when filter applied
+  "excluded_alternatives": [...], // when filter applied
+  "low_confidence_top_match": bool, // OBS-18A — semantic strategy only
+  // Phase 1 legacy (session only, deprecated v0.34, removed v0.36):
+  "library_keywords": [...], "resource_keywords": [...], "libraries_count": int,
+}
+```
+
+**`low_confidence_top_match` ownership**: OBS-18A semantic strategy
+only. Other strategies don't compute confidence (pattern is exact
+substring; catalog is unfiltered; session is exact substring) so
+this field is meaningless there.
+
+**`recommendations` prose convention** (shared across strategies):
+- First line names the top match (or no-matches prose).
+- Subsequent lines may surface alternatives, required arguments
+  (when available — semantic only), filter diagnostics.
+- Tone is declarative, no fake confidence numbers (v2 fix —
+  session strategy no longer claims "confidence: 1.00").
+
+If OBS-18A and OBS-23B both ship before pattern is unified, the
+"common envelope" claim is **3-of-4 strategies**, not all-four. The
+section above is explicit about pattern remaining on its
+top-level-`results` shape. Pattern unification is filed as
+OBS-Future-pattern-unification follow-up — same migration template
+as OBS-23B.
+
+---
+
+## Review findings + resolutions (Codex round-1 + Claude round-1)
+
+Both reviewers ran adversarial review against v1 of this design.
+Convergent findings → v2 fixes:
+
+| Finding | Source | v2 resolution |
+|---|---|---|
+| Externalisation claim WRONG — Phase 1 keeps legacy fields at top level so the existing `result` rule doesn't cover them | BOTH | Added explicit `library_keywords` + `resource_keywords` rules to `DEFAULT_RULES`. Implementation task #8 added. |
+| Reader survey missed `tests/benchmarks/test_robustness_token_overhead.py:124` | Codex | v2 survey table includes it; impl task #5 updates the fixture. |
+| Reader survey missed `scripts/benchmark_discovery_tools.py` | Claude | v2 survey table includes it; impl task #6 updates the counter logic. |
+| `confidence=1.00` is dishonest (session strategy doesn't rank) | BOTH | Replaced with `match_type: "exact_substring"` field. Recommendation prose uses "Exact match: X" / "Substring match: X" — no fake confidence. |
+| `match_count` redundant with `len(matches)` | Codex | Dropped from the unified shape. |
+| `library_count` / `resource_count` semantics ambiguous (pre-trim vs post-trim) | Codex | Documented as POST-TRIM. Added `total_before_trim` for pre-trim diagnostic. |
+| Phase 2/3 hand-wavy ("OBS-Future, not numbered") | BOTH | Filed as OBS-34 (Phase 2, target v0.34) and OBS-35 (Phase 3, target v0.36) with normative version targets. |
+| Cross-strategy claim overstated (pattern is still different) | BOTH | "Common outer envelope" section explicitly says 3-of-4 strategies; pattern is documented as follow-up. |
+| OBS-23A interaction: legacy `library_keywords` field gets pre-filtered too | Claude | Documented as Phase 1 backward-compat note: "a pre-OBS-23A caller that read library_keywords to get the FULL namespace would experience behaviour change at OBS-23A (filter applied), not at OBS-23B". |
+| Self-citing "round-2 Codex review" without source link | Both | Renamed to "Codex CLI round-2 review" (the transcript was the codex exec output captured in conversation; should link to a docs/reviews/ artifact in OBS-23B impl). |
+| `low_confidence_top_match` (OBS-18A) ↔ session recommendations interaction undocumented | Claude | Cross-design contract section added; field is semantic-strategy-only. |
+
+Non-convergent findings:
+- Env var vs tool parameter for legacy-field suppression: Claude
+  suggested `legacy_shape: bool` tool param instead of env var.
+  **Decision: keep env var.** Tool parameter would require every
+  caller to pass it; env var is the operator-side opt-out the
+  design wants for Phase 2 verification.
+- Bundle pattern unification into OBS-23B: Claude asked. **Decision:
+  keep separate.** Pattern has more readers (used more often than
+  session) and would more than double the OBS-23B scope.
