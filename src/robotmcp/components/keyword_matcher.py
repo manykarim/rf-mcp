@@ -255,56 +255,62 @@ class KeywordMatcher:
         self,
         action_description: str,
         context: str = "web",
-        current_state: Dict[str, Any] = None
+        current_state: Dict[str, Any] = None,
+        limit: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Discover matching Robot Framework keywords for an action description.
-        
+
         Args:
             action_description: Natural language description of the action
             context: Application context (web, mobile, api, database)
             current_state: Current application state
-            
+            limit: Maximum number of ranked matches to return. Defaults
+                   to 10 when not provided. OBS-22 — without this
+                   parameter, semantic strategy silently capped at 10
+                   regardless of caller intent.
+
         Returns:
             Dictionary containing ranked keyword matches
         """
         try:
             # Ensure initialization is complete
             await self._ensure_initialized()
-            
+
             if current_state is None:
                 current_state = {}
-            
+
             # Normalize action description
             normalized_action = self._normalize_action(action_description)
-            
+
             # Extract action type from description
             action_type = self._classify_action(normalized_action)
-            
+
             # Get keyword matches using multiple strategies
             matches = []
-            
+
             # Strategy 1: Pattern-based matching
             pattern_matches = await self._pattern_based_matching(normalized_action, action_type, context)
             matches.extend(pattern_matches)
-            
+
             # Strategy 2: Semantic similarity matching (if embeddings available)
             if self.embeddings_model:
                 semantic_matches = await self._semantic_matching(normalized_action, context)
                 matches.extend(semantic_matches)
-            
+
             # Strategy 3: Context-aware matching
             context_matches = await self._context_aware_matching(
                 normalized_action, context, current_state
             )
             matches.extend(context_matches)
-            
+
             # Remove duplicates and rank by confidence
             unique_matches = self._deduplicate_matches(matches)
             ranked_matches = self._rank_matches(unique_matches, normalized_action, context)
-            
-            # Limit to top 10 matches
-            top_matches = ranked_matches[:10]
+
+            # OBS-22 — honour caller-supplied limit (default 10).
+            effective_limit = limit if (isinstance(limit, int) and limit > 0) else 10
+            top_matches = ranked_matches[:effective_limit]
             
             return {
                 "success": True,

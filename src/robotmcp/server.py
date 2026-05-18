@@ -2354,8 +2354,13 @@ async def find_keywords(
                 library_filter_source = "session"
 
     if strategy_norm in {"semantic", "intent"}:
+        # OBS-22 — thread ``limit`` into the matcher so the matcher's
+        # hard cap (default 10 at keyword_matcher.py:307) honours
+        # caller intent. Without this the semantic branch silently
+        # ignored ``limit`` — pattern/catalog branches applied it via
+        # ``matches[:limit_value]`` but semantic didn't.
         discovery = await keyword_matcher.discover_keywords(
-            query, context, current_state
+            query, context, current_state, limit=limit_value,
         )
 
         # Apply library filtering when an effective preference is set
