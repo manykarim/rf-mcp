@@ -1458,6 +1458,58 @@ class KeywordExecutor:
                                 ),
                             })
 
+                            # OBS-15 — the OBS-12 role-prefix hint
+                            # otherwise lives in the keyword-execution
+                            # failure path via generate_hints. ``button=X``
+                            # against Browser library typically fails HERE
+                            # at pre-validation, never reaching that path.
+                            # Run the same checker inline so the diagnosis
+                            # surfaces where the failure actually occurs.
+                            try:
+                                from robotmcp.utils.hints import (
+                                    HintContext as _HintContext,
+                                    _check_browser_role_prefix_misuse,
+                                )
+                                _ctx = _HintContext(
+                                    session_id=session.session_id,
+                                    keyword=keyword,
+                                    arguments=list(arguments or []),
+                                    error_text=error_msg or "",
+                                    session_search_order=getattr(
+                                        session, "search_order", None
+                                    ),
+                                )
+                                for _h in _check_browser_role_prefix_misuse(
+                                    _ctx, _ctx.error_text
+                                ):
+                                    hints.append({
+                                        "type": "browser_role_prefix_misuse",
+                                        "title": _h.title,
+                                        "message": _h.message,
+                                        "examples": _h.examples,
+                                    })
+                            except Exception:
+                                # Hint enrichment is best-effort — never
+                                # mask the underlying pre-validation
+                                # failure on import / context-build error.
+                                pass
+
+                            # Dedupe by ``type`` (idempotency safety —
+                            # the checker should only fire once per call,
+                            # but if a future caller appends another
+                            # role-prefix hint via a different path we
+                            # keep the response clean).
+                            _seen_types: set = set()
+                            _deduped: List[Dict[str, Any]] = []
+                            for _h_entry in hints:
+                                _t = _h_entry.get("type")
+                                if _t and _t in _seen_types:
+                                    continue
+                                if _t:
+                                    _seen_types.add(_t)
+                                _deduped.append(_h_entry)
+                            hints = _deduped
+
                             event_bus.publish_sync(
                                 FrontendEvent(
                                     event_type="step_failed",

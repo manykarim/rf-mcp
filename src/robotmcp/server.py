@@ -2104,6 +2104,120 @@ def _filter_keywords_by_session_library(
     return filtered_keywords, excluded_with_alternatives
 
 
+def _rebuild_post_filter_recommendations(
+    matches: List[Dict[str, Any]],
+) -> List[str]:
+    """Regenerate the semantic matcher's usage recommendations using
+    post-filter matches.
+
+    ``KeywordMatcher.discover_keywords`` computes ``recommendations``
+    inline from the *pre-filter* ranked matches and embeds them in its
+    response. When ``find_keywords`` applies a library filter, the
+    pre-filter top match (the "Best match: X (confidence: Y)" line)
+    can reference an excluded keyword — contradicting the post-filter
+    ``matches`` list and pointing the agent at an unavailable keyword.
+
+    Reproduced 2026-05-17: with ``library_name="Browser"`` and query
+    "open browser page navigate to url", the matches list contained
+    only Browser keywords (Go To, New Page, Open Browser) but
+    recommendations[0] was ``"Best match: Get Browser Aliases
+    (confidence: 0.84)"`` — a SeleniumLibrary keyword that had just
+    been filtered out.
+
+    This helper mirrors the matcher's format
+    (``KeywordMatcher._generate_usage_recommendations``) but operates
+    on the post-filter dict shape (matches come in as dicts with
+    ``keyword_name``, ``confidence``, ``arguments`` rather than
+    ``KeywordMatch`` dataclasses). Kept in server.py rather than the
+    matcher because the matcher has no visibility into the filter.
+    """
+    if not matches:
+        return [
+            "No matching keywords found. Consider:",
+            "- Check if required libraries are imported",
+            "- Rephrase the action description",
+            "- Use more specific terms",
+        ]
+    recs: List[str] = []
+    top = matches[0]
+    name = top.get("keyword_name") or top.get("name") or "<unknown>"
+    confidence = top.get("confidence")
+    if isinstance(confidence, (int, float)):
+        recs.append(f"Best match: {name} (confidence: {confidence:.2f})")
+    else:
+        recs.append(f"Best match: {name}")
+    args = top.get("arguments") or []
+    if args:
+        recs.append(f"Required arguments: {', '.join(args)}")
+    if len(matches) > 1:
+        alt_names = [
+            (m.get("keyword_name") or m.get("name") or "<unknown>")
+            for m in matches[1:4]
+        ]
+        recs.append(f"Alternative options: {', '.join(alt_names)}")
+    return recs
+
+
+def _build_filter_diagnostics(
+    excluded: List[Dict[str, Any]],
+    applied: str,
+    source: str,
+) -> Dict[str, Any]:
+    """Build compact response diagnostics for a library filter pass.
+
+    Replaces the legacy verbose ``excluded_keywords`` shape (7+ entries
+    × ~150 tokens each, with ``incompatible_library``/``session_library``/
+    ``reason`` fields repeated identically) with a compact summary:
+
+      library_filter: {applied, source, from_library, count}
+      excluded_alternatives: [{keyword, alternative, example}, ...]
+        — only entries that carry actionable SL→Browser (or vice versa)
+        translation info from the plugin's KEYWORD_ALTERNATIVES table.
+
+    For the typical Browser-filter-applied response (~7 excluded SL
+    keywords with one or two alternatives), this cuts the inline
+    response from ~1100 tokens to ~75 tokens. Bare excluded keyword
+    names are dropped — the agent already learns "X was filtered" from
+    X's absence in the ``matches`` list, so re-listing them adds zero
+    information.
+    """
+    # Derive the unique-incompatible-library label. In practice it's a
+    # single library (Browser ↔ SeleniumLibrary in current plugins) but
+    # the table semantics allow multiples; surface as a comma-joined
+    # label rather than a list, since the agent reads a string.
+    libs = sorted({
+        e.get("incompatible_library")
+        for e in excluded
+        if e.get("incompatible_library")
+    })
+    from_library: str | None = libs[0] if len(libs) == 1 else (
+        ", ".join(libs) if libs else None
+    )
+
+    diagnostics: Dict[str, Any] = {
+        "library_filter": {
+            "applied": applied,
+            "source": source,
+            "count": len(excluded),
+        }
+    }
+    if from_library:
+        diagnostics["library_filter"]["from_library"] = from_library
+
+    actionable = [
+        {
+            "keyword": e["keyword"],
+            "alternative": e["alternative"],
+            "example": e.get("example"),
+        }
+        for e in excluded
+        if e.get("alternative")
+    ]
+    if actionable:
+        diagnostics["excluded_alternatives"] = actionable
+    return diagnostics
+
+
 @mcp.tool
 async def find_keywords(
     query: str,
@@ -2132,7 +2246,14 @@ async def find_keywords(
                   - "session": List keywords from session's loaded libraries
         context: Scenario context (e.g., "web", "mobile", "api") used by semantic discovery.
         session_id: Required for strategy="session" to search the live RF namespace.
-        library_name: Optional library filter for catalog search.
+        library_name: Optional library filter applied to ALL strategies.
+                      When set, restricts results to the named library and its
+                      compatible siblings (e.g., library_name="Browser" excludes
+                      SeleniumLibrary but keeps BuiltIn, Collections, String).
+                      Takes precedence over the session's
+                      explicit_library_preference when both are present.
+                      Catalog strategy additionally scopes the underlying
+                      lookup to this library.
         current_state: Optional state payload to improve semantic matching.
         limit: Optional maximum number of results to return.
 
@@ -2183,30 +2304,48 @@ async def find_keywords(
         except (TypeError, ValueError):
             limit_value = None
 
-    # Get session library preference for filtering
-    session_library_preference = None
-    if session_id:
+    # Resolve effective library preference for filtering.
+    # Precedence (highest wins):
+    #   1. Explicit ``library_name`` parameter (per-call override)
+    #   2. Session's ``explicit_library_preference`` (session-wide default)
+    #   3. None (no filter)
+    # The same filter (plugin-driven incompatibility table) applies in
+    # both cases — ``library_name="Browser"`` excludes the same libraries
+    # as a Browser-preference session would.  Catalog strategy ALSO uses
+    # ``library_name`` to scope its underlying lookup; the per-strategy
+    # branches below preserve that behaviour and additionally apply the
+    # post-filter for consistency.
+    effective_library_preference: str | None = None
+    library_filter_source: str = ""
+    if library_name:
+        effective_library_preference = library_name
+        library_filter_source = "library_name"
+    elif session_id:
         session = execution_engine.session_manager.get_session(session_id)
         if session:
-            session_library_preference = getattr(
+            session_pref = getattr(
                 session, "explicit_library_preference", None
             )
+            if session_pref:
+                effective_library_preference = session_pref
+                library_filter_source = "session"
 
     if strategy_norm in {"semantic", "intent"}:
         discovery = await keyword_matcher.discover_keywords(
             query, context, current_state
         )
 
-        # Apply library filtering if session has preference
+        # Apply library filtering when an effective preference is set
+        # (from library_name OR session preference).
         excluded = []
-        if session_library_preference and discovery.get("matches"):
+        if effective_library_preference and discovery.get("matches"):
             # Convert semantic matches to format expected by filter function
             matches_for_filter = [
                 {"name": m.get("keyword_name"), "library": m.get("library"), **m}
                 for m in discovery.get("matches", [])
             ]
             filtered_matches, excluded = _filter_keywords_by_session_library(
-                matches_for_filter, session_id, session_library_preference
+                matches_for_filter, session_id, effective_library_preference
             )
             # Convert back to original format
             discovery["matches"] = [
@@ -2214,6 +2353,19 @@ async def find_keywords(
                 for m in filtered_matches
             ]
             discovery["filtered_count"] = len(excluded)
+            # Regenerate recommendations against the post-filter
+            # matches — the matcher emits its recommendations BEFORE
+            # we apply the library filter, so without this fix the
+            # ``Best match: X`` line can name an excluded keyword.
+            # Only rebuild when the filter actually trimmed entries —
+            # if ``excluded`` is empty, the matcher's recommendations
+            # are still accurate and we avoid the no-op work.
+            if excluded:
+                discovery["recommendations"] = (
+                    _rebuild_post_filter_recommendations(
+                        discovery["matches"]
+                    )
+                )
 
         result = {
             "success": bool(discovery.get("success", True)),
@@ -2222,8 +2374,13 @@ async def find_keywords(
             "result": discovery,
         }
         if excluded:
-            result["excluded_keywords"] = excluded
-            result["session_library"] = session_library_preference
+            result.update(
+                _build_filter_diagnostics(
+                    excluded,
+                    effective_library_preference,
+                    library_filter_source,
+                )
+            )
         # ADR-015: Externalize large fields to artifacts
         if session_id:
             result = _externalize_response("find_keywords", session_id, result)
@@ -2241,11 +2398,11 @@ async def find_keywords(
         await _ensure_all_session_libraries_loaded()
         matches = execution_engine.search_keywords(query)
 
-        # Apply library filtering if session has preference
+        # Apply library filtering when an effective preference is set.
         excluded = []
-        if session_library_preference:
+        if effective_library_preference:
             matches, excluded = _filter_keywords_by_session_library(
-                matches, session_id, session_library_preference
+                matches, session_id, effective_library_preference
             )
 
         if limit_value is not None:
@@ -2272,8 +2429,13 @@ async def find_keywords(
             "results": matches,
         }
         if excluded:
-            result["excluded_keywords"] = excluded
-            result["session_library"] = session_library_preference
+            result.update(
+                _build_filter_diagnostics(
+                    excluded,
+                    effective_library_preference,
+                    library_filter_source,
+                )
+            )
         # ADR-015: Externalize large fields to artifacts
         if session_id:
             result = _externalize_response("find_keywords", session_id, result)
@@ -2299,11 +2461,17 @@ async def find_keywords(
                 or lowered in (item.get("library") or "").lower()
             ]
 
-        # Apply library filtering if session has preference
+        # Apply library filtering when an effective preference is set.
+        # NB: ``execution_engine.get_available_keywords(library_name)``
+        # already scopes the engine lookup by library_name; the post-
+        # filter is largely a no-op when library_name is set, but stays
+        # consistent with the semantic/pattern branches and catches
+        # cross-library matches the engine might return for sibling-
+        # library queries (rare).
         excluded = []
-        if session_library_preference:
+        if effective_library_preference:
             catalog, excluded = _filter_keywords_by_session_library(
-                catalog, session_id, session_library_preference
+                catalog, session_id, effective_library_preference
             )
 
         if limit_value is not None:
@@ -2331,8 +2499,13 @@ async def find_keywords(
             "results": catalog,
         }
         if excluded:
-            result["excluded_keywords"] = excluded
-            result["session_library"] = session_library_preference
+            result.update(
+                _build_filter_diagnostics(
+                    excluded,
+                    effective_library_preference,
+                    library_filter_source,
+                )
+            )
 
         # ADR-010 I3: Hint when catalog returns empty without active session
         if not catalog and not session_id:

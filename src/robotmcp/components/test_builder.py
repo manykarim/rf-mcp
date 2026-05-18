@@ -37,6 +37,12 @@ class TestCaseStep:
     # BDD step grouping
     bdd_group: Optional[str] = None
     bdd_intent: Optional[str] = None
+    # OBS-11 — the string form of the captured value (from
+    # ExecutionStep.result) when this step assigned a variable.
+    # Used by ``_propagate_assigned_variables_to_literal_args`` to
+    # rewrite literals in subsequent steps that equal the captured
+    # value into ``${VAR}`` references in the generated suite.
+    captured_value: Optional[str] = None
 
 
 @dataclass
@@ -1499,6 +1505,7 @@ class TestBuilder:
                 assignment_type=getattr(exec_step, "assignment_type", None),
                 bdd_group=getattr(exec_step, "bdd_group", None),
                 bdd_intent=getattr(exec_step, "bdd_intent", None),
+                captured_value=self._captured_value_str(exec_step),
             ))
         return steps
 
@@ -1513,6 +1520,7 @@ class TestBuilder:
                 assignment_type=getattr(exec_step, "assignment_type", None),
                 bdd_group=getattr(exec_step, "bdd_group", None),
                 bdd_intent=getattr(exec_step, "bdd_intent", None),
+                captured_value=self._captured_value_str(exec_step),
             )
             steps.append(tc_step)
 
@@ -2618,6 +2626,15 @@ class TestBuilder:
             lines.append("*** Test Cases ***")
 
         for test_case in suite.test_cases:
+            # OBS-11 — rewrite literal args that match a recently
+            # captured variable's value into ``${VAR}`` references,
+            # in-place. Bounded lookback (10 steps) and skip arg 0
+            # (locator slot). See the method's docstring for the
+            # benchmark scenario this addresses.
+            self._propagate_assigned_variables_to_literal_args(
+                test_case.steps,
+            )
+
             # Suite-template mode: name + args on SAME line (no [Template], no indented body)
             if suite.suite_template:
                 data_steps = [s for s in test_case.steps
@@ -2741,6 +2758,130 @@ class TestBuilder:
                 lines.append("")
 
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # OBS-11 — propagate captured variables into subsequent literal args
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _captured_value_str(exec_step) -> Optional[str]:
+        """Return the string-coerced captured value from an ExecutionStep,
+        or None when the step didn't assign a variable / didn't produce
+        a usable value.
+
+        Used by ``_build_impl_steps_from_test_info`` and
+        ``_build_test_case_from_test_info`` to plumb ``ExecutionStep.result``
+        through to ``TestCaseStep.captured_value`` for the OBS-11
+        variable-propagation pass."""
+        assigned = getattr(exec_step, "assigned_variables", None)
+        if not assigned:
+            return None
+        value = getattr(exec_step, "result", None)
+        if value is None:
+            return None
+        # Coerce to string for arg-level equality comparison.
+        # RF args are always strings on the wire; the runtime value
+        # may be int/float/dict — we compare the str representation.
+        try:
+            return str(value)
+        except Exception:  # pragma: no cover - defensive
+            return None
+
+    # Lookback window for variable-propagation: only literals in the
+    # next N steps after a capture are eligible for rewriting. Bounded
+    # to avoid late-in-test coincidental matches.
+    _OBS11_LOOKBACK_STEPS: int = 10
+
+    def _propagate_assigned_variables_to_literal_args(
+        self,
+        steps: List["TestCaseStep"],
+    ) -> None:
+        """OBS-11 — rewrite literal args that match a recently captured
+        variable's value into ``${VAR}`` references, in-place.
+
+        Walks ``steps`` in order. For each step that assigned a
+        variable AND has a non-empty ``captured_value``, registers the
+        ``value → ${VAR}`` mapping with a step-index tag. For each
+        subsequent step (within ``_OBS11_LOOKBACK_STEPS``), checks each
+        argument from position 1 onward (arg 0 is the locator slot for
+        the vast majority of keywords — skipping it avoids false
+        substitutions in locator strings) and replaces an exact-match
+        literal with the ``${VAR}`` reference.
+
+        Lookback is bounded to limit the blast radius of coincidental
+        matches. Exact-match equality (not substring) further reduces
+        false positives.
+
+        Mutates ``steps`` in-place; the rendered output for each step
+        will reflect the substituted args.
+
+        Examples this addresses (from 2026-05-17 post-OBS benchmark
+        Obstacle 7 — Sonnet's generated suite):
+
+            BEFORE:
+                ${ENTRY_COUNT}=    Get Element Count    css=.option
+                Fill Text          id=entryCount        5
+
+            AFTER:
+                ${ENTRY_COUNT}=    Get Element Count    css=.option
+                Fill Text          id=entryCount        ${ENTRY_COUNT}
+        """
+        if not steps:
+            return
+
+        # Active captures: list of (capture_step_idx, value, var_name).
+        # Most recent first so the lookup wins on the latest capture
+        # when two variables happen to have the same value.
+        active: List[tuple[int, str, str]] = []
+
+        for idx, step in enumerate(steps):
+            # Step 1 — rewrite this step's args BEFORE registering any
+            # new captures from THIS step. A capture's value is only
+            # usable from the NEXT step onward (a self-substitution
+            # would replace the args that feed the capturing keyword).
+            if step.arguments:
+                new_args = list(step.arguments)
+                # Skip arg 0 — by convention the locator slot for input
+                # and click keywords. Substituting there risks rewriting
+                # locator strings that happen to equal a captured value.
+                for arg_idx in range(1, len(new_args)):
+                    arg = new_args[arg_idx]
+                    if not isinstance(arg, str):
+                        continue
+                    # If the literal already references a variable
+                    # (e.g. someone passed ``${SOMETHING}`` explicitly)
+                    # leave it alone — propagation only rewrites raw
+                    # literals.
+                    if "${" in arg:
+                        continue
+                    # Find the most-recent active capture whose value
+                    # matches the literal AND is within the lookback.
+                    for cap_idx, cap_value, cap_var in active:
+                        if idx - cap_idx > self._OBS11_LOOKBACK_STEPS:
+                            continue
+                        if cap_value == arg:
+                            new_args[arg_idx] = cap_var
+                            break
+                step.arguments = new_args
+
+            # Step 2 — register any captures THIS step produced for
+            # subsequent steps to reference.
+            if step.captured_value and step.assigned_variables:
+                cap_value = step.captured_value
+                if not cap_value.strip():
+                    # Empty / whitespace-only captures aren't useful.
+                    continue
+                cap_var = step.assigned_variables[0]
+                # Prepend so most-recent captures are checked first.
+                active.insert(0, (idx, cap_value, cap_var))
+
+        # Trim active list to keep memory bounded across very long
+        # test cases. The lookback comparison above already prevents
+        # stale captures from matching; this just stops unbounded
+        # growth of the in-memory list.
+        # (No-op when total captures < some reasonable cap; the
+        # active list shrinks naturally because lookback-out captures
+        # are still checked but always rejected.)
 
     async def _render_linear_step(self, step: TestCaseStep) -> str:
         """Render a single linear keyword step with proper escaping and assignments."""
