@@ -1112,23 +1112,30 @@ class ExecutionCoordinator:
                 }
             return {"success": False, "error": f"Keyword '{keyword_name}' not found in library '{library_name}'"}
         else:
-            # No library specified: return first match for backward compatibility
-            ki = keyword_discovery.find_keyword(keyword_name)
-            if ki:
+            # OBS-32 — no library specified: return ALL matches via
+            # find_all_keywords so the inspection-fallback path mirrors
+            # the LibDoc path's matches[] shape. Callers that need a
+            # single keyword can still take matches[0]; callers reading
+            # the ambiguity correctly now see every option.
+            all_matches = keyword_discovery.find_all_keywords(keyword_name)
+            if all_matches:
                 return {
                     "success": True,
-                    "keyword": {
-                        "name": ki.name,
-                        "library": ki.library,
-                        "args": ki.args,
-                        "arg_types": getattr(ki, "arg_types", []),
-                        "doc": getattr(ki, "doc", ""),
-                        "short_doc": ki.short_doc,
-                        "tags": ki.tags,
-                        "is_deprecated": False,
-                        "source": getattr(ki, "source", ""),
-                        "lineno": getattr(ki, "lineno", 0),
-                    },
+                    "matches": [
+                        {
+                            "name": ki.name,
+                            "library": ki.library,
+                            "args": ki.args,
+                            "arg_types": getattr(ki, "arg_types", []),
+                            "doc": getattr(ki, "doc", ""),
+                            "short_doc": ki.short_doc,
+                            "tags": ki.tags,
+                            "is_deprecated": False,
+                            "source": getattr(ki, "source", ""),
+                            "lineno": getattr(ki, "lineno", 0),
+                        }
+                        for ki in all_matches
+                    ],
                 }
             return {"success": False, "error": f"Keyword '{keyword_name}' not found"}
 

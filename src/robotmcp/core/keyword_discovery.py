@@ -334,6 +334,33 @@ class KeywordDiscovery:
 
         return None
     
+    def find_all_keywords(self, keyword_name: str) -> List[KeywordInfo]:
+        """Return all keywords matching ``keyword_name`` across every loaded
+        library (exact + normalized name match).
+
+        OBS-32 — the LibDoc primary path in
+        ``execution_coordinator.get_keyword_documentation`` returns a
+        ``matches[]`` array for ambiguous unscoped lookups (line 1067-1090).
+        The inspection fallback at line 1115-1116 collapses to the first
+        match via ``find_keyword``, which is inconsistent. This sibling
+        method gives the fallback path the same multi-match shape.
+        """
+        if not keyword_name:
+            return []
+        normalized = keyword_name.lower().strip()
+        seen_ids: set[int] = set()
+        results: List[KeywordInfo] = []
+        for cached_name, keyword_info in self.keyword_cache.items():
+            if keyword_info.name.lower() == normalized:
+                kid = id(keyword_info)
+                if kid in seen_ids:
+                    continue
+                seen_ids.add(kid)
+                results.append(keyword_info)
+        # Stable sort by library name so callers see a deterministic order.
+        results.sort(key=lambda k: k.library or "")
+        return results
+
     def get_keyword_suggestions(self, keyword_name: str, limit: int = 5) -> List[str]:
         """Get keyword suggestions based on partial match."""
         if not keyword_name:
