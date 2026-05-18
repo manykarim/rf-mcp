@@ -1019,12 +1019,21 @@ class ExecutionCoordinator:
             ]
 
     def get_keyword_documentation(
-        self, keyword_name: str, library_name: str = None
+        self,
+        keyword_name: str,
+        library_name: str = None,
+        allowed_libraries: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Get keyword documentation using RF libdoc with strict library filtering.
 
-        - If library_name is provided: restrict search to that library only. No cross-library fallback.
-        - If library_name is None: return all matches across libraries in a 'matches' array.
+        - If library_name is provided: restrict search to that library only.
+          No cross-library fallback.
+        - If library_name is None and allowed_libraries is provided
+          (OBS-19): cross-library lookup but filter matches to only
+          those libraries. Used by ``get_keyword_info(session_id=...)``
+          to scope lookups to a session's imported libraries.
+        - If both are None: return all matches across libraries in a
+          'matches' array.
         """
         # LibDoc preferred path
         if self.rf_doc_storage.is_available():
@@ -1068,22 +1077,50 @@ class ExecutionCoordinator:
                 # Return all matches across libraries
                 matches = self.rf_doc_storage.get_keywords_documentation_all(keyword_name)
                 if matches:
+                    # OBS-19 — filter to session-allowed libraries when
+                    # the caller scoped the lookup by session_id. Other
+                    # libraries' matches are excluded but used to
+                    # generate alternative hints by the caller.
+                    excluded_in_other_libs = []
+                    if allowed_libraries is not None:
+                        allowed_set = {lib for lib in allowed_libraries}
+                        kept = [m for m in matches if m.library in allowed_set]
+                        excluded_in_other_libs = [
+                            m for m in matches if m.library not in allowed_set
+                        ]
+                        matches = kept
+                    if matches:
+                        return {
+                            "success": True,
+                            "matches": [
+                                {
+                                    "name": m.name,
+                                    "library": m.library,
+                                    "args": m.args,
+                                    "arg_types": m.arg_types,
+                                    "doc": m.doc,
+                                    "short_doc": m.short_doc,
+                                    "tags": m.tags,
+                                    "is_deprecated": m.is_deprecated,
+                                    "source": m.source,
+                                    "lineno": m.lineno,
+                                }
+                                for m in matches
+                            ],
+                        }
+                    # No allowed-library matches but found in others —
+                    # report the keyword exists elsewhere so caller can
+                    # produce a library-mismatch hint.
                     return {
-                        "success": True,
-                        "matches": [
-                            {
-                                "name": m.name,
-                                "library": m.library,
-                                "args": m.args,
-                                "arg_types": m.arg_types,
-                                "doc": m.doc,
-                                "short_doc": m.short_doc,
-                                "tags": m.tags,
-                                "is_deprecated": m.is_deprecated,
-                                "source": m.source,
-                                "lineno": m.lineno,
-                            }
-                            for m in matches
+                        "success": False,
+                        "error": (
+                            f"Keyword '{keyword_name}' is not available in this "
+                            f"session's libraries ({sorted(allowed_libraries)}). "
+                            f"Found in: "
+                            f"{sorted({m.library for m in excluded_in_other_libs})}."
+                        ),
+                        "found_in_other_libraries": [
+                            m.library for m in excluded_in_other_libs
                         ],
                     }
                 # No matches anywhere

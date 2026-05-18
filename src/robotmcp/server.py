@@ -5216,8 +5216,21 @@ async def get_keyword_info(
     Args:
         mode: One of "keyword" (default), "library", "session", or "parse".
         keyword_name: Keyword to document (required for modes "keyword"/"session"/"parse").
-        library_name: Library to document (required for mode "library"; optional for keyword mode).
-        session_id: Session id when mode="session" to fetch overrides from the live namespace.
+        library_name: Library to document (required for mode "library";
+                      optional for keyword mode — explicit per-call scope
+                      that takes precedence over session-derived scope).
+        session_id: Optional session id.
+                    - mode="keyword" / "global" (OBS-19): when provided
+                      without ``library_name``, restricts the keyword
+                      lookup to libraries imported in that session
+                      (plus neutral helpers like BuiltIn, Collections).
+                      When the keyword exists only in other libraries,
+                      the response carries a library-mismatch error +
+                      plugin-generated alternative hint instead of the
+                      keyword doc. Sessions without ``session_id`` get
+                      the global lookup (cross-library matches[]).
+                    - mode="session" / "namespace": required to address
+                      the live RF namespace.
         arguments: Optional arguments to parse when mode="parse".
 
     Returns:
@@ -5225,6 +5238,8 @@ async def get_keyword_info(
             - success: bool
             - mode: resolved mode
             - doc/signature data or error on failure
+            - hint: plugin library-mismatch hint when applicable
+              (OBS-19 mode="keyword" + session-scope mismatch)
     """
 
     mode_norm = (mode or "keyword").strip().lower()
@@ -5232,7 +5247,9 @@ async def get_keyword_info(
     if mode_norm in {"keyword", "global"}:
         if not keyword_name:
             return {"success": False, "error": "keyword_name is required"}
-        result = await _get_keyword_documentation_payload(keyword_name, library_name)
+        result = await _get_keyword_documentation_payload(
+            keyword_name, library_name, session_id=session_id,
+        )
         result["mode"] = "keyword"
         # OBS-21 — externalise large keyword.doc / matches payloads.
         # The keyword-mode payload is usually small (200-400 tokens),
@@ -5294,9 +5311,100 @@ async def get_keyword_info(
 
 
 async def _get_keyword_documentation_payload(
-    keyword_name: str, library_name: str | None = None
+    keyword_name: str,
+    library_name: str | None = None,
+    session_id: str | None = None,
 ) -> Dict[str, Any]:
-    return execution_engine.get_keyword_documentation(keyword_name, library_name)
+    """OBS-19 — when ``session_id`` is provided, scope the lookup to
+    the session's imported libraries so the response cannot document
+    keywords unavailable in the live session.
+
+    Precedence: ``library_name`` (explicit per-call scope) wins, then
+    session-derived ``allowed_libraries``, then global lookup.
+
+    When the keyword exists only in non-allowed libraries, the
+    response is transformed into a library-mismatch error with an
+    alternative hint via the existing plugin
+    ``validate_keyword_for_session`` shared API at
+    ``LibraryPluginManager.validate_keyword_for_session`` (manager.py:239).
+    """
+    allowed_libraries: Optional[List[str]] = None
+    session_for_hint = None
+
+    # Resolve session-scoped allowed libraries when caller passed a
+    # session_id BUT did not pin to a specific library (library_name
+    # already implies its own strict scope).
+    if session_id and not library_name:
+        session = execution_engine.session_manager.get_session(session_id)
+        if session is None:
+            return {
+                "success": False,
+                "error": f"Session '{session_id}' not found",
+            }
+        # imported_libraries is a list/set on ExecutionSession.
+        imported = list(getattr(session, "imported_libraries", []) or [])
+        if imported:
+            # Always keep neutral libraries visible alongside the UI
+            # library. Mirrors keyword_discovery.py:264 neutral set so
+            # session-scoped lookups still find BuiltIn helpers.
+            neutral = {
+                "BuiltIn", "Collections", "String", "DateTime",
+                "OperatingSystem", "Process", "XML",
+            }
+            allowed_libraries = sorted(set(imported) | neutral)
+            session_for_hint = session
+
+    result = execution_engine.get_keyword_documentation(
+        keyword_name, library_name, allowed_libraries=allowed_libraries,
+    )
+
+    # OBS-19 — if the lookup failed because the keyword exists only
+    # in non-allowed libraries, enrich the response with a
+    # library-mismatch hint via the active plugin's shared API.
+    if (
+        result.get("success") is False
+        and result.get("found_in_other_libraries")
+        and session_for_hint is not None
+    ):
+        # The first "other" library that the keyword lives in is the
+        # source library for the mismatch hint. Pick the first; if
+        # multiple, the plugin alternative table is typically library-
+        # specific and only one will produce a hint anyway.
+        source_lib = result["found_in_other_libraries"][0]
+        try:
+            from robotmcp.plugins.manager import get_library_plugin_manager
+            plugin_manager = get_library_plugin_manager()
+            # Determine which library the session is using for UI work.
+            # Use the explicit_library_preference if set; else the
+            # first imported UI library (Browser or SeleniumLibrary).
+            session_lib = getattr(
+                session_for_hint, "explicit_library_preference", None
+            )
+            if not session_lib:
+                imported_libs = list(
+                    getattr(session_for_hint, "imported_libraries", []) or []
+                )
+                for candidate in ("Browser", "SeleniumLibrary"):
+                    if candidate in imported_libs:
+                        session_lib = candidate
+                        break
+            if session_lib:
+                hint = plugin_manager.validate_keyword_for_session(
+                    session_lib,
+                    session_for_hint,
+                    keyword_name,
+                    source_lib,
+                )
+                if hint:
+                    # Preserve the existing error message; add the
+                    # plugin's structured alternative info under
+                    # ``hint`` so the agent can act on it.
+                    result["hint"] = hint
+        except Exception:
+            # Hint enrichment is best-effort.
+            pass
+
+    return result
 
 
 @mcp.tool(**DISABLED_TOOL_KWARGS)
