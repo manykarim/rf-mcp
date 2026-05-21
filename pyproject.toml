@@ -30,6 +30,7 @@ api = ["robotframework-requests"]
 database = ["robotframework-databaselibrary"]
 memory = ["sqlite-vec>=0.1.6", "model2vec>=0.4.0"]
 tokens = ["tiktoken>=0.7.0"]
+metrics = ["prometheus-client>=0.20.0"]
 all = [
     "robotframework-browser",
     "robotframework-seleniumlibrary",
@@ -41,6 +42,7 @@ all = [
     "sqlite-vec>=0.1.6",
     "model2vec>=0.4.0",
     "tiktoken>=0.7.0",
+    "prometheus-client>=0.20.0",
 ]
 dev = [
     "pytest>=7.0.0",
