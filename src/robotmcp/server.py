@@ -2621,7 +2621,14 @@ async def find_keywords(
                 "error": "session_id is required when strategy='session'",
             }
         mgr = get_rf_native_context_manager()
-        payload = mgr.list_available_keywords(session_id)
+        # OBS-23A — pass the caller's ``query`` as a name_filter and
+        # ``limit_value`` as the trim cap. Pre-OBS-23A behaviour
+        # (no filter, no limit) is preserved when both are absent.
+        payload = mgr.list_available_keywords(
+            session_id,
+            name_filter=query if query else None,
+            limit=limit_value,
+        )
         payload.update({"strategy": "session", "query": query})
         # ADR-015: Externalize large fields to artifacts
         payload = _externalize_response("find_keywords", session_id, payload)

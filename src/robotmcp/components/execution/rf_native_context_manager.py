@@ -1638,8 +1638,22 @@ class RobotFrameworkNativeContextManager:
                 "args": args or []
             }
 
-    def list_available_keywords(self, session_id: str) -> Dict[str, Any]:
-        """List available keyword names from imported libraries and resources in this session."""
+    def list_available_keywords(
+        self,
+        session_id: str,
+        name_filter: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """List available keyword names from imported libraries and resources in this session.
+
+        OBS-23A — accepts optional ``name_filter`` (case-insensitive
+        substring match on keyword name) and ``limit`` (max entries
+        across library+resource union). When both omitted, behaviour
+        is identical to the pre-OBS-23A implementation.
+
+        ``total_before_trim`` and ``total_after_filter`` are surfaced
+        in the response so callers can detect when truncation occurred.
+        """
         try:
             if session_id not in self._session_contexts:
                 return {"success": False, "error": "No RF context for session", "session_id": session_id}
@@ -1675,12 +1689,46 @@ class RobotFrameworkNativeContextManager:
             except Exception:
                 pass
 
+            # OBS-23A — capture pre-trim totals before any filtering.
+            total_before_trim = len(library_keywords) + len(resource_keywords)
+
+            # Apply name_filter (case-insensitive substring on `name`)
+            if name_filter:
+                needle = name_filter.lower().strip()
+                if needle:
+                    library_keywords = [
+                        kw for kw in library_keywords
+                        if needle in kw["name"].lower()
+                    ]
+                    resource_keywords = [
+                        kw for kw in resource_keywords
+                        if needle in kw["name"].lower()
+                    ]
+
+            total_after_filter = len(library_keywords) + len(resource_keywords)
+
+            # Apply limit across the union (library first, then resource).
+            # NB: limit is applied AFTER filtering — agents that ask for
+            # `query="click", limit=5` get up to 5 hits whose name
+            # contains "click", not 5 random keywords from the session.
+            if isinstance(limit, int) and limit > 0:
+                remaining = limit
+                if len(library_keywords) > remaining:
+                    library_keywords = library_keywords[:remaining]
+                    resource_keywords = []
+                else:
+                    remaining -= len(library_keywords)
+                    resource_keywords = resource_keywords[:remaining]
+
             return {
                 "success": True,
                 "session_id": session_id,
                 "libraries_count": len(list(namespace.libraries)),
                 "library_keywords": library_keywords,
                 "resource_keywords": resource_keywords,
+                # OBS-23A diagnostics so callers see the filter/limit effect.
+                "total_before_trim": total_before_trim,
+                "total_after_filter": total_after_filter,
             }
         except Exception as e:
             return {"success": False, "error": str(e), "session_id": session_id}
