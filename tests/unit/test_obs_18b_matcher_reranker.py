@@ -410,3 +410,141 @@ class TestRegressionBaselines:
     ])
     def test_query_class_matches_expected(self, query, expected_top_class):
         assert _classify_query_action_class(query) == expected_top_class
+
+
+# ---------------------------------------------------------------------------
+# Real end-to-end regression baseline tests (post-Wave-3 review fix)
+#
+# Codex + Claude subagent flagged the parametrised classifier tests
+# above as tautological — they only verify the query classifier, not
+# that the actual ``discover_keywords`` pipeline produces the right
+# top match. This class pins top-match name+library against the REAL
+# matcher with the REAL Browser/SeleniumLibrary keyword data. If
+# anyone changes the reranker, classifier, or matcher pipeline in a
+# way that breaks the OBS-18A v2 pinned baselines, these tests fail.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestPinnedTopMatchEndToEnd:
+    """Real end-to-end pinning of top-match name+library for the OBS-18A
+    v2 pinned baselines. Uses the real matcher (no mocks of internals)
+    so the test exercises the actual production code path."""
+
+    async def _run(self, query, library_name=None, monkeypatch=None):
+        if monkeypatch is not None:
+            monkeypatch.setenv("ROBOTMCP_MATCHER_RERANK", "1")
+        from robotmcp.server import find_keywords as fk
+        fn = getattr(fk, "fn", fk)
+        kwargs = {"query": query, "strategy": "semantic", "limit": 5}
+        if library_name:
+            kwargs["library_name"] = library_name
+        return await fn(**kwargs)
+
+    async def test_S01_click_button_browser_top_is_click(self, monkeypatch):
+        """S01-style: 'click button' + Browser → top match in click class.
+        Note benchmark S01 actually uses 'select dropdown' query; this
+        test uses the design's pinned 'click button' query directly."""
+        r = await self._run("click button", "Browser", monkeypatch)
+        matches = r["result"]["matches"]
+        assert matches, "expected at least one match"
+        top = matches[0]
+        # Top match must be from Browser, click-class
+        assert top["library"] == "Browser"
+        assert classify_keyword_action(top["keyword_name"], top.get("tags", [])) == "click", (
+            f"Expected click-class top match for 'click button' query; "
+            f"got {top['keyword_name']} ({classify_keyword_action(top['keyword_name'], top.get('tags', []))})"
+        )
+
+    async def test_S02_select_dropdown_sl_top_is_select_from_list(self, monkeypatch):
+        """S02 (the OBS-18B fix target): query
+        'select dropdown option by visible label' + SeleniumLibrary →
+        top match MUST be ``Select From List By Label``."""
+        r = await self._run(
+            "select dropdown option by visible label",
+            "SeleniumLibrary", monkeypatch,
+        )
+        matches = r["result"]["matches"]
+        assert matches
+        assert matches[0]["keyword_name"] == "Select From List By Label", (
+            f"S02 regression: top match must be Select From List By Label; "
+            f"got {matches[0]['keyword_name']}"
+        )
+
+    async def test_S06_click_browser_top_is_click(self, monkeypatch):
+        """S06: single-word 'click' + Browser → top match Browser.Click."""
+        r = await self._run("click", "Browser", monkeypatch)
+        matches = r["result"]["matches"]
+        assert matches
+        assert matches[0]["library"] == "Browser"
+        assert matches[0]["keyword_name"] == "Click", (
+            f"S06 regression: 'click' + Browser top must be Click; "
+            f"got {matches[0]['keyword_name']}"
+        )
+
+    async def test_S07_navigate_browser_top_is_go_to(self, monkeypatch):
+        """S07: 'navigate' + Browser → top match Browser.Go To."""
+        r = await self._run("navigate", "Browser", monkeypatch)
+        matches = r["result"]["matches"]
+        assert matches
+        assert matches[0]["library"] == "Browser"
+        assert matches[0]["keyword_name"] == "Go To", (
+            f"S07 regression: 'navigate' + Browser top must be Go To; "
+            f"got {matches[0]['keyword_name']}"
+        )
+
+    async def test_S10_api_query_browser_caps_with_flag(self, monkeypatch):
+        """S10 (OBS-18B AC #4b): cross-domain 'send http post request' +
+        Browser must produce ``low_confidence_top_match: true`` AND a
+        matches[0].confidence ≤ 0.5 (capped by Trigger B)."""
+        r = await self._run(
+            "send http post request with json body",
+            "Browser", monkeypatch,
+        )
+        res = r["result"]
+        assert res.get("low_confidence_top_match") is True, (
+            "S10 must set low_confidence_top_match=True"
+        )
+        assert res["matches"][0]["confidence"] <= 0.5, (
+            f"S10 top-match confidence must be ≤ 0.5; "
+            f"got {res['matches'][0]['confidence']}"
+        )
+
+    async def test_S12_compound_wait_click_top_stays_click_class(self, monkeypatch):
+        """S12 (Wave-3 round-1 review FIX): compound query with both
+        'wait' and 'click' triggers must NOT regress click-class top
+        match. Pre-fix this query returned ``Wait For Condition``
+        because of trigger ordering. Post-fix it returns Click (the
+        reranker abstains on ambiguous compound queries)."""
+        r = await self._run(
+            "wait for the modal dialog to appear and then click the "
+            "confirm button at the bottom of the form",
+            "Browser", monkeypatch,
+        )
+        matches = r["result"]["matches"]
+        assert matches
+        top_class = classify_keyword_action(
+            matches[0]["keyword_name"], matches[0].get("tags", []),
+        )
+        # Top match must be click-class (NOT wait-class) — compound
+        # queries are ambiguous; the reranker abstains; the pre-rerank
+        # matcher's top is click-class.
+        assert top_class == "click", (
+            f"S12 regression: compound 'wait... click...' top must stay "
+            f"click-class; got {matches[0]['keyword_name']} ({top_class})"
+        )
+
+    async def test_S13_bdd_click_top_is_click(self, monkeypatch):
+        """S13: BDD-prefixed 'When I click submit button' + Browser →
+        top match in click class (BDD prefix stripped before
+        classification)."""
+        r = await self._run("When I click submit button", "Browser", monkeypatch)
+        matches = r["result"]["matches"]
+        assert matches
+        top_class = classify_keyword_action(
+            matches[0]["keyword_name"], matches[0].get("tags", []),
+        )
+        assert top_class == "click", (
+            f"S13 regression: BDD 'When I click...' must produce click-class top; "
+            f"got {matches[0]['keyword_name']} ({top_class})"
+        )
