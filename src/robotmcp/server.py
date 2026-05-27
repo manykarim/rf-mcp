@@ -2038,6 +2038,7 @@ def _filter_keywords_by_session_library(
     keywords: List[Dict[str, Any]],
     session_id: str | None,
     session_library_preference: str | None,
+    strict_library: bool = False,
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
     """Filter keywords to only include those compatible with session library preference.
 
@@ -2047,6 +2048,12 @@ def _filter_keywords_by_session_library(
         keywords: List of keyword dicts with 'name' and 'library' fields
         session_id: Session ID for logging
         session_library_preference: Explicit library preference (e.g., "Browser", "SeleniumLibrary")
+        strict_library: OBS-33 — when True AND a preference is set,
+            exclude EVERY library that isn't the named one (not just
+            the plugin's incompatible siblings). Compatible "neutral"
+            libraries like BuiltIn/Collections/etc. are dropped too.
+            Default False preserves the existing "incompatible-only"
+            behaviour.
 
     Returns:
         Tuple of (filtered_keywords, excluded_keywords_with_alternatives)
@@ -2059,6 +2066,15 @@ def _filter_keywords_by_session_library(
     excluded_libraries = set(
         plugin_manager.get_incompatible_libraries(session_library_preference)
     )
+
+    if strict_library:
+        # OBS-33 — extend excluded_libraries to cover ALL non-preferred
+        # libraries. Compute from the actual keywords list so we don't
+        # have to enumerate every possible library globally.
+        all_libs_in_input = {kw.get("library", "") for kw in keywords if kw.get("library")}
+        excluded_libraries = excluded_libraries | (
+            all_libs_in_input - {session_library_preference}
+        )
 
     if not excluded_libraries:
         return keywords, []
@@ -2098,7 +2114,8 @@ def _filter_keywords_by_session_library(
     if excluded_with_alternatives:
         logger.info(
             f"Session {session_id}: Filtered out {len(excluded_with_alternatives)} "
-            f"keywords from incompatible libraries: {list(excluded_libraries)}"
+            f"keywords from incompatible libraries: {list(excluded_libraries)} "
+            f"(strict_library={strict_library})"
         )
 
     return filtered_keywords, excluded_with_alternatives
@@ -2162,6 +2179,7 @@ def _build_filter_diagnostics(
     excluded: List[Dict[str, Any]],
     applied: str,
     source: str,
+    strict_library: bool = False,
 ) -> Dict[str, Any]:
     """Build compact response diagnostics for a library filter pass.
 
@@ -2199,6 +2217,11 @@ def _build_filter_diagnostics(
             "applied": applied,
             "source": source,
             "count": len(excluded),
+            # OBS-33 — agent visibility into which filter rule fired.
+            # "strict" = ALL non-preferred libraries excluded.
+            # "compatible" = only plugin-table-incompatible siblings
+            # excluded (BuiltIn, Collections, etc. stay visible).
+            "mode": "strict" if strict_library else "compatible",
         }
     }
     if from_library:
@@ -2227,6 +2250,7 @@ async def find_keywords(
     library_name: str | None = None,
     current_state: Dict[str, Any] | None = None,
     limit: int | None = None,
+    strict_library: bool = False,
 ) -> Dict[str, Any]:
     """Discover Robot Framework keywords using multiple strategies.
 
@@ -2263,6 +2287,18 @@ async def find_keywords(
                       lookup to this library.
         current_state: Optional state payload to improve semantic matching.
         limit: Optional maximum number of results to return.
+        strict_library: OBS-33 — when True AND a library preference is
+                        set (via ``library_name`` or session
+                        ``explicit_library_preference``), exclude EVERY
+                        library that isn't the preferred one. Default
+                        behaviour (False) preserves "compatible siblings"
+                        — BuiltIn / Collections / String / DateTime etc.
+                        remain visible alongside the preferred library.
+                        Use strict mode to scope discovery tightly to
+                        a single library (e.g., pattern ``"Get*"`` +
+                        ``library_name="Browser"`` +
+                        ``strict_library=True`` → Browser keywords only,
+                        no BuiltIn helpers).
 
     Returns:
         Dict[str, Any]: Discovery result:
@@ -2380,7 +2416,8 @@ async def find_keywords(
                 for m in discovery.get("matches", [])
             ]
             filtered_matches, excluded = _filter_keywords_by_session_library(
-                matches_for_filter, session_id, effective_library_preference
+                matches_for_filter, session_id, effective_library_preference,
+                strict_library=strict_library,
             )
             # Convert back to original format
             discovery["matches"] = [
@@ -2414,6 +2451,7 @@ async def find_keywords(
                     excluded,
                     effective_library_preference,
                     library_filter_source,
+                    strict_library=strict_library,
                 )
             )
         # ADR-015: Externalize large fields to artifacts
@@ -2437,7 +2475,8 @@ async def find_keywords(
         excluded = []
         if effective_library_preference:
             matches, excluded = _filter_keywords_by_session_library(
-                matches, session_id, effective_library_preference
+                matches, session_id, effective_library_preference,
+                strict_library=strict_library,
             )
 
         if limit_value is not None:
@@ -2469,6 +2508,7 @@ async def find_keywords(
                     excluded,
                     effective_library_preference,
                     library_filter_source,
+                    strict_library=strict_library,
                 )
             )
         # ADR-015: Externalize large fields to artifacts
@@ -2506,7 +2546,8 @@ async def find_keywords(
         excluded = []
         if effective_library_preference:
             catalog, excluded = _filter_keywords_by_session_library(
-                catalog, session_id, effective_library_preference
+                catalog, session_id, effective_library_preference,
+                strict_library=strict_library,
             )
 
         # OBS-25 — Hard-cap unscoped catalog dumps to prevent the 97k
@@ -2582,6 +2623,7 @@ async def find_keywords(
                     excluded,
                     effective_library_preference,
                     library_filter_source,
+                    strict_library=strict_library,
                 )
             )
 
