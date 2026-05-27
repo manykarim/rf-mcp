@@ -2175,6 +2175,53 @@ def _rebuild_post_filter_recommendations(
     return recs
 
 
+def _build_session_recommendations(
+    matches: List[Dict[str, Any]], query: str,
+) -> List[str]:
+    """OBS-23B-impl — build honest recommendations prose for the
+    session strategy.
+
+    Session strategy is a literal name-substring lookup. There's no
+    ranking, so the prose names the kind of match found (exact name
+    vs substring) WITHOUT a fake confidence number (round-1 review
+    flagged ``confidence: 1.00`` as dishonest).
+    """
+    if not matches:
+        return [
+            "No keywords match the query in this session.",
+            "- Verify the query string",
+            "- Check the session's imported libraries",
+        ]
+    q_lower = (query or "").lower().strip()
+    exact = None
+    if q_lower:
+        for m in matches:
+            if m.get("keyword_name", "").lower() == q_lower:
+                exact = m
+                break
+    top = exact or matches[0]
+    top_name = top.get("keyword_name", "")
+    top_lib = top.get("library") or top.get("source") or "session"
+    if exact:
+        recs = [f"Exact match: {top_name} ({top_lib})"]
+    else:
+        if q_lower:
+            recs = [
+                f"Substring match: {top_name} ({top_lib}); "
+                f"no exact name match for '{query}'"
+            ]
+        else:
+            recs = [f"First in session: {top_name} ({top_lib})"]
+    # Required-arguments line intentionally OMITTED — session strategy
+    # doesn't have per-keyword arg info from list_available_keywords.
+    # Agents fetch full info via get_keyword_info(mode="keyword",
+    # keyword_name=..., session_id=...) if needed.
+    if len(matches) > 1:
+        alt_names = [m.get("keyword_name", "") for m in matches[1:4]]
+        recs.append(f"Alternative options: {', '.join(alt_names)}")
+    return recs
+
+
 def _build_filter_diagnostics(
     excluded: List[Dict[str, Any]],
     applied: str,
@@ -2689,14 +2736,81 @@ async def find_keywords(
             name_filter=query if query else None,
             limit=limit_value,
         )
-        payload.update({"strategy": "session", "query": query})
+
+        # OBS-23B-impl Phase 1 — dual-emit:
+        # 1. Build the unified ``result.matches`` shape that matches
+        #    semantic/pattern/catalog strategies.
+        # 2. Preserve the legacy top-level ``library_keywords`` /
+        #    ``resource_keywords`` / ``libraries_count`` fields for
+        #    backwards-compat through Phase 2 (target v0.34) →
+        #    Phase 3 removal (target v0.36).
+        # Per round-1 review fixes: match_type replaces dishonest
+        # confidence=1.00; match_count dropped (redundant with
+        # len(matches)).
+        unified_matches: List[Dict[str, Any]] = []
+        for kw in (payload.get("library_keywords") or []):
+            unified_matches.append({
+                "keyword_name": kw.get("name", ""),
+                "library": kw.get("library"),
+                "full_name": kw.get("full_name", kw.get("name", "")),
+                "match_type": "exact_substring",
+                "source_type": "library",
+                "source": None,
+            })
+        for kw in (payload.get("resource_keywords") or []):
+            unified_matches.append({
+                "keyword_name": kw.get("name", ""),
+                "library": None,
+                "full_name": kw.get("full_name", kw.get("name", "")),
+                "match_type": "exact_substring",
+                "source_type": "resource",
+                "source": kw.get("resource"),
+            })
+
+        # OBS-23B recommendations (no fake confidence — honest prose
+        # about how the match was found).
+        recommendations = _build_session_recommendations(
+            unified_matches, query,
+        )
+
+        # Build the response with BOTH the unified shape under `result`
+        # AND the legacy top-level fields (Phase 1 dual-emit).
+        response: Dict[str, Any] = {
+            "success": payload.get("success", True),
+            "strategy": "session",
+            "query": query,
+            "result": {
+                "matches": unified_matches,
+                "library_count": len({
+                    m["library"] for m in unified_matches if m["library"]
+                }),
+                "resource_count": len({
+                    m["source"] for m in unified_matches if m["source"]
+                }),
+                "recommendations": recommendations,
+            },
+            # OBS-23B Phase 1 legacy fields (target removal: OBS-35 / v0.36)
+            "library_keywords": payload.get("library_keywords") or [],
+            "resource_keywords": payload.get("resource_keywords") or [],
+            "libraries_count": payload.get("libraries_count", 0),
+        }
+        # OBS-23A diagnostic fields surface at top level too
+        # (pre-trim vs post-filter visibility for the agent).
+        if "total_before_trim" in payload:
+            response["result"]["total_before_trim"] = payload["total_before_trim"]
+        if "total_after_filter" in payload:
+            response["result"]["total_after_filter"] = payload["total_after_filter"]
+        # Propagate session error path if applicable
+        if not payload.get("success") and payload.get("error"):
+            response["error"] = payload["error"]
+
         # ADR-015: Externalize large fields to artifacts
-        payload = _externalize_response("find_keywords", session_id, payload)
+        response = _externalize_response("find_keywords", session_id, response)
         # Track for instruction learning
         _track_tool_result(
-            session_id, "find_keywords", {"query": query, "strategy": strategy}, payload
+            session_id, "find_keywords", {"query": query, "strategy": strategy}, response
         )
-        return payload
+        return response
 
     return {"success": False, "error": f"Unsupported strategy '{strategy}'"}
 
