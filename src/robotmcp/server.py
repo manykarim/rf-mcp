@@ -2504,6 +2504,28 @@ async def find_keywords(
                     )
                 )
 
+            # OBS-18B — re-apply the action-class confidence cap to
+            # the post-filter top match. The matcher's pre-filter cap
+            # may have targeted a match the filter then removed,
+            # leaving the actual user-visible top match uncapped.
+            try:
+                from robotmcp.components.keyword_matcher import (
+                    _classify_query_action_class,
+                    _reranker_enabled,
+                    apply_confidence_cap_dict,
+                )
+                if _reranker_enabled() and discovery.get("matches"):
+                    qclass = _classify_query_action_class(query)
+                    capped_matches, low_conf = apply_confidence_cap_dict(
+                        discovery["matches"], qclass,
+                    )
+                    discovery["matches"] = capped_matches
+                    if low_conf:
+                        discovery["low_confidence_top_match"] = True
+            except Exception:
+                # Reranker enrichment is best-effort.
+                pass
+
         result = {
             "success": bool(discovery.get("success", True)),
             "strategy": "semantic",

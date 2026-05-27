@@ -1,9 +1,11 @@
 """Keyword Matcher component for semantic matching of Robot Framework keywords."""
 
+import os
 import re
 import logging
 from typing import Any, Dict, List, Optional, Tuple
-from dataclasses import dataclass
+import dataclasses
+from dataclasses import dataclass, field
 import asyncio
 from difflib import SequenceMatcher
 
@@ -44,6 +46,279 @@ class KeywordMatch:
     argument_types: List[str]
     documentation: str
     usage_example: Optional[str] = None
+    # OBS-18B — RF tags carried through the matcher pipeline so the
+    # action-class reranker can classify keywords (per OBS-18A v2
+    # design). Default empty list to keep existing call-sites
+    # backward-compatible.
+    tags: List[str] = field(default_factory=list)
+
+
+# ----------------------------------------------------------------------------
+# OBS-18B — Action-class reranker (per OBS-18A v2 design)
+# ----------------------------------------------------------------------------
+#
+# The matcher's pre-rerank confidence reflects per-strategy local optima
+# (SequenceMatcher overlap + tag-boost + pattern similarity). High
+# confidence doesn't always mean the keyword performs the queried action
+# — e.g., S02 ("select dropdown option by visible label") ranks
+# `Element Should Be Visible` at 0.87 because "visible" matches both
+# query and keyword name.
+#
+# The reranker classifies BOTH the query and each keyword into one of
+# 9 action classes, then down-weights mismatches. A separate confidence
+# cap fires when (A) top-3 spans ≥3 distinct classes (uncertain
+# matcher) OR (B) query is `unknown` and the top match has an
+# opinionated class above the cap threshold.
+#
+# Feature flag: ROBOTMCP_MATCHER_RERANK (off → no-op; on → reranker
+# active). Defaults to on in v0.34+ per OBS-18A v2 rollback plan.
+
+
+_QUERY_TRIGGERS: Dict[str, Tuple[str, ...]] = {
+    # Order matters when triggers overlap; first match wins.
+    "wait":     ("wait until", "wait for", "wait ", "sleep", "pause",
+                 "delay", "timeout"),
+    "navigate": ("go to", "navigate", "visit", "open page", "open url",
+                 "load url", "new page"),
+    "select":   ("select dropdown", "select option", "select from list",
+                 "choose dropdown", "pick from", "dropdown option"),
+    "fill":     ("fill ", "type ", "enter ", "input ", "set value",
+                 "set text", "write "),
+    "assert":   ("should ", "verify ", "must be", "ensure ", "expect ",
+                 "page contains", "page should"),
+    "query":    ("get ", "read ", "fetch ", "retrieve ", "current ",
+                 "value of", "count of"),
+    "control":  ("iterate", "loop ", "repeat ", "for each",
+                 "conditionally", "run keyword"),
+    "click":    ("click", "press", "tap", "push button", "hit"),
+}
+
+
+def _classify_query_action_class(query: str) -> str:
+    """Return action class for a natural-language query.
+
+    Determines intent from trigger phrases. Order matters — more
+    specific intents (wait, navigate) checked before broad ones
+    (click). Returns 'unknown' when no trigger matches.
+    """
+    q = (query or "").lower().strip()
+    if not q:
+        return "unknown"
+    for cls, triggers in _QUERY_TRIGGERS.items():
+        for trig in triggers:
+            if trig in q:
+                return cls
+    return "unknown"
+
+
+def classify_keyword_action(name: str, tags: List[str]) -> str:
+    """Return action class for a keyword. Deterministic; same inputs
+    always produce same output.
+
+    Precedence (per OBS-18A v2 design):
+      Wait → BrowserControl → Getter → Assertion → Setter+name → name-pattern
+
+    Tag values are case-normalised + space-stripped, so both
+    ``PageContent`` and ``Page Content`` map to the same set entry.
+    None entries in tags are filtered defensively.
+    """
+    name_lower = (name or "").lower()
+    tag_set = {
+        (t or "").lower().replace(" ", "")
+        for t in (tags or [])
+        if t
+    }
+
+    # Priority 1: Wait wins (most specific intent)
+    if "wait" in tag_set:
+        return "wait"
+    # Priority 2: BrowserControl wins over Setter (Go To, New Page tagged BOTH)
+    if "browsercontrol" in tag_set:
+        return "navigate"
+    # Priority 3: Getter wins over Assertion when co-tagged
+    if "getter" in tag_set:
+        return "query"
+    # Priority 4: Pure Assertion (no Getter) — Should*, Page Should*
+    if "assertion" in tag_set:
+        return "assert"
+    # Priority 5: Setter — context-dependent via name pattern
+    if "setter" in tag_set:
+        if name_lower.startswith((
+            "select options", "select option", "select from",
+            "select checkbox", "deselect options", "deselect checkbox",
+        )):
+            return "select"
+        if name_lower.startswith((
+            "fill text", "fill secret", "type text", "type secret",
+            "input text", "input password", "input secret",
+            "set text", "press keys",
+        )):
+            return "fill"
+        return "click"  # default Setter
+
+    # Priority 6: name-pattern fallback (SL, BuiltIn, resource kws)
+    if name_lower.startswith("wait") or name_lower == "sleep":
+        return "wait"
+    if name_lower.startswith((
+        "go to", "navigate", "new page", "new browser",
+        "new context", "new persistent context",
+        "open browser", "open page",
+    )):
+        return "navigate"
+    if name_lower.startswith(("select from", "select options",
+                              "deselect", "select checkbox")):
+        return "select"
+    if name_lower.startswith(("click", "tap", "press", "double click")):
+        return "click"
+    if name_lower.startswith(("fill", "type", "input text", "type text",
+                              "input password", "set text", "press keys",
+                              "send keys")):
+        return "fill"
+    # Pure-assertion check before pure-query so ``Element Should Be
+    # Visible`` etc. don't get mis-classified as control.
+    if (name_lower.startswith(("should ", "page should",
+                               "element should"))
+            or " should be " in f" {name_lower} "):
+        return "assert"
+    if name_lower.startswith(("get ", "fetch ", "read ")):
+        return "query"
+    if name_lower.startswith(("run keyword", "repeat keyword",
+                              "for each", "evaluate")):
+        return "control"
+
+    return "unknown"
+
+
+def _reranker_enabled() -> bool:
+    """Feature flag — ROBOTMCP_MATCHER_RERANK env var. Defaults to
+    ON (1) per OBS-18A v2 rollback plan. Set to '0' / 'false' / 'off'
+    to disable.
+    """
+    val = os.getenv("ROBOTMCP_MATCHER_RERANK", "1").strip().lower()
+    return val not in ("0", "false", "off", "no", "")
+
+
+def apply_action_class_reranker(
+    matches: List[KeywordMatch],
+    query_action_class: str,
+) -> List[KeywordMatch]:
+    """Down-weight matches whose action class doesn't match the
+    query's class. Caller-supplied confidence cap is applied
+    separately by ``apply_confidence_cap``.
+
+    Uses ``dataclasses.replace`` for the down-weight rebuild (per
+    Codex/Claude round-1 perf review — ~5x faster than rebuilding
+    7 explicit kwargs).
+    """
+    if query_action_class == "unknown" or not matches:
+        # Abstain — preserve matcher's original ranking.
+        return matches
+    downweight = float(os.getenv("ROBOTMCP_RERANK_DOWNWEIGHT", "0.6"))
+    reranked: List[KeywordMatch] = []
+    for m in matches:
+        kw_class = classify_keyword_action(m.keyword_name, m.tags)
+        if kw_class == query_action_class:
+            reranked.append(m)  # confidence unchanged
+        else:
+            reranked.append(dataclasses.replace(
+                m, confidence=m.confidence * downweight,
+            ))
+    # Re-sort by the new confidence
+    return sorted(reranked, key=lambda x: x.confidence, reverse=True)
+
+
+def apply_confidence_cap_dict(
+    matches: List[Dict[str, Any]],
+    query_action_class: str,
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """Variant of ``apply_confidence_cap`` operating on the dict shape
+    used post-library-filter in ``server.find_keywords``. Used by
+    OBS-18B to re-apply the cap to the actual user-visible top match
+    after library filtering may have shuffled the matcher's top entry.
+
+    Returns (matches, low_confidence_top_match_flag).
+    """
+    if not matches:
+        return matches, False
+    cap = float(os.getenv("ROBOTMCP_RERANK_CAP", "0.5"))
+    top = matches[0]
+    top_name = top.get("keyword_name") or top.get("name") or ""
+    top_tags = top.get("tags") or []
+    top_conf = float(top.get("confidence", 0.0))
+    top_class = classify_keyword_action(top_name, top_tags)
+
+    trigger_b = (
+        query_action_class == "unknown"
+        and top_class != "unknown"
+    )
+
+    trigger_a = False
+    if len(matches) >= 3:
+        top3_classes = set()
+        for m in matches[:3]:
+            nm = m.get("keyword_name") or m.get("name") or ""
+            tg = m.get("tags") or []
+            top3_classes.add(classify_keyword_action(nm, tg))
+        trigger_a = len(top3_classes) >= 3
+
+    if not (trigger_a or trigger_b):
+        return matches, False
+
+    if top_conf > cap:
+        capped = dict(top)
+        capped["confidence"] = cap
+        return [capped] + list(matches[1:]), True
+    return matches, True
+
+
+def apply_confidence_cap(
+    matches: List[KeywordMatch],
+    query_action_class: str,
+) -> Tuple[List[KeywordMatch], bool]:
+    """Cap top-match confidence under two trigger conditions:
+
+    - Trigger A: top-3 spans ≥3 distinct action classes (divergent
+      ranking — matcher is uncertain).
+    - Trigger B (OBS-18A v2 — closes the S10 gap): query class is
+      ``unknown`` AND top match has an opinionated class AND its
+      confidence > cap threshold.
+
+    Returns (matches, low_confidence_top_match_flag).
+    """
+    if not matches:
+        return matches, False
+    cap = float(os.getenv("ROBOTMCP_RERANK_CAP", "0.5"))
+    top = matches[0]
+    top_class = classify_keyword_action(top.keyword_name, top.tags)
+
+    # Trigger B — unknown query + opinionated top → matcher reaches
+    # for a class the query doesn't ask for. Flag fires regardless of
+    # whether confidence happens to be above the cap (the agent
+    # benefits from knowing the matcher is uncertain). The actual
+    # confidence cap only applies when conf > cap.
+    trigger_b = (
+        query_action_class == "unknown"
+        and top_class != "unknown"
+    )
+
+    # Trigger A — divergent top-3
+    trigger_a = False
+    if len(matches) >= 3:
+        top3_classes = {
+            classify_keyword_action(m.keyword_name, m.tags)
+            for m in matches[:3]
+        }
+        trigger_a = len(top3_classes) >= 3
+
+    if not (trigger_a or trigger_b):
+        return matches, False
+
+    if top.confidence > cap:
+        capped_top = dataclasses.replace(top, confidence=cap)
+        return [capped_top] + list(matches[1:]), True
+    # Top is already at/below cap; still surface the flag so agents
+    # know the matcher is uncertain.
+    return matches, True
 
 @dataclass
 class KeywordInfo:
@@ -328,11 +603,28 @@ class KeywordMatcher:
             unique_matches = self._deduplicate_matches(matches)
             ranked_matches = self._rank_matches(unique_matches, normalized_action, context)
 
+            # OBS-18B — Action-class reranker + confidence cap.
+            # Gated by ROBOTMCP_MATCHER_RERANK env var (default ON).
+            # Pipeline order:
+            #   5. _rank_matches (sort by raw confidence) — existing
+            #   6. apply_action_class_reranker (NEW) — penalise mismatch
+            #   7. apply_confidence_cap (NEW) — surface uncertainty
+            #   8. limit slice (OBS-22) — caller-supplied trim
+            low_confidence_top_match = False
+            if _reranker_enabled() and ranked_matches:
+                query_class = _classify_query_action_class(action_description)
+                ranked_matches = apply_action_class_reranker(
+                    ranked_matches, query_class,
+                )
+                ranked_matches, low_confidence_top_match = apply_confidence_cap(
+                    ranked_matches, query_class,
+                )
+
             # OBS-22 — honour caller-supplied limit (default 10).
             effective_limit = limit if (isinstance(limit, int) and limit > 0) else 10
             top_matches = ranked_matches[:effective_limit]
-            
-            return {
+
+            response = {
                 "success": True,
                 "action_description": action_description,
                 "action_type": action_type,
@@ -344,13 +636,24 @@ class KeywordMatcher:
                         "arguments": match.arguments,
                         "argument_types": match.argument_types,
                         "documentation": match.documentation[:200] + "..." if len(match.documentation) > 200 else match.documentation,
-                        "usage_example": match.usage_example
+                        "usage_example": match.usage_example,
+                        # OBS-18B — propagate tags so the find_keywords
+                        # post-library-filter cap can re-classify the
+                        # actual surviving top match.
+                        "tags": list(match.tags or []),
                     } for match in top_matches
                 ],
                 "total_matches": len(unique_matches),
                 "recommendations": self._generate_usage_recommendations(top_matches, normalized_action)
             }
-            
+            # OBS-18B — surface the cap flag at the matcher-response
+            # level. find_keywords wraps under `result` so agents see
+            # ``result.low_confidence_top_match: true`` when the cap
+            # fires.
+            if low_confidence_top_match:
+                response["low_confidence_top_match"] = True
+            return response
+
         except Exception as e:
             logger.error(f"Error discovering keywords: {e}")
             return {
@@ -425,7 +728,8 @@ class KeywordMatcher:
                                     arguments=keyword_info.arguments,
                                     argument_types=keyword_info.argument_types,
                                     documentation=keyword_info.documentation,
-                                    usage_example=self._generate_usage_example(keyword_info, action)
+                                    usage_example=self._generate_usage_example(keyword_info, action),
+                                    tags=list(keyword_info.tags or []),
                                 ))
         
         return matches
@@ -464,7 +768,8 @@ class KeywordMatcher:
                             arguments=keyword_info.arguments,
                             argument_types=keyword_info.argument_types,
                             documentation=keyword_info.documentation,
-                            usage_example=self._generate_usage_example(keyword_info, action)
+                            usage_example=self._generate_usage_example(keyword_info, action),
+                            tags=list(keyword_info.tags or []),
                         ))
         
         except Exception as e:
@@ -533,7 +838,8 @@ class KeywordMatcher:
                         arguments=keyword_info.arguments,
                         argument_types=keyword_info.argument_types,
                         documentation=keyword_info.documentation,
-                        usage_example=self._generate_usage_example(keyword_info, action)
+                        usage_example=self._generate_usage_example(keyword_info, action),
+                        tags=list(keyword_info.tags or []),
                     ))
         
         return matches

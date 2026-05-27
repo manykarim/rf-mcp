@@ -231,9 +231,11 @@ class TestSessionStrategyEndToEnd:
         assert result["success"] is True
         assert result["strategy"] == "session"
         assert result["query"] == "click"
-        # Diagnostic fields surface
-        assert result["total_before_trim"] == 50
-        assert result["total_after_filter"] == 1
+        # Diagnostic fields surface under result.* (OBS-23B-impl
+        # moved these under the unified ``result`` envelope per
+        # ``docs/proposals/session_strategy_schema.md`` v2).
+        assert result["result"]["total_before_trim"] == 50
+        assert result["result"]["total_after_filter"] == 1
 
     async def test_session_strategy_empty_query_no_filter(self):
         """Empty query → no name_filter passed to backend."""
