@@ -649,10 +649,14 @@ class TestRecommendationsRebuild:
         assert "Set Window Position" not in recs[0], (
             f"recommendations[0] still references excluded keyword: {recs[0]!r}"
         )
-        # The post-filter top match is the Browser ``Click`` entry
-        # (confidence 0.80).
+        # The post-filter top match is the Browser ``Click`` entry.
+        # OBS-18B (Wave 3 round-1 fix): query="anything" classifies as
+        # "unknown"; ``Click`` is an opinionated class → Trigger B
+        # fires → confidence capped at 0.50. Recommendation
+        # correctly reports the CAPPED value (cap runs BEFORE rebuild
+        # per Wave-3 round-1 ordering fix).
         assert "Click" in recs[0]
-        assert "confidence: 0.80" in recs[0]
+        assert "confidence: 0.50" in recs[0]
 
     async def test_recommendations_carry_post_filter_arguments(self, patched_engines):
         """The "Required arguments" line in recommendations must

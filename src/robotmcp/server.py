@@ -2490,24 +2490,16 @@ async def find_keywords(
                 for m in filtered_matches
             ]
             discovery["filtered_count"] = len(excluded)
-            # Regenerate recommendations against the post-filter
-            # matches — the matcher emits its recommendations BEFORE
-            # we apply the library filter, so without this fix the
-            # ``Best match: X`` line can name an excluded keyword.
-            # Only rebuild when the filter actually trimmed entries —
-            # if ``excluded`` is empty, the matcher's recommendations
-            # are still accurate and we avoid the no-op work.
-            if excluded:
-                discovery["recommendations"] = (
-                    _rebuild_post_filter_recommendations(
-                        discovery["matches"]
-                    )
-                )
 
-            # OBS-18B — re-apply the action-class confidence cap to
-            # the post-filter top match. The matcher's pre-filter cap
-            # may have targeted a match the filter then removed,
-            # leaving the actual user-visible top match uncapped.
+            # OBS-18B post-filter cap MUST run BEFORE the
+            # recommendation rebuild so the rebuild can read the
+            # capped confidence value (round-3 review caught: pre-fix
+            # ordering produced contradictory output where
+            # ``matches[0].confidence`` was 0.50 but
+            # ``recommendations[0]`` still said "confidence: 0.72").
+            # The matcher's pre-filter cap may have targeted a match
+            # the filter then removed, leaving the actual user-
+            # visible top match uncapped.
             try:
                 from robotmcp.components.keyword_matcher import (
                     _classify_query_action_class,
@@ -2520,11 +2512,30 @@ async def find_keywords(
                         discovery["matches"], qclass,
                     )
                     discovery["matches"] = capped_matches
+                    # CLEAR the flag if no trigger fired post-filter
+                    # (otherwise a matcher-set flag would persist as a
+                    # false positive once the filter shuffled the top
+                    # match into a non-divergent set).
                     if low_conf:
                         discovery["low_confidence_top_match"] = True
+                    else:
+                        discovery.pop("low_confidence_top_match", None)
             except Exception:
                 # Reranker enrichment is best-effort.
                 pass
+
+            # Regenerate recommendations against the post-filter,
+            # post-cap matches — the matcher emits its
+            # recommendations BEFORE we apply the library filter +
+            # post-filter cap. Only rebuild when the filter actually
+            # trimmed entries — if ``excluded`` is empty, the
+            # matcher's recommendations are still accurate.
+            if excluded:
+                discovery["recommendations"] = (
+                    _rebuild_post_filter_recommendations(
+                        discovery["matches"]
+                    )
+                )
 
         result = {
             "success": bool(discovery.get("success", True)),
@@ -2789,6 +2800,31 @@ async def find_keywords(
                 "source": kw.get("resource"),
             })
 
+        # OBS-33 (Wave-3 round-1 review fix) — apply library filter +
+        # strict_library to the unified matches in session strategy.
+        # Pre-fix: the session branch entirely bypassed
+        # ``_filter_keywords_by_session_library``, so OBS-33 had no
+        # effect on this strategy. Now we apply the SAME resolved
+        # preference (effective_library_preference) + strict_library
+        # flag that semantic/pattern/catalog use. Wraps each match
+        # into the filter's expected ``{name, library, ...}`` shape,
+        # then converts back. Resource entries (library=None) are
+        # exempt — filter operates on library names only.
+        session_excluded: List[Dict[str, Any]] = []
+        if effective_library_preference and unified_matches:
+            lib_matches = [
+                {"name": m["keyword_name"], "library": m["library"], **m}
+                for m in unified_matches if m.get("library")
+            ]
+            resource_matches = [m for m in unified_matches if not m.get("library")]
+            kept, session_excluded = _filter_keywords_by_session_library(
+                lib_matches, session_id, effective_library_preference,
+                strict_library=strict_library,
+            )
+            unified_matches = [
+                {k: v for k, v in m.items() if k != "name"} for m in kept
+            ] + resource_matches
+
         # OBS-23B recommendations (no fake confidence — honest prose
         # about how the match was found).
         recommendations = _build_session_recommendations(
@@ -2801,6 +2837,10 @@ async def find_keywords(
             "success": payload.get("success", True),
             "strategy": "session",
             "query": query,
+            # OBS-23B-impl backwards-compat fix (Wave-3 round-1):
+            # propagate ``session_id`` from the legacy backend payload
+            # so callers reading it at top level continue to work.
+            "session_id": payload.get("session_id", session_id),
             "result": {
                 "matches": unified_matches,
                 "library_count": len({
@@ -2816,12 +2856,22 @@ async def find_keywords(
             "resource_keywords": payload.get("resource_keywords") or [],
             "libraries_count": payload.get("libraries_count", 0),
         }
-        # OBS-23A diagnostic fields surface at top level too
+        # OBS-23A diagnostic fields surface under ``result``
         # (pre-trim vs post-filter visibility for the agent).
         if "total_before_trim" in payload:
             response["result"]["total_before_trim"] = payload["total_before_trim"]
         if "total_after_filter" in payload:
             response["result"]["total_after_filter"] = payload["total_after_filter"]
+        # OBS-33 — surface filter diagnostics when filtering applied
+        if session_excluded:
+            response.update(
+                _build_filter_diagnostics(
+                    session_excluded,
+                    effective_library_preference,
+                    library_filter_source,
+                    strict_library=strict_library,
+                )
+            )
         # Propagate session error path if applicable
         if not payload.get("success") and payload.get("error"):
             response["error"] = payload["error"]

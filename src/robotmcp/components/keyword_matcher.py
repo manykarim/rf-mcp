@@ -97,18 +97,33 @@ _QUERY_TRIGGERS: Dict[str, Tuple[str, ...]] = {
 def _classify_query_action_class(query: str) -> str:
     """Return action class for a natural-language query.
 
-    Determines intent from trigger phrases. Order matters — more
-    specific intents (wait, navigate) checked before broad ones
-    (click). Returns 'unknown' when no trigger matches.
+    Determines intent from trigger phrases. Compound queries that
+    match multiple opinionated classes (e.g., "wait for X and then
+    click Y") classify as ``ambiguous`` — the reranker abstains
+    instead of arbitrarily picking the first-trigger class which
+    would penalise the keywords matching the OTHER class.
+
+    Per Wave-3 review (Copilot + Claude subagent caught the S12
+    regression where "wait for ... and click ..." was classified
+    as ``wait`` because of trigger ordering, demoting click-class
+    keywords below their pre-Wave-3 baselines).
+
+    Returns ``unknown`` when no trigger matches.
     """
     q = (query or "").lower().strip()
     if not q:
         return "unknown"
+    matched: set[str] = set()
     for cls, triggers in _QUERY_TRIGGERS.items():
         for trig in triggers:
             if trig in q:
-                return cls
-    return "unknown"
+                matched.add(cls)
+                break
+    if not matched:
+        return "unknown"
+    if len(matched) > 1:
+        return "ambiguous"
+    return next(iter(matched))
 
 
 def classify_keyword_action(name: str, tags: List[str]) -> str:
@@ -210,8 +225,10 @@ def apply_action_class_reranker(
     Codex/Claude round-1 perf review — ~5x faster than rebuilding
     7 explicit kwargs).
     """
-    if query_action_class == "unknown" or not matches:
-        # Abstain — preserve matcher's original ranking.
+    if query_action_class in ("unknown", "ambiguous") or not matches:
+        # Abstain — preserve matcher's original ranking. ``ambiguous``
+        # covers compound queries like "wait for X and click Y" where
+        # picking either class would penalise the other.
         return matches
     downweight = float(os.getenv("ROBOTMCP_RERANK_DOWNWEIGHT", "0.6"))
     reranked: List[KeywordMatch] = []
