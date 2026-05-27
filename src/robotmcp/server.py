@@ -2395,6 +2395,24 @@ async def find_keywords(
             if session_pref:
                 effective_library_preference = session_pref
                 library_filter_source = "session"
+            else:
+                # OBS-20 — discovery/execution filter symmetry. The
+                # Browser plugin's execute-time validation at
+                # ``browser_plugin.py:312-321`` rejects SeleniumLibrary
+                # keywords whenever Browser is imported (regardless of
+                # explicit preference). The SeleniumLibrary plugin is
+                # ASYMMETRIC — it only acts on explicit
+                # ``selenium*``-prefixed preference. Mirror those exact
+                # rules here so discovery surfaces match what
+                # execute_step will accept.
+                imported = set(
+                    getattr(session, "imported_libraries", []) or []
+                )
+                # Browser is the only plugin with imported-fallback.
+                # SL plugin does NOT mirror this — keep the asymmetry.
+                if "Browser" in imported:
+                    effective_library_preference = "Browser"
+                    library_filter_source = "session_imported"
 
     if strategy_norm in {"semantic", "intent"}:
         # OBS-22 — thread ``limit`` into the matcher so the matcher's
