@@ -2240,7 +2240,14 @@ async def find_keywords(
         query: Search text or intent description.
                Examples: "click a button", "validate json", "get*request"
         strategy: Discovery approach:
-                  - "semantic": Natural language search (best for exploring)
+                  - "semantic": Hybrid keyword search combining name/doc
+                    pattern matching, tag/action-class classification, and
+                    (when installed) sentence-transformers embedding
+                    similarity. For best semantic ranking, install the
+                    optional extra: ``uv add robotmcp[semantic]``. Without
+                    the extra, falls back to pattern + tag + difflib
+                    SequenceMatcher ranking; the strategy is still useful
+                    but ranking quality is reduced.
                   - "pattern": Glob/regex matching (best when you know partial name)
                   - "catalog": List all available keywords
                   - "session": List keywords from session's loaded libraries
@@ -2296,6 +2303,29 @@ async def find_keywords(
                 f"'{bdd_query_result.original_name}' -> '{query}'"
             )
 
+    # OBS-24 — Empty/whitespace-only queries against semantic/pattern
+    # strategies fall through to the matcher and produce bogus low-
+    # confidence "hits" (e.g. confidence=0.35 against an empty action
+    # description). Short-circuit before that with a clear hint to
+    # use catalog strategy when an unfiltered listing is needed.
+    # Catalog + session strategies handle empty queries by design
+    # (list everything in scope) and are intentionally not gated.
+    if strategy_norm in {"semantic", "intent", "pattern", "search"}:
+        if not query or not query.strip():
+            return {
+                "success": False,
+                "strategy": strategy_norm,
+                "query": query,
+                "error": (
+                    f"Query string is required for strategy='{strategy_norm}'"
+                ),
+                "hint": (
+                    "Use strategy='catalog' to list available keywords "
+                    "without a query, or strategy='session' if a session is "
+                    "active."
+                ),
+            }
+
     current_state = current_state or {}
     limit_value: int | None = None
     if limit is not None:
@@ -2331,8 +2361,13 @@ async def find_keywords(
                 library_filter_source = "session"
 
     if strategy_norm in {"semantic", "intent"}:
+        # OBS-22 — thread ``limit`` into the matcher so the matcher's
+        # hard cap (default 10 at keyword_matcher.py:307) honours
+        # caller intent. Without this the semantic branch silently
+        # ignored ``limit`` — pattern/catalog branches applied it via
+        # ``matches[:limit_value]`` but semantic didn't.
         discovery = await keyword_matcher.discover_keywords(
-            query, context, current_state
+            query, context, current_state, limit=limit_value,
         )
 
         # Apply library filtering when an effective preference is set
@@ -2474,6 +2509,49 @@ async def find_keywords(
                 catalog, session_id, effective_library_preference
             )
 
+        # OBS-25 — Hard-cap unscoped catalog dumps to prevent the 97k
+        # token whale observed in benchmark S20
+        # (find_keywords(strategy="catalog") with no session, no
+        # library_name, no query returns 658 keywords across 10
+        # libraries). The cap only applies when ALL three scoping
+        # mechanisms are absent — a scoped catalog call is intentional
+        # and shouldn't be truncated.
+        catalog_truncated = False
+        full_catalog_size = 0
+        if (
+            not session_id
+            and not library_name
+            and not query
+            and not effective_library_preference
+        ):
+            # Codex round-3 review caught: raw ``int()`` raises on
+            # invalid env values (e.g., ``ROBOTMCP_CATALOG_HARD_CAP="abc"``),
+            # turning a discovery call into a 500. Fall back to 100
+            # on parse failure with a single WARNING-level log so
+            # operators see the misconfiguration.
+            try:
+                hard_cap = int(os.getenv("ROBOTMCP_CATALOG_HARD_CAP", "100"))
+                if hard_cap <= 0:
+                    raise ValueError("must be > 0")
+            except (TypeError, ValueError) as _e:
+                logger.warning(
+                    "Invalid ROBOTMCP_CATALOG_HARD_CAP=%r; falling back to 100",
+                    os.getenv("ROBOTMCP_CATALOG_HARD_CAP"),
+                )
+                hard_cap = 100
+            if len(catalog) > hard_cap:
+                full_catalog_size = len(catalog)
+                libraries = sorted({c.get("library", "?") for c in catalog})
+                catalog = catalog[:hard_cap]
+                catalog_truncated = True
+                catalog_hint = (
+                    f"Catalog returned {full_catalog_size} keywords across "
+                    f"{len(libraries)} libraries. Use library_name= or a "
+                    f"query= filter to narrow the result, or pass "
+                    f"session_id= to enable externalisation. First "
+                    f"{hard_cap} entries returned."
+                )
+
         if limit_value is not None:
             catalog = catalog[:limit_value]
 
@@ -2506,6 +2584,14 @@ async def find_keywords(
                     library_filter_source,
                 )
             )
+
+        # OBS-25: surface the hard-cap diagnostic + full size when the
+        # cap fired so the agent knows the response was truncated and
+        # how to scope down.
+        if catalog_truncated:
+            result["catalog_truncated"] = True
+            result["full_catalog_size"] = full_catalog_size
+            result["hint"] = catalog_hint
 
         # ADR-010 I3: Hint when catalog returns empty without active session
         if not catalog and not session_id:
@@ -5144,8 +5230,29 @@ async def get_keyword_info(
     Args:
         mode: One of "keyword" (default), "library", "session", or "parse".
         keyword_name: Keyword to document (required for modes "keyword"/"session"/"parse").
-        library_name: Library to document (required for mode "library"; optional for keyword mode).
-        session_id: Session id when mode="session" to fetch overrides from the live namespace.
+        library_name: Library to document (required for mode "library";
+                      optional for keyword mode — explicit per-call scope
+                      that takes precedence over session-derived scope).
+        session_id: Optional session id.
+                    - mode="keyword" / "global" (OBS-19): when provided
+                      without ``library_name``, restricts the keyword
+                      lookup to libraries imported in that session
+                      (plus neutral helpers like BuiltIn, Collections).
+                      When the keyword exists only in other libraries,
+                      the response carries a library-mismatch error +
+                      plugin-generated alternative hint instead of the
+                      keyword doc. Sessions without ``session_id`` get
+                      the global lookup (cross-library matches[]).
+                    - mode="session" / "namespace": required to address
+                      the live RF namespace.
+                    - **Externalisation gate (OBS-21)**: any mode with
+                      ``session_id`` provided enables artifact
+                      externalisation for large payloads (``library.doc``,
+                      ``library.keywords``, ``keyword.doc``, ``matches``).
+                      Without ``session_id``, payloads stay inline
+                      regardless of size — there's no artifact store
+                      to write to, so sessionless callers get the full
+                      content. Preserves backwards compat.
         arguments: Optional arguments to parse when mode="parse".
 
     Returns:
@@ -5153,6 +5260,11 @@ async def get_keyword_info(
             - success: bool
             - mode: resolved mode
             - doc/signature data or error on failure
+            - hint: plugin library-mismatch hint when applicable
+              (OBS-19 mode="keyword" + session-scope mismatch)
+            - Large fields may be replaced by "Content saved to ..."
+              artifact summary strings when ``session_id`` is provided
+              and the field exceeds the inline threshold (OBS-21).
     """
 
     mode_norm = (mode or "keyword").strip().lower()
@@ -5160,8 +5272,19 @@ async def get_keyword_info(
     if mode_norm in {"keyword", "global"}:
         if not keyword_name:
             return {"success": False, "error": "keyword_name is required"}
-        result = await _get_keyword_documentation_payload(keyword_name, library_name)
+        result = await _get_keyword_documentation_payload(
+            keyword_name, library_name, session_id=session_id,
+        )
         result["mode"] = "keyword"
+        # OBS-21 — externalise large keyword.doc / matches payloads.
+        # The keyword-mode payload is usually small (200-400 tokens),
+        # but verbose docstrings (e.g., New Persistent Context with
+        # 40 args) can exceed the inline threshold. Gated on session_id
+        # per the existing externalisation contract.
+        if session_id:
+            result = _externalize_response(
+                "get_keyword_info", session_id, result
+            )
         return result
 
     if mode_norm in {"library", "libdoc"}:
@@ -5169,6 +5292,15 @@ async def get_keyword_info(
             return {"success": False, "error": "library_name is required"}
         result = await _get_library_documentation_payload(library_name)
         result["mode"] = "library"
+        # OBS-21 — library mode is the major token whale (benchmark
+        # K06 returned 71,521 tokens for full Browser libdoc).
+        # Externalise the heavy fields (library.doc + library.keywords)
+        # so the inline payload stays compact when session_id is
+        # provided.
+        if session_id:
+            result = _externalize_response(
+                "get_keyword_info", session_id, result
+            )
         return result
 
     if mode_norm in {"session", "namespace"}:
@@ -5181,6 +5313,11 @@ async def get_keyword_info(
             session_id, keyword_name
         )
         result["mode"] = "session"
+        # OBS-21 — session-mode keyword payload may carry verbose doc
+        # for library keywords; externalise on the same gate.
+        result = _externalize_response(
+            "get_keyword_info", session_id, result
+        )
         return result
 
     if mode_norm in {"parse", "signature"}:
@@ -5199,9 +5336,106 @@ async def get_keyword_info(
 
 
 async def _get_keyword_documentation_payload(
-    keyword_name: str, library_name: str | None = None
+    keyword_name: str,
+    library_name: str | None = None,
+    session_id: str | None = None,
 ) -> Dict[str, Any]:
-    return execution_engine.get_keyword_documentation(keyword_name, library_name)
+    """OBS-19 — when ``session_id`` is provided, scope the lookup to
+    the session's imported libraries so the response cannot document
+    keywords unavailable in the live session.
+
+    Precedence: ``library_name`` (explicit per-call scope) wins, then
+    session-derived ``allowed_libraries``, then global lookup.
+
+    When the keyword exists only in non-allowed libraries, the
+    response is transformed into a library-mismatch error with an
+    alternative hint via the existing plugin
+    ``validate_keyword_for_session`` shared API at
+    ``LibraryPluginManager.validate_keyword_for_session`` (manager.py:239).
+    """
+    allowed_libraries: Optional[List[str]] = None
+    session_for_hint = None
+
+    # Resolve session-scoped allowed libraries when caller passed a
+    # session_id BUT did not pin to a specific library (library_name
+    # already implies its own strict scope).
+    if session_id and not library_name:
+        session = execution_engine.session_manager.get_session(session_id)
+        if session is None:
+            return {
+                "success": False,
+                "error": f"Session '{session_id}' not found",
+            }
+        # imported_libraries is a list/set on ExecutionSession.
+        # Neutral helpers always visible alongside the UI library —
+        # mirrors keyword_discovery.py:264 neutral set so session-
+        # scoped lookups still find BuiltIn helpers.
+        # NB: even when ``imported`` is empty (fresh session, no
+        # libraries imported yet), session_id is load-bearing — we
+        # still scope to neutral libraries rather than silently fall
+        # through to the global lookup. (Codex round-3 caught this:
+        # the old ``if imported:`` guard let an empty list become a
+        # de facto "no scoping" path, contradicting the session
+        # contract.)
+        imported = list(getattr(session, "imported_libraries", []) or [])
+        neutral = {
+            "BuiltIn", "Collections", "String", "DateTime",
+            "OperatingSystem", "Process", "XML",
+        }
+        allowed_libraries = sorted(set(imported) | neutral)
+        session_for_hint = session
+
+    result = execution_engine.get_keyword_documentation(
+        keyword_name, library_name, allowed_libraries=allowed_libraries,
+    )
+
+    # OBS-19 — if the lookup failed because the keyword exists only
+    # in non-allowed libraries, enrich the response with a
+    # library-mismatch hint via the active plugin's shared API.
+    if (
+        result.get("success") is False
+        and result.get("found_in_other_libraries")
+        and session_for_hint is not None
+    ):
+        # The first "other" library that the keyword lives in is the
+        # source library for the mismatch hint. Pick the first; if
+        # multiple, the plugin alternative table is typically library-
+        # specific and only one will produce a hint anyway.
+        source_lib = result["found_in_other_libraries"][0]
+        try:
+            from robotmcp.plugins.manager import get_library_plugin_manager
+            plugin_manager = get_library_plugin_manager()
+            # Determine which library the session is using for UI work.
+            # Use the explicit_library_preference if set; else the
+            # first imported UI library (Browser or SeleniumLibrary).
+            session_lib = getattr(
+                session_for_hint, "explicit_library_preference", None
+            )
+            if not session_lib:
+                imported_libs = list(
+                    getattr(session_for_hint, "imported_libraries", []) or []
+                )
+                for candidate in ("Browser", "SeleniumLibrary"):
+                    if candidate in imported_libs:
+                        session_lib = candidate
+                        break
+            if session_lib:
+                hint = plugin_manager.validate_keyword_for_session(
+                    session_lib,
+                    session_for_hint,
+                    keyword_name,
+                    source_lib,
+                )
+                if hint:
+                    # Preserve the existing error message; add the
+                    # plugin's structured alternative info under
+                    # ``hint`` so the agent can act on it.
+                    result["hint"] = hint
+        except Exception:
+            # Hint enrichment is best-effort.
+            pass
+
+    return result
 
 
 @mcp.tool(**DISABLED_TOOL_KWARGS)

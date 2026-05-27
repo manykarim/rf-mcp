@@ -58,6 +58,25 @@ DEFAULT_RULES: List[ExternalizationRule] = [
     ExternalizationRule(tool_name="execute_batch", field_path="steps"),
     # find_keywords
     ExternalizationRule(tool_name="find_keywords", field_path="result"),
+    # get_keyword_info — OBS-21
+    # K06 benchmark returned 71,521 inline tokens for a single
+    # mode="library" call. library.doc is the 36k-char prose
+    # docstring; library.keywords carries 147 per-keyword entries.
+    # keyword.doc applies to mode="keyword" responses with verbose
+    # docstrings (e.g., Browser.New Persistent Context with 40 args).
+    ExternalizationRule(tool_name="get_keyword_info", field_path="library.doc"),
+    ExternalizationRule(tool_name="get_keyword_info", field_path="library.keywords"),
+    ExternalizationRule(tool_name="get_keyword_info", field_path="keyword.doc"),
+    ExternalizationRule(tool_name="get_keyword_info", field_path="doc"),
+    # OBS-19 + OBS-21 follow-up: session-scoped mode="keyword" lookup
+    # (and unscoped ambiguous lookup) returns ``matches[]`` instead
+    # of a single ``keyword`` field. Each match carries its own doc;
+    # path-based externalisation doesn't support array glob (matches
+    # [*].doc), so externalise the whole array as one artifact when
+    # cumulative size exceeds the threshold. Small matches[] (e.g.
+    # the typical 2-entry ambiguous case) stays inline because
+    # ``should_externalize`` checks total serialised size first.
+    ExternalizationRule(tool_name="get_keyword_info", field_path="matches"),
     # execute_step
     ExternalizationRule(
         tool_name="execute_step", field_path="session_variables"

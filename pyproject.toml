@@ -30,6 +30,11 @@ api = ["robotframework-requests"]
 database = ["robotframework-databaselibrary"]
 memory = ["sqlite-vec>=0.1.6", "model2vec>=0.4.0"]
 tokens = ["tiktoken>=0.7.0"]
+# OBS-30 — Optional embedding similarity for find_keywords semantic
+# strategy. Without this, the matcher falls back to pattern + tag +
+# difflib-based ranking. The full library is heavy (~2GB with torch);
+# install only when you want true embedding similarity.
+semantic = ["sentence-transformers>=2.2.0", "scipy>=1.10.0"]
 all = [
     "robotframework-browser",
     "robotframework-seleniumlibrary",

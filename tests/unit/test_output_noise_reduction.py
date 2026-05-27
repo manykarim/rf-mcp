@@ -740,12 +740,18 @@ class TestEnhancedHTTPResponse:
 
 
 class TestExternalizationRulesExpanded:
-    """Verify all 13 rules present in DEFAULT_RULES."""
+    """Verify all rules present in DEFAULT_RULES.
+
+    Count updated by OBS-21 (+4 get_keyword_info rules:
+    library.doc, library.keywords, keyword.doc, doc).
+    """
 
     def test_total_rule_count(self):
         from robotmcp.domains.artifact_output.services import DEFAULT_RULES
 
-        assert len(DEFAULT_RULES) == 14
+        # 14 pre-OBS-21 + 5 OBS-21 (get_keyword_info rules:
+        # library.doc, library.keywords, keyword.doc, doc, matches) = 19
+        assert len(DEFAULT_RULES) == 19
 
     def test_get_session_state_rules_present(self):
         from robotmcp.domains.artifact_output.services import DEFAULT_RULES
