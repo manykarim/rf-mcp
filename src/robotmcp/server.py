@@ -2038,6 +2038,7 @@ def _filter_keywords_by_session_library(
     keywords: List[Dict[str, Any]],
     session_id: str | None,
     session_library_preference: str | None,
+    strict_library: bool = False,
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
     """Filter keywords to only include those compatible with session library preference.
 
@@ -2047,6 +2048,12 @@ def _filter_keywords_by_session_library(
         keywords: List of keyword dicts with 'name' and 'library' fields
         session_id: Session ID for logging
         session_library_preference: Explicit library preference (e.g., "Browser", "SeleniumLibrary")
+        strict_library: OBS-33 — when True AND a preference is set,
+            exclude EVERY library that isn't the named one (not just
+            the plugin's incompatible siblings). Compatible "neutral"
+            libraries like BuiltIn/Collections/etc. are dropped too.
+            Default False preserves the existing "incompatible-only"
+            behaviour.
 
     Returns:
         Tuple of (filtered_keywords, excluded_keywords_with_alternatives)
@@ -2059,6 +2066,15 @@ def _filter_keywords_by_session_library(
     excluded_libraries = set(
         plugin_manager.get_incompatible_libraries(session_library_preference)
     )
+
+    if strict_library:
+        # OBS-33 — extend excluded_libraries to cover ALL non-preferred
+        # libraries. Compute from the actual keywords list so we don't
+        # have to enumerate every possible library globally.
+        all_libs_in_input = {kw.get("library", "") for kw in keywords if kw.get("library")}
+        excluded_libraries = excluded_libraries | (
+            all_libs_in_input - {session_library_preference}
+        )
 
     if not excluded_libraries:
         return keywords, []
@@ -2098,7 +2114,8 @@ def _filter_keywords_by_session_library(
     if excluded_with_alternatives:
         logger.info(
             f"Session {session_id}: Filtered out {len(excluded_with_alternatives)} "
-            f"keywords from incompatible libraries: {list(excluded_libraries)}"
+            f"keywords from incompatible libraries: {list(excluded_libraries)} "
+            f"(strict_library={strict_library})"
         )
 
     return filtered_keywords, excluded_with_alternatives
@@ -2158,10 +2175,58 @@ def _rebuild_post_filter_recommendations(
     return recs
 
 
+def _build_session_recommendations(
+    matches: List[Dict[str, Any]], query: str,
+) -> List[str]:
+    """OBS-23B-impl — build honest recommendations prose for the
+    session strategy.
+
+    Session strategy is a literal name-substring lookup. There's no
+    ranking, so the prose names the kind of match found (exact name
+    vs substring) WITHOUT a fake confidence number (round-1 review
+    flagged ``confidence: 1.00`` as dishonest).
+    """
+    if not matches:
+        return [
+            "No keywords match the query in this session.",
+            "- Verify the query string",
+            "- Check the session's imported libraries",
+        ]
+    q_lower = (query or "").lower().strip()
+    exact = None
+    if q_lower:
+        for m in matches:
+            if m.get("keyword_name", "").lower() == q_lower:
+                exact = m
+                break
+    top = exact or matches[0]
+    top_name = top.get("keyword_name", "")
+    top_lib = top.get("library") or top.get("source") or "session"
+    if exact:
+        recs = [f"Exact match: {top_name} ({top_lib})"]
+    else:
+        if q_lower:
+            recs = [
+                f"Substring match: {top_name} ({top_lib}); "
+                f"no exact name match for '{query}'"
+            ]
+        else:
+            recs = [f"First in session: {top_name} ({top_lib})"]
+    # Required-arguments line intentionally OMITTED — session strategy
+    # doesn't have per-keyword arg info from list_available_keywords.
+    # Agents fetch full info via get_keyword_info(mode="keyword",
+    # keyword_name=..., session_id=...) if needed.
+    if len(matches) > 1:
+        alt_names = [m.get("keyword_name", "") for m in matches[1:4]]
+        recs.append(f"Alternative options: {', '.join(alt_names)}")
+    return recs
+
+
 def _build_filter_diagnostics(
     excluded: List[Dict[str, Any]],
     applied: str,
     source: str,
+    strict_library: bool = False,
 ) -> Dict[str, Any]:
     """Build compact response diagnostics for a library filter pass.
 
@@ -2199,6 +2264,11 @@ def _build_filter_diagnostics(
             "applied": applied,
             "source": source,
             "count": len(excluded),
+            # OBS-33 — agent visibility into which filter rule fired.
+            # "strict" = ALL non-preferred libraries excluded.
+            # "compatible" = only plugin-table-incompatible siblings
+            # excluded (BuiltIn, Collections, etc. stay visible).
+            "mode": "strict" if strict_library else "compatible",
         }
     }
     if from_library:
@@ -2227,6 +2297,7 @@ async def find_keywords(
     library_name: str | None = None,
     current_state: Dict[str, Any] | None = None,
     limit: int | None = None,
+    strict_library: bool = False,
 ) -> Dict[str, Any]:
     """Discover Robot Framework keywords using multiple strategies.
 
@@ -2263,6 +2334,18 @@ async def find_keywords(
                       lookup to this library.
         current_state: Optional state payload to improve semantic matching.
         limit: Optional maximum number of results to return.
+        strict_library: OBS-33 — when True AND a library preference is
+                        set (via ``library_name`` or session
+                        ``explicit_library_preference``), exclude EVERY
+                        library that isn't the preferred one. Default
+                        behaviour (False) preserves "compatible siblings"
+                        — BuiltIn / Collections / String / DateTime etc.
+                        remain visible alongside the preferred library.
+                        Use strict mode to scope discovery tightly to
+                        a single library (e.g., pattern ``"Get*"`` +
+                        ``library_name="Browser"`` +
+                        ``strict_library=True`` → Browser keywords only,
+                        no BuiltIn helpers).
 
     Returns:
         Dict[str, Any]: Discovery result:
@@ -2359,6 +2442,24 @@ async def find_keywords(
             if session_pref:
                 effective_library_preference = session_pref
                 library_filter_source = "session"
+            else:
+                # OBS-20 — discovery/execution filter symmetry. The
+                # Browser plugin's execute-time validation at
+                # ``browser_plugin.py:312-321`` rejects SeleniumLibrary
+                # keywords whenever Browser is imported (regardless of
+                # explicit preference). The SeleniumLibrary plugin is
+                # ASYMMETRIC — it only acts on explicit
+                # ``selenium*``-prefixed preference. Mirror those exact
+                # rules here so discovery surfaces match what
+                # execute_step will accept.
+                imported = set(
+                    getattr(session, "imported_libraries", []) or []
+                )
+                # Browser is the only plugin with imported-fallback.
+                # SL plugin does NOT mirror this — keep the asymmetry.
+                if "Browser" in imported:
+                    effective_library_preference = "Browser"
+                    library_filter_source = "session_imported"
 
     if strategy_norm in {"semantic", "intent"}:
         # OBS-22 — thread ``limit`` into the matcher so the matcher's
@@ -2380,7 +2481,8 @@ async def find_keywords(
                 for m in discovery.get("matches", [])
             ]
             filtered_matches, excluded = _filter_keywords_by_session_library(
-                matches_for_filter, session_id, effective_library_preference
+                matches_for_filter, session_id, effective_library_preference,
+                strict_library=strict_library,
             )
             # Convert back to original format
             discovery["matches"] = [
@@ -2388,13 +2490,46 @@ async def find_keywords(
                 for m in filtered_matches
             ]
             discovery["filtered_count"] = len(excluded)
-            # Regenerate recommendations against the post-filter
-            # matches — the matcher emits its recommendations BEFORE
-            # we apply the library filter, so without this fix the
-            # ``Best match: X`` line can name an excluded keyword.
-            # Only rebuild when the filter actually trimmed entries —
-            # if ``excluded`` is empty, the matcher's recommendations
-            # are still accurate and we avoid the no-op work.
+
+            # OBS-18B post-filter cap MUST run BEFORE the
+            # recommendation rebuild so the rebuild can read the
+            # capped confidence value (round-3 review caught: pre-fix
+            # ordering produced contradictory output where
+            # ``matches[0].confidence`` was 0.50 but
+            # ``recommendations[0]`` still said "confidence: 0.72").
+            # The matcher's pre-filter cap may have targeted a match
+            # the filter then removed, leaving the actual user-
+            # visible top match uncapped.
+            try:
+                from robotmcp.components.keyword_matcher import (
+                    _classify_query_action_class,
+                    _reranker_enabled,
+                    apply_confidence_cap_dict,
+                )
+                if _reranker_enabled() and discovery.get("matches"):
+                    qclass = _classify_query_action_class(query)
+                    capped_matches, low_conf = apply_confidence_cap_dict(
+                        discovery["matches"], qclass,
+                    )
+                    discovery["matches"] = capped_matches
+                    # CLEAR the flag if no trigger fired post-filter
+                    # (otherwise a matcher-set flag would persist as a
+                    # false positive once the filter shuffled the top
+                    # match into a non-divergent set).
+                    if low_conf:
+                        discovery["low_confidence_top_match"] = True
+                    else:
+                        discovery.pop("low_confidence_top_match", None)
+            except Exception:
+                # Reranker enrichment is best-effort.
+                pass
+
+            # Regenerate recommendations against the post-filter,
+            # post-cap matches — the matcher emits its
+            # recommendations BEFORE we apply the library filter +
+            # post-filter cap. Only rebuild when the filter actually
+            # trimmed entries — if ``excluded`` is empty, the
+            # matcher's recommendations are still accurate.
             if excluded:
                 discovery["recommendations"] = (
                     _rebuild_post_filter_recommendations(
@@ -2414,6 +2549,7 @@ async def find_keywords(
                     excluded,
                     effective_library_preference,
                     library_filter_source,
+                    strict_library=strict_library,
                 )
             )
         # ADR-015: Externalize large fields to artifacts
@@ -2437,7 +2573,8 @@ async def find_keywords(
         excluded = []
         if effective_library_preference:
             matches, excluded = _filter_keywords_by_session_library(
-                matches, session_id, effective_library_preference
+                matches, session_id, effective_library_preference,
+                strict_library=strict_library,
             )
 
         if limit_value is not None:
@@ -2469,6 +2606,7 @@ async def find_keywords(
                     excluded,
                     effective_library_preference,
                     library_filter_source,
+                    strict_library=strict_library,
                 )
             )
         # ADR-015: Externalize large fields to artifacts
@@ -2506,7 +2644,8 @@ async def find_keywords(
         excluded = []
         if effective_library_preference:
             catalog, excluded = _filter_keywords_by_session_library(
-                catalog, session_id, effective_library_preference
+                catalog, session_id, effective_library_preference,
+                strict_library=strict_library,
             )
 
         # OBS-25 — Hard-cap unscoped catalog dumps to prevent the 97k
@@ -2582,6 +2721,7 @@ async def find_keywords(
                     excluded,
                     effective_library_preference,
                     library_filter_source,
+                    strict_library=strict_library,
                 )
             )
 
@@ -2621,15 +2761,128 @@ async def find_keywords(
                 "error": "session_id is required when strategy='session'",
             }
         mgr = get_rf_native_context_manager()
-        payload = mgr.list_available_keywords(session_id)
-        payload.update({"strategy": "session", "query": query})
+        # OBS-23A — pass the caller's ``query`` as a name_filter and
+        # ``limit_value`` as the trim cap. Pre-OBS-23A behaviour
+        # (no filter, no limit) is preserved when both are absent.
+        payload = mgr.list_available_keywords(
+            session_id,
+            name_filter=query if query else None,
+            limit=limit_value,
+        )
+
+        # OBS-23B-impl Phase 1 — dual-emit:
+        # 1. Build the unified ``result.matches`` shape that matches
+        #    semantic/pattern/catalog strategies.
+        # 2. Preserve the legacy top-level ``library_keywords`` /
+        #    ``resource_keywords`` / ``libraries_count`` fields for
+        #    backwards-compat through Phase 2 (target v0.34) →
+        #    Phase 3 removal (target v0.36).
+        # Per round-1 review fixes: match_type replaces dishonest
+        # confidence=1.00; match_count dropped (redundant with
+        # len(matches)).
+        unified_matches: List[Dict[str, Any]] = []
+        for kw in (payload.get("library_keywords") or []):
+            unified_matches.append({
+                "keyword_name": kw.get("name", ""),
+                "library": kw.get("library"),
+                "full_name": kw.get("full_name", kw.get("name", "")),
+                "match_type": "exact_substring",
+                "source_type": "library",
+                "source": None,
+            })
+        for kw in (payload.get("resource_keywords") or []):
+            unified_matches.append({
+                "keyword_name": kw.get("name", ""),
+                "library": None,
+                "full_name": kw.get("full_name", kw.get("name", "")),
+                "match_type": "exact_substring",
+                "source_type": "resource",
+                "source": kw.get("resource"),
+            })
+
+        # OBS-33 (Wave-3 round-1 review fix) — apply library filter +
+        # strict_library to the unified matches in session strategy.
+        # Pre-fix: the session branch entirely bypassed
+        # ``_filter_keywords_by_session_library``, so OBS-33 had no
+        # effect on this strategy. Now we apply the SAME resolved
+        # preference (effective_library_preference) + strict_library
+        # flag that semantic/pattern/catalog use. Wraps each match
+        # into the filter's expected ``{name, library, ...}`` shape,
+        # then converts back. Resource entries (library=None) are
+        # exempt — filter operates on library names only.
+        session_excluded: List[Dict[str, Any]] = []
+        if effective_library_preference and unified_matches:
+            lib_matches = [
+                {"name": m["keyword_name"], "library": m["library"], **m}
+                for m in unified_matches if m.get("library")
+            ]
+            resource_matches = [m for m in unified_matches if not m.get("library")]
+            kept, session_excluded = _filter_keywords_by_session_library(
+                lib_matches, session_id, effective_library_preference,
+                strict_library=strict_library,
+            )
+            unified_matches = [
+                {k: v for k, v in m.items() if k != "name"} for m in kept
+            ] + resource_matches
+
+        # OBS-23B recommendations (no fake confidence — honest prose
+        # about how the match was found).
+        recommendations = _build_session_recommendations(
+            unified_matches, query,
+        )
+
+        # Build the response with BOTH the unified shape under `result`
+        # AND the legacy top-level fields (Phase 1 dual-emit).
+        response: Dict[str, Any] = {
+            "success": payload.get("success", True),
+            "strategy": "session",
+            "query": query,
+            # OBS-23B-impl backwards-compat fix (Wave-3 round-1):
+            # propagate ``session_id`` from the legacy backend payload
+            # so callers reading it at top level continue to work.
+            "session_id": payload.get("session_id", session_id),
+            "result": {
+                "matches": unified_matches,
+                "library_count": len({
+                    m["library"] for m in unified_matches if m["library"]
+                }),
+                "resource_count": len({
+                    m["source"] for m in unified_matches if m["source"]
+                }),
+                "recommendations": recommendations,
+            },
+            # OBS-23B Phase 1 legacy fields (target removal: OBS-35 / v0.36)
+            "library_keywords": payload.get("library_keywords") or [],
+            "resource_keywords": payload.get("resource_keywords") or [],
+            "libraries_count": payload.get("libraries_count", 0),
+        }
+        # OBS-23A diagnostic fields surface under ``result``
+        # (pre-trim vs post-filter visibility for the agent).
+        if "total_before_trim" in payload:
+            response["result"]["total_before_trim"] = payload["total_before_trim"]
+        if "total_after_filter" in payload:
+            response["result"]["total_after_filter"] = payload["total_after_filter"]
+        # OBS-33 — surface filter diagnostics when filtering applied
+        if session_excluded:
+            response.update(
+                _build_filter_diagnostics(
+                    session_excluded,
+                    effective_library_preference,
+                    library_filter_source,
+                    strict_library=strict_library,
+                )
+            )
+        # Propagate session error path if applicable
+        if not payload.get("success") and payload.get("error"):
+            response["error"] = payload["error"]
+
         # ADR-015: Externalize large fields to artifacts
-        payload = _externalize_response("find_keywords", session_id, payload)
+        response = _externalize_response("find_keywords", session_id, response)
         # Track for instruction learning
         _track_tool_result(
-            session_id, "find_keywords", {"query": query, "strategy": strategy}, payload
+            session_id, "find_keywords", {"query": query, "strategy": strategy}, response
         )
-        return payload
+        return response
 
     return {"success": False, "error": f"Unsupported strategy '{strategy}'"}
 

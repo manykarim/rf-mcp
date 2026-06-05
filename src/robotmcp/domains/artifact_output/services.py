@@ -77,6 +77,14 @@ DEFAULT_RULES: List[ExternalizationRule] = [
     # the typical 2-entry ambiguous case) stays inline because
     # ``should_externalize`` checks total serialised size first.
     ExternalizationRule(tool_name="get_keyword_info", field_path="matches"),
+    # OBS-23B-impl Phase 1 — session strategy dual-emits legacy
+    # ``library_keywords`` / ``resource_keywords`` at top level.
+    # The existing ``find_keywords.result`` rule covers the new
+    # unified shape (result.matches); these rules cover the legacy
+    # mirror fields so they don't leak inline during the deprecation
+    # window. Target removal: OBS-35 (v0.36).
+    ExternalizationRule(tool_name="find_keywords", field_path="library_keywords"),
+    ExternalizationRule(tool_name="find_keywords", field_path="resource_keywords"),
     # execute_step
     ExternalizationRule(
         tool_name="execute_step", field_path="session_variables"
