@@ -234,9 +234,23 @@ class NaturalLanguageProcessor:
             
             # Determine required capabilities
             required_capabilities = self._determine_capabilities(normalized_scenario, context)
-            
-            # Detect explicit library preferences
-            explicit_library_preference = self._detect_explicit_library_preference(normalized_scenario)
+
+            # v5: resolve explicit library preference ONCE via PreferenceResolver.
+            # The resolution is a local — no shared state on self (Codex round-4
+            # flagged _last_resolution as a race-condition risk under the
+            # module-level NaturalLanguageProcessor singleton).
+            #
+            # v7 (Codex round-6 C1 follow-on): pass the RAW scenario, not the
+            # normalized text. `_normalize_text` collapses `\s+` → single space,
+            # which destroys the paragraph-break information the v7 detector
+            # relies on (`_SENTENCE_DELIMITERS` matches `\n\s*\n+` paragraph
+            # breaks). Without this fix, "Do not use this approach\n\nUse
+            # Playwright for the test." gets normalized into one line and the
+            # negation reaches across the paragraph break. The detector handles
+            # its own normalization internally (case-insensitive matching,
+            # explicit sentence/paragraph splitting); raw input is correct here.
+            resolution = self._resolve_explicit_library_preference(scenario)
+            explicit_library_preference = resolution.library if resolution else None
             session_type = self._detect_session_type(normalized_scenario, context)
             
             # Build structured scenario
@@ -269,14 +283,13 @@ class NaturalLanguageProcessor:
                     "expected_outcomes": structured_scenario.expected_outcomes,
                     "required_capabilities": structured_scenario.required_capabilities
                 },
-                "analysis": {
-                    "action_count": len(actions),
-                    "complexity": self._assess_complexity(actions),
-                    "estimated_steps": len(actions) * 2,  # Rough estimate
-                    "suggested_libraries": required_capabilities,
-                    "explicit_library_preference": explicit_library_preference,
-                    "detected_session_type": session_type
-                }
+                "analysis": self._build_analysis_block(
+                    actions=actions,
+                    required_capabilities=required_capabilities,
+                    explicit_library_preference=explicit_library_preference,
+                    resolution=resolution,
+                    session_type=session_type,
+                ),
             }
             
         except Exception as e:
@@ -650,17 +663,34 @@ class NaturalLanguageProcessor:
         return verifications
     
     def _detect_explicit_library_preference(self, scenario_text: str) -> Optional[str]:
-        """Detect explicit library preference using centralized LibraryDetector."""
-        try:
-            from robotmcp.utils.library_detection import detect_library_preference
-            detected = detect_library_preference(scenario_text, min_score=5)
-            if detected:
-                return detected
-        except ImportError:
-            pass
+        """Detect explicit library preference using centralized LibraryDetector.
 
-        # Fallback to local patterns for backward compatibility
-        return self._fallback_detect_library_preference(scenario_text)
+        v5: routes through `detect_explicit_preference()` (the conservative,
+        sentence-scoped path) instead of the old `detect_library_preference()`
+        (broad mention-layer path). Returns just the library name for
+        backward compatibility with existing test fixtures.
+        """
+        # v7 (Codex round-6 C3): mirror the v6 D-session-fallback fix from
+        # session_models.py. A `None` from the v6 detector is a deliberate
+        # abstain (no explicit signal, ambiguity, or conflict). Falling back
+        # to `_fallback_detect_library_preference` re-introduces broad
+        # substring false-positives ("Parse the XML response..." → "XML";
+        # "Use requests for the API call" → "RequestsLibrary"). v7 only
+        # falls back when the underlying detector can't even RUN — never
+        # when it deliberately abstains.
+        resolution = None
+        try:
+            resolution = self._resolve_explicit_library_preference(scenario_text)
+        except Exception as e:
+            logger.debug(f"detect_explicit_preference unavailable: {e}")
+            # Hard failure to run → fall back (preserves original behaviour
+            # only when the library can't load at all).
+            return self._fallback_detect_library_preference(scenario_text)
+
+        if resolution and resolution.library:
+            return resolution.library
+        # v7: deliberate abstain — return None. NOT the broad fallback.
+        return None
 
     def _fallback_detect_library_preference(self, scenario_text: str) -> Optional[str]:
         """Fallback library preference detection using local patterns."""
@@ -702,7 +732,75 @@ class NaturalLanguageProcessor:
             return "RequestsLibrary"
 
         return None
-    
+
+    def _resolve_explicit_library_preference(self, scenario_text: str):
+        """v5: return the full PreferenceResolution (library + evidence +
+        conflicts + provenance) for the new explicit-preference path.
+
+        Returns None if the LibraryDetector module is unavailable (fallback
+        path). The caller is responsible for reading `.library`, `.evidence`,
+        `.conflicts`, `.source`, and `.sampling_evidence` from the returned
+        resolution.
+
+        Note: this is the race-free entry point. v4 stashed `self._last_resolution`
+        for the analyze_scenario emit; that pattern is unsafe under the
+        module-level NaturalLanguageProcessor singleton (server.py creates one
+        instance and shares it across concurrent requests).
+        """
+        if not scenario_text:
+            return None
+        try:
+            from robotmcp.utils.library_detection import get_library_detector
+            return get_library_detector().detect_explicit_preference(scenario_text)
+        except ImportError:
+            return None
+
+    def _build_analysis_block(
+        self,
+        *,
+        actions,
+        required_capabilities,
+        explicit_library_preference,
+        resolution,
+        session_type: str,
+    ) -> Dict[str, Any]:
+        """v5: emit the analyze_scenario analysis block with the new optional
+        fields (`preference_source`, `explicit_library_evidence`,
+        `library_preference_conflicts`). Additive — existing callers reading
+        only the original fields see no change.
+        """
+        block: Dict[str, Any] = {
+            "action_count": len(actions),
+            "complexity": self._assess_complexity(actions),
+            "estimated_steps": len(actions) * 2,
+            "suggested_libraries": required_capabilities,
+            "explicit_library_preference": explicit_library_preference,
+            "detected_session_type": session_type,
+        }
+        if resolution is None:
+            return block
+
+        # v5: provenance — always emit when resolution is populated.
+        block["preference_source"] = resolution.source
+
+        # Evidence (only when rule-based; sampling clears these at server-side).
+        if resolution.evidence:
+            block["explicit_library_evidence"] = list(resolution.evidence)
+
+        # Conflicts (dict-of-dicts shape per ADR-024 §3.4 and DDD §4.1.6 v5).
+        if resolution.conflicts:
+            # Resolution conflicts already have the canonical shape
+            # {library, score, patterns_matched}. Pass-through unchanged.
+            block["library_preference_conflicts"] = {
+                group: list(entries) for group, entries in resolution.conflicts.items()
+            }
+
+        # Sampling rationale (only present after Site A override per ADR-024 §11).
+        if resolution.sampling_evidence:
+            block["sampling_evidence"] = resolution.sampling_evidence
+
+        return block
+
     def _detect_session_type(self, scenario: str, context: str) -> str:
         """Detect session type using centralized session models detection."""
         try:

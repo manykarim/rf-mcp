@@ -1867,14 +1867,22 @@ async def analyze_scenario(
                 analysis = result.get("analysis", {})
                 if sampling_result.get("session_type"):
                     analysis["detected_session_type"] = sampling_result["session_type"]
-                if sampling_result.get("primary_library"):
-                    analysis["explicit_library_preference"] = sampling_result[
-                        "primary_library"
-                    ]
+                # v5 (ADR-024 §11 — sampling override coherence Site A):
+                # ONLY `library_preference` writes to `explicit_library_preference`.
+                # `primary_library` is the LLM's "main library detected"
+                # (a recommendation), not the user-stated explicit preference,
+                # so it is no longer mapped to the explicit field. When the
+                # override fires, evidence/conflicts are cleared and
+                # preference_source flips to "sampling".
                 if sampling_result.get("library_preference"):
                     analysis["explicit_library_preference"] = sampling_result[
                         "library_preference"
                     ]
+                    analysis["preference_source"] = "sampling"
+                    analysis.pop("explicit_library_evidence", None)
+                    analysis.pop("library_preference_conflicts", None)
+                    if sampling_result.get("rationale"):
+                        analysis["sampling_evidence"] = sampling_result["rationale"]
                 if sampling_result.get("detected_context"):
                     analysis["detected_context"] = sampling_result["detected_context"]
                 result["analysis"] = analysis
@@ -1968,6 +1976,10 @@ async def analyze_scenario(
             llm_lib_pref = await sample_detect_library_preference(ctx, scenario)
             if llm_lib_pref:
                 session.explicit_library_preference = llm_lib_pref
+                # v5 (ADR-024 §11 — sampling override coherence Site B):
+                # tag the session aggregate's provenance so downstream
+                # consumers can distinguish rule-based from LLM-driven.
+                session.preference_source = "sampling"
                 logger.info(f"LLM sampling detected library preference: {llm_lib_pref}")
             llm_session_type = await sample_detect_session_type(ctx, scenario, context)
             if llm_session_type:

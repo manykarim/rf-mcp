@@ -131,6 +131,11 @@ class ExecutionSession:
     explicit_library_preference: Optional[str] = (
         None  # For scenario-based explicit preferences
     )
+    # v5 (ADR-024 §11): provenance of explicit_library_preference. "rule" for
+    # rule-based detection (default); "sampling" when an LLM sampling override
+    # writes the field via server.py:1961-1972. Lets downstream consumers
+    # distinguish deterministic detection from LLM-inferred preference.
+    preference_source: Optional[str] = "rule"
     scenario_text: Optional[str] = None  # Store original scenario for re-analysis
     auto_configured: bool = False  # Track if session was auto-configured
     context_mode: bool = False  # Track if session uses full RF context mode
@@ -575,15 +580,30 @@ class ExecutionSession:
             return None
 
         try:
-            from robotmcp.utils.library_detection import detect_library_preference
-            result = detect_library_preference(scenario_text, min_score=5)
-            if result:
+            # v5: route through the new explicit-preference path
+            # (sentence-scoped negation, conflict surfacing) rather than the
+            # legacy mention-layer detect(). Also tags the session's
+            # preference_source as "rule" for downstream consumers.
+            from robotmcp.utils.library_detection import (
+                detect_explicit_library_preference as _detect_explicit,
+            )
+            resolution = _detect_explicit(scenario_text)
+            if resolution and resolution.library:
+                self.preference_source = "rule"
                 logger.info(
-                    f"Detected explicit {result} preference in scenario (via LibraryDetector)"
+                    f"Detected explicit {resolution.library} preference in scenario (via LibraryDetector v5)"
                 )
-                return result
-            # If LibraryDetector found nothing, try fallback
-            return self._fallback_detect_library(scenario_text)
+                return resolution.library
+            # v6 (Codex round-5 D-session-fallback): v5 returning None means
+            # the detector deliberately abstained (no explicit signal, or
+            # ambiguity / conflict). v5 used to fall through to the broad
+            # `_fallback_detect_library` substring heuristic here, which
+            # re-introduced false-positive "explicit" preferences at the
+            # session-aggregate level (e.g. "Parse the XML response from the
+            # API" → XML, contradicting analyze_scenario's null). The fallback
+            # now fires ONLY on ImportError, never on a deliberate None.
+            self.preference_source = "rule"
+            return None
         except ImportError:
             # Fallback to simple detection if LibraryDetector not available
             logger.debug("LibraryDetector not available, using fallback detection")
