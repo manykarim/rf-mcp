@@ -30,6 +30,7 @@ Run with: uv run --no-sync pytest tests/integration/test_platynui_gnome_apps_e2e
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import subprocess
@@ -678,7 +679,7 @@ class TestTextEditorE2E:
             content = editor_file.read_text()
             if marker in content:
                 break
-            time.sleep(0.5)
+            await asyncio.sleep(0.5)
         assert marker in content, content
 
 
