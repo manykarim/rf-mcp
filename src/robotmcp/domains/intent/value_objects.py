@@ -56,6 +56,10 @@ class LocatorStrategy(Enum):
     LINK = "link"
     PARTIAL_LINK = "partial_link"
     ACCESSIBILITY_ID = "accessibility_id"
+    # PlatynUI desktop XPath (ADR-025): namespaces app:/control:/item:/
+    # native:, PascalCase attributes (@Name, @Bounds). Always passes
+    # through unchanged — web prefix heuristics do not apply.
+    PLATYNUI_XPATH = "platynui_xpath"
     AUTO = "auto"   # Let resolver detect strategy from target string
 
 

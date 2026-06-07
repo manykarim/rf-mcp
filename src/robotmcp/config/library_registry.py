@@ -32,6 +32,7 @@ class LibraryCategory(Enum):
     WEB = "web"
     API = "api"
     MOBILE = "mobile"
+    DESKTOP = "desktop"
     DATABASE = "database"
     DATA = "data"
     SYSTEM = "system"

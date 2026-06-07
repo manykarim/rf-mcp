@@ -38,4 +38,6 @@ class SessionLookupAdapter:
         libs = session.imported_libraries
         if any("Appium" in lib for lib in libs):
             return "mobile"
+        if any("platynui" in lib.lower() for lib in libs):
+            return "desktop"
         return "web"

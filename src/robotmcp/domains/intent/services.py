@@ -279,6 +279,11 @@ class IntentResolver:
             if self.registry.has_mapping(intent_verb, "AppiumLibrary"):
                 return "AppiumLibrary"
 
+        # Desktop sessions resolve to PlatynUI.BareMetal (ADR-025)
+        if platform == "desktop":
+            if self.registry.has_mapping(intent_verb, "PlatynUI.BareMetal"):
+                return "PlatynUI.BareMetal"
+
         # Scan imported libraries for any that have this mapping
         for lib in self.session_lookup.get_imported_libraries(session_id):
             if self.registry.has_mapping(intent_verb, lib):

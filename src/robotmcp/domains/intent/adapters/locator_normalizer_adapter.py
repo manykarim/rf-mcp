@@ -47,6 +47,19 @@ class LocatorNormalizerAdapter:
         strategy = "pass_through"
         was_transformed = False
 
+        # PlatynUI descriptors are XPath over the desktop accessibility
+        # tree (namespaces app:/control:/item:/native:). Web locator
+        # heuristics (css/text/link prefixes) do not apply — always pass
+        # through unchanged (ADR-025).
+        if target_library == "PlatynUI.BareMetal":
+            return NormalizedLocator(
+                value=original,
+                source_locator=original,
+                target_library=target_library,
+                strategy_applied="platynui_xpath_pass_through",
+                was_transformed=False,
+            )
+
         # If locator already has a valid prefix for target library, pass through
         if target.has_prefix:
             locator = self._translate_prefix(original, target_library)

@@ -323,6 +323,16 @@ class KeywordExecutor:
         keyword_lower = keyword.lower().strip()
         if keyword_lower not in self.ELEMENT_INTERACTION_KEYWORDS:
             return False
+        # Desktop sessions (PlatynUI, ADR-025): no DOM, no JS probes —
+        # the native runtime handles descriptor resolution with its own
+        # retry. Pre-validation never applies.
+        # (Strict `is True` so MagicMock sessions in tests don't match.)
+        try:
+            checker = getattr(session, "is_desktop_session", None)
+            if callable(checker) and checker() is True:
+                return False
+        except Exception:
+            pass
         # Definitive veto only: if the introspector confidently says the
         # keyword's library has no locator arg, skip pre-validation. None /
         # ambiguous results do NOT veto — preserves the curated list.
@@ -1263,6 +1273,22 @@ class KeywordExecutor:
     ) -> Dict[str, Any]:
         """Inner keyword execution, called under _execution_lock."""
         try:
+            # ADR-025: desktop (PlatynUI) sessions must force the X11
+            # backend BEFORE the first native Runtime is created in this
+            # process — the Wayland portal handshake blocks indefinitely
+            # in headless contexts. Idempotent; opt-out via
+            # ROBOTMCP_PLATYNUI_KEEP_WAYLAND=1.
+            try:
+                _is_desktop = getattr(session, "is_desktop_session", None)
+                if callable(_is_desktop) and _is_desktop() is True:
+                    from robotmcp.plugins.builtin.platynui_plugin import (
+                        ensure_x11_session_env,
+                    )
+
+                    ensure_x11_session_env()
+            except Exception:  # pragma: no cover - defensive
+                pass
+
             # PHASE 1.2: Pre-execution Library Registration
             # Ensure required library is registered before keyword execution
             self._ensure_library_registration(keyword, session)
@@ -1995,6 +2021,17 @@ class KeywordExecutor:
         """
         if not timeout_ms:
             return arguments
+
+        # Desktop sessions (PlatynUI, ADR-025): keywords take descriptor
+        # locators, not timeout= named args. The native runtime applies its
+        # own descriptor-resolution retry (default 30s). Never inject.
+        # (Strict `is True` so MagicMock sessions in tests don't match.)
+        try:
+            checker = getattr(session, "is_desktop_session", None)
+            if callable(checker) and checker() is True:
+                return arguments
+        except Exception:
+            pass
 
         keyword_lower = keyword.lower().replace(" ", "_").replace("-", "_")
 

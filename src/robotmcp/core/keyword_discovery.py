@@ -43,8 +43,19 @@ class KeywordDiscovery:
         for attr_name in dir(instance):
             if attr_name.startswith('_'):
                 continue
-            
+
             try:
+                # Never invoke property getters during discovery — they can
+                # have heavyweight side effects (e.g. PlatynUI's lazy
+                # ``runtime`` property constructs the native Rust runtime,
+                # ADR-025). Properties are never keywords.
+                try:
+                    static_attr = inspect.getattr_static(instance, attr_name)
+                except AttributeError:
+                    static_attr = None
+                if isinstance(static_attr, property):
+                    continue
+
                 attr = getattr(instance, attr_name)
                 if not inspect.isroutine(attr):
                     continue

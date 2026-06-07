@@ -165,6 +165,9 @@ class IntentActionAdapter:
             elif resolved.library == "AppiumLibrary":
                 from ..aggregates import _get_appium_extract_keyword
                 dispatched_keyword = _get_appium_extract_keyword(extract_mode)
+            elif resolved.library == "PlatynUI.BareMetal":
+                from ..aggregates import _get_platynui_extract_keyword
+                dispatched_keyword = _get_platynui_extract_keyword(extract_mode)
 
         # Apply nth-match suffix to the first argument (the locator) when
         # requested. Library-specific syntax handled by _apply_nth_to_locator.

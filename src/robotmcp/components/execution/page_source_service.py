@@ -79,6 +79,19 @@ class PageSourceService:
         """
         page_source = ""
         try:
+            # Desktop sessions (PlatynUI, ADR-025) have no DOM/page source.
+            # Short-circuit to avoid the fallback path attempting web
+            # keywords that don't exist in the session (ERROR log noise).
+            # (Strict `is True` so MagicMock sessions in tests don't match.)
+            is_desktop = getattr(session, "is_desktop_session", None)
+            if callable(is_desktop) and is_desktop() is True:
+                logger.debug(
+                    "Page source skipped for desktop session %s "
+                    "(no DOM; use get_session_state ui_tree section)",
+                    session.session_id,
+                )
+                return ""
+
             from robotmcp.components.execution.rf_native_context_manager import (
                 get_rf_native_context_manager,
             )

@@ -1676,9 +1676,113 @@ Handle WebView
                     "Verify app is properly signed for testing"
                 ]
             }
-        
+
         return analysis
-    
+
+    def get_platynui_locator_guidance(self, error_message: str = None, keyword_name: str = None) -> Dict[str, Any]:
+        """Provide PlatynUI.BareMetal locator (descriptor) guidance for agents.
+
+        PlatynUI (new Rust core, ADR-025) locates desktop UI elements with
+        XPath 2.0-style queries over the accessibility tree (Windows UIA,
+        Linux AT-SPI2). There are NO css=/id=/text= prefixes.
+
+        Args:
+            error_message: Optional error message to analyze
+            keyword_name: Optional keyword name that failed
+
+        Returns:
+            Dict with PlatynUI descriptor syntax guidance
+        """
+        guidance = {
+            "locator_strategies": {
+                "xpath": (
+                    "The ONLY strategy: XPath over the desktop accessibility "
+                    "tree with namespaces app:, control:, item:, native: and "
+                    "PascalCase attributes (@Name, @AutomationId, @Bounds)"
+                ),
+            },
+            "namespaces": {
+                "app": "Applications - e.g., /app:*[@Name='gnome-calculator']",
+                "control": "UI controls - e.g., control:Button, control:Frame, control:Text",
+                "item": "List/tree items - e.g., item:ListItem[@Name='File.txt']",
+                "native": "Technology-specific properties (advanced)",
+            },
+            "common_examples": {
+                "List applications (fast, ~1s)": "Query    /app:*",
+                "App-scoped button": "/app:*[@Name='myapp']//control:Button[@Name='OK']",
+                "Window on Linux (Frame!)": "/app:*[@Name='myapp']//control:Frame",
+                "Window on Windows": "/app:*[@Name='myapp']//control:Window",
+                "By AutomationId": "/app:*[@Name='myapp']//control:*[@AutomationId='submitBtn']",
+                "Scope once, query relative": "Set Root    /app:*[@Name='myapp']",
+            },
+            "performance_rules": [
+                "NEVER start a locator with // (walks the WHOLE desktop tree; "
+                "AT-SPI applies a ~1s timeout per unresponsive node — a busy "
+                "desktop can take minutes)",
+                "ALWAYS scope to an application: /app:*[@Name='X']//...",
+                "Use Set Root once per app, then use shorter relative queries",
+                "List /app:* first to discover exact application names",
+            ],
+            "platform_notes": {
+                "linux": (
+                    "AT-SPI2: top-level windows have role 'Frame' "
+                    "(control:Frame), NOT control:Window. control:Window "
+                    "usually matches only compositor/shell elements."
+                ),
+                "windows": "UIA: top-level windows are control:Window.",
+                "wayland": (
+                    "On Wayland sessions rf-mcp forces the X11/XWayland "
+                    "backend (XDG_SESSION_TYPE=x11) to avoid an interactive "
+                    "xdg-desktop-portal consent dialog that blocks headless "
+                    "runs. Opt out with ROBOTMCP_PLATYNUI_KEEP_WAYLAND=1."
+                ),
+            },
+            "keyboard_sequences": {
+                "description": "Keyboard Type/Press/Release accept chord syntax",
+                "examples": ["Hello World", "<Ctrl+A>", "<Ctrl+C>then more text", "<Enter>"],
+            },
+            "tips": [
+                "Descriptors resolve lazily with retry (default 30s timeout, "
+                "0.1s interval) — no explicit waits needed for appearing elements",
+                "Attributes are PascalCase: @Name, @AutomationId, @ClassName, "
+                "@Bounds, @IsVisible, @IsEnabled",
+                "Get Attribute reads any attribute; mode=text equivalent is "
+                "the 'Name' attribute",
+                "Window keywords (Activate/Maximize/Close Window...) accept "
+                "Frame/Window/Dialog elements alike",
+                "Take Screenshot supports filename=EMBED for log embedding",
+            ],
+        }
+
+        if error_message:
+            analysis = {}
+            error_lower = error_message.lower()
+            if "not found" in error_lower or "no nodes" in error_lower:
+                analysis["element_not_found_suggestions"] = [
+                    "List applications first: Query    /app:*",
+                    "Verify the application Name matches exactly (case-sensitive)",
+                    "On Linux use control:Frame for windows, not control:Window",
+                    "Descend one level at a time to find the right role/Name",
+                    "Use the platynui-cli inspector: platynui-cli snapshot "
+                    "\"/app:*[@Name='myapp']\" --max-depth 3",
+                ]
+            if "timeout" in error_lower or "timed out" in error_lower:
+                analysis["timeout_suggestions"] = [
+                    "Scope the query to one application (/app:*[@Name='X']//...)",
+                    "Avoid unscoped // queries — they walk the whole desktop",
+                    "Reduce tree depth: query intermediate containers first",
+                ]
+            if "import" in error_lower:
+                analysis["installation_guidance"] = [
+                    "PlatynUI.BareMetal and platynui-native must come from the "
+                    "same source commit (preview packages)",
+                    "pip install --pre platynui-native platynui-cli; RF library "
+                    "from source: branch new_core",
+                ]
+            guidance.update(analysis)
+
+        return guidance
+
     def _get_keyword_argument_spec(self, keyword_name: str, library_name: Optional[str] = None):
         """Get Robot Framework ArgumentSpec for a keyword to validate named arguments.
         

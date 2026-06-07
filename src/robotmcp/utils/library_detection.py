@@ -211,6 +211,13 @@ _LIBRARY_TOKENS: Dict[str, List[str]] = {
     "DatabaseLibrary": ["databaselibrary", r"database\s*library"],
     "SSHLibrary": ["sshlibrary", r"ssh\s*library"],
     "XML": ["xmllibrary", r"xml\s*library"],
+    "PlatynUI.BareMetal": [
+        "platynui",
+        r"platynui\.baremetal",
+        r"platynui\s*baremetal",
+        r"platynui[- ]cli",
+        r"platynui[- ]native",
+    ],
 }
 
 
@@ -517,6 +524,27 @@ LIBRARY_RULES_DEFAULT: Dict[str, List[PatternRule]] = {
             5, False, "generic XML mention",
         ),
         PatternRule(r"\bxml\b", 4, False, "bare xml could mean file format"),
+    ],
+    "PlatynUI.BareMetal": [
+        PatternRule(
+            r"\b(use|using|with|via|through|prefer)[^\S\n]+(platynui(?:\.baremetal)?|platynui[^\S\n]*baremetal)\b",
+            10, True, "preference verb + PlatynUI token",
+        ),
+        PatternRule(r"\bplatynui\.baremetal\b", 9, True, "verbatim library name"),
+        PatternRule(r"\bplatynui\b", 8, True, "standalone PlatynUI brand token"),
+        PatternRule(r"\bplatynui[- ](cli|native|inspector)\b", 8, True, "PlatynUI tooling"),
+        # Mention-only (domain markers, NOT explicit preference)
+        PatternRule(
+            r"\bdesktop\s+(automation|testing|ui)\b", 7, False, "domain marker",
+        ),
+        PatternRule(
+            r"\bnative\s+(desktop|app(?:lication)?)\s+(test|automation)",
+            6, False, "generic domain",
+        ),
+        PatternRule(
+            r"\b(windows\s+uia|at[- ]spi2?|accessibility\s+tree)\b",
+            6, False, "desktop accessibility technology",
+        ),
     ],
 }
 

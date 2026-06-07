@@ -87,6 +87,7 @@ class SessionType(Enum):
     DATA_PROCESSING = "data_processing"
     SYSTEM_TESTING = "system_testing"
     MOBILE_TESTING = "mobile_testing"
+    DESKTOP_TESTING = "desktop_testing"
     DATABASE_TESTING = "database_testing"
     VISUAL_TESTING = "visual_testing"
     MIXED = "mixed"
@@ -227,6 +228,16 @@ class ExecutionSession:
     def is_web_session(self) -> bool:
         """Check if this is a web testing session."""
         return self.platform_type == PlatformType.WEB or self.is_browser_session()
+
+    def is_desktop_session(self) -> bool:
+        """Check if this is a native desktop testing session (PlatynUI)."""
+        return (
+            self.platform_type == PlatformType.DESKTOP
+            or self.session_type == SessionType.DESKTOP_TESTING
+            or any(
+                "platynui" in lib.lower() for lib in self.imported_libraries
+            )
+        )
 
     def set_mobile_config(self, config: MobileConfig) -> None:
         """Set mobile configuration for the session."""
@@ -523,6 +534,25 @@ class ExecutionSession:
                 ],
                 description="Mobile application testing with Appium",
             ),
+            SessionType.DESKTOP_TESTING: SessionProfile(
+                session_type=SessionType.DESKTOP_TESTING,
+                core_libraries=["BuiltIn", "PlatynUI.BareMetal", "Collections", "String"],
+                optional_libraries=["OperatingSystem", "Process", "DateTime"],
+                search_order=[
+                    "PlatynUI.BareMetal",
+                    "BuiltIn",
+                    "Collections",
+                    "String",
+                ],
+                keywords_patterns=[
+                    r"\b(desktop|native)\s+(app|application|ui|automation|testing)\b",
+                    r"\b(platynui|baremetal)\b",
+                    r"\b(uia|at-?spi2?|accessibility\s+tree)\b",
+                    r"\b(activate|maximize|minimize|restore|close)\s+window\b",
+                    r"\b(pointer|keyboard)\s+(click|type|press)\b",
+                ],
+                description="Native desktop UI automation with PlatynUI",
+            ),
             SessionType.DATABASE_TESTING: SessionProfile(
                 session_type=SessionType.DATABASE_TESTING,
                 core_libraries=["BuiltIn", "DatabaseLibrary", "Collections", "String"],
@@ -711,6 +741,15 @@ class ExecutionSession:
                 (r"\b(emulator|simulator|real\s+device)\b", 3),
                 (r"\b(APK|IPA|bundle\s+ID|package\s+name)\b", 3),
                 (r"\b(device\s+farm|BrowserStack|Sauce\s+Labs)\b", 3),
+            ],
+            SessionType.DESKTOP_TESTING: [
+                (r"\b(platynui|baremetal)\b", 5),
+                (r"\bdesktop\s+(testing|automation|app|application|ui)\b", 4),
+                (r"\bnative\s+(desktop|app|application|ui)\b", 3),
+                (r"\b(uia|ui\s+automation|at-?spi2?|accessibility\s+tree)\b", 4),
+                (r"\b(activate|maximize|minimize|restore|close)\s+window\b", 3),
+                (r"\b(gnome|kde|gtk|qt|win32|wpf|winforms)\s+(app|application)\b", 3),
+                (r"\b(calculator|notepad|gedit|file\s+manager)\b", 2),
             ],
             SessionType.DATABASE_TESTING: [
                 (r"\b(database|sql|query|table|record)\b", 3),
@@ -1000,6 +1039,15 @@ class ExecutionSession:
             elif self.explicit_library_preference == "AppiumLibrary":
                 self.session_type = SessionType.MOBILE_TESTING
                 return profiles[SessionType.MOBILE_TESTING]
+
+            # Desktop testing libraries (PlatynUI new core, ADR-025)
+            elif self.explicit_library_preference in (
+                "PlatynUI.BareMetal",
+                "PlatynUI",
+            ):
+                self.session_type = SessionType.DESKTOP_TESTING
+                self.platform_type = PlatformType.DESKTOP
+                return profiles[SessionType.DESKTOP_TESTING]
 
             # API testing libraries
             elif self.explicit_library_preference == "RequestsLibrary":

@@ -3818,7 +3818,10 @@ async def get_session_state(
 
     Args:
         session_id: Active session identifier to inspect.
-        sections: Specific data blocks to include (e.g., summary, page_source, variables, application_state).
+        sections: Specific data blocks to include (e.g., summary, page_source, variables, application_state, ui_tree).
+            ui_tree (desktop/PlatynUI sessions only): accessibility-tree snapshot.
+            Lists applications; pass application names via elements_of_interest
+            to expand their subtrees (bounded depth, ADR-025).
         state_type: Type of application state to fetch when requesting application_state (dom|api|database|all).
         elements_of_interest: Targeted element identifiers passed to application state collectors.
         page_source_filtered: When True, returns sanitized/filtered DOM text instead of the full source.
@@ -3891,6 +3894,24 @@ async def get_session_state(
     if "rf_context" in requested or "context" in requested:
         rf_context = await _diagnose_rf_context_payload(session_id)
         payload["sections"]["rf_context"] = rf_context
+
+    if "ui_tree" in requested:
+        # Desktop (PlatynUI) accessibility tree (ADR-025). Application
+        # names passed via elements_of_interest get their subtrees
+        # expanded (bounded depth/children); otherwise lists apps only.
+        from robotmcp.components.execution.ui_tree_service import get_ui_tree
+
+        _session_obj = execution_engine.session_manager.get_session(session_id)
+        if _session_obj is None:
+            payload["sections"]["ui_tree"] = {
+                "success": False,
+                "error": f"Session '{session_id}' not found",
+            }
+        else:
+            payload["sections"]["ui_tree"] = await get_ui_tree(
+                _session_obj,
+                app_filters=elements_of_interest or None,
+            )
 
     # ADR-018: Delta-based state retrieval
     # mode="auto" (default): auto-detect delta when prior version exists
@@ -6281,10 +6302,10 @@ async def get_locator_guidance(
     error_message: str | None = None,
     keyword_name: str | None = None,
 ) -> Dict[str, Any]:
-    """Provide locator/selector guidance for Browser, SeleniumLibrary, or AppiumLibrary.
+    """Provide locator/selector guidance for Browser, SeleniumLibrary, AppiumLibrary, or PlatynUI.BareMetal.
 
     Args:
-        library: Target library ("Browser", "SeleniumLibrary", or "AppiumLibrary"). Case-insensitive.
+        library: Target library ("Browser", "SeleniumLibrary", "AppiumLibrary", or "PlatynUI.BareMetal"). Case-insensitive.
         error_message: Optional error text to tailor guidance (e.g., from a failed keyword).
         keyword_name: Optional keyword name for context-specific hints.
 
@@ -6319,9 +6340,15 @@ async def get_locator_guidance(
         result.setdefault("success", True)
         return result
 
+    if lib_norm in {"platynui", "platynui.baremetal", "platynui-cli", "baremetal"}:
+        result = converter.get_platynui_locator_guidance(error_message, keyword_name)
+        result["library"] = "PlatynUI.BareMetal"
+        result.setdefault("success", True)
+        return result
+
     return {
         "success": False,
-        "error": f"Unsupported library '{library}'. Choose Browser, SeleniumLibrary, or AppiumLibrary.",
+        "error": f"Unsupported library '{library}'. Choose Browser, SeleniumLibrary, AppiumLibrary, or PlatynUI.BareMetal.",
     }
 
 

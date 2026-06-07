@@ -103,6 +103,47 @@ WAIT_KEYWORDS: Set[str] = {
     "wait",
 }
 
+# PlatynUI.BareMetal desktop keyword sets (new core, ADR-025).
+# Desktop sessions skip timeout *injection* entirely (the native runtime
+# handles its own descriptor-resolution retry, default 30s), but the
+# classification keeps observability/metrics consistent.
+
+# Pointer + window management + focus -> CLICK (element action)
+PLATYNUI_ACTION_KEYWORDS: Set[str] = {
+    "pointer_click",
+    "pointer_multi_click",
+    "pointer_press",
+    "pointer_release",
+    "pointer_move_to",
+    "activate_window",
+    "maximize_window",
+    "minimize_window",
+    "restore_window",
+    "close_window",
+    "move_window",
+    "resize_window",
+    "move_and_resize_window",
+    "bring_to_front",
+    "focus",
+}
+
+# Keyboard input -> FILL
+PLATYNUI_KEYBOARD_KEYWORDS: Set[str] = {
+    "keyboard_type",
+    "keyboard_press",
+    "keyboard_release",
+}
+
+# Reads / inspection -> GET_TEXT ("query", "get_attribute",
+# "take_screenshot" overlap with the generic READ set; listed for
+# completeness and explicit ownership)
+PLATYNUI_READ_KEYWORDS: Set[str] = {
+    "query",
+    "set_root",
+    "get_pointer_position",
+    "highlight",
+}
+
 # Mapping from keyword sets to ActionType
 _KEYWORD_TO_ACTION: Dict[str, ActionType] = {}
 
@@ -128,6 +169,17 @@ def _build_keyword_mapping() -> None:
 
     for keyword in WAIT_KEYWORDS:
         _KEYWORD_TO_ACTION[keyword] = ActionType.WAIT_FOR_ELEMENT
+
+    # PlatynUI desktop sets (processed last so explicit ownership wins
+    # over the generic sets for any name overlap)
+    for keyword in PLATYNUI_ACTION_KEYWORDS:
+        _KEYWORD_TO_ACTION[keyword] = ActionType.CLICK
+
+    for keyword in PLATYNUI_KEYBOARD_KEYWORDS:
+        _KEYWORD_TO_ACTION[keyword] = ActionType.FILL
+
+    for keyword in PLATYNUI_READ_KEYWORDS:
+        _KEYWORD_TO_ACTION[keyword] = ActionType.GET_TEXT
 
 
 # Build mapping on module load

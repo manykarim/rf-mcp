@@ -74,8 +74,9 @@ class TestIntentVerb:
 class TestLocatorStrategy:
     """Test LocatorStrategy enum."""
 
-    def test_has_exactly_9_values(self):
-        assert len(LocatorStrategy) == 9
+    def test_has_exactly_10_values(self):
+        # ADR-025 added PLATYNUI_XPATH (desktop accessibility-tree XPath)
+        assert len(LocatorStrategy) == 10
 
     def test_includes_auto(self):
         assert LocatorStrategy.AUTO.value == "auto"

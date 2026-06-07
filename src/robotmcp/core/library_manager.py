@@ -178,6 +178,21 @@ class LibraryManager:
 
     def try_import_library(self, library_name: str, keyword_extractor) -> bool:
         """Try to import and initialize a Robot Framework library."""
+        # ADR-025: PlatynUI resolves the Linux session type ONCE per process
+        # and caches it. Force the X11 backend BEFORE the library is
+        # imported/instantiated — anything that touches the native runtime
+        # afterwards (discovery, keywords) would otherwise initialize the
+        # Wayland portal path, which blocks/fails in headless contexts.
+        if "platynui" in library_name.lower():
+            try:
+                from robotmcp.plugins.builtin.platynui_plugin import (
+                    ensure_x11_session_env,
+                )
+
+                ensure_x11_session_env()
+            except Exception:  # pragma: no cover - defensive
+                pass
+
         # Check exclusion groups before loading
         can_load, reason = self._check_exclusion_group(library_name)
         if not can_load:

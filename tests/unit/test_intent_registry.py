@@ -202,9 +202,15 @@ class TestGetSupportedIntents:
 class TestGetSupportedLibraries:
     """Test library enumeration."""
 
-    def test_returns_three_libraries(self, registry):
+    def test_returns_four_libraries(self, registry):
+        # ADR-025 added PlatynUI.BareMetal (desktop, new Rust core)
         libs = registry.get_supported_libraries()
-        assert libs == {"Browser", "SeleniumLibrary", "AppiumLibrary"}
+        assert libs == {
+            "Browser",
+            "SeleniumLibrary",
+            "AppiumLibrary",
+            "PlatynUI.BareMetal",
+        }
 
 
 # =============================================================================

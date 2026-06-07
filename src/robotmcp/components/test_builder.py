@@ -2088,6 +2088,24 @@ class TestBuilder:
         setup = None
         teardown = None
 
+        # Desktop (PlatynUI) steps must never get browser teardown —
+        # their keywords ("Pointer Click", "Keyboard Type") would
+        # otherwise match the generic web-action heuristics below and
+        # produce an invalid `Close Browser` teardown (ADR-025).
+        _desktop_keywords = (
+            "pointer click", "pointer multi click", "pointer press",
+            "pointer release", "pointer move to", "keyboard type",
+            "keyboard press", "keyboard release", "activate window",
+            "maximize window", "minimize window", "restore window",
+            "close window", "move window", "resize window",
+            "move and resize window", "bring to front", "set root",
+        )
+        if any(
+            step.keyword.lower().split(".")[-1].strip() in _desktop_keywords
+            for step in steps
+        ):
+            return setup, teardown
+
         # Check if we need browser cleanup
         has_browser_actions = any(
             "browser" in step.keyword.lower()

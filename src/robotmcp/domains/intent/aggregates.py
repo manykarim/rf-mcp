@@ -148,6 +148,7 @@ class IntentRegistry:
         registry.register_all(_builtin_browser_mappings())
         registry.register_all(_builtin_selenium_mappings())
         registry.register_all(_builtin_appium_mappings())
+        registry.register_all(_builtin_platynui_mappings())
         for seq in _builtin_navigate_fallbacks():
             registry.register_navigate_fallback(seq)
         return registry
@@ -343,6 +344,57 @@ def _get_appium_extract_keyword(mode: str) -> str:
     extract to web sessions; this is a defensive fallback.
     """
     return _APPIUM_EXTRACT_KEYWORDS.get((mode or "text").lower(), "Get Text")
+
+
+def _get_platynui_extract_keyword(mode: str) -> str:
+    """Map an extract mode to its PlatynUI.BareMetal keyword (ADR-025).
+
+    Desktop has no url/title/value/count reads — everything is an
+    accessibility-tree attribute read via ``Get Attribute``. mode=text
+    reads the ``Name`` attribute (the accessible label/content).
+    """
+    return "Get Attribute"
+
+
+def _extract_platynui_transformer(target, value, normalized_locator, options):
+    """PlatynUI.BareMetal extract: builds Get Attribute args by mode.
+
+    Per-mode argument shapes:
+        text:      [descriptor, "Name"]   — accessible name/label
+        attribute: [descriptor, <attribute_name>]
+        (other modes fall back to text — no DOM/url/title on desktop)
+
+    Raises:
+        ValueError: when no target descriptor is provided, or when
+            mode=attribute is used without ``options["attribute_name"]``.
+    """
+    opts = options or {}
+    mode = (opts.get("mode") or "text").lower()
+
+    locator: Optional[str] = None
+    if normalized_locator is not None:
+        locator = normalized_locator.value
+    elif target is not None:
+        locator = target.locator
+    if locator is None:
+        raise ValueError(
+            f"intent_action(intent='extract', mode='{mode}') requires a "
+            f"target descriptor for PlatynUI (XPath like "
+            f"/app:*[@Name='myapp']//control:Button[@Name='OK'])."
+        )
+
+    if mode == "attribute":
+        attribute_name = opts.get("attribute_name")
+        if not attribute_name:
+            raise ValueError(
+                "intent_action(intent='extract', mode='attribute') requires "
+                "options['attribute_name'] (e.g. 'Bounds', 'IsVisible', "
+                "'AutomationId')."
+            )
+        return [locator, attribute_name]
+
+    # text and all defensive fallbacks read the accessible Name
+    return [locator, "Name"]
 
 
 def _extract_browser_transformer(target, value, normalized_locator, options):
@@ -715,6 +767,109 @@ def _builtin_appium_mappings() -> List[IntentMapping]:
             requires_value=False,
             argument_transformer=_wait_for_selenium_transformer,  # same arg shape
             timeout_category="assertion",
+        ),
+    ]
+
+
+def _builtin_platynui_mappings() -> List[IntentMapping]:
+    """Built-in mappings for PlatynUI.BareMetal (desktop, ADR-025).
+
+    Covers the verbs that translate to the new-core 24-keyword surface.
+    Deliberately NOT mapped (use execute_step directly):
+        NAVIGATE — desktop apps have no URLs
+        SELECT   — no first-class dropdown-select keyword in BareMetal
+    Window management (Activate/Maximize/Minimize/Restore/Close/Move/
+    Resize Window, Bring To Front) is intentionally outside the small
+    intent verb set; call those keywords via execute_step.
+
+    Locators are PlatynUI XPath descriptors. ALWAYS app-scoped:
+    /app:*[@Name='myapp']//control:Button[@Name='OK'] — unscoped //
+    queries walk the whole desktop tree (~1s per sluggish AT-SPI node).
+    """
+    return [
+        IntentMapping(
+            intent_verb=IntentVerb.CLICK,
+            library="PlatynUI.BareMetal",
+            keyword="Pointer Click",
+            requires_target=True,
+            requires_value=False,
+            timeout_category="action",
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.FILL,
+            library="PlatynUI.BareMetal",
+            keyword="Keyboard Type",
+            requires_target=True,
+            requires_value=True,
+            timeout_category="action",
+            notes=(
+                "Keyboard Type focuses the descriptor then types. Sequence "
+                "syntax supports chords: <Ctrl+A>Hello<Enter>."
+            ),
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.HOVER,
+            library="PlatynUI.BareMetal",
+            keyword="Pointer Move To",
+            requires_target=True,
+            requires_value=False,
+            timeout_category="action",
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.ASSERT_VISIBLE,
+            library="PlatynUI.BareMetal",
+            keyword="Query",
+            requires_target=True,
+            requires_value=False,
+            argument_transformer=lambda target, value, normalized_locator, options: [
+                (normalized_locator.value if normalized_locator else target.locator),
+                "only_first=True",
+            ],
+            timeout_category="assertion",
+            notes=(
+                "Existence assertion: Query with only_first=True raises "
+                "ElementNotFoundError when nothing matches (descriptor "
+                "resolution retries up to the query timeout, default 30s)."
+            ),
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.EXTRACT_TEXT,
+            library="PlatynUI.BareMetal",
+            keyword="Get Attribute",
+            requires_target=True,
+            requires_value=False,
+            argument_transformer=lambda target, value, normalized_locator, options: [
+                (normalized_locator.value if normalized_locator else target.locator),
+                "Name",
+            ],
+            timeout_category="read",
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.EXTRACT,
+            library="PlatynUI.BareMetal",
+            keyword="Get Attribute",
+            requires_target=False,
+            requires_value=False,
+            argument_transformer=_extract_platynui_transformer,
+            timeout_category="read",
+            notes=(
+                "OBS-06. mode={text,attribute} supported; text reads the "
+                "accessible Name attribute. count/value/url/title are not "
+                "first-class on desktop and fall back to text."
+            ),
+        ),
+        IntentMapping(
+            intent_verb=IntentVerb.WAIT_FOR,
+            library="PlatynUI.BareMetal",
+            keyword="Query",
+            requires_target=True,
+            requires_value=False,
+            argument_transformer=lambda target, value, normalized_locator, options: [
+                (normalized_locator.value if normalized_locator else target.locator),
+                "only_first=True",
+            ],
+            timeout_category="assertion",
+            notes="Descriptor resolution retries built-in (default 30s).",
         ),
     ]
 
