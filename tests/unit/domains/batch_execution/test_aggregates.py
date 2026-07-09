@@ -145,6 +145,46 @@ class TestBatchExecutionCreate:
         assert batch.steps[2].assign_to == "val2"
 
 
+# ── execute_batch arguments/args compatibility (D5) ──────────────────
+
+
+class TestBatchStepArgumentCompat:
+    """A batch step's positional arguments may be given as ``args`` or the
+    canonical ``arguments`` key (parity with execute_step). Conflicting
+    dual-specification is rejected rather than silently shadowed."""
+
+    def test_arguments_key_used(self):
+        batch = _make_batch(steps_data=[{"keyword": "Log", "arguments": ["hello"]}])
+        assert batch.steps[0].args == ["hello"]
+
+    def test_args_key_used(self):
+        batch = _make_batch(steps_data=[{"keyword": "Log", "args": ["hello"]}])
+        assert batch.steps[0].args == ["hello"]
+
+    def test_both_keys_equal_accepted(self):
+        batch = _make_batch(steps_data=[
+            {"keyword": "Log", "args": ["x"], "arguments": ["x"]},
+        ])
+        assert batch.steps[0].args == ["x"]
+
+    def test_conflicting_keys_rejected(self):
+        with pytest.raises(ValueError, match="conflicting 'args' and 'arguments'"):
+            _make_batch(steps_data=[
+                {"keyword": "Log", "args": ["x"], "arguments": ["y"]},
+            ])
+
+    def test_neither_key_is_empty(self):
+        batch = _make_batch(steps_data=[{"keyword": "No Operation"}])
+        assert batch.steps[0].args == []
+
+    def test_arguments_canonical_when_only_arguments(self):
+        # arguments-only step (the exact failure from the maintainer report #8)
+        batch = _make_batch(steps_data=[
+            {"keyword": "Should Be Equal", "arguments": ["1", "1"]},
+        ])
+        assert batch.steps[0].args == ["1", "1"]
+
+
 # ── BatchExecution post_init ─────────────────────────────────────────
 
 

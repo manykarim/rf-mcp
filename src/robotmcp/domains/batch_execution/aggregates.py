@@ -86,8 +86,10 @@ class BatchExecution:
 
         Args:
             session_id: The MCP session to execute within
-            steps_data: List of step dicts with ``keyword``, ``args``,
-                optional ``label`` and ``timeout``
+            steps_data: List of step dicts with ``keyword``, positional
+                arguments under ``arguments`` (canonical) or ``args``,
+                optional ``label`` and ``timeout``. Supplying both
+                ``args`` and ``arguments`` with different values is rejected.
             on_failure: Failure policy name (``stop``, ``retry``, ``recover``)
             max_recovery_attempts: Max recovery attempts per step (1-10)
             timeout_ms: Total batch timeout in milliseconds (1000-600000)
@@ -107,7 +109,7 @@ class BatchExecution:
             steps.append(BatchStep(
                 index=i,
                 keyword=s["keyword"],
-                args=list(s.get("args", [])),
+                args=cls._resolve_step_args(s, i),
                 label=s.get("label"),
                 timeout=step_timeout,
                 assign_to=s.get("assign_to"),
@@ -125,6 +127,37 @@ class BatchExecution:
             max_recovery_attempts=limit,
             timeout=timeout,
         )
+
+    @staticmethod
+    def _resolve_step_args(step: Dict[str, Any], index: int) -> List[Any]:
+        """Resolve a batch step's positional arguments from ``args`` or
+        ``arguments``.
+
+        ``arguments`` is the canonical key (parity with ``execute_step``).
+        Compatibility rules:
+        - only one key present -> use it
+        - both present and equal -> accept
+        - both present and DIFFERENT -> ValueError (no silent shadowing)
+        - neither present -> empty list
+        """
+        has_args = "args" in step and step.get("args") is not None
+        has_arguments = "arguments" in step and step.get("arguments") is not None
+
+        if has_args and has_arguments:
+            a = list(step.get("args") or [])
+            b = list(step.get("arguments") or [])
+            if a != b:
+                raise ValueError(
+                    f"Step {index}: conflicting 'args' and 'arguments' "
+                    f"({a!r} != {b!r}). Provide only one (the canonical key is "
+                    f"'arguments') or make them equal."
+                )
+            return b
+        if has_arguments:
+            return list(step.get("arguments") or [])
+        if has_args:
+            return list(step.get("args") or [])
+        return []
 
     # ------------------------------------------------------------------
     # Clock management
