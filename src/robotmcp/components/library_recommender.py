@@ -56,6 +56,22 @@ class LibraryRecommender:
         'web_automation': ['Browser', 'SeleniumLibrary'],
     }
 
+    # Library name aliases (short name -> canonical registry name).
+    LIBRARY_ALIASES = {
+        'platynui': 'PlatynUI.BareMetal',
+    }
+
+    @classmethod
+    def resolve_library_alias(cls, name: Optional[str]) -> Optional[str]:
+        """Resolve a short/alias library name to its canonical registry name.
+
+        e.g. ``PlatynUI`` -> ``PlatynUI.BareMetal``. Returns the input
+        unchanged when it is not a known alias.
+        """
+        if not name:
+            return name
+        return cls.LIBRARY_ALIASES.get(name.strip().lower(), name)
+
     def __init__(self):
         self.libraries_registry: Dict[str, LibraryInfo] = {}
         self.use_case_mapping: Dict[str, Set[str]] = {}
@@ -126,7 +142,12 @@ class LibraryRecommender:
         """
         try:
             self._initialize_registry()
-            
+
+            # Resolve a short alias (e.g. "PlatynUI" -> "PlatynUI.BareMetal")
+            explicit_library_preference = self.resolve_library_alias(
+                explicit_library_preference
+            )
+
             # Normalize scenario text
             normalized_scenario = self._normalize_text(scenario)
             
@@ -216,6 +237,19 @@ class LibraryRecommender:
         ctx = (context or '').lower().strip()
         kws = set((kw or '').lower() for kw in scenario_keywords)
 
+        # Native-desktop libraries must not leak into non-desktop contexts
+        # unless the scenario explicitly mentions desktop terms (prevents a
+        # regression where PlatynUI/FlaUI surface for web/mobile/api flows).
+        if ctx != 'desktop':
+            allow_desktop = any(
+                k in kws for k in {'desktop', 'platynui', 'gnome', 'native', 'gtk', 'qt', 'win32'}
+            )
+            if not allow_desktop:
+                _desktop_native = {
+                    'PlatynUI.BareMetal', 'FlaUILibrary', 'ImageHorizonLibrary', 'SikuliLibrary'
+                }
+                recs = [r for r in recs if r.library.name not in _desktop_native]
+
         if ctx == 'web':
             # Exclude mobile unless scenario mentions mobile terms
             allow_mobile = any(k in kws for k in {'mobile', 'android', 'ios', 'app'})
@@ -250,6 +284,23 @@ class LibraryRecommender:
             for r in recs:
                 name = r.library.name
                 if name in {"Browser", "SeleniumLibrary"}:
+                    continue
+                filtered.append(r)
+            return filtered
+
+        if ctx == 'desktop':
+            # For desktop (native UI) context, exclude web and mobile automation
+            # libraries unless the scenario explicitly asks for them, so a Linux
+            # desktop scenario is not steered to Appium/Browser. The generic
+            # "app" token does NOT enable mobile here (a desktop "application").
+            allow_web = any(k in kws for k in {'browser', 'web', 'page', 'url', 'website'})
+            allow_mobile = any(k in kws for k in {'mobile', 'android', 'ios', 'appium', 'device'})
+            filtered: List['LibraryRecommendation'] = []
+            for r in recs:
+                name = r.library.name
+                if name in {"Browser", "SeleniumLibrary"} and not allow_web:
+                    continue
+                if name == "AppiumLibrary" and not allow_mobile:
                     continue
                 filtered.append(r)
             return filtered
@@ -333,6 +384,13 @@ class LibraryRecommender:
             recs = [r for r in recs if r.library.name != 'Browser']
             # Ensure AppiumLibrary is first if present
             recs.sort(key=lambda r: 0 if r.library.name == 'AppiumLibrary' else 1)
+        elif ctx == 'desktop':
+            names = [r.library.name for r in recs]
+            if 'PlatynUI.BareMetal' in names:
+                # Native desktop leads; drop Appium (mobile) so it never
+                # outranks PlatynUI for a Linux desktop scenario.
+                recs = [r for r in recs if r.library.name != 'AppiumLibrary']
+                recs.sort(key=lambda r: 0 if r.library.name == 'PlatynUI.BareMetal' else 1)
         return recs
 
     def _apply_strict_exclusions(self, recommendations: List[LibraryRecommendation]) -> List[LibraryRecommendation]:
@@ -493,7 +551,7 @@ class LibraryRecommender:
             'mobile': ['mobile', 'app'],
             'api': ['api', 'http', 'rest'], 
             'database': ['database', 'data'],
-            'desktop': ['gui', 'windows', 'visual'],
+            'desktop': ['desktop', 'gui', 'windows', 'visual'],
             'system': ['system', 'network']
         }
         
@@ -522,7 +580,9 @@ class LibraryRecommender:
             'mobile': ['AppiumLibrary'],
             'api': ['RequestsLibrary', 'REST'],
             'database': ['DatabaseLibrary'],
-            'desktop': ['FlaUILibrary', 'ImageHorizonLibrary', 'SikuliLibrary'],
+            # PlatynUI.BareMetal (native desktop, new Rust core) leads desktop
+            # so a Linux/GNOME desktop scenario is not routed to mobile/Appium.
+            'desktop': ['PlatynUI.BareMetal', 'FlaUILibrary', 'ImageHorizonLibrary', 'SikuliLibrary'],
             'system': ['SSHLibrary', 'Process', 'OperatingSystem'],
             'visual': ['DocTest.VisualTest', 'DocTest.PdfTest', 'Screenshot'],
             'enterprise': ['RoboSAPiens'],
