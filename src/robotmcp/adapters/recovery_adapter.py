@@ -32,13 +32,29 @@ class RecoveryServiceAdapter:
         engine: RecoveryEngine,
         keyword_runner: KeywordRunner,
         page_state: Optional[PageStateCapture] = None,
+        session_manager: Optional[Any] = None,
     ):
         self._engine = engine
+        # Used to resolve the recovery platform (web vs desktop) so a desktop
+        # batch gets desktop strategies, never browser ones (change:
+        # desktop-aware-batch-execution).
+        self._session_manager = session_manager
         self._classifier = ErrorClassifier(engine=engine)
         self._tier1 = Tier1RecoveryService(keyword_runner=keyword_runner)
         self._tier2 = Tier2RecoveryService(
             keyword_runner=keyword_runner, page_state=page_state
         )
+
+    def _resolve_platform(self, session_id: str) -> str:
+        """Return "desktop" for a PlatynUI session, else "web" (default)."""
+        try:
+            if self._session_manager is not None:
+                sess = self._session_manager.get_session(session_id)
+                if sess is not None and sess.is_desktop_session():
+                    return "desktop"
+        except Exception:
+            pass
+        return "web"
 
     async def attempt_recovery(
         self, session_id: str, keyword: str, args: List[str],
@@ -51,8 +67,12 @@ class RecoveryServiceAdapter:
         classification = self._classifier.classify(error_message)
         logger.debug("Error classified as %s", classification.value)
 
-        # 2. Select strategy
-        strategy = self._engine.select_strategy(classification, attempt_number)
+        # 2. Select strategy (platform-aware: desktop sessions must never get
+        #    browser recovery actions — change: desktop-aware-batch-execution).
+        platform = self._resolve_platform(session_id)
+        strategy = self._engine.select_strategy(
+            classification, attempt_number, platform=platform
+        )
         if strategy is None:
             logger.debug("No recovery strategy for %s", classification.value)
             return None

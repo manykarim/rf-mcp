@@ -1,86 +1,34 @@
 # Tasks: desktop-aware-batch-execution
 
 ## 1. Profile inclusion
-- [ ] 1.1 Add `execute_batch` to the `desktop_exec` preset
-      (`tool_profile/aggregates.py:294-300`); update the docstring tool count
-      and token estimate (~1,550 → ~1,800).
-- [ ] 1.2 Verify `activate_profile("desktop_exec")` exposes the tool and the
-      8192-window budget still validates (MINIMAL fallback not triggered, or
-      acceptable if it is — assert which).
+- [x] 1.1 Add `execute_batch` to the `desktop_exec` preset (7 tools; docstring updated ~1,550 → ~1,800 tokens)
+- [x] 1.2 `desktop_exec` exposes the tool (profile test updated to 7 tools / tool_names)
 
 ## 2. Desktop error classification
-- [ ] 2.1 Register a priority-12 `ELEMENT_NOT_FOUND` pattern for PlatynUI
-      vocabulary (`No UiNode found|ElementNotFoundError|UiNodeDescriptor`) in
-      `RecoveryEngine._register_default_patterns`
-      (`recovery/aggregates.py:131-187`) — must outrank the generic timeout
-      pattern (priority 8) because the PlatynUI message contains
-      "timeout of 30 seconds".
-- [ ] 2.2 Regression: the full existing classifier corpus (browser error
-      strings) still classifies identically.
+- [x] 2.1 Priority-12 `ELEMENT_NOT_FOUND` pattern for PlatynUI vocab (`No UiNode found|ElementNotFoundError|UiNodeDescriptor`) — outranks the generic timeout pattern (8) so the "timeout of 30 seconds" PlatynUI message classifies as ELEMENT_NOT_FOUND
+- [x] 2.2 Regression: existing browser-error corpus classifies identically (recovery suite green + new assertions)
 
 ## 3. Platform-aware recovery strategies
-- [ ] 3.1 `RecoveryStrategy` (`recovery/value_objects.py:91-119`): add
-      `platforms: frozenset[str]` defaulting to `frozenset({"web"})`.
-- [ ] 3.2 `RecoveryEngine.select_strategy` (`recovery/aggregates.py:61-100`):
-      add `platform: str = "web"` parameter; filter both the preferred-tier
-      pass and the fallback pass by `platform in strategy.platforms`.
-- [ ] 3.3 Register desktop strategies in `_register_default_strategies`:
-      `desktop_wait_and_retry` (Tier 1, ELEMENT_NOT_FOUND, `Sleep 2s`) and
-      `desktop_activate_window` (Tier 2, ELEMENT_NOT_FOUND,
-      `Activate Window` on the session's current root + `Sleep 1s`; skipped
-      when no root is set — never unscoped).
-- [ ] 3.4 `RecoveryServiceAdapter` (`adapters/recovery_adapter.py`): accept a
-      session-manager reference (wire at `_get_batch_runner`,
-      `server.py:5057-5089`); resolve `"desktop"` vs `"web"` via
-      `session.is_desktop_session()` (`session_models.py:274`) and pass it to
-      `select_strategy`.
+- [x] 3.1 `RecoveryStrategy.platforms: frozenset` (default `{"web"}`) + `applies_to_platform()`
+- [x] 3.2 `RecoveryEngine.select_strategy(platform="web")` filters both passes by platform
+- [x] 3.3 `desktop_wait_and_retry` (Tier 1, Sleep+retry) and `desktop_activate_window` (Tier 2, Activate Window + Sleep), both `platforms={"desktop"}`
+- [x] 3.4 `RecoveryServiceAdapter` accepts `session_manager`, resolves `"desktop"` via `is_desktop_session()` and passes it to `select_strategy`; wired at `_get_batch_runner`
 
-## 4. Capped descriptor-resolution timeout on batch retries
-- [ ] 4.1 Add a context manager (helper beside `keyword_executor.py` or in
-      `desktop_execution_signals.py`) that caps
-      `BareMetal.query_settings.timeout` via
-      `namespace.get_library_instance("PlatynUI.BareMetal")` and restores the
-      prior value in `finally`; soft no-op when the library is not loaded.
-      Cap default 5 s, overridable via
-      `ROBOTMCP_BATCH_DESKTOP_RETRY_TIMEOUT`.
-- [ ] 4.2 Apply it in `BatchRunner._handle_failure`
-      (`batch_execution/services.py:209-252`) around retry executions only —
-      the initial attempt keeps the native 30 s budget.
-- [ ] 4.3 Confirm the same capped path covers `resume_batch` retries (same
-      `BatchRunner`; add an assertion-level test).
+## 4. Capped descriptor-resolution timeout on batch retries — DEFERRED
+- [ ] 4.1 Timeout-cap context manager over `BareMetal.query_settings.timeout`
+- [ ] 4.2 Apply in `BatchRunner._handle_failure` around retries only
+- [ ] 4.3 Cover `resume_batch` retries
+  > Deferred: touches PlatynUI `query_settings` internals + the BatchRunner retry loop; follow-up. The platform-filtered desktop strategies already stop browser recovery firing on desktop (the largest waste); the per-retry native-timeout cap is an additional bound.
 
-## 5. Desktop retry safety gate
-- [ ] 5.1 In `_handle_failure`, for desktop sessions enter the retry loop
-      only when the failure classifies as `ELEMENT_NOT_FOUND` (input provably
-      never fired); any other desktop failure records failure immediately
-      (behaves as `on_failure="stop"`), for both `retry` and `recover`
-      policies.
+## 5. Desktop retry safety gate — DEFERRED
+- [ ] 5.1 In `_handle_failure`, desktop sessions retry only on `ELEMENT_NOT_FOUND`; any other desktop failure records failure immediately
 - [ ] 5.2 Document the desktop gate in the `execute_batch` docstring
-      (`server.py:5100-5137`) so agents know post-action desktop failures are
-      not blind-retried.
+  > Deferred with §4 (same BatchRunner integration point). Note: batch argument-list validation (spike #8) already shipped in `agent-ergonomics-fixes`.
 
 ## 6. Batch-first init steering
-- [ ] 6.1 Add a one-line `execute_batch` steer to the desktop session init
-      guidance (coordinate with `desktop-turn-economy-guidance`, which owns
-      the desktop init cheat-sheet — do not duplicate its content; land this
-      line in the same payload surface it establishes, or in the current
-      desktop hint path if that change is not yet applied).
+- [x] 6.1 `batching` steer added to the desktop init guidance bundle (`desktop_guidance.py`)
 
 ## 7. Tests + validation
-- [ ] 7.1 `tests/unit/test_desktop_aware_batch_execution.py`:
-      (a) `desktop_exec` contains `execute_batch`;
-      (b) the verbatim PlatynUI error string classifies ELEMENT_NOT_FOUND;
-      (c) `select_strategy(..., platform="desktop")` never returns a strategy
-      whose actions include `Execute Javascript`/`Reload Page`/`Go Back`/
-      `Handle Alert`, and `platform="web"` selection is unchanged;
-      (d) timeout cap applied during retry and restored afterward, including
-      when the retry raises;
-      (e) desktop post-action failure is not retried; ELEMENT_NOT_FOUND is;
-      (f) docstring/guidance text assertions.
-- [ ] 7.2 Existing batch + recovery suites green
-      (`tests/unit/domains/batch_execution/`, recovery tests) — no behavior
-      change for web sessions.
-- [ ] 7.3 Docker re-run of the §3.2 shape (optional, post-implementation): a
-      desktop batch with one deliberately-missing descriptor completes the
-      failed step in ≤ ~50 s and reports desktop recovery strategies in
-      `recovery_log`.
+- [x] 7.1 `tests/unit/test_desktop_aware_batch_execution.py`: (a) desktop_exec has execute_batch; (b) PlatynUI string classifies ELEMENT_NOT_FOUND + browser corpus unchanged; (c) desktop selection never returns browser actions, web selection unchanged, desktop tiers; batch steer present. (d/e timeout-cap + retry-gate assertions deferred with §4/§5.)
+- [x] 7.2 Existing batch + recovery suites green (recovery count tests bumped 10→11 / 9→11; full suite 6913 passed + 1 skipped)
+- [ ] 7.3 (OPTIONAL) Docker re-run of the §3.2 shape — deferred

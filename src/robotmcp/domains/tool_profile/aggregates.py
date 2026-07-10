@@ -286,15 +286,18 @@ class ProfilePresets:
 
     @classmethod
     def desktop_exec(cls) -> ToolProfile:
-        """6-tool profile for desktop automation on small-context models.
+        """7-tool profile for desktop automation on small-context models.
 
-        Estimated ~1,550 tokens (compact descriptions, includes
-        ``build_test_suite`` for end-of-workflow suite generation).
+        Estimated ~1,800 tokens (compact descriptions, includes
+        ``build_test_suite`` for end-of-workflow suite generation and
+        ``execute_batch`` — desktop interaction is turn-intensive, so batching
+        the round-trips is exactly what constrained models need; change:
+        desktop-aware-batch-execution).
         """
         return ToolProfile(
             name="desktop_exec",
             tool_names=frozenset({
-                "manage_session", "execute_step",
+                "manage_session", "execute_step", "execute_batch",
                 "get_session_state", "find_keywords",
                 "intent_action", "build_test_suite",
             }),

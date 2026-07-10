@@ -93,5 +93,7 @@ def get_desktop_guidance() -> Optional[Dict[str, Any]]:
             "keywords": cheat_sheet,  # compact one-line signatures (name first)
             "locator_crib": _LOCATOR_CRIB,
             "note": "Desktop keyword surface + locator rules — use these instead of find_keywords; call get_locator_guidance for the full cookbook.",
+            # change: desktop-aware-batch-execution
+            "batching": "Desktop interaction is turn-intensive — once you know the keywords/locators, collapse a sequence into ONE execute_batch call (e.g. Start Process -> Query frame -> Set Root -> clicks -> Get Attribute). Desktop batch failures recover with desktop strategies, not browser ones.",
         }
         return _cached_bundle

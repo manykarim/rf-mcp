@@ -62,6 +62,7 @@ class RecoveryEngine:
         self,
         classification: ErrorClassification,
         attempt_number: int = 1,
+        platform: str = "web",
     ) -> Optional[RecoveryStrategy]:
         """Select best strategy for an error classification and attempt number.
 
@@ -87,14 +88,19 @@ class RecoveryEngine:
             RecoveryTier.TIER_1 if attempt_number <= 1 else RecoveryTier.TIER_2
         )
 
-        # Try preferred tier first
+        # Try preferred tier first (platform-filtered so desktop sessions never
+        # get browser-only recovery actions, and vice versa).
         for strategy in self._strategies.values():
-            if strategy.tier == preferred_tier and strategy.applies_to(classification):
+            if (
+                strategy.tier == preferred_tier
+                and strategy.applies_to(classification)
+                and strategy.applies_to_platform(platform)
+            ):
                 return strategy
 
-        # Fallback to any tier
+        # Fallback to any tier (still platform-filtered)
         for strategy in self._strategies.values():
-            if strategy.applies_to(classification):
+            if strategy.applies_to(classification) and strategy.applies_to_platform(platform):
                 return strategy
 
         return None
@@ -136,6 +142,15 @@ class RecoveryEngine:
                 ErrorClassification.UNKNOWN,
                 r"Variable\s+'[^']+'\s+not found",
                 15,
+            ),
+            # PlatynUI (desktop) element-resolution errors — priority 12 so they
+            # outrank the generic timeout pattern (8): the PlatynUI message
+            # contains "timeout of 30 seconds" and would otherwise misclassify as
+            # TIMEOUT_EXCEPTION (change: desktop-aware-batch-execution).
+            (
+                ErrorClassification.ELEMENT_NOT_FOUND,
+                r"No UiNode found|ElementNotFoundError|UiNodeDescriptor",
+                12,
             ),
             # Tier 1: Element-level errors (priority 10)
             (
@@ -199,7 +214,46 @@ class RecoveryEngine:
         Tier 2 strategies are context-aware and may require page state
         inspection or navigation.
         """
-        # ---- Tier 1: Keyword-specific ----
+        # ---- Desktop (PlatynUI) recovery — platform-gated to "desktop" ----
+        # Browser recovery actions (Execute Javascript / Reload Page / Go Back /
+        # Handle Alert) are useless on a desktop AT-SPI tree, and each
+        # ElementNotFound retry is a 30s hang; desktop sessions get these instead
+        # (change: desktop-aware-batch-execution).
+        self._strategies["desktop_wait_and_retry"] = RecoveryStrategy(
+            name="desktop_wait_and_retry",
+            tier=RecoveryTier.TIER_1,
+            applicable_to=(ErrorClassification.ELEMENT_NOT_FOUND,),
+            actions=(
+                RecoveryAction(
+                    keyword="Sleep",
+                    args=("2s",),
+                    description="Wait for the desktop control to appear, then retry",
+                ),
+            ),
+            description="Desktop: wait then retry the descriptor resolution",
+            platforms=frozenset({"desktop"}),
+        )
+        self._strategies["desktop_activate_window"] = RecoveryStrategy(
+            name="desktop_activate_window",
+            tier=RecoveryTier.TIER_2,
+            applicable_to=(ErrorClassification.ELEMENT_NOT_FOUND,),
+            actions=(
+                RecoveryAction(
+                    keyword="Activate Window",
+                    args=(),
+                    description="Re-activate the AUT window (current root) before retry",
+                ),
+                RecoveryAction(
+                    keyword="Sleep",
+                    args=("1s",),
+                    description="Let the window settle",
+                ),
+            ),
+            description="Desktop: re-activate the application window, then retry",
+            platforms=frozenset({"desktop"}),
+        )
+
+        # ---- Tier 1: Keyword-specific (web) ----
 
         self._strategies["wait_and_retry"] = RecoveryStrategy(
             name="wait_and_retry",

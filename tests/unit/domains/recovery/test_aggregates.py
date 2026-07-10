@@ -17,11 +17,15 @@ from robotmcp.domains.recovery.value_objects import (
 class TestRecoveryEngineDefaults:
     def test_with_defaults_pattern_count(self):
         engine = RecoveryEngine.with_defaults()
-        assert engine.pattern_count == 10
+        # 10 web patterns + 1 PlatynUI desktop ELEMENT_NOT_FOUND pattern
+        # (change: desktop-aware-batch-execution).
+        assert engine.pattern_count == 11
 
     def test_with_defaults_strategy_count(self):
         engine = RecoveryEngine.with_defaults()
-        assert engine.strategy_count == 9
+        # 9 web strategies + 2 desktop strategies (desktop_wait_and_retry,
+        # desktop_activate_window).
+        assert engine.strategy_count == 11
 
     def test_empty_engine(self):
         engine = RecoveryEngine()

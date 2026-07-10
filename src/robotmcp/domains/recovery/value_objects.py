@@ -104,10 +104,20 @@ class RecoveryStrategy:
     applicable_to: Tuple[ErrorClassification, ...] = ()
     actions: Tuple[RecoveryAction, ...] = ()
     description: str = ""
+    # Platforms this strategy is valid for. Defaults to web so every existing
+    # (browser) strategy keeps web-only semantics; desktop strategies opt into
+    # {"desktop"} (change: desktop-aware-batch-execution). Browser recovery
+    # actions (Execute Javascript / Reload Page / Go Back / Handle Alert) are
+    # useless — and each ElementNotFound retry is a 30s hang — on desktop.
+    platforms: frozenset = frozenset({"web"})
 
     def applies_to(self, classification: ErrorClassification) -> bool:
         """Check if this strategy handles the given error classification."""
         return classification in self.applicable_to
+
+    def applies_to_platform(self, platform: str) -> bool:
+        """Check if this strategy is valid for the given platform ("web"/"desktop")."""
+        return platform in self.platforms
 
     def to_dict(self):
         return {

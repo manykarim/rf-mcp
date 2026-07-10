@@ -604,14 +604,16 @@ class TestSlimExecPreset:
 class TestDesktopExecPreset:
     """Test the desktop_exec profile preset."""
 
-    def test_has_6_tools(self):
+    def test_has_7_tools(self):
+        # execute_batch added — desktop interaction is turn-intensive
+        # (change: desktop-aware-batch-execution).
         p = ProfilePresets.desktop_exec()
-        assert p.tool_count == 6
+        assert p.tool_count == 7
 
     def test_tool_names(self):
         p = ProfilePresets.desktop_exec()
         expected = frozenset({
-            "manage_session", "execute_step",
+            "manage_session", "execute_step", "execute_batch",
             "get_session_state", "find_keywords",
             "intent_action", "build_test_suite",
         })

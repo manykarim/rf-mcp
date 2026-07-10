@@ -5148,6 +5148,7 @@ def _get_batch_runner() -> Any:
         engine=container.recovery_engine,
         keyword_runner=kw_adapter,
         page_state=page_state,
+        session_manager=execution_engine.session_manager,
     )
     evidence_collector = EvidenceCollectorImpl(execution_engine)
 
