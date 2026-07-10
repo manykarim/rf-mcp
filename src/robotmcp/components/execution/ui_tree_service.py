@@ -458,7 +458,10 @@ def _collect_ui_tree_sync(
                 "Pass application names via elements_of_interest to expand "
                 "their subtrees (bounded depth). Example: "
                 "get_session_state(sections=['ui_tree'], "
-                "elements_of_interest=['gnome-calculator'])"
+                "elements_of_interest=['gnome-calculator']). To enumerate "
+                "interactive controls (Buttons/Text/Edit…) with ready-to-use "
+                "descriptors — instead of per-element Query probing — request "
+                "the 'actionable_controls' section."
             )
         return result
     except Exception as exc:
@@ -596,3 +599,241 @@ def get_desktop_environment(session: Any) -> Dict[str, Any]:
     except Exception as exc:  # pragma: no cover - env dependent
         logger.debug("desktop_environment: desktop_info unavailable: %s", exc)
     return out
+
+
+# ── Desktop actionable-controls view (change: desktop-actionable-controls) ──
+# ui_tree is depth-bounded (DEFAULT_MAX_DEPTH=3) and GTK controls nest 4-6 deep,
+# so agents fall back to per-element Query probing (5-8 calls/run) or //control:*
+# dumps. This is the desktop analog of the web P8 actionable_elements view: a
+# FLAT, role-filtered list of interactive controls with ready app-scoped
+# descriptors — depth-unbounded but budget-bounded, and always AUT-scoped.
+
+_INTERACTIVE_ROLES = frozenset({
+    "button", "togglebutton", "radiobutton", "checkbox", "menuitem", "menu",
+    "combobox", "listitem", "tabitem", "slider", "spinbutton", "link",
+    "text", "edit", "entry", "textbox", "textfield",
+})
+
+
+def _role_token(role: Any) -> str:
+    """Reduce a node role to its control token (``control:Button`` -> ``Button``)."""
+    if not role:
+        return ""
+    return str(role).rsplit(":", 1)[-1]
+
+
+def _is_interactive_role(role: Any, roles: frozenset) -> bool:
+    tok = _role_token(role).lower()
+    return bool(tok) and any(r in tok for r in roles)
+
+
+def _control_descriptor(app_name: str, role: Any, name: str, occurrence: int) -> str:
+    """Build an app-scoped, index-disambiguated control descriptor."""
+    role_tok = _role_token(role) or "*"
+    if name:
+        base = f"/app:*[@Name='{app_name}']//control:{role_tok}[@Name='{name}']"
+    else:
+        base = f"/app:*[@Name='{app_name}']//control:{role_tok}"
+    if occurrence > 1:
+        return f"({base})[{occurrence}]"
+    return base
+
+
+def walk_actionable_controls(
+    app_node: Any,
+    app_name: str,
+    *,
+    roles: frozenset = _INTERACTIVE_ROLES,
+    max_nodes: int = 1500,
+    max_elements: int = 80,
+    time_budget_s: float = 5.0,
+) -> Dict[str, Any]:
+    """Flat depth-first walk of ONE application subtree, collecting interactive
+    controls with ready descriptors. Pure w.r.t. the node API (role/name/
+    children()/attribute()) so it is unit-testable with a fake tree. Never
+    raises on a per-node provider error (skips the node); returns partial
+    results with a ``truncated`` reason on any exhausted budget.
+    """
+    import time
+
+    deadline = time.monotonic() + time_budget_s
+    controls: List[Dict[str, Any]] = []
+    occ: Dict[tuple, int] = {}
+    node_budget = max_nodes
+    truncated: Optional[str] = None
+    # DFS via an explicit stack (children pushed reversed to preserve order).
+    stack: List[tuple] = [(app_node, 0)]
+    while stack:
+        if node_budget <= 0:
+            truncated = "max_nodes"
+            break
+        if time.monotonic() > deadline:
+            truncated = "time_budget"
+            break
+        node, depth = stack.pop()
+        node_budget -= 1
+        role = getattr(node, "role", None)
+        if depth > 0 and _is_interactive_role(role, roles):  # skip the app root itself
+            summ = _node_summary(node, include_attributes=True)
+            name = summ.get("name") or ""
+            key = (_role_token(role).lower(), name)
+            occ[key] = occ.get(key, 0) + 1
+            controls.append({
+                "role": _role_token(role),
+                "name": name,
+                "descriptor": _control_descriptor(app_name, role, name, occ[key]),
+                "enabled": summ.get("isenabled"),
+                "visible": summ.get("isvisible"),
+                "bounds": summ.get("bounds"),
+                "depth": depth,
+            })
+            if len(controls) >= max_elements:
+                truncated = "max_elements"
+                break
+        try:
+            children = list(node.children())
+        except Exception:
+            continue  # per-node provider hiccup — skip, never raise
+        for child in reversed(children):
+            stack.append((child, depth + 1))
+
+    result: Dict[str, Any] = {
+        "success": True,
+        "application": app_name,
+        "control_count": len(controls),
+        "controls": controls,
+    }
+    if truncated:
+        result["truncated"] = {"reason": truncated}
+    return result
+
+
+def _collect_actionable_controls_sync(
+    app_filters: Optional[List[str]],
+    *,
+    roles: frozenset,
+    max_nodes: int,
+    max_elements: int,
+    time_budget_s: float,
+    aut_pid: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Blocking collection — resolve a SINGLE anchor application (display-scoped)
+    and walk only its subtree. Refuses to walk when >1 app matches and no filter
+    is given (spec req 2). Run via asyncio.to_thread."""
+    from robotmcp.plugins.builtin.platynui_plugin import (
+        get_runtime,
+        runtime_unavailable_reason,
+        clear_runtime_tree_cache,
+    )
+
+    runtime = get_runtime()
+    if runtime is None:
+        return {
+            "success": False,
+            "error": "platynui runtime unavailable",
+            "reason": runtime_unavailable_reason() or "not_installed",
+        }
+    try:
+        clear_runtime_tree_cache()
+        apps = list(runtime.evaluate("/app:*"))
+        filters_lower = [f.lower() for f in (app_filters or [])]
+
+        # Display scoping (D4): drop host apps on an isolation-marked display.
+        scoped_pids: Optional[frozenset] = None
+        scoping_active = False
+        try:
+            from robotmcp.components.execution.desktop_display_safety import (
+                classify_bound_display_detailed,
+            )
+
+            if classify_bound_display_detailed()["isolation_source"] == "marker":
+                scoping_active = True
+                scoped_pids = _display_scoped_pids()
+                if scoped_pids is not None and aut_pid is not None:
+                    scoped_pids = scoped_pids | {int(aut_pid)}
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+        candidates: List[tuple] = []
+        for app in apps:
+            name = getattr(app, "name", None) or ""
+            if scoping_active and scoped_pids is not None:
+                pid = _app_pid(app)
+                if pid is not None and pid not in scoped_pids:
+                    continue  # host app on isolated display — never the anchor
+            if filters_lower:
+                if any(f in name.lower() for f in filters_lower):
+                    candidates.append((name, app))
+            else:
+                candidates.append((name, app))
+
+        if not candidates:
+            return {
+                "success": True,
+                "application_count": 0,
+                "control_count": 0,
+                "controls": [],
+                "hint": (
+                    f"No application matched {app_filters}."
+                    if filters_lower
+                    else "No desktop application found on the bound display."
+                ),
+            }
+        if len(candidates) > 1 and not filters_lower:
+            # Never walk more than one application (spec req 2).
+            return {
+                "success": True,
+                "requires_app_filter": True,
+                "applications": [n for n, _ in candidates],
+                "hint": (
+                    "Multiple applications present — pass one via "
+                    "elements_of_interest (e.g. ['gnome-calculator']). Refusing "
+                    "to walk more than one application subtree."
+                ),
+            }
+
+        app_name, app_node = candidates[0]
+        return walk_actionable_controls(
+            app_node,
+            app_name,
+            roles=roles,
+            max_nodes=max_nodes,
+            max_elements=max_elements,
+            time_budget_s=time_budget_s,
+        )
+    except Exception as exc:
+        return {"success": False, "error": f"actionable_controls retrieval failed: {exc}"}
+
+
+async def get_actionable_controls(
+    session: Any,
+    app_filters: Optional[List[str]] = None,
+    *,
+    roles: Optional[List[str]] = None,
+    max_nodes: int = 1500,
+    max_elements: int = 80,
+    time_budget_s: float = 5.0,
+) -> Dict[str, Any]:
+    """Flat, AUT-scoped, budget-bounded interactive-control view for desktop
+    sessions — the desktop analog of the web actionable_elements view. Desktop
+    -only; a non-desktop session gets a structured rejection."""
+    import asyncio
+
+    is_desktop = getattr(session, "is_desktop_session", None)
+    if not (callable(is_desktop) and is_desktop() is True):
+        return {
+            "success": False,
+            "error": "actionable_controls is a desktop (PlatynUI) section only",
+            "hint": "Use the 'page_source' section for web/API sessions.",
+        }
+    aut_pid = getattr(session, "desktop_aut_pid", None)
+    role_set = frozenset(r.lower() for r in roles) if roles else _INTERACTIVE_ROLES
+    return await asyncio.to_thread(
+        _collect_actionable_controls_sync,
+        app_filters,
+        roles=role_set,
+        max_nodes=max_nodes,
+        max_elements=max_elements,
+        time_budget_s=time_budget_s,
+        aut_pid=aut_pid,
+    )

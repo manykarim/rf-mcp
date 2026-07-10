@@ -4144,6 +4144,27 @@ async def get_session_state(
             except Exception as _denv_exc:  # pragma: no cover - defensive
                 logger.debug("desktop_environment section skipped: %s", _denv_exc)
 
+    if "actionable_controls" in requested:
+        # Flat, AUT-scoped, budget-bounded interactive-control view — the desktop
+        # analog of the web actionable_elements view. Replaces per-element Query
+        # probing (change: desktop-actionable-controls). elements_of_interest
+        # selects the anchor application.
+        from robotmcp.components.execution.ui_tree_service import (
+            get_actionable_controls,
+        )
+
+        _ac_session = execution_engine.session_manager.get_session(session_id)
+        if _ac_session is None:
+            payload["sections"]["actionable_controls"] = {
+                "success": False,
+                "error": f"Session '{session_id}' not found",
+            }
+        else:
+            payload["sections"]["actionable_controls"] = await get_actionable_controls(
+                _ac_session,
+                app_filters=elements_of_interest or None,
+            )
+
     # ADR-018: Delta-based state retrieval
     # mode="auto" (default): auto-detect delta when prior version exists
     _use_delta = False
