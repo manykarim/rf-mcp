@@ -582,8 +582,12 @@ class ExecutionSession:
                 # search order leads with the desktop library (the intelligent
                 # search-order builder derives from core_libraries order).
                 # change: desktop-mcp-workflow-correctness.
-                core_libraries=["PlatynUI.BareMetal", "BuiltIn", "Collections", "String"],
-                optional_libraries=["OperatingSystem", "Process", "DateTime"],
+                # Process is core: every desktop scenario begins by launching an
+                # app (Start Process), and a bare desktop init that omitted it
+                # forced a fail+fallback cycle (spike lever #5). PlatynUI.BareMetal
+                # stays first so the derived search order still leads with it.
+                core_libraries=["PlatynUI.BareMetal", "BuiltIn", "Process", "Collections", "String"],
+                optional_libraries=["OperatingSystem", "DateTime"],
                 search_order=[
                     "PlatynUI.BareMetal",
                     "BuiltIn",

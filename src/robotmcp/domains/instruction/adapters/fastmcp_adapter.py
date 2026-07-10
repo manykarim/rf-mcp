@@ -34,6 +34,7 @@ class InstructionTemplateType(Enum):
     DETAILED = "detailed"
     BROWSER_FOCUSED = "browser-focused"
     API_FOCUSED = "api-focused"
+    DESKTOP_FOCUSED = "desktop-focused"
 
     @classmethod
     def from_string(cls, value: str) -> "InstructionTemplateType":

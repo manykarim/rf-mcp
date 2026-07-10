@@ -3237,6 +3237,26 @@ async def manage_session(
             "next_step": f"Use session_id='{session_id}' in all subsequent tool calls.",
         }
 
+        # Desktop upfront guidance (change: desktop-turn-economy-guidance):
+        # deliver the PlatynUI keyword surface + locator crib at init so desktop
+        # agents don't burn ~60% of their turns on find_keywords. Soft-fail —
+        # a libdoc hiccup must never break session init.
+        try:
+            _is_desktop = getattr(session, "is_desktop_session", None)
+            _desktop = bool(_is_desktop() if callable(_is_desktop) else False) or any(
+                lib in {"PlatynUI.BareMetal", "PlatynUI"} for lib in (libraries or [])
+            )
+            if _desktop:
+                from robotmcp.components.execution.desktop_guidance import (
+                    get_desktop_guidance,
+                )
+
+                _bundle = get_desktop_guidance()
+                if _bundle:
+                    result["desktop_guidance"] = _bundle
+        except Exception:
+            pass
+
         # ── ADR-006/ADR-016: Auto-activate tool profile (params > env vars) ──
         effective_profile = tool_profile or os.environ.get("ROBOTMCP_TOOL_PROFILE")
         effective_model_tier = model_tier or os.environ.get("ROBOTMCP_MODEL_TIER")

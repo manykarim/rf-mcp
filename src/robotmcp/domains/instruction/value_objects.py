@@ -711,6 +711,34 @@ Available tools: {available_tools}""",
         )
 
     @classmethod
+    def desktop_focused(cls) -> "InstructionTemplate":
+        """Desktop-focused template for PlatynUI automation (~1000 chars)."""
+        return cls(
+            template_id="desktop-focused",
+            content="""rf-mcp DESKTOP AUTOMATION WORKFLOW (PlatynUI):
+
+1. manage_session(action="init", libraries=["PlatynUI.BareMetal", "Process", "BuiltIn"])
+   -> the init response includes desktop_guidance: the keyword surface + locator crib. USE IT instead of find_keywords.
+2. execute_step(keyword="Start Process", arguments=["gnome-calculator"]) -> launch the app
+3. execute_step(keyword="Query", arguments=["/app:*[@Name='gnome-calculator']//control:Frame"]) -> find the window
+4. Set Root to the app, then act with pointer/keyboard on scoped control: locators
+5. Read back with Get Attribute; screenshot with Take Screenshot(descriptor, filename=...)
+
+LOCATOR RULES (critical — each avoids a 30s hang or a refusal):
+- Scope EVERY locator: /app:*[@Name='<app>']//control:... NEVER start with // (walks the whole desktop; refused).
+- On Linux, windows are control:Frame, NOT control:Window.
+- Launch (Start Process) BEFORE you Query for the frame.
+- Take Screenshot's FIRST positional is a node descriptor, not a filename — pass filename= for a path.
+- Call get_locator_guidance for the full desktop cookbook.
+
+NEVER click or type without a clean app-scoped locator.
+
+Available tools: {available_tools}""",
+            description="Desktop (PlatynUI) automation focused template",
+            placeholders=("available_tools",),
+        )
+
+    @classmethod
     def get_by_name(cls, name: str) -> "InstructionTemplate":
         """Get a template by its name.
 
@@ -729,6 +757,7 @@ Available tools: {available_tools}""",
             "detailed": cls.detailed,
             "browser-focused": cls.browser_focused,
             "api-focused": cls.api_focused,
+            "desktop-focused": cls.desktop_focused,
             # Alias for discovery_first as default
             "discovery_first": cls.discovery_first,
             "locator_prevention": cls.locator_prevention,
