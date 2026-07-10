@@ -703,6 +703,128 @@ class KeywordExecutor:
             }],
         }
 
+    def _screenshot_signature_guard(self, session, keyword, arguments):
+        """Refuse a desktop Take Screenshot whose DESCRIPTOR slot holds a bare
+        image path — the filename-as-descriptor trap that resolves for ~30s
+        before ElementNotFound (change: desktop-screenshot-failfast). Returns an
+        error dict to refuse, None to proceed. Opt-out downgrades to a one-time
+        warning.
+        """
+        from robotmcp.components.execution.desktop_execution_signals import (
+            screenshot_path_in_descriptor_slot,
+        )
+
+        _is_desktop = getattr(session, "is_desktop_session", None)
+        if not (callable(_is_desktop) and _is_desktop() is True):
+            return None
+        path = screenshot_path_in_descriptor_slot(keyword, arguments)
+        if path is None:
+            return None
+
+        opted_in = (
+            os.environ.get("ROBOTMCP_PLATYNUI_ALLOW_PATH_DESCRIPTOR", "").strip().lower()
+            in {"1", "true", "yes"}
+            or bool(getattr(session, "platynui_allow_path_descriptor", False))
+        )
+        if opted_in:
+            if not getattr(session, "desktop_path_descriptor_warned", False):
+                try:
+                    session.desktop_path_descriptor_warned = True
+                    session._pending_path_descriptor_hint = {
+                        "type": "screenshot_path_descriptor_allowed",
+                        "message": (
+                            f"'{path}' sits in the Take Screenshot DESCRIPTOR slot "
+                            "(ALLOW_PATH_DESCRIPTOR opt-in); if it is a filename, "
+                            "pass filename= instead."
+                        ),
+                    }
+                except Exception:
+                    pass
+            return None
+
+        return {
+            "success": False,
+            "error": (
+                f"Take Screenshot received the path '{path}' in its DESCRIPTOR slot "
+                "(first positional) — it resolves as a UI node and hangs ~30s "
+                "before failing. Refused before dispatch."
+            ),
+            "keyword": keyword,
+            "hints": [{
+                "type": "screenshot_signature",
+                "message": (
+                    "Take Screenshot signature is (descriptor, filename, rect). "
+                    f"For the whole desktop:  Take Screenshot  filename={path} . "
+                    f"For one element:  Take Screenshot  <descriptor>  {path} . "
+                    "Set ROBOTMCP_PLATYNUI_ALLOW_PATH_DESCRIPTOR=1 to bypass."
+                ),
+            }],
+        }
+
+    def _control_window_guard(self, session, keyword, arguments):
+        """Refuse a Linux desktop tree-resolving keyword whose locator uses
+        control:Window — AT-SPI windows are control:Frame, so control:Window
+        matches nothing and hangs ~30s (change: desktop-screenshot-failfast).
+        Refuse-with-hint (never auto-rewrite: recorded steps must match what
+        executed). Opt-out downgrades to a one-time warning.
+        """
+        import sys
+
+        if sys.platform != "linux":
+            return None
+        from robotmcp.components.execution.desktop_execution_signals import (
+            control_window_locator,
+        )
+
+        _is_desktop = getattr(session, "is_desktop_session", None)
+        if not (callable(_is_desktop) and _is_desktop() is True):
+            return None
+        locator = control_window_locator(keyword, arguments)
+        if locator is None:
+            return None
+
+        opted_in = (
+            os.environ.get("ROBOTMCP_PLATYNUI_ALLOW_CONTROL_WINDOW", "").strip().lower()
+            in {"1", "true", "yes"}
+            or bool(getattr(session, "platynui_allow_control_window", False))
+        )
+        if opted_in:
+            if not getattr(session, "desktop_control_window_warned", False):
+                try:
+                    session.desktop_control_window_warned = True
+                    session._pending_control_window_hint = {
+                        "type": "control_window_allowed",
+                        "message": (
+                            f"'{locator}' uses control:Window on Linux "
+                            "(ALLOW_CONTROL_WINDOW opt-in); AT-SPI windows are "
+                            "control:Frame."
+                        ),
+                    }
+                except Exception:
+                    pass
+            return None
+
+        rewrite = locator.replace("control:Window", "control:Frame").replace(
+            "control:window", "control:Frame"
+        )
+        return {
+            "success": False,
+            "error": (
+                f"desktop locator '{locator}' uses control:Window, which matches "
+                "nothing on Linux AT-SPI (windows are control:Frame) and hangs "
+                "~30s — refused before dispatch."
+            ),
+            "keyword": keyword,
+            "hints": [{
+                "type": "control_window_on_linux",
+                "message": (
+                    "On Linux AT-SPI, application windows are control:Frame, not "
+                    f"control:Window. Use '{rewrite}'. Set "
+                    "ROBOTMCP_PLATYNUI_ALLOW_CONTROL_WINDOW=1 to bypass."
+                ),
+            }],
+        }
+
     @staticmethod
     def _infer_session_app_name(session) -> Optional[str]:
         """Best-effort AUT application name for a scoped-locator rewrite hint:
@@ -1834,6 +1956,19 @@ class KeywordExecutor:
                     )
                     if _unscoped_guard is not None:
                         return _unscoped_guard
+                    # Screenshot filename-as-descriptor trap + Linux control:Window
+                    # — both convert a silent 30s hang into a fast, actionable
+                    # refusal (change: desktop-screenshot-failfast).
+                    _shot_sig_guard = self._screenshot_signature_guard(
+                        session, keyword, arguments
+                    )
+                    if _shot_sig_guard is not None:
+                        return _shot_sig_guard
+                    _ctrl_win_guard = self._control_window_guard(
+                        session, keyword, arguments
+                    )
+                    if _ctrl_win_guard is not None:
+                        return _ctrl_win_guard
                     # Focus-before-act: ensure pointer/keyboard input targets
                     # the AUT window, not whatever window is active, and that
                     # the AUT window is visible/in-scope (change:
