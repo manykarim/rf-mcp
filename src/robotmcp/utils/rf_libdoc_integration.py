@@ -1,6 +1,9 @@
 """Native Robot Framework libdoc integration for keyword discovery."""
 
+import importlib.util
 import logging
+import os
+import threading
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 
@@ -44,35 +47,100 @@ class RFLibraryInfo:
 class RobotFrameworkDocStorage:
     """Storage and retrieval of Robot Framework library documentation using native libdoc."""
     
+    # RF standard libraries live under ``robot.libraries.*`` (not top-level
+    # modules), so the R3 find_spec gate MUST NOT apply to them — it would see
+    # find_spec("BuiltIn") is None and wrongly skip them. They ship with
+    # `robot` and are always importable; Telnet (removed telnetlib on py3.13)
+    # is handled by the existing try/except in _load_library_documentation.
+    _RF_STANDARD_LIBRARIES = frozenset({
+        "BuiltIn", "Collections", "DateTime", "Dialogs", "OperatingSystem",
+        "Process", "Screenshot", "String", "Telnet", "XML", "Remote",
+    })
+
     def __init__(self):
-        self.libraries: Dict[str, RFLibraryInfo] = {}
+        # Backing stores — populated lazily via ``_ensure_initialized`` so that
+        # constructing this object (which happens transitively at import of
+        # robotmcp.server, via ExecutionCoordinator) does NOT run the ~1.5s
+        # libdoc preload of 17 libraries and thereby block the MCP handshake
+        # (change: fast-mcp-handshake-lazy-init). Public access goes through the
+        # libraries/keyword_index_by_name/failed_imports properties.
+        self._libraries: Dict[str, RFLibraryInfo] = {}
         # Map normalized keyword name -> { library_name -> RFKeywordInfo }
-        self.keyword_index_by_name: Dict[str, Dict[str, RFKeywordInfo]] = {}
-        self.failed_imports: Dict[str, str] = {}
-        
+        self._keyword_index_by_name: Dict[str, Dict[str, RFKeywordInfo]] = {}
+        self._failed_imports: Dict[str, str] = {}
+        self._initialized = False
+        self._init_lock = threading.Lock()
+
         # Load library list from centralized registry
         from robotmcp.config.library_registry import get_library_names_for_loading
         self.common_libraries = get_library_names_for_loading()
-        
+
         if not HAS_LIBDOC:
             logger.warning("Robot Framework libdoc not available. Falling back to inspection-based discovery.")
+            self._initialized = True  # nothing to populate
             return
-            
-        self._initialize_libraries()
-    
+
+        # Eager escape hatch (2.x parity): ROBOTMCP_LAZY_INIT=0 restores
+        # import-time population.
+        if os.environ.get("ROBOTMCP_LAZY_INIT") == "0":
+            self._ensure_initialized()
+
+    @property
+    def libraries(self) -> Dict[str, "RFLibraryInfo"]:
+        self._ensure_initialized()
+        return self._libraries
+
+    @property
+    def keyword_index_by_name(self) -> Dict[str, Dict[str, "RFKeywordInfo"]]:
+        self._ensure_initialized()
+        return self._keyword_index_by_name
+
+    @property
+    def failed_imports(self) -> Dict[str, str]:
+        self._ensure_initialized()
+        return self._failed_imports
+
+    def _ensure_initialized(self) -> None:
+        """Populate libdoc on first access; idempotent and thread-safe."""
+        if self._initialized:
+            return
+        with self._init_lock:
+            if self._initialized:
+                return
+            if HAS_LIBDOC:
+                self._initialize_libraries()
+            self._initialized = True
+
     def _initialize_libraries(self):
         """Initialize library documentation using native Robot Framework libdoc."""
         if not HAS_LIBDOC:
             return
-            
+
         logger.info("Initializing Robot Framework libraries using native libdoc...")
-        
+
         for library_name in self.common_libraries:
+            # R3: skip an EXTERNAL library whose top-level module isn't
+            # importable, gating by MODULE name (find_spec) — never distribution
+            # name, which wrongly flags PlatynUI.BareMetal (dist is
+            # robotframework-PlatynUI). RF standard libraries are exempt (see
+            # _RF_STANDARD_LIBRARIES).
+            top = library_name.split(".")[0]
+            if top not in self._RF_STANDARD_LIBRARIES:
+                try:
+                    spec = importlib.util.find_spec(top)
+                except (ImportError, ValueError, ModuleNotFoundError):
+                    spec = None
+                if spec is None:
+                    self._failed_imports[library_name] = "not installed (skipped)"
+                    logger.debug(
+                        f"Skipping libdoc for '{library_name}': module '{top}' not importable"
+                    )
+                    continue
             self._load_library_documentation(library_name)
-        
+
         # Count total keywords across all libraries
-        total_keywords = sum(len(lib.keywords) for lib in self.libraries.values())
-        logger.info(f"Initialized {len(self.libraries)} libraries with {total_keywords} keywords using libdoc")
+        total_keywords = sum(len(lib.keywords) for lib in self._libraries.values())
+        logger.info(f"Initialized {len(self._libraries)} libraries with {total_keywords} keywords using libdoc")
     
     def _load_library_documentation(self, library_name: str) -> bool:
         """Load library documentation using Robot Framework's LibraryDocumentation."""
@@ -99,21 +167,23 @@ class RobotFrameworkDocStorage:
                 keyword_info = self._extract_keyword_from_libdoc(library_name, kw_doc)
                 lib_info.keywords[keyword_info.name] = keyword_info
                 
-                # Index by normalized name and library to avoid collisions
+                # Index by normalized name and library to avoid collisions.
+                # Use backing fields here: this runs under _ensure_initialized's
+                # lock, so touching the properties would re-enter and deadlock.
                 norm = self._normalize_name(keyword_info.name)
-                if norm not in self.keyword_index_by_name:
-                    self.keyword_index_by_name[norm] = {}
-                self.keyword_index_by_name[norm][library_name] = keyword_info
-            
-            self.libraries[library_name] = lib_info
-            self.failed_imports.pop(library_name, None)
+                if norm not in self._keyword_index_by_name:
+                    self._keyword_index_by_name[norm] = {}
+                self._keyword_index_by_name[norm][library_name] = keyword_info
+
+            self._libraries[library_name] = lib_info
+            self._failed_imports.pop(library_name, None)
             
             logger.info(f"Successfully loaded library '{library_name}' with {len(lib_info.keywords)} keywords using libdoc")
             return True
             
         except Exception as e:
             logger.debug(f"Failed to load library documentation for '{library_name}': {e}")
-            self.failed_imports[library_name] = str(e)
+            self._failed_imports[library_name] = str(e)
             return False
     
     def _extract_keyword_from_libdoc(self, library_name: str, kw_doc: 'KeywordDoc') -> RFKeywordInfo:

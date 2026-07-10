@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 import os
+import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -1039,13 +1040,62 @@ def _build_choose_recommendations_prompt(
 nlp_processor = NaturalLanguageProcessor()
 keyword_matcher = KeywordMatcher()
 library_recommender = LibraryRecommender()
-execution_engine = ExecutionCoordinator()
 state_manager = StateManager()
-test_builder = TestBuilder(execution_engine)
 mobile_capability_service = MobileCapabilityService()
 
-# Initialize enhanced serialization system
-initialize_enhanced_serialization(execution_engine)
+# --- Lazy ExecutionCoordinator (change: fast-mcp-handshake-lazy-init) ---
+# Constructing the coordinator transitively spins up robotmcp's execution stack
+# (and, before this change, the libdoc preload) — enough to block the MCP
+# handshake for seconds. Defer it behind a transparent proxy so importing this
+# module constructs nothing heavy; a warm-up thread in main() materializes it
+# right after the event loop is up, and a tool call arriving during warm-up
+# blocks at most on one initialization. ROBOTMCP_LAZY_INIT=0 restores eager
+# construction at import.
+_real_execution_engine = None
+_engine_lock = threading.Lock()
+
+
+def _get_execution_engine():
+    """Construct (once, thread-safe) the ExecutionCoordinator + enhanced serialization."""
+    global _real_execution_engine
+    if _real_execution_engine is not None:
+        return _real_execution_engine
+    with _engine_lock:
+        if _real_execution_engine is not None:
+            return _real_execution_engine
+        engine = ExecutionCoordinator()
+        initialize_enhanced_serialization(engine)
+        _real_execution_engine = engine
+        return engine
+
+
+class _LazyEngineProxy:
+    """Transparent lazy proxy for the ExecutionCoordinator singleton.
+
+    Materializes the real coordinator (and applies enhanced serialization) on
+    first attribute access. ``from robotmcp.server import execution_engine``
+    yields this proxy, and ``mock.patch("robotmcp.server.execution_engine", …)``
+    replaces the module attribute wholesale, so tests still substitute what
+    handlers see.
+    """
+
+    __slots__ = ()
+
+    def __getattr__(self, name):
+        return getattr(_get_execution_engine(), name)
+
+    def __setattr__(self, name, value):
+        setattr(_get_execution_engine(), name, value)
+
+    def __repr__(self):
+        return f"<LazyEngineProxy materialized={_real_execution_engine is not None}>"
+
+
+if os.environ.get("ROBOTMCP_LAZY_INIT") == "0":
+    execution_engine = _get_execution_engine()
+else:
+    execution_engine = _LazyEngineProxy()
+test_builder = TestBuilder(execution_engine)
 
 # Shared guidance for automation workflows
 AUTOMATION_TOOL_GUIDE: List[tuple[str, str]] = [
@@ -8183,6 +8233,25 @@ def main(argv: List[str] | None = None) -> None:
                 run_kwargs["port"] = args.port
             if args.path:
                 run_kwargs["path"] = args.path
+
+        # Warm up the lazy ExecutionCoordinator in the background right after the
+        # event loop comes up, so the first tool call doesn't pay the init
+        # (change: fast-mcp-handshake-lazy-init). The MCP handshake is answered
+        # from static metadata and is unaffected. A tool call arriving during
+        # warm-up blocks on the same factory lock — never longer than one init.
+        if (
+            os.environ.get("ROBOTMCP_LAZY_INIT") != "0"
+            and os.environ.get("ROBOTMCP_WARMUP") != "0"
+        ):
+            def _warm_up_engine():
+                try:
+                    _get_execution_engine()
+                except Exception as e:  # never let warm-up break startup
+                    logger.debug(f"Engine warm-up failed (lazy path remains): {e}")
+
+            threading.Thread(
+                target=_warm_up_engine, name="robotmcp-engine-warmup", daemon=True
+            ).start()
 
         mcp.run(**run_kwargs)
     except KeyboardInterrupt:

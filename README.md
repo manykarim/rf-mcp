@@ -37,11 +37,17 @@ pip install rf-mcp
     "robotmcp": {
       "type": "stdio",
       "command": "uv",
-      "args": ["run", "-m", "robotmcp.server"]
+      "args": ["run", "-m", "robotmcp.server"],
+      "env": { "UV_COMPILE_BYTECODE": "1" }
     }
   }
 }
 ```
+
+> `UV_COMPILE_BYTECODE=1` precompiles the dependency tree at install time. Without
+> it, the **first** server launch after an install/upgrade pays several seconds of
+> `.pyc` compilation before the MCP handshake completes (some clients time out and
+> show the server as unavailable). It is a one-time, install-time cost.
 
 #### HTTP
 
