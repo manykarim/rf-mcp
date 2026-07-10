@@ -105,6 +105,18 @@ class BatchExecution:
 
         steps: List[BatchStep] = []
         for i, s in enumerate(steps_data):
+            # Validate the step shape up front so a malformed step produces an
+            # actionable message instead of a bare KeyError('keyword') leaking to
+            # the agent (2026-07 spike finding F2).
+            if not isinstance(s, dict) or not (
+                isinstance(s.get("keyword"), str) and s.get("keyword").strip()
+            ):
+                raise ValueError(
+                    f"Step {i}: missing required 'keyword'. Each step must be a "
+                    f"mapping like {{'keyword': '<RF keyword>', 'arguments': [...], "
+                    f"'assign_to': '<var>'}} — 'arguments' (or the legacy 'args'), "
+                    f"'assign_to', 'label', and 'timeout' are optional."
+                )
             step_timeout = StepTimeout(s["timeout"]) if s.get("timeout") else None
             steps.append(BatchStep(
                 index=i,
@@ -140,12 +152,27 @@ class BatchExecution:
         - both present and DIFFERENT -> ValueError (no silent shadowing)
         - neither present -> empty list
         """
+        def _as_list(value: Any, key: str) -> List[Any]:
+            # Reject non-list argument containers with the same clarity
+            # execute_step gives. list(dict) silently yields the dict's KEYS —
+            # a MiniMax agent passed ``arguments={"item": "gnome-calculator"}``
+            # and the keys resolved to a bogus descriptor "item" that burned 93s
+            # in descriptor-timeout retries inside a desktop batch (2026-07 spike
+            # finding §3.2). execute_step rejects the same shape instantly.
+            if not isinstance(value, (list, tuple)):
+                raise ValueError(
+                    f"Step {index}: '{key}' must be a list of positional "
+                    f"arguments, got {type(value).__name__} ({value!r}). "
+                    f"Example: {{'keyword': 'Click', 'arguments': ['id=x']}}."
+                )
+            return list(value)
+
         has_args = "args" in step and step.get("args") is not None
         has_arguments = "arguments" in step and step.get("arguments") is not None
 
         if has_args and has_arguments:
-            a = list(step.get("args") or [])
-            b = list(step.get("arguments") or [])
+            a = _as_list(step.get("args"), "args")
+            b = _as_list(step.get("arguments"), "arguments")
             if a != b:
                 raise ValueError(
                     f"Step {index}: conflicting 'args' and 'arguments' "
@@ -154,9 +181,9 @@ class BatchExecution:
                 )
             return b
         if has_arguments:
-            return list(step.get("arguments") or [])
+            return _as_list(step.get("arguments"), "arguments")
         if has_args:
-            return list(step.get("args") or [])
+            return _as_list(step.get("args"), "args")
         return []
 
     # ------------------------------------------------------------------

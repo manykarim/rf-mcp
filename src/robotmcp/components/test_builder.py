@@ -269,6 +269,7 @@ class TestBuilder:
         bdd_style: bool = False,
         data_driven_mode: str = "auto",
         include_pre_start: bool = False,
+        output_path: str = "",
     ) -> Dict[str, Any]:
         """
         Generate Robot Framework test suite from successful execution steps.
@@ -676,6 +677,29 @@ class TestBuilder:
                 "rf_text": rf_text,
                 "statistics": stats,
             }
+
+            # Optional safe persistence: write the generated .robot to disk via
+            # plain file I/O so the suite is preserved byte-for-byte. Agents MUST
+            # NOT round-trip rf_text through the RF ``Create File`` keyword — RF
+            # resolves ${variables} and interprets \n/\t escapes inside the
+            # argument, silently corrupting the suite (assigned vars collapse to
+            # runtime values; escaped newlines become raw line breaks).
+            if output_path:
+                try:
+                    import os as _os
+
+                    _dir = _os.path.dirname(_os.path.abspath(output_path))
+                    if _dir:
+                        _os.makedirs(_dir, exist_ok=True)
+                    with open(output_path, "w", encoding="utf-8", newline="") as _fh:
+                        _fh.write(rf_text)
+                    result["output_path"] = _os.path.abspath(output_path)
+                    result["output_bytes"] = len(rf_text.encode("utf-8"))
+                except Exception as _e:  # soft-fail: the build still succeeded
+                    result["output_error"] = (
+                        f"Failed to write suite to {output_path}: {_e}"
+                    )
+
             event_bus.publish_sync(
                 FrontendEvent(
                     event_type="suite_built",

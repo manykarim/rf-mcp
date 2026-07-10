@@ -559,6 +559,10 @@ For DOM inspection: get_session_state(sections=["page_source"], include_reduced_
    - manage_session(action="start_test", test_name="Login Test") to begin a named test
    - manage_session(action="end_test") to finish it, then start another
    - build_test_suite generates a multi-test .robot file
+   - To SAVE a suite to disk, pass build_test_suite(output_path="/path/suite.robot").
+     NEVER write the returned rf_text via the Create File keyword: RF resolves
+     variable references and expands escape sequences in the content, corrupting
+     the suite.
 
 6. BDD STYLE (when user requests BDD/Gherkin):
    - NEVER put Given/When/Then directly on library keywords (Click, Fill Text, etc.)

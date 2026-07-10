@@ -1035,8 +1035,15 @@ class ExecutionSession:
 
         allowed = set(profile.core_libraries)
         allowed.update(profile.optional_libraries)
-        # Always allow BuiltIn
-        allowed.add("BuiltIn")
+        # Always allow BuiltIn + the domain-agnostic RF standard libraries.
+        # Agents routinely need file I/O, data structures, dates, and processes
+        # regardless of session type — e.g. an api_testing session writing a
+        # result file needs OperatingSystem. Gating these forced an
+        # import_library detour (2026-07 spike finding F5). Domain libraries
+        # (Browser/SeleniumLibrary/AppiumLibrary) stay profile-governed.
+        allowed.update(
+            {"BuiltIn", "OperatingSystem", "Collections", "String", "DateTime", "Process"}
+        )
         # Always allow the explicitly preferred library (P16 fix: when
         # explicit_library_preference is "SeleniumLibrary" but the default
         # WEB_AUTOMATION profile only lists "Browser", the preference must

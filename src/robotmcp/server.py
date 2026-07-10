@@ -4609,6 +4609,7 @@ async def build_test_suite(
     bdd_style: bool = False,
     data_driven_mode: str = "auto",
     include_pre_start: bool = False,
+    output_path: str = "",
 ) -> Dict[str, Any]:
     """Generate a Robot Framework test suite from previously executed steps.
 
@@ -4631,6 +4632,16 @@ async def build_test_suite(
             (the response reports ``excluded_pre_start_count`` + a summary) so the
             suite reflects only intended in-test interactions. Set True to
             preserve the prior adoption behavior.
+        output_path: Optional absolute path to persist the generated .robot suite
+            to disk directly (UTF-8; parent directories created). ALWAYS use this
+            to save a suite — do NOT write ``rf_text`` via the ``Create File``
+            keyword: Robot Framework resolves ``${variables}`` and interprets
+            ``\\n``/``\\t`` escapes inside the argument, which silently corrupts
+            the suite content (assigned vars collapse to their runtime values,
+            escaped newlines become raw line breaks). Writing here goes through
+            plain file I/O and preserves the generated text byte-for-byte. When
+            set, the response includes ``output_path`` and ``output_bytes`` (or
+            ``output_error`` on a write failure — the build still succeeds).
 
     Returns:
         Dict[str, Any]: Suite generation result:
@@ -4638,6 +4649,7 @@ async def build_test_suite(
             - session_id: resolved id
             - suite: structured suite metadata
             - rf_text: generated .robot content
+            - output_path/output_bytes: present when output_path was written
             - statistics/optimization_applied: summary of generated steps
             - error/guidance: present on failure
     """
@@ -4676,6 +4688,7 @@ async def build_test_suite(
         bdd_style=bdd_style,
         data_driven_mode=data_driven_mode,
         include_pre_start=include_pre_start,
+        output_path=output_path,
     )
 
     # Add session resolution info to result
@@ -5102,6 +5115,9 @@ async def execute_batch(
             - label (str, optional): Human-readable label
             - timeout (str, optional): Per-step RF timeout (e.g., "10s")
             - assign_to (str, optional): Variable name to capture return value (e.g., "cart_count")
+            NOTE: batch steps do NOT support ``bdd_group``/``bdd_intent`` — use
+            per-step ``execute_step(bdd_group=..., bdd_intent=...)`` for BDD grouping.
+            A step missing ``keyword`` returns an actionable validation error.
         on_failure: Policy on step failure:
             - "stop": abort immediately
             - "retry": retry without recovery logic
