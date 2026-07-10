@@ -85,10 +85,20 @@ def generate_builtin_plugins() -> List[StaticLibraryPlugin]:
                 )
             )
 
+        # A static builtin may declare its unqualified keywords so they resolve
+        # to this library (change: desktop-stepwise-followups). Without this,
+        # core libs like Process had no keyword->library map and unqualified
+        # keywords (e.g. "Start Process") failed to resolve.
+        keyword_names = definition.get("keywords") or []
+        keyword_library_map = (
+            {kw: metadata.name for kw in keyword_names} if keyword_names else None
+        )
+
         plugin = StaticLibraryPlugin(
             metadata=metadata,
             capabilities=capabilities,
             install_actions=install_actions or None,
+            keyword_library_map=keyword_library_map,
         )
         plugins.append(plugin)
 

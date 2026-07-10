@@ -26,11 +26,11 @@ from robotmcp.domains.intent.value_objects import (
 class TestIntentVerb:
     """Test IntentVerb enum."""
 
-    def test_has_exactly_9_values(self):
-        # OBS-06 — added EXTRACT (generalised, mode-aware getter). The
-        # set is still deliberately small; growth requires updating the
-        # tool-profile + adapter wiring.
-        assert len(IntentVerb) == 9
+    def test_has_exactly_10_values(self):
+        # OBS-06 added EXTRACT; platynui-focused-execution added
+        # ENSURE_FOCUSED (desktop AUT focus). The set is still deliberately
+        # small; growth requires updating the tool-profile + adapter wiring.
+        assert len(IntentVerb) == 10
 
     def test_navigate_value(self):
         assert IntentVerb.NAVIGATE.value == "navigate"

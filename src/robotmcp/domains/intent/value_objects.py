@@ -35,6 +35,11 @@ class IntentVerb(str, Enum):
     # attribute / count / value / url / title getters. PREFER this
     # verb for new code; ``EXTRACT_TEXT`` is deprecated.
     EXTRACT = "extract"
+    # Desktop (PlatynUI) focus capability (change: platynui-focused-execution).
+    # Raises + focuses the AUT top-level window so subsequent pointer/keyboard
+    # operations target it. Maps to "Activate Window" for PlatynUI; no web/
+    # mobile mapping (focus-before-act is automatic there is not applicable).
+    ENSURE_FOCUSED = "ensure_focused"
 
     # Reserved for future expansion (not yet mapped)
     # DRAG = "drag"

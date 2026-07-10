@@ -158,6 +158,57 @@ class TestEnsureX11SessionEnv:
         assert note is None
         assert env["XDG_SESSION_TYPE"] == "wayland"
 
+    # -- GTK/Qt backend pinning (wayland-0 fallback escape; change:
+    # platynui-visible-safe-targeting follow-up) ------------------------
+
+    def test_wayland_force_pins_gdk_backend(self, monkeypatch):
+        # wl_display_connect(NULL) falls back to 'wayland-0' even with
+        # WAYLAND_DISPLAY unset — forcing X11 must pin GDK_BACKEND too,
+        # else GTK AUTs launched as children escape to the host desktop.
+        self._linux(monkeypatch)
+        env = {"XDG_SESSION_TYPE": "wayland", "DISPLAY": ":100",
+               "WAYLAND_DISPLAY": "wayland-0"}
+        ensure_x11_session_env(env)
+        assert env["GDK_BACKEND"] == "x11"
+        assert env["QT_QPA_PLATFORM"] == "xcb"
+
+    def test_x11_session_with_live_wayland_socket_pins_backend(
+        self, monkeypatch, tmp_path
+    ):
+        # Pre-scrubbed env (XDG_SESSION_TYPE=x11, no WAYLAND_DISPLAY) on a
+        # Wayland host: the wayland-0 socket still exists in the runtime
+        # dir, so the fallback is reachable and must be pinned away.
+        self._linux(monkeypatch)
+        (tmp_path / "wayland-0").touch()
+        env = {"XDG_SESSION_TYPE": "x11", "DISPLAY": ":100",
+               "XDG_RUNTIME_DIR": str(tmp_path)}
+        assert ensure_x11_session_env(env) is None
+        assert env["GDK_BACKEND"] == "x11"
+
+    def test_pure_x11_host_does_not_pin(self, monkeypatch, tmp_path):
+        # No compositor socket reachable -> nothing to pin.
+        self._linux(monkeypatch)
+        env = {"XDG_SESSION_TYPE": "x11", "DISPLAY": ":0",
+               "XDG_RUNTIME_DIR": str(tmp_path)}
+        ensure_x11_session_env(env)
+        assert "GDK_BACKEND" not in env
+        assert "QT_QPA_PLATFORM" not in env
+
+    def test_pre_set_backend_respected(self, monkeypatch):
+        self._linux(monkeypatch)
+        env = {"XDG_SESSION_TYPE": "wayland", "DISPLAY": ":100",
+               "WAYLAND_DISPLAY": "wayland-0", "GDK_BACKEND": "wayland"}
+        ensure_x11_session_env(env)
+        assert env["GDK_BACKEND"] == "wayland"  # never override explicit choice
+        assert "QT_QPA_PLATFORM" not in env
+
+    def test_keep_wayland_optout_skips_pinning(self, monkeypatch):
+        self._linux(monkeypatch)
+        env = {"XDG_SESSION_TYPE": "wayland", "DISPLAY": ":0",
+               "WAYLAND_DISPLAY": "wayland-0", KEEP_WAYLAND_ENV: "1"}
+        ensure_x11_session_env(env)
+        assert "GDK_BACKEND" not in env
+
     def test_no_display_no_wayland_returns_none_unchanged(self, monkeypatch):
         self._linux(monkeypatch)
         env = {}

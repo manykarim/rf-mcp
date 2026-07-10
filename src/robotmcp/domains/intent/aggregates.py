@@ -871,6 +871,19 @@ def _builtin_platynui_mappings() -> List[IntentMapping]:
             timeout_category="assertion",
             notes="Descriptor resolution retries built-in (default 30s).",
         ),
+        IntentMapping(
+            intent_verb=IntentVerb.ENSURE_FOCUSED,
+            library="PlatynUI.BareMetal",
+            keyword="Activate Window",
+            requires_target=True,
+            requires_value=False,
+            timeout_category="action",
+            notes=(
+                "Raises + focuses the AUT window so subsequent pointer/"
+                "keyboard ops target it (change: platynui-focused-execution). "
+                "Accepts the window descriptor (control:Frame/Window/Dialog)."
+            ),
+        ),
     ]
 
 

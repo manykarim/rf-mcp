@@ -295,9 +295,30 @@ class SessionManager:
             Detected platform type
         """
         scenario_lower = scenario.lower()
-        
+
+        # Desktop-vs-mobile precedence (change: desktop-mcp-workflow-correctness,
+        # mirrors ExecutionSession._desktop_vs_mobile_precedence). The generic
+        # token "app" in the mobile list below wrongly beat a native desktop
+        # "application" (maintainer-report #1). Apply explicit precedence FIRST:
+        # an explicit mobile signal wins; otherwise a desktop signal yields
+        # DESKTOP; "app" alone never forces mobile.
+        try:
+            from robotmcp.models.session_models import (
+                ExecutionSession,
+                SessionType,
+            )
+
+            _decider = ExecutionSession(session_id="__platform_detect__")
+            decided = _decider._desktop_vs_mobile_precedence(scenario_lower)
+            if decided == SessionType.DESKTOP_TESTING:
+                return PlatformType.DESKTOP
+            if decided == SessionType.MOBILE_TESTING:
+                return PlatformType.MOBILE
+        except Exception:
+            pass
+
         # Mobile indicators
-        mobile_keywords = ['app', 'mobile', 'android', 'ios', 'iphone', 'ipad', 
+        mobile_keywords = ['app', 'mobile', 'android', 'ios', 'iphone', 'ipad',
                           'device', 'appium', 'emulator', 'simulator', 'apk',
                           'bundle', 'tap', 'swipe', 'gesture']
         

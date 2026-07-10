@@ -811,6 +811,9 @@ class TestBridgeIntegration:
         # Mock session
         mock_session = MagicMock()
         mock_session.get_session_info.return_value = {"session_id": "test"}
+        # Attach-bridge (web) session — not desktop, so page_source routes
+        # through the bridge path rather than the desktop stub.
+        mock_session.is_desktop_session.return_value = False
         monkeypatch.setattr(
             "robotmcp.server.execution_engine.session_manager.get_session",
             lambda sid: mock_session,

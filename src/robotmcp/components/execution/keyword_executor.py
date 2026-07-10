@@ -287,6 +287,9 @@ class KeywordExecutor:
             "true",
             "True",
         )
+        # Focus-before-act manager for PlatynUI desktop sessions
+        # (change: platynui-focused-execution). Lazily created on first use.
+        self._platynui_focus_manager = None
         # Lock to serialize Browser timeout mutations during pre-validation.
         # Browser.Set Browser Timeout is a Playwright-global setting; without
         # a lock, concurrent pre-validations in different threads could see
@@ -306,6 +309,462 @@ class KeywordExecutor:
         # unresolved lookups (no session context, multiple libraries match,
         # keyword name not found) do NOT veto — we trust the positive list.
         self._locator_introspector = LocatorArgIntrospector(self.keyword_discovery)
+
+    def _maybe_sanitize_desktop_launch(self, session, keyword, arguments):
+        """For a desktop-session ``Start Process`` of a known GUI binary,
+        append RF ``env:`` overrides that strip snap-contaminated loader vars
+        and set the bound display (change: platynui-desktop-safety-isolation).
+
+        Returns possibly-augmented arguments. Non-GUI / non-desktop launches
+        are returned unchanged. Honors a ``platynui_no_sanitize`` session attr.
+        """
+        try:
+            # Sanitize both Start Process and Run Process GUI launches for parity
+            # with the resolution hook and the spec (Codex review #3).
+            if keyword.strip().lower().rsplit(".", 1)[-1] not in (
+                "start process",
+                "run process",
+            ):
+                return arguments
+            _is_desktop = getattr(session, "is_desktop_session", None)
+            if not (callable(_is_desktop) and _is_desktop() is True):
+                return arguments
+            from robotmcp.components.execution.desktop_launch_env import (
+                build_desktop_launch_env,
+                is_desktop_gui_launch,
+            )
+
+            binary = is_desktop_gui_launch(list(arguments or []))
+            if binary is None:
+                return arguments
+            # Already carries explicit env: overrides? leave it to the author.
+            if any(isinstance(a, str) and a.startswith("env:") for a in (arguments or [])):
+                return arguments
+            sanitize = not bool(getattr(session, "platynui_no_sanitize", False))
+            display_env = {
+                "DISPLAY": os.environ.get("DISPLAY", ""),
+                "XDG_SESSION_TYPE": "x11",
+                "GDK_BACKEND": "x11",
+                "WAYLAND_DISPLAY": "",
+            }
+            clean = build_desktop_launch_env(
+                arguments[0], display_env=display_env, sanitize=sanitize
+            )
+            # Inject only the vars that matter for the snap failure + display,
+            # as RF env: overrides (per-var; the rest of the env is inherited).
+            inject_vars = (
+                "LD_LIBRARY_PATH", "GTK_PATH", "GIO_MODULE_DIR",
+                "GIO_EXTRA_MODULES", "GSETTINGS_SCHEMA_DIR", "QT_PLUGIN_PATH",
+                "XDG_DATA_DIRS", "DISPLAY", "XDG_SESSION_TYPE", "GDK_BACKEND",
+            )
+            extra = []
+            for var in inject_vars:
+                if var in clean and clean[var]:
+                    extra.append(f"env:{var}={clean[var]}")
+            # Neutralize snap single-path vars that were dropped.
+            for var in ("LD_PRELOAD", "GTK_EXE_PREFIX"):
+                if var in os.environ and var not in clean:
+                    extra.append(f"env:{var}=")
+            if extra:
+                logger.info(
+                    "PlatynUI desktop launch: sanitized env for %s (%d overrides)",
+                    binary, len(extra),
+                )
+                return list(arguments) + extra
+            return arguments
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("desktop launch sanitize skipped: %s", exc)
+            return arguments
+
+    def _maybe_resolve_desktop_executable(self, session, keyword, arguments):
+        """For a desktop-session Process launch/probe, resolve the executable
+        (``arguments[0]``) to an absolute path via ``shutil.which`` against the
+        server-process PATH, so a tool present for the server is found from step
+        execution (maintainer-report #7 — ``xdotool FileNotFoundError``).
+
+        Resolution uses the server PATH only — it deliberately does NOT inherit
+        an interactive shell's startup environment (a security regression). When
+        a tool is genuinely unresolvable, logs a WARNING with the effective PATH
+        so the failure is diagnosable rather than opaque.
+        change: desktop-mcp-workflow-correctness.
+        """
+        try:
+            kw = keyword.strip().lower().rsplit(".", 1)[-1]
+            if kw not in ("start process", "run process"):
+                return arguments
+            _is_desktop = getattr(session, "is_desktop_session", None)
+            if not (callable(_is_desktop) and _is_desktop() is True):
+                return arguments
+            if not arguments:
+                return arguments
+            exe = arguments[0]
+            # Skip RF config tokens (env:..., key=value options) — only resolve a
+            # plain executable name/path in the first positional.
+            if (
+                not isinstance(exe, str)
+                or not exe
+                or exe.startswith("env:")
+                or "=" in exe
+            ):
+                return arguments
+            from robotmcp.components.execution.desktop_launch_env import (
+                get_effective_path,
+                resolve_executable,
+            )
+
+            resolved = resolve_executable(exe)
+            if resolved and resolved != exe:
+                logger.info(
+                    "PlatynUI desktop launch: resolved executable %r -> %r",
+                    exe, resolved,
+                )
+                return [resolved] + list(arguments[1:])
+            if resolved is None and not os.path.isabs(exe):
+                logger.warning(
+                    "PlatynUI desktop launch: executable %r is not resolvable on "
+                    "the server PATH=%s",
+                    exe, get_effective_path(),
+                )
+            return arguments
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("desktop executable resolution skipped: %s", exc)
+            return arguments
+
+    def _desktop_text_count_before(self, keyword, arguments):
+        """Read the target text node's ``native:Text.CharacterCount`` via the
+        shared native runtime DIRECTLY (non-reentrant — no RF re-execution under
+        the lock), for the input-effect check
+        (change: desktop-input-and-runtime-diagnostics).
+
+        Only for keyboard interaction keywords with an explicit, resolvable
+        target descriptor in ``arguments[0]`` (skips the focused-typing
+        ``${None}`` form, where the target is ambiguous). Returns an int, or
+        None when not applicable / unreadable. Best-effort; never raises.
+        """
+        try:
+            base = keyword.strip().lower().rsplit(".", 1)[-1]
+            if base not in ("keyboard type", "keyboard press", "keyboard release"):
+                return None
+            if not arguments:
+                return None
+            locator = arguments[0]
+            if (
+                not isinstance(locator, str)
+                or not locator.strip()
+                or locator.strip() in ("${None}", "${none}", "None")
+                or "=" in locator
+            ):
+                return None
+            from robotmcp.plugins.builtin.platynui_plugin import get_runtime
+
+            rt = get_runtime()
+            if rt is None:
+                return None
+            node = None
+            ev = getattr(rt, "evaluate_single", None) or getattr(rt, "evaluate", None)
+            if ev is None:
+                return None
+            res = ev(locator)
+            node = res[0] if isinstance(res, (list, tuple)) and res else res
+            if node is None:
+                return None
+            attr_fn = getattr(node, "attribute", None)
+            if not callable(attr_fn):
+                return None
+            attr = attr_fn("native:Text.CharacterCount")
+            if attr is None:
+                return None
+            val = attr.value() if hasattr(attr, "value") else attr
+            return int(val)
+        except Exception as exc:  # pragma: no cover - env dependent
+            logger.debug("desktop input-effect snapshot skipped: %s", exc)
+            return None
+
+    def _platynui_safety_guard(self, session, keyword):
+        """Active-desktop safety guard for PlatynUI interaction keywords
+        (change: platynui-desktop-safety-isolation).
+
+        Returns the safety outcome dict for interaction keywords (so the caller
+        can refuse non-isolated displays), or None when the guard does not
+        apply. Bypassed/warn runs are logged at WARNING for auditability.
+        """
+        from robotmcp.components.execution.platynui_focus import (
+            is_interaction_keyword,
+        )
+
+        if not is_interaction_keyword(keyword):
+            return None
+        from robotmcp.components.execution.desktop_display_safety import (
+            evaluate_safety,
+        )
+
+        outcome = evaluate_safety(session)
+        if outcome["bypassed"] or (not outcome["enforcing"]):
+            logger.warning(
+                "PlatynUI safety guard: %s desktop (%s) — %s",
+                "bypassed on" if outcome["bypassed"] else "warn-only on",
+                outcome["classification"], outcome["reason"],
+            )
+        elif not outcome["allowed"]:
+            logger.warning(
+                "PlatynUI safety guard: refused on %s desktop",
+                outcome["classification"],
+            )
+        return outcome
+
+    def _platynui_focus_before_act(self, session, keyword, arguments):
+        """Ensure the AUT window is focused/visible/in-scope before a
+        PlatynUI pointer/keyboard keyword (change: platynui-focused-execution).
+
+        Reads policy from the session (defaults: focus ON, warn-not-fail):
+          - ``platynui_no_focus`` (bool): per-session escape hatch
+          - ``platynui_fail_on_hidden`` (bool): fail fast on non-visible AUT
+          - ``platynui_strict_scope`` (bool): fail fast on cross-window target
+
+        Returns a FocusOutcome (or None when not applicable). Raises
+        FocusError when a strict/fail-fast precondition is violated.
+        """
+        from robotmcp.components.execution.platynui_focus import (
+            PlatynUIFocusManager,
+            is_interaction_keyword,
+        )
+
+        if not is_interaction_keyword(keyword):
+            return None
+        if self._platynui_focus_manager is None:
+            self._platynui_focus_manager = PlatynUIFocusManager()
+        # ADR-031 dirty flag: a desktop launch may have changed window
+        # identities — drop the verified-activation cache (task 2.5).
+        if getattr(session, "desktop_tree_dirty", False):
+            try:
+                self._platynui_focus_manager.invalidate_focus_cache()
+            except Exception:
+                pass
+        focus = not bool(getattr(session, "platynui_no_focus", False))
+        fail_on_hidden = bool(getattr(session, "platynui_fail_on_hidden", False))
+        strict_scope = bool(getattr(session, "platynui_strict_scope", False))
+        aut_pid = getattr(session, "desktop_aut_pid", None)
+        aut_sid = getattr(session, "desktop_aut_sid", None)
+        # Target highlighting: default ON, per-session opt-out + env kill
+        # switch (change: platynui-visible-safe-targeting, task 3.1).
+        highlight = bool(getattr(session, "platynui_highlight", True))
+        outcome = self._platynui_focus_manager.ensure_focused(
+            keyword,
+            list(arguments or []),
+            focus=focus,
+            check_scope=True,
+            strict_scope=strict_scope,
+            fail_on_hidden=fail_on_hidden,
+            aut_pid=aut_pid if isinstance(aut_pid, int) else None,
+            aut_sid=aut_sid if isinstance(aut_sid, int) else None,
+            highlight=highlight,
+        )
+        # D7 one-shot (change: desktop-evidence-and-display-scoping): the
+        # blind type-at-focus warning fires once per session, mirroring
+        # desktop_wayland_warned.
+        try:
+            from robotmcp.components.execution.platynui_focus import (
+                UNFOCUSED_TYPING_WARNING,
+            )
+
+            if outcome is not None and UNFOCUSED_TYPING_WARNING in outcome.warnings:
+                if getattr(session, "desktop_unfocused_typing_warned", False):
+                    outcome.warnings = [
+                        w for w in outcome.warnings
+                        if w != UNFOCUSED_TYPING_WARNING
+                    ]
+                else:
+                    session.desktop_unfocused_typing_warned = True
+        except Exception:  # pragma: no cover - defensive
+            pass
+        return outcome
+
+    @staticmethod
+    def _screenshot_allowed_roots() -> list:
+        """Roots a desktop screenshot may be written under (D3)."""
+        import tempfile
+
+        roots = [tempfile.gettempdir()]
+        extra = os.environ.get("ROBOTMCP_SCREENSHOT_DIR", "").strip()
+        if extra:
+            roots.append(extra)
+        return roots
+
+    def _screenshot_path_guard(self, keyword, arguments):
+        """Refuse desktop screenshot paths outside the allowed roots with an
+        actionable hint (change: desktop-evidence-and-display-scoping, D3).
+        Returns an error result dict, or None to proceed."""
+        from robotmcp.components.execution.desktop_execution_signals import (
+            screenshot_request_path,
+        )
+
+        requested = screenshot_request_path(keyword, arguments)
+        if not requested or not os.path.isabs(requested):
+            return None
+        real = os.path.realpath(requested)
+        for root in self._screenshot_allowed_roots():
+            root_real = os.path.realpath(root)
+            if real == root_real or real.startswith(root_real + os.sep):
+                return None
+        roots = ", ".join(self._screenshot_allowed_roots())
+        return {
+            "success": False,
+            "error": (
+                f"screenshot path '{requested}' is outside the allowed "
+                f"roots ({roots})"
+            ),
+            "keyword": keyword,
+            "hints": [{
+                "type": "screenshot_path_refused",
+                "message": (
+                    f"Desktop screenshots may only be written under: {roots}. "
+                    "Set ROBOTMCP_SCREENSHOT_DIR to allow an additional root."
+                ),
+            }],
+        }
+
+    def _unscoped_locator_guard(self, session, keyword, arguments):
+        """Refuse a desktop Query/Evaluate whose XPath is unscoped (//-rooted),
+        before the native walk runs (change: desktop-unscoped-locator-guardrail).
+
+        A leading // re-walks the whole session AT-SPI tree (every desktop app),
+        taking tens of seconds on a busy desktop — long enough to exceed the MCP
+        client's request timeout and kill the transport. Returns an error dict
+        to refuse, None to proceed. Honors an explicit opt-out (env or session)
+        that downgrades the refusal to a one-time warning.
+        """
+        from robotmcp.components.execution.desktop_execution_signals import (
+            is_query_keyword,
+            is_unscoped_locator,
+        )
+
+        # Desktop-only (defensive — the call site already gates on this).
+        _is_desktop = getattr(session, "is_desktop_session", None)
+        if not (callable(_is_desktop) and _is_desktop() is True):
+            return None
+        if not is_query_keyword(keyword):
+            return None
+        args = list(arguments or [])
+        if not args or not is_unscoped_locator(args[0]):
+            return None
+
+        locator = str(args[0]).strip()
+        app = self._infer_session_app_name(session)
+        rewrite = (
+            f"/app:*[@Name='{app}']{locator}" if app
+            else f"/app:*[@Name='<app>']{locator}"
+        )
+
+        # Opt-out: deliberate desktop-wide search. Downgrade to a one-time
+        # warning rather than a refusal (mirrors desktop_wayland_warned).
+        opted_in = (
+            os.environ.get("ROBOTMCP_PLATYNUI_ALLOW_UNSCOPED", "").strip().lower()
+            in {"1", "true", "yes"}
+            or bool(getattr(session, "platynui_allow_unscoped", False))
+        )
+        if opted_in:
+            # Proceed, but surface a ONE-TIME warning (consumed + flag-flipped
+            # in the post-execution result block so it rides on success OR
+            # failure).
+            if not getattr(session, "desktop_unscoped_warned", False):
+                try:
+                    session._pending_unscoped_hint = {
+                        "type": "unscoped_desktop_locator_allowed",
+                        "message": (
+                            f"unscoped locator '{locator}' is walking the whole "
+                            "session UI tree (ROBOTMCP_PLATYNUI_ALLOW_UNSCOPED "
+                            "opt-in) — this can take tens of seconds on a busy "
+                            "desktop. Scope to /app:*[@Name='X']//… when possible."
+                        ),
+                    }
+                except Exception:
+                    pass
+            return None  # proceed
+
+        return {
+            "success": False,
+            "error": (
+                f"unscoped desktop locator '{locator}' would walk the whole "
+                "session UI tree (every desktop application) and can take tens "
+                "of seconds — refused before dispatch"
+            ),
+            "keyword": keyword,
+            "hints": [{
+                "type": "unscoped_desktop_locator",
+                "message": (
+                    "NEVER start a desktop locator with // — it is absolute "
+                    "XPath and ignores Set Root, re-walking every application "
+                    "on the session AT-SPI bus. Scope to the application "
+                    f"instead, e.g. '{rewrite}'. To size a subtree first, "
+                    "count() is allowed (e.g. count(//control:Button)). "
+                    "Set ROBOTMCP_PLATYNUI_ALLOW_UNSCOPED=1 only for a "
+                    "deliberate desktop-wide search."
+                ),
+            }],
+        }
+
+    @staticmethod
+    def _infer_session_app_name(session) -> Optional[str]:
+        """Best-effort AUT application name for a scoped-locator rewrite hint:
+        the launched-process basename when known, else None."""
+        try:
+            import os as _os
+
+            pid = getattr(session, "desktop_aut_pid", None)
+            if isinstance(pid, int):
+                comm = f"/proc/{pid}/comm"
+                if _os.path.exists(comm):
+                    with open(comm) as f:
+                        name = f.read().strip()
+                    if name:
+                        return name
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _maybe_recover_screenshot_result(session, keyword, arguments, result) -> None:
+        """Flip a desktop screenshot failure to success when the requested
+        file verifiably exists (change: desktop-evidence-and-display-scoping,
+        D3). Upstream PlatynUI ``take_screenshot`` WRITES the file, then
+        crashes building the html log link (``filepath.relative_to(outputdir)``)
+        for absolute paths outside the RF output dir — the artifact is real,
+        only the log link failed. Mutates ``result`` in place; never raises.
+        """
+        if not isinstance(result, dict) or result.get("success"):
+            return
+        try:
+            err_txt = str(result.get("error") or "")
+            if "is not in the subpath of" not in err_txt:
+                return
+            from robotmcp.components.execution.desktop_execution_signals import (
+                screenshot_request_path,
+            )
+
+            requested = screenshot_request_path(keyword, arguments)
+            is_desktop = getattr(session, "is_desktop_session", None)
+            if (
+                requested
+                and os.path.isabs(requested)
+                and callable(is_desktop)
+                and is_desktop() is True
+                and os.path.isfile(requested)
+                and os.path.getsize(requested) > 0
+            ):
+                result["success"] = True
+                result["error"] = None
+                result["result"] = requested
+                result.setdefault("hints", []).append({
+                    "type": "screenshot_path_recovered",
+                    "message": (
+                        f"Screenshot was written to '{requested}'; the "
+                        "keyword's failure was an upstream log-link quirk "
+                        "for paths outside the RF output dir and has been "
+                        "reclassified as success."
+                    ),
+                })
+        except Exception:  # pragma: no cover - defensive
+            pass
 
     def _requires_pre_validation(
         self,
@@ -1278,6 +1737,8 @@ class KeywordExecutor:
             # process — the Wayland portal handshake blocks indefinitely
             # in headless contexts. Idempotent; opt-out via
             # ROBOTMCP_PLATYNUI_KEEP_WAYLAND=1.
+            _focus_outcome = None
+            _input_effect_before = None  # D1: native CharacterCount before a keyboard step
             try:
                 _is_desktop = getattr(session, "is_desktop_session", None)
                 if callable(_is_desktop) and _is_desktop() is True:
@@ -1286,8 +1747,138 @@ class KeywordExecutor:
                     )
 
                     ensure_x11_session_env()
-            except Exception:  # pragma: no cover - defensive
-                pass
+                    # D2: if a recent desktop launch marked the tree stale,
+                    # refresh the cached accessibility tree before the FIRST
+                    # tree-resolving keyword so a newly-launched app resolves by
+                    # name (change: desktop-tree-cache-refresh). The flag is
+                    # consumed once so steady-state queries keep the warm cache.
+                    try:
+                        from robotmcp.components.execution.desktop_execution_signals import (
+                            is_tree_resolving_keyword,
+                        )
+
+                        if (
+                            getattr(session, "desktop_tree_dirty", False)
+                            and is_tree_resolving_keyword(keyword)
+                        ):
+                            from robotmcp.plugins.builtin.platynui_plugin import (
+                                clear_runtime_tree_cache,
+                            )
+
+                            clear_runtime_tree_cache()
+                            session.desktop_tree_dirty = False
+                            # Window identities may have changed — drop the
+                            # verified-activation cache too (task 2.5).
+                            if self._platynui_focus_manager is not None:
+                                self._platynui_focus_manager.invalidate_focus_cache()
+                    except Exception as _refq_exc:  # pragma: no cover - defensive
+                        logger.debug(
+                            "pre-query tree refresh skipped: %s", _refq_exc
+                        )
+                    # SAFETY GUARD (change: platynui-desktop-safety-isolation):
+                    # before any focus/dispatch, refuse pointer/keyboard input
+                    # unless the bound display is provably isolated — so input
+                    # cannot leak onto the user's active desktop. Fail closed on
+                    # active/unknown; opt-in + warn-mode honored.
+                    _safety_outcome = self._platynui_safety_guard(
+                        session, keyword
+                    )
+                    if _safety_outcome is not None and not _safety_outcome["allowed"]:
+                        _guard_hint = {
+                            "type": "platynui_active_desktop_guard",
+                            "message": _safety_outcome["reason"],
+                        }
+                        # D3: attach the actionable isolation recipe so the agent
+                        # has a guided path to an isolated display, not just the
+                        # bypass env var. change: desktop-stepwise-execution-fidelity.
+                        _recipe = _safety_outcome.get("isolation_recipe")
+                        if _recipe:
+                            _guard_hint["isolation_recipe"] = _recipe
+                        return {
+                            "success": False,
+                            "error": _safety_outcome["reason"],
+                            "keyword": keyword,
+                            "platynui_safety": {
+                                "classification": _safety_outcome["classification"],
+                                "enforcing": _safety_outcome["enforcing"],
+                            },
+                            "hints": [_guard_hint],
+                        }
+                    # Clear any active highlight overlay before a screenshot
+                    # so the evidence image shows the app, not the marker
+                    # (change: platynui-visible-safe-targeting, task 3.2).
+                    try:
+                        from robotmcp.components.execution.platynui_focus import (
+                            normalize_keyword as _pfx_norm,
+                        )
+
+                        if (
+                            _pfx_norm(keyword) == "take screenshot"
+                            and self._platynui_focus_manager is not None
+                        ):
+                            self._platynui_focus_manager.clear_highlight()
+                    except Exception:  # pragma: no cover - defensive
+                        pass
+                    # Evidence path guard (D3): refuse screenshot paths
+                    # outside the allowed roots with an actionable hint
+                    # (change: desktop-evidence-and-display-scoping).
+                    _shot_guard = self._screenshot_path_guard(keyword, arguments)
+                    if _shot_guard is not None:
+                        return _shot_guard
+                    # Unscoped-locator guardrail: refuse //-rooted desktop
+                    # Query/Evaluate before the multi-second session-wide walk
+                    # exceeds the MCP client timeout (change:
+                    # desktop-unscoped-locator-guardrail).
+                    _unscoped_guard = self._unscoped_locator_guard(
+                        session, keyword, arguments
+                    )
+                    if _unscoped_guard is not None:
+                        return _unscoped_guard
+                    # Focus-before-act: ensure pointer/keyboard input targets
+                    # the AUT window, not whatever window is active, and that
+                    # the AUT window is visible/in-scope (change:
+                    # platynui-focused-execution). FocusError fails fast under
+                    # opt-in policy; otherwise warnings ride along on the step.
+                    _focus_outcome = self._platynui_focus_before_act(
+                        session, keyword, arguments
+                    )
+                    # Resolve a desktop Process launch/recovery executable to an
+                    # absolute path against the server PATH (maintainer-report
+                    # #7). change: desktop-mcp-workflow-correctness.
+                    arguments = self._maybe_resolve_desktop_executable(
+                        session, keyword, arguments
+                    )
+                    # Snap-decontaminate a desktop GUI launch so a snap-confined
+                    # app does not inherit snap-rooted loader vars and exit 127
+                    # (maintainer-report finding #2). change:
+                    # desktop-stepwise-execution-fidelity. (is_desktop_gui_launch
+                    # matches on basename, so it still fires after absolute-path
+                    # resolution above.)
+                    arguments = self._maybe_sanitize_desktop_launch(
+                        session, keyword, arguments
+                    )
+                    # D1: snapshot the target text node's CharacterCount BEFORE a
+                    # keyboard interaction with an explicit (resolvable) target,
+                    # so a success-with-no-effect can be flagged afterward
+                    # (change: desktop-input-and-runtime-diagnostics). Native /
+                    # non-reentrant; best-effort.
+                    _input_effect_before = self._desktop_text_count_before(
+                        keyword, arguments
+                    )
+            except Exception as _focus_exc:
+                from robotmcp.components.execution.platynui_focus import FocusError
+
+                if isinstance(_focus_exc, FocusError):
+                    return {
+                        "success": False,
+                        "error": str(_focus_exc),
+                        "keyword": keyword,
+                        "hints": [{
+                            "type": "platynui_focus_precondition",
+                            "message": str(_focus_exc),
+                        }],
+                    }
+                # defensive: never let focus logic break execution
 
             # PHASE 1.2: Pre-execution Library Registration
             # Ensure required library is registered before keyword execution
@@ -1608,6 +2199,49 @@ class KeywordExecutor:
             step.end_time = datetime.now()
             step.result = result.get("output")
 
+            # Surface focus-before-act outcome (warnings/bypass/strategy) so
+            # silent off-window or non-visible operations are not lost
+            # (change: platynui-focused-execution, tasks 2.2/4.4).
+            if _focus_outcome is not None and isinstance(result, dict):
+                fo = _focus_outcome.to_dict()
+                if _focus_outcome.bypassed:
+                    result["focus_bypassed"] = True
+                if fo.get("warnings") or fo.get("attempted"):
+                    result["platynui_focus"] = fo
+                    if fo.get("warnings"):
+                        _fhints = result.get("hints") or []
+                        for _w in fo["warnings"]:
+                            _fhints.append({
+                                "type": "platynui_focus_warning",
+                                "message": _w,
+                            })
+                        result["hints"] = _fhints
+
+            # One-time unscoped-locator warning on the opt-in path (change:
+            # desktop-unscoped-locator-guardrail): attached for success OR
+            # failure, then the per-session one-shot flag is flipped.
+            _pending_unscoped = getattr(session, "_pending_unscoped_hint", None)
+            if _pending_unscoped is not None and isinstance(result, dict):
+                result.setdefault("hints", []).append(_pending_unscoped)
+                try:
+                    session.desktop_unscoped_warned = True
+                    session._pending_unscoped_hint = None
+                except Exception:
+                    pass
+
+            # Screenshot path recovery (D3) — see _maybe_recover_screenshot_result.
+            self._maybe_recover_screenshot_result(session, keyword, arguments, result)
+
+            # Step accounting: every execution counts, recorded or not, so
+            # build_test_suite can warn on silently-empty stepwise suites
+            # (change: platynui-visible-safe-targeting, I-1).
+            try:
+                session.executed_step_count += 1
+                if not result["success"]:
+                    session.failed_step_count += 1
+            except Exception:
+                pass
+
             if result["success"]:
                 step_result_value = result.get("result")
                 if step_result_value is None and "output" in result:
@@ -1629,11 +2263,195 @@ class KeywordExecutor:
                         f"Step not recorded (inspection-only or record=False): {keyword}"
                     )
                 result["recorded"] = record_resolved
+
+                # D2a: surface a Process-vs-discovery disagreement for a desktop
+                # launch — the handle is dead (e.g. snap exec 127) while
+                # PlatynUI may still observe stale nodes (finding #2). Uses the
+                # handle's own ``poll()`` — NON-reentrant, no RF re-execution
+                # under the lock. change: desktop-stepwise-execution-fidelity.
+                try:
+                    _is_desktop = getattr(session, "is_desktop_session", None)
+                    if callable(_is_desktop) and _is_desktop() is True:
+                        from robotmcp.components.execution.desktop_execution_signals import (
+                            close_liveness_hint,
+                            evidence_missing_hint,
+                            input_effect_hint,
+                            is_close_keyword,
+                            is_interaction_keyword,
+                            is_launch_keyword,
+                            launch_liveness_hint,
+                            wayland_input_warning,
+                        )
+
+                        # Close liveness (change: desktop-test-scoping-and-
+                        # close-lifecycle, D5): the window closed but the AUT
+                        # process may have survived (start-center frames).
+                        if is_close_keyword(keyword):
+                            # The display's window population changed — drop
+                            # the display-scoping PID cache so post-close
+                            # diagnostics (display_empty) see fresh state
+                            # (run-4 finding: stale cache made the empty
+                            # display report "(X11 probe unavailable)").
+                            try:
+                                from robotmcp.components.execution.ui_tree_service import (
+                                    clear_display_pid_cache,
+                                )
+
+                                clear_display_pid_cache()
+                            except Exception:  # pragma: no cover - defensive
+                                pass
+                            _aut_pid = getattr(session, "desktop_aut_pid", None)
+                            _alive = None
+                            if isinstance(_aut_pid, int):
+                                try:
+                                    os.kill(_aut_pid, 0)
+                                    _alive = True
+                                except ProcessLookupError:
+                                    _alive = False
+                                except PermissionError:
+                                    _alive = True
+                                except Exception:
+                                    _alive = None
+                            _ch = close_liveness_hint(_alive)
+                            if _ch:
+                                result.setdefault("hints", []).append(_ch)
+
+                        # Evidence integrity (change: desktop-evidence-and-
+                        # display-scoping, D2): a successful screenshot step
+                        # must be backed by a file on disk or carry a warning.
+                        _ev_hint = evidence_missing_hint(
+                            keyword, arguments, step_result_value
+                        )
+                        if _ev_hint:
+                            result.setdefault("hints", []).append(_ev_hint)
+
+                        # D2: once per session, warn that synthetic X11 input may
+                        # be blocked when the session originated as Wayland.
+                        if (
+                            is_interaction_keyword(keyword)
+                            and not getattr(session, "desktop_wayland_warned", False)
+                        ):
+                            _wh = wayland_input_warning(keyword)
+                            if _wh:
+                                result.setdefault("hints", []).append(_wh)
+                                session.desktop_wayland_warned = True
+
+                        # D1: success-with-no-effect — compare the BEFORE snapshot
+                        # to an AFTER snapshot; warn when a keyboard step succeeded
+                        # but the target's CharacterCount did not change.
+                        if _input_effect_before is not None:
+                            _after = self._desktop_text_count_before(keyword, arguments)
+                            _eh = input_effect_hint(
+                                keyword=keyword,
+                                success=True,
+                                state_before=_input_effect_before,
+                                state_after=_after,
+                            )
+                            if _eh:
+                                result.setdefault("hints", []).append(_eh)
+
+                        if is_launch_keyword(keyword):
+                            proc = step_result_value
+                            running = None
+                            try:
+                                if hasattr(proc, "poll"):
+                                    running = proc.poll() is None
+                            except Exception:
+                                running = None
+                            # Remember the AUT pid so focus-before-act can
+                            # verify the resolved target belongs to the
+                            # launched application (change:
+                            # platynui-visible-safe-targeting, task 2.4).
+                            try:
+                                _pid = getattr(proc, "pid", None)
+                                if isinstance(_pid, int):
+                                    session.desktop_aut_pid = _pid
+                                    # Session id survives wrapper exits,
+                                    # daemonization and single-instance
+                                    # handoff — the lineage signal for the
+                                    # scope check (change:
+                                    # desktop-aut-process-lineage).
+                                    try:
+                                        session.desktop_aut_sid = os.getsid(_pid)
+                                    except Exception:
+                                        session.desktop_aut_sid = None
+                            except Exception:
+                                pass
+                            _hint = launch_liveness_hint(
+                                process_running=running, discovery_node_count=None
+                            )
+                            if _hint:
+                                result.setdefault("hints", []).append(_hint)
+                            # I-4: a dash-prefixed `=`-containing launch arg
+                            # (e.g. -env:UserInstallation=file://…) was likely
+                            # swallowed by RF as a named argument — the app
+                            # started WITHOUT it. Detect-and-hint only; the
+                            # command line is never rewritten (change:
+                            # platynui-visible-safe-targeting, task 5.1).
+                            try:
+                                from robotmcp.utils.hints import (
+                                    _escaped_form,
+                                    detect_process_eq_arg_misparse,
+                                )
+
+                                _flagged = detect_process_eq_arg_misparse(
+                                    keyword, arguments
+                                )
+                                if _flagged:
+                                    result.setdefault("hints", []).append({
+                                        "type": "process_named_arg_misparse",
+                                        "message": (
+                                            "Robot Framework may have parsed "
+                                            + ", ".join(f"'{a}'" for a in _flagged)
+                                            + " as a named argument and dropped "
+                                            "it from the command line. Escape "
+                                            "the first '=' as '\\=' to keep it "
+                                            "positional, e.g. "
+                                            + _escaped_form(_flagged[0])
+                                        ),
+                                    })
+                            except Exception:  # pragma: no cover - defensive
+                                pass
+                            # D1: a freshly-launched app is invisible to the
+                            # cached desktop tree until cleared. Clear now and
+                            # mark the session dirty so the first post-launch
+                            # tree-resolving keyword re-reads live AT-SPI
+                            # (change: desktop-tree-cache-refresh).
+                            try:
+                                from robotmcp.plugins.builtin.platynui_plugin import (
+                                    clear_runtime_tree_cache,
+                                )
+
+                                clear_runtime_tree_cache()
+                                session.desktop_tree_dirty = True
+                                # The display's window/PID population changed —
+                                # drop the display-scoping PID cache so the new
+                                # AUT is never filtered as a "host app" (change:
+                                # desktop-evidence-and-display-scoping, D4).
+                                from robotmcp.components.execution.ui_tree_service import (
+                                    clear_display_pid_cache,
+                                )
+
+                                clear_display_pid_cache()
+                            except Exception as _ref_exc:  # pragma: no cover - defensive
+                                logger.debug(
+                                    "post-launch tree refresh skipped: %s", _ref_exc
+                                )
+                except Exception as _sig_exc:  # pragma: no cover - defensive
+                    logger.debug("desktop launch signal skipped: %s", _sig_exc)
             else:
                 step.mark_failure(result.get("error"))
                 logger.debug(
                     f"Failed step not added to session: {keyword} - {result.get('error')}"
                 )
+
+            # Surface running executed/recorded counts so an agent can detect
+            # the divergence while still executing (I-1).
+            try:
+                result["steps_executed"] = session.executed_step_count
+                result["steps_recorded"] = session.recorded_step_count()
+            except Exception:
+                pass
 
             # Update session variables if any were set
             if "variables" in result:
@@ -2503,10 +3321,13 @@ class KeywordExecutor:
                 else:
                     libraries = []
 
-                # If keyword has explicit library prefix (e.g., 'XML.Parse XML'), ensure it's imported
+                # If keyword has explicit library prefix (e.g., 'XML.Parse XML'),
+                # ensure it's imported. RF keyword names contain no dots, so the
+                # library is everything before the LAST dot (split-on-first-dot
+                # truncated dotted names like 'PlatynUI.BareMetal').
                 try:
                     if "." in keyword:
-                        prefix = keyword.split(".", 1)[0]
+                        prefix = keyword.rsplit(".", 1)[0]
                         if prefix and prefix not in libraries:
                             libraries.append(prefix)
                 except Exception:
@@ -2539,6 +3360,33 @@ class KeywordExecutor:
                     session_order = getattr(session, "search_order", None)
                     if session_order:
                         ctx_info["imported_libraries"] = list(session_order)
+                        # Ensure every session library is ACTUALLY imported
+                        # into the live RF namespace. The context may have
+                        # been created before the session's libraries were
+                        # fully configured (e.g. start_test auto-creation, or
+                        # init/import_library after the first step) — run 4
+                        # (2026-06-11) hit "No keyword with name 'Take
+                        # Screenshot' found" because PlatynUI.BareMetal was
+                        # in the session but not in the namespace. Idempotent:
+                        # dict lookup only when already imported.
+                        _ns = ctx_info.get("namespace")
+                        _kw_store = getattr(_ns, "_kw_store", None)
+                        _loaded = (
+                            getattr(_kw_store, "libraries", {}) if _kw_store else {}
+                        )
+                        for _lib in session_order:
+                            if _lib and _lib not in _loaded:
+                                try:
+                                    _ns.import_library(_lib, args=(), alias=None)
+                                    logger.info(
+                                        "On-demand import of session library "
+                                        f"'{_lib}' into existing RF context"
+                                    )
+                                except Exception as _imp_exc:
+                                    logger.debug(
+                                        "on-demand import of %s failed: %s",
+                                        _lib, _imp_exc,
+                                    )
             except Exception:
                 pass
 
@@ -3235,6 +4083,23 @@ class KeywordExecutor:
             "status": step.status,
             "execution_time": step.execution_time,
         }
+        # Carry the focus-before-act outcome to the MCP response so off-window/
+        # non-visible operations are visible to the agent (change:
+        # platynui-focused-execution).
+        if result.get("focus_bypassed"):
+            base_response["focus_bypassed"] = True
+        if result.get("platynui_focus") is not None:
+            base_response["platynui_focus"] = result["platynui_focus"]
+        # On SUCCESS the failure-only hint path below is skipped, so surface
+        # focus warnings (off-window/non-visible) here too.
+        if result["success"]:
+            _pf = result.get("platynui_focus") or {}
+            _pf_warnings = _pf.get("warnings") if isinstance(_pf, dict) else None
+            if _pf_warnings:
+                base_response["hints"] = [
+                    {"type": "platynui_focus_warning", "message": _w}
+                    for _w in _pf_warnings
+                ]
 
         if not result["success"]:
             base_response["error"] = result.get("error", "Unknown error")

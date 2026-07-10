@@ -112,6 +112,208 @@ _MATCHED_SET_HINT = (
 # check-and-set (cross-LLM review finding, ADR-025).
 _ENV_SHIM_LOCK = threading.Lock()
 
+# Whether this desktop session originated as Wayland (set once, before X11 is
+# forced). change: desktop-input-and-runtime-diagnostics.
+_WAYLAND_ORIGIN: Optional[bool] = None
+
+
+def _record_session_origin(env: Dict[str, str]) -> None:
+    """Record (once) whether the session originated as Wayland — env signals or
+    a live ``$XDG_RUNTIME_DIR/wayland-0`` socket. Best-effort; never raises."""
+    global _WAYLAND_ORIGIN
+    if _WAYLAND_ORIGIN:
+        return  # already known to be Wayland; do not downgrade
+    try:
+        session_type = env.get("XDG_SESSION_TYPE", "").strip().lower()
+        if session_type == "wayland" or env.get("WAYLAND_DISPLAY"):
+            _WAYLAND_ORIGIN = True
+            return
+        runtime_dir = env.get("XDG_RUNTIME_DIR", "")
+        if runtime_dir and os.path.exists(os.path.join(runtime_dir, "wayland-0")):
+            _WAYLAND_ORIGIN = True
+            return
+        if _WAYLAND_ORIGIN is None:
+            _WAYLAND_ORIGIN = False
+    except Exception:  # pragma: no cover - defensive
+        pass
+
+
+def was_wayland_session() -> bool:
+    """True when this desktop session originated as Wayland (so forced-X11
+    synthetic input may be blocked by the compositor)."""
+    return _WAYLAND_ORIGIN is True
+
+
+# --- Runtime broker (change: platynui-desktop-safety-isolation, D4) ---------
+#
+# The PlatynUI native platform module is process-global and is NOT safely
+# re-initializable: once a Runtime is shut down, a later bind fails with
+# "ProviderError ... not available after shutdown or failed connect". The
+# proven proximate cause of that error on the MCP/Robot path was
+# ui_tree_service creating and shutting down a Runtime on EVERY call. The
+# broker gives ALL call sites (focus manager, ui_tree, etc.) one shared,
+# lock-bound, lazily-created Runtime and refuses re-init after close.
+
+_RUNTIME_LOCK = threading.Lock()
+_RUNTIME = None  # the shared platynui_native.Runtime
+# States: "new" (never bound) | "open" | "shutting_down" | "disposed"
+# (terminal — the process-global platform module cannot be re-initialized).
+_RUNTIME_STATE = "new"
+# Last bind/connect failure text (for classification). None once open.
+_RUNTIME_LAST_ERROR: Optional[str] = None
+
+
+def runtime_unavailable_reason() -> Optional[str]:
+    """Classify why the PlatynUI runtime is unavailable, or None when it is
+    available (change: desktop-input-and-runtime-diagnostics).
+
+    Returns one of:
+    - ``"not_installed"`` — the native module could not be imported
+    - ``"display_connect_failed"`` — the runtime could not connect to the
+      display (DISPLAY/XAUTHORITY/XDG_RUNTIME_DIR)
+    - ``"disposed"`` — the one-shot native module was disposed; restart needed
+    - ``"unavailable"`` — bind failed for an unclassified reason
+    - ``None`` — the runtime is currently open/available
+
+    Never raises.
+    """
+    if _RUNTIME is not None and _RUNTIME_STATE == "open":
+        return None
+    if _RUNTIME_STATE == "disposed":
+        return "disposed"
+    err = (_RUNTIME_LAST_ERROR or "").lower()
+    if not err:
+        return None  # never attempted yet
+    if "no module named" in err or "import" in err or "not installed" in err:
+        return "not_installed"
+    if any(
+        tok in err
+        for tok in (
+            "connect", "connection", "display", "shutdown", "xauth",
+            "x11", "wayland", "provider initialization", "platform",
+        )
+    ):
+        return "display_connect_failed"
+    return "unavailable"
+
+
+def get_runtime():
+    """Return the process-shared PlatynUI Runtime, creating it once (lazily).
+
+    Forces the X11 backend first (env shim), then binds once under the lock.
+    Returns None when platynui_native is unavailable. Raises RuntimeError when
+    the broker has been disposed (single shared runtime; restart the process).
+    """
+    global _RUNTIME, _RUNTIME_STATE
+    if _RUNTIME is not None and _RUNTIME_STATE == "open":
+        return _RUNTIME
+    with _RUNTIME_LOCK:
+        if _RUNTIME is not None and _RUNTIME_STATE == "open":
+            return _RUNTIME
+        if _RUNTIME_STATE == "disposed":
+            # Was opened then shut down: refuse re-init (module is one-shot).
+            raise RuntimeError(
+                "PlatynUI runtime broker is disposed; the native platform "
+                "module cannot be re-initialized in this process — restart "
+                "the process."
+            )
+        global _RUNTIME_LAST_ERROR
+        try:
+            ensure_x11_session_env()
+            import platynui_native as pn
+
+            _RUNTIME = pn.Runtime()
+            _RUNTIME_STATE = "open"
+            _RUNTIME_LAST_ERROR = None
+        except Exception as exc:  # pragma: no cover - env dependent
+            logger.debug("PlatynUI runtime broker bind failed: %s", exc)
+            _RUNTIME = None
+            # Record the failure for classification (change:
+            # desktop-input-and-runtime-diagnostics). Stay in "new" so an
+            # unavailable-then-available env can retry.
+            _RUNTIME_LAST_ERROR = f"{type(exc).__name__}: {exc}"
+        return _RUNTIME
+
+
+def runtime_state() -> str:
+    return _RUNTIME_STATE
+
+
+def native_providers() -> list:
+    """Return the active PlatynUI providers via the NATIVE ``runtime.providers()``
+    API (change: desktop-native-platynui-alignment). Best-effort; returns an
+    empty list when the runtime is unavailable. Never raises."""
+    try:
+        runtime = get_runtime()
+    except Exception:
+        return []
+    if runtime is None:
+        return []
+    try:
+        _p = getattr(runtime, "providers", None)
+        if callable(_p):
+            return list(_p() or [])
+    except Exception as exc:  # pragma: no cover - env dependent
+        logger.debug("native_providers failed: %s", exc)
+    return []
+
+
+def clear_runtime_tree_cache() -> bool:
+    """Best-effort clear of the shared runtime's cached accessibility tree.
+
+    The PlatynUI runtime caches the desktop tree, so an application launched
+    AFTER the last snapshot stays invisible to subsequent keyword queries until
+    the cache is cleared (change: desktop-tree-cache-refresh). This centralizes
+    the ``getattr(runtime, "clear_cache", None)`` dance used by get_ui_tree and
+    the keyword-execution refresh paths.
+
+    Returns True when a clear was performed, False otherwise (runtime
+    unavailable, no clear_cache, or the clear raised). Never raises.
+    """
+    try:
+        runtime = get_runtime()
+    except Exception:
+        # Disposed/unavailable broker — nothing to clear.
+        return False
+    if runtime is None:
+        return False
+    try:
+        _clear = getattr(runtime, "clear_cache", None)
+        if callable(_clear):
+            _clear()
+            return True
+    except Exception as exc:  # pragma: no cover - env dependent
+        logger.debug("clear_runtime_tree_cache failed: %s", exc)
+    return False
+
+
+def shutdown_runtime() -> None:
+    """Shut down the shared runtime and mark the broker closed.
+
+    Intended for process teardown only. After this, ``get_runtime()`` raises
+    rather than attempting a doomed re-bind.
+    """
+    global _RUNTIME, _RUNTIME_STATE
+    with _RUNTIME_LOCK:
+        if _RUNTIME is None:
+            _RUNTIME_STATE = "disposed"
+            return
+        _RUNTIME_STATE = "shutting_down"
+        rt, _RUNTIME = _RUNTIME, None
+        _RUNTIME_STATE = "disposed"
+    try:
+        rt.shutdown()
+    except Exception:  # pragma: no cover
+        pass
+
+
+def _reset_runtime_broker_for_tests() -> None:
+    """Test-only: reset broker state so unit tests start fresh."""
+    global _RUNTIME, _RUNTIME_STATE
+    with _RUNTIME_LOCK:
+        _RUNTIME = None
+        _RUNTIME_STATE = "new"
+
 
 def ensure_x11_session_env(environ: Optional[Dict[str, str]] = None) -> Optional[str]:
     """Force the X11 backend for PlatynUI on Linux Wayland sessions.
@@ -136,6 +338,14 @@ def ensure_x11_session_env(environ: Optional[Dict[str, str]] = None) -> Optional
     # the check-and-set must not interleave across threads — and CPython's
     # putenv from concurrent threads should be serialized anyway.
     with _ENV_SHIM_LOCK:
+        # Record whether this session ORIGINATED as Wayland, BEFORE forcing X11,
+        # so callers can warn that synthetic X11 (XTest) input may be blocked by
+        # the compositor (change: desktop-input-and-runtime-diagnostics). Use
+        # env signals AND a live wayland socket — the env may be scrubbed
+        # (XDG_SESSION_TYPE pre-forced to x11, WAYLAND_DISPLAY unset) on a real
+        # Wayland host, but $XDG_RUNTIME_DIR/wayland-0 still exists there.
+        _record_session_origin(env)
+
         if env.get(KEEP_WAYLAND_ENV, "").strip() in {"1", "true", "yes"}:
             return None
 
@@ -144,6 +354,7 @@ def ensure_x11_session_env(environ: Optional[Dict[str, str]] = None) -> Optional
         display = bool(env.get("DISPLAY"))
 
         if session_type == "x11":
+            _pin_gtk_x11_backend(env)
             return None
         if not display:
             # No X server available — forcing X11 would break init outright.
@@ -157,6 +368,7 @@ def ensure_x11_session_env(environ: Optional[Dict[str, str]] = None) -> Optional
             return None
         if session_type == "wayland" or (not session_type and wayland):
             env["XDG_SESSION_TYPE"] = "x11"
+            _pin_gtk_x11_backend(env)
             note = (
                 "PlatynUI: forced XDG_SESSION_TYPE=x11 (XWayland) to avoid the "
                 "Wayland xdg-desktop-portal consent handshake which blocks "
@@ -165,7 +377,44 @@ def ensure_x11_session_env(environ: Optional[Dict[str, str]] = None) -> Optional
             )
             logger.warning(note)
             return note
+        _pin_gtk_x11_backend(env)
         return None
+
+
+def _pin_gtk_x11_backend(env: Dict[str, str]) -> None:
+    """Pin GUI-toolkit backends to X11 when a Wayland compositor socket is
+    reachable (change: platynui-visible-safe-targeting follow-up).
+
+    Unsetting ``WAYLAND_DISPLAY`` is NOT sufficient: libwayland's
+    ``wl_display_connect(NULL)`` falls back to the literal socket name
+    ``wayland-0`` in ``$XDG_RUNTIME_DIR``, and distro GTK builds try the
+    Wayland backend first — so an AUT launched via Process with
+    ``DISPLAY=:100`` can silently render on the user's ACTIVE host desktop
+    while synthetic XTest input goes to the isolated display (observed with
+    LibreOffice on the 2026-06-11 validation rerun: soffice.bin connected to
+    ``/run/user/1000/wayland-0``/gnome-shell despite a scrubbed env).
+    Children inherit this process env via Start Process, so pinning here
+    confines GTK/Qt AUTs to the bound X display. Respects pre-set values.
+    """
+    try:
+        if env.get("GDK_BACKEND") or env.get("QT_QPA_PLATFORM"):
+            return
+        runtime_dir = env.get("XDG_RUNTIME_DIR", "")
+        wayland_reachable = bool(env.get("WAYLAND_DISPLAY")) or (
+            runtime_dir
+            and os.path.exists(os.path.join(runtime_dir, "wayland-0"))
+        )
+        if not wayland_reachable or not env.get("DISPLAY"):
+            return
+        env["GDK_BACKEND"] = "x11"
+        env["QT_QPA_PLATFORM"] = "xcb"
+        logger.info(
+            "PlatynUI: pinned GDK_BACKEND=x11 / QT_QPA_PLATFORM=xcb — a "
+            "Wayland compositor socket is reachable and GTK's wayland-0 "
+            "fallback would otherwise let AUTs escape to the active desktop."
+        )
+    except Exception:  # pragma: no cover - defensive
+        pass
 
 
 class PlatynUILibraryPlugin(StaticLibraryPlugin):

@@ -648,7 +648,14 @@ class ExecutionCoordinator:
                 suite_content, session_id, options
             )
 
-            # Refresh RF native context after dry run as RF CLI may alter globals
+            # Refresh RF native context after dry run as RF CLI may alter globals.
+            # NOTE (change: desktop-evidence-and-display-scoping, D6): this
+            # refresh used to CLOBBER an active start_test bracket (current_
+            # run_test/current_res_test reset to None → "No active test to
+            # end"). create_context_for_session now seeds those from the
+            # existing session entry, so the refresh is state-preserving and
+            # must NOT be skipped (the dry run may have torn down the live
+            # EXECUTION_CONTEXTS, which this call re-establishes).
             try:
                 from robotmcp.components.execution.rf_native_context_manager import (
                     get_rf_native_context_manager,

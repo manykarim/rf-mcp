@@ -519,8 +519,15 @@ class TestBuildSuiteMultiTest:
         assert "No tests with steps" in result.get("error", "")
 
     @pytest.mark.asyncio
-    async def test_auto_end_running_test(self):
-        """build_test_suite auto-ends a running test."""
+    async def test_build_does_not_end_running_test(self):
+        """build_test_suite is NON-DESTRUCTIVE for a running test.
+
+        It used to auto-end the active test — the run-3 (2026-06-11) root
+        cause: stepwise agents call build_test_suite between steps, the
+        first build silently ended the test, and every later step fell into
+        suite_level_steps (43/46 steps lost from the generated suite).
+        change: desktop-test-scoping-and-close-lifecycle (D7).
+        """
         from robotmcp.components.test_builder import TestBuilder
 
         sess = ExecutionSession(session_id="mt3")
@@ -536,7 +543,11 @@ class TestBuildSuiteMultiTest:
         builder = TestBuilder(execution_engine=engine)
         result = await builder.build_suite(session_id="mt3")
         assert result["success"], result.get("error")
-        assert sess.test_registry.tests["T1"].status == "pass"
+        # The running test renders AND stays running so subsequent steps
+        # keep recording into it.
+        assert sess.test_registry.tests["T1"].status == "running"
+        assert sess.test_registry.get_current_test() is not None
+        assert "T1" in (result.get("rf_text") or "")
 
 
 # =====================================================================

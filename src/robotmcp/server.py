@@ -1825,7 +1825,11 @@ async def analyze_scenario(
 
     Args:
         scenario: Human-language description of the task to automate.
-        context: Application context (e.g., "web", "mobile", "api"); defaults to "web".
+        context: Application context (e.g., "web", "mobile", "api", "desktop");
+            defaults to "web". An explicit context="desktop" DETERMINISTICALLY
+            forces a native desktop (PlatynUI) session regardless of scenario
+            wording — phrasing or word order cannot flip it to mobile/Appium.
+            Use it for Linux/GNOME desktop GUI scenarios.
         session_id: Optional existing session id to reuse; if omitted, a new one is created.
 
     Returns:
@@ -1953,8 +1957,23 @@ async def analyze_scenario(
         scenario
     )
 
-    # Initialize mobile session if detected
-    if platform_type == PlatformType.MOBILE:
+    # An explicit desktop context (or a text-detected desktop platform) forces a
+    # native desktop session. This must win over the mobile path: the generic
+    # "app" token in a desktop "application" scenario used to route to Appium
+    # (maintainer-report #1). change: desktop-mcp-workflow-correctness.
+    explicit_desktop = (context or "").lower() == "desktop"
+
+    if explicit_desktop or platform_type == PlatformType.DESKTOP:
+        # Auto-configure as a desktop (PlatynUI) session. Pass the context so an
+        # explicit desktop request overrides any text-classifier ambiguity.
+        session.configure_from_scenario(
+            scenario, context="desktop" if explicit_desktop else None
+        )
+        logger.info(
+            f"Initialized desktop session '{session_id}' "
+            f"(explicit_context={explicit_desktop}, platform={platform_type.value})"
+        )
+    elif platform_type == PlatformType.MOBILE:
         execution_engine.session_manager.initialize_mobile_session(session, scenario)
         logger.info(
             f"Initialized mobile session for platform: {session.mobile_config.platform_name if session.mobile_config else 'Unknown'}"
@@ -2332,7 +2351,11 @@ async def find_keywords(
                     SequenceMatcher ranking; the strategy is still useful
                     but ranking quality is reduced.
                   - "pattern": Glob/regex matching (best when you know partial name)
-                  - "catalog": List all available keywords
+                  - "catalog": List all available keywords. This is a LITERAL
+                    substring filter on keyword/library names — a multi-word
+                    natural-language query will return 0; use library_name= to
+                    list a library (e.g. "PlatynUI"/"PlatynUI.BareMetal"), or
+                    strategy="semantic" for intent matching.
                   - "session": List keywords from session's loaded libraries
         context: Scenario context (e.g., "web", "mobile", "api") used by semantic discovery.
         session_id: Required for strategy="session" to search the live RF namespace.
@@ -2386,6 +2409,14 @@ async def find_keywords(
     """
 
     strategy_norm = (strategy or "semantic").strip().lower()
+
+    # Resolve a short library alias (e.g. "PlatynUI" -> "PlatynUI.BareMetal")
+    # so desktop keyword discovery works under either name.
+    # change: desktop-mcp-workflow-correctness (maintainer-report #5).
+    if library_name:
+        from robotmcp.components.library_recommender import LibraryRecommender
+
+        library_name = LibraryRecommender.resolve_library_alias(library_name)
 
     # BDD prefix stripping for query (ADR-019)
     from robotmcp.domains.keyword_resolution.services import BddPrefixService
@@ -2746,12 +2777,24 @@ async def find_keywords(
             result["hint"] = catalog_hint
 
         # ADR-010 I3: Hint when catalog returns empty without active session
-        if not catalog and not session_id:
+        if not catalog and not session_id and not query:
             result["hint"] = (
                 "Catalog is empty because no session with libraries is active. "
                 "Create a session first with manage_session(action='init', "
                 "libraries=[...]), or use strategy='semantic' which works "
                 "without a session."
+            )
+        # The catalog strategy is a LITERAL substring filter on keyword/library
+        # names. A multi-word natural-language query (e.g. "get window find
+        # element ui tree") will not match and returns 0 — do not strand the
+        # agent. change: desktop-mcp-workflow-correctness (maintainer-report #5).
+        elif not catalog and query:
+            result["hint"] = (
+                f"Catalog strategy is a literal substring filter; the query "
+                f"'{query}' matched no keyword or library name. To list a "
+                f"library's keywords use library_name= (e.g. "
+                f"library_name='PlatynUI.BareMetal'), or use strategy='semantic' "
+                f"for natural-language intent matching."
             )
         # ADR-015: Externalize large fields to artifacts
         if session_id:
@@ -3475,6 +3518,63 @@ async def manage_session(
 
         session = execution_engine.session_manager.get_or_create_session(session_id)
 
+        # Atomic start_test (change: desktop-test-scoping-and-close-lifecycle,
+        # D1/D2): establish the RF context FIRST (auto-create when start_test
+        # is called before any execute_step — run-3 root cause of "No context
+        # for session"), then the context-layer test, and activate the
+        # registry LAST. A failure at any layer fails the WHOLE call — the
+        # old soft-success left the registry multi-test-active while the
+        # context had no test, silently routing 43/46 steps out of the suite.
+        mgr = get_rf_native_context_manager()
+        try:
+            ctx_info = mgr.get_session_context_info(session_id)
+            if not ctx_info.get("context_exists"):
+                if getattr(session, "search_order", None):
+                    _libs = list(session.search_order)
+                elif getattr(session, "loaded_libraries", None):
+                    _libs = list(session.loaded_libraries)
+                else:
+                    _libs = []
+                ctx_create = mgr.create_context_for_session(session_id, _libs)
+                if not ctx_create.get("success"):
+                    return {
+                        "success": False,
+                        "error": (
+                            "start_test could not create the RF context: "
+                            f"{ctx_create.get('error')}"
+                        ),
+                        "session_id": session_id,
+                        "action": action_norm,
+                    }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"start_test could not establish the RF context: {e}",
+                "session_id": session_id,
+                "action": action_norm,
+            }
+
+        # Start test in RF context (pushes test scope)
+        try:
+            ctx_result = mgr.start_test_in_context(
+                session_id, test_name, test_documentation, test_tags or []
+            )
+        except Exception as e:
+            ctx_result = {"success": False, "error": str(e)}
+        if not ctx_result.get("success"):
+            return {
+                "success": False,
+                "error": (
+                    "start_test failed in the RF context layer: "
+                    f"{ctx_result.get('error')}"
+                ),
+                "session_id": session_id,
+                "action": action_norm,
+                "context_result": ctx_result,
+            }
+
+        # Registry activation last — the irreversible layer only flips after
+        # both context layers succeeded.
         session.test_registry.start_test(
             name=test_name,
             documentation=test_documentation,
@@ -3483,15 +3583,6 @@ async def manage_session(
             teardown=test_teardown,
             template=template,  # ADR-019
         )
-
-        # Start test in RF context (pushes test scope)
-        ctx_result = {}
-        try:
-            mgr = get_rf_native_context_manager()
-            ctx_result = mgr.start_test_in_context(session_id, test_name, test_documentation, test_tags or [])
-        except Exception as e:
-            logger.warning(f"RF context start_test failed (non-fatal): {e}")
-            ctx_result = {"success": False, "error": str(e)}
 
         result = {
             "success": True,
@@ -3509,11 +3600,16 @@ async def manage_session(
                 "manage_session(action='add_data_row', test_name='Row Name', args=[...]). "
                 "Then call manage_session(action='end_test') and build_test_suite."
             )
-        # Fix 4: Warn when start_test is called after steps were already executed
+        # Fix 4: Inform when start_test is called after steps were already
+        # executed. Those pre-start steps are EXCLUDED from the generated suite
+        # body by default (change: desktop-mcp-workflow-correctness); pass
+        # build_test_suite(include_pre_start=True) to adopt them.
         if session.steps:
             result["warning"] = (
-                f"Session has {len(session.steps)} steps executed before start_test. "
-                "These will be adopted as the template keyword body when build_test_suite is called. "
+                f"Session has {len(session.steps)} step(s) executed before start_test. "
+                "By default these exploratory pre-start steps are EXCLUDED from the "
+                "generated suite body (build_test_suite reports excluded_pre_start_count). "
+                "Pass build_test_suite(include_pre_start=True) to adopt them. "
                 "For best results, call start_test BEFORE executing steps."
             )
         return result
@@ -3529,10 +3625,22 @@ async def manage_session(
         session = execution_engine.session_manager.get_or_create_session(session_id)
         _status = test_status.lower() if test_status else "pass"
 
+        # Registry-first end_test (change: desktop-test-scoping-and-close-
+        # lifecycle, D2): the registry is the source of truth for suite
+        # generation. No active registry test -> the call fails; an active
+        # registry test always ends successfully, and a context-layer miss
+        # is downgraded to a warning (the RF layer self-heals on next start).
         test_info = session.test_registry.end_test(
             status=_status,
             message=test_message,
         )
+        if test_info is None:
+            return {
+                "success": False,
+                "error": "No active test to end (call start_test first)",
+                "session_id": session_id,
+                "action": action_norm,
+            }
 
         # End test in RF context (pops test scope, sets PREV_TEST_*)
         ctx_result = {}
@@ -3544,14 +3652,22 @@ async def manage_session(
             logger.warning(f"RF context end_test failed (non-fatal): {e}")
             ctx_result = {"success": False, "error": str(e)}
 
-        return {
+        result = {
             "success": True,
             "session_id": session_id,
             "action": action_norm,
-            "test_name": test_info.name if test_info else None,
+            "test_name": test_info.name,
             "test_status": _status,
             "context_result": ctx_result,
         }
+        if not ctx_result.get("success"):
+            result["warning"] = (
+                f"Registry test '{test_info.name}' ended normally, but the RF "
+                "context layer reported: "
+                f"{ctx_result.get('error', 'no active context test')}. The "
+                "context layer self-heals on the next start_test."
+            )
+        return result
 
     # ── Data-driven: add_data_row ───────────────────────────────────
     if action_norm in {"add_data_row", "data_row"}:
@@ -3842,6 +3958,17 @@ async def get_session_state(
 
     sections = sections or ["summary", "page_source", "variables"]
     requested = {s.lower() for s in sections}
+
+    # Desktop (PlatynUI) sessions inspect the accessibility tree, never the
+    # mobile/Appium source path (maintainer-report #4). Auto-include ui_tree and
+    # serve page_source as a desktop stub. change: desktop-mcp-workflow-correctness.
+    _state_session = execution_engine.session_manager.get_session(session_id)
+    is_desktop_session = bool(
+        _state_session is not None and _state_session.is_desktop_session()
+    )
+    if is_desktop_session:
+        requested.add("ui_tree")
+
     payload: Dict[str, Any] = {
         "success": True,
         "session_id": session_id,
@@ -3862,22 +3989,40 @@ async def get_session_state(
         payload["sections"]["application_state"] = app_state
 
     if "page_source" in requested:
-        page_source = await _get_page_source_payload(
-            session_id=session_id,
-            full_source=not page_source_filtered,
-            filtered=page_source_filtered,
-            filtering_level=page_source_filtering_level,
-            include_reduced_dom=include_reduced_dom,
-        )
-        if (
-            include_dom_stream
-            and isinstance(page_source, dict)
-            and isinstance(page_source.get("page_source"), str)
-        ):
-            page_source["page_source_stream"] = _chunk_string(
-                page_source["page_source"], max(int(dom_chunk_size), 1024)
+        if is_desktop_session:
+            # Desktop sessions have no HTML/DOM page source. Return a stub that
+            # points to ui_tree instead of attempting the mobile-source lookup
+            # ("Failed to get mobile source: No application is open").
+            payload["sections"]["page_source"] = {
+                "success": True,
+                "source": "desktop",
+                "library": "PlatynUI.BareMetal",
+                "page_source": None,
+                "message": (
+                    "Desktop (PlatynUI) sessions expose no HTML page source — "
+                    "there is no desktop application DOM. Use the 'ui_tree' "
+                    "section for the accessibility-tree snapshot of the running "
+                    "application."
+                ),
+                "hint": "Inspect the 'ui_tree' section for desktop application state.",
+            }
+        else:
+            page_source = await _get_page_source_payload(
+                session_id=session_id,
+                full_source=not page_source_filtered,
+                filtered=page_source_filtered,
+                filtering_level=page_source_filtering_level,
+                include_reduced_dom=include_reduced_dom,
             )
-        payload["sections"]["page_source"] = page_source
+            if (
+                include_dom_stream
+                and isinstance(page_source, dict)
+                and isinstance(page_source.get("page_source"), str)
+            ):
+                page_source["page_source_stream"] = _chunk_string(
+                    page_source["page_source"], max(int(dom_chunk_size), 1024)
+                )
+            payload["sections"]["page_source"] = page_source
 
     if "variables" in requested:
         variables = await _get_context_variables_payload(session_id)
@@ -3912,6 +4057,22 @@ async def get_session_state(
                 _session_obj,
                 app_filters=elements_of_interest or None,
             )
+            # desktop_environment: display identity + isolation classification
+            # + upstream desktop_info(), so an agent can prove "app visible on
+            # display :N, input confined to it" before interacting
+            # (change: platynui-visible-safe-targeting, task 3.3).
+            try:
+                _is_desktop = getattr(_session_obj, "is_desktop_session", None)
+                if callable(_is_desktop) and _is_desktop() is True:
+                    from robotmcp.components.execution.ui_tree_service import (
+                        get_desktop_environment,
+                    )
+
+                    payload["sections"]["desktop_environment"] = (
+                        get_desktop_environment(_session_obj)
+                    )
+            except Exception as _denv_exc:  # pragma: no cover - defensive
+                logger.debug("desktop_environment section skipped: %s", _denv_exc)
 
     # ADR-018: Delta-based state retrieval
     # mode="auto" (default): auto-detect delta when prior version exists
@@ -4447,6 +4608,7 @@ async def build_test_suite(
     remove_library_prefixes: bool = True,
     bdd_style: bool = False,
     data_driven_mode: str = "auto",
+    include_pre_start: bool = False,
 ) -> Dict[str, Any]:
     """Generate a Robot Framework test suite from previously executed steps.
 
@@ -4464,6 +4626,11 @@ async def build_test_suite(
             "per_test" — [Template] per test case with data rows (current behavior).
             "suite_template" — Test Template in Settings, each named row is a separate
             test case with individual pass/fail in reports.
+        include_pre_start: Whether to adopt exploratory steps executed BEFORE
+            start_test into the generated test body. Default False excludes them
+            (the response reports ``excluded_pre_start_count`` + a summary) so the
+            suite reflects only intended in-test interactions. Set True to
+            preserve the prior adoption behavior.
 
     Returns:
         Dict[str, Any]: Suite generation result:
@@ -4508,6 +4675,7 @@ async def build_test_suite(
         resolved_session_id, test_name, tags, documentation, remove_library_prefixes,
         bdd_style=bdd_style,
         data_driven_mode=data_driven_mode,
+        include_pre_start=include_pre_start,
     )
 
     # Add session resolution info to result
@@ -4927,8 +5095,10 @@ async def execute_batch(
         session_id: Session to execute within (must exist or be auto-created).
         steps: List of step dicts, each with:
             - keyword (str, required): RF keyword name
-            - args (list[str], optional): Positional arguments, may contain ${STEP_N}
-              (both 0-based and 1-based indexing supported)
+            - arguments (list[str], optional): Positional arguments, may contain ${STEP_N}
+              (both 0-based and 1-based indexing supported). This is the canonical
+              key (parity with execute_step). The legacy alias ``args`` is also
+              accepted; supplying BOTH with different values is a validation error.
             - label (str, optional): Human-readable label
             - timeout (str, optional): Per-step RF timeout (e.g., "10s")
             - assign_to (str, optional): Variable name to capture return value (e.g., "cart_count")
@@ -5065,15 +5235,22 @@ async def resume_batch(
         continuation_steps: List[BatchStep] = []
         step_offset = 0
 
-        # Add fix steps first (if any)
+        # Add fix steps first (if any). Argument resolution MUST match
+        # execute_batch: ``arguments`` is the canonical key, ``args`` the
+        # alias — reading only ``args`` silently dropped fix-step arguments
+        # (change: desktop-evidence-and-display-scoping, D5).
         if fix_steps:
+            from robotmcp.domains.batch_execution.aggregates import (
+                BatchExecution as _BatchExecution,
+            )
+
             for i, s in enumerate(fix_steps):
                 step_timeout = StepTimeout(s["timeout"]) if s.get("timeout") else None
                 continuation_steps.append(
                     BatchStep(
                         index=i,
                         keyword=s["keyword"],
-                        args=list(s.get("args", [])),
+                        args=_BatchExecution._resolve_step_args(s, i),
                         label=s.get("label", f"fix_step_{i}"),
                         timeout=step_timeout,
                         assign_to=s.get("assign_to"),

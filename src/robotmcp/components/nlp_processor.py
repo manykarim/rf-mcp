@@ -546,6 +546,11 @@ class NaturalLanguageProcessor:
             required.add("RequestsLibrary")
         elif context == "mobile":
             required.add("AppiumLibrary")
+        elif context == "desktop":
+            # Native desktop UI automation (new-core PlatynUI) + Process for
+            # launching/closing the application under test.
+            required.add("PlatynUI.BareMetal")
+            required.add("Process")
         elif context == "database":
             required.add("DatabaseLibrary")
         
@@ -553,7 +558,13 @@ class NaturalLanguageProcessor:
         for library, keywords in self.capability_keywords.items():
             if any(keyword in scenario_lower for keyword in keywords):
                 required.add(library)
-        
+
+        # For an explicit desktop context, the generic "app"/"application" token
+        # must not pull in AppiumLibrary (mobile) — the caller asked for native
+        # desktop (maintainer-report #2). change: desktop-mcp-workflow-correctness.
+        if context == "desktop":
+            required.discard("AppiumLibrary")
+
         return list(required)
 
     def _assess_complexity(self, actions: List[TestAction]) -> str:
@@ -803,6 +814,13 @@ class NaturalLanguageProcessor:
 
     def _detect_session_type(self, scenario: str, context: str) -> str:
         """Detect session type using centralized session models detection."""
+        # An explicit desktop context wins over text heuristics: the caller
+        # told us this is a native desktop scenario (maintainer-report #1 —
+        # "calculator application" was mis-scored as mobile). Do not let the
+        # weighted text classifier override an explicit desktop request.
+        if (context or "").lower() == "desktop":
+            return "desktop_testing"
+
         try:
             from robotmcp.models.session_models import ExecutionSession
             temp_session = ExecutionSession(session_id="__nlp_detect__")

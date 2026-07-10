@@ -143,6 +143,37 @@ class ExecutionSession:
     libraries_loaded: bool = (
         False  # Track if session libraries have been loaded into library manager
     )
+    # Desktop (PlatynUI) accessibility-tree cache is stale and must be refreshed
+    # before the next tree-resolving keyword — set after a desktop GUI launch so
+    # a newly-started app becomes visible to name-based queries
+    # (change: desktop-tree-cache-refresh).
+    desktop_tree_dirty: bool = False
+    # One-shot guard: the Wayland-forced-X11-input warning has been surfaced for
+    # this session (change: desktop-input-and-runtime-diagnostics).
+    desktop_wayland_warned: bool = False
+    # One-shot guard: the blind type-at-focus (no verified AUT window focus)
+    # warning has been surfaced (change: desktop-evidence-and-display-scoping).
+    desktop_unfocused_typing_warned: bool = False
+    # Opt-out + one-shot guard for the unscoped-locator guardrail: when the
+    # opt-out is set, a //-rooted desktop Query/Evaluate is allowed to run and
+    # warns once instead of being refused
+    # (change: desktop-unscoped-locator-guardrail).
+    platynui_allow_unscoped: bool = False
+    desktop_unscoped_warned: bool = False
+    # Step accounting independent of suite recording: every execute_step keyword
+    # execution counts, recorded or not, so build_test_suite can warn when a
+    # stepwise session silently produces an empty suite
+    # (change: platynui-visible-safe-targeting, I-1).
+    executed_step_count: int = 0
+    failed_step_count: int = 0
+    # PID of the AUT process launched via Process in this desktop session —
+    # lets focus-before-act prove the resolved target belongs to the launched
+    # application (change: platynui-visible-safe-targeting, task 2.4).
+    desktop_aut_pid: Optional[int] = None
+    # Session id captured at launch — the lineage signal that survives
+    # wrapper exits, daemonization and single-instance handoff
+    # (change: desktop-aut-process-lineage).
+    desktop_aut_sid: Optional[int] = None
     # Track variable files imported through resources (path + args)
     loaded_variable_files: List[Dict[str, Any]] = field(default_factory=list)
     # Track variables explicitly set via manage_session(action="set_variables", scope="suite")
@@ -182,6 +213,17 @@ class ExecutionSession:
             else:
                 self.steps.append(step)
             self.last_activity = datetime.now()
+
+    def recorded_step_count(self) -> int:
+        """Total steps recorded for suite generation across all storage modes.
+
+        Sums the legacy flat list, every registered test's steps, and
+        suite-level steps (change: platynui-visible-safe-targeting, I-1).
+        """
+        count = len(self.steps) + len(self.suite_level_steps)
+        for test in self.test_registry.tests.values():
+            count += len(test.steps)
+        return count
 
     def update_activity(self) -> None:
         """Update the last activity timestamp."""
@@ -536,7 +578,11 @@ class ExecutionSession:
             ),
             SessionType.DESKTOP_TESTING: SessionProfile(
                 session_type=SessionType.DESKTOP_TESTING,
-                core_libraries=["BuiltIn", "PlatynUI.BareMetal", "Collections", "String"],
+                # PlatynUI.BareMetal leads core_libraries so the built session
+                # search order leads with the desktop library (the intelligent
+                # search-order builder derives from core_libraries order).
+                # change: desktop-mcp-workflow-correctness.
+                core_libraries=["PlatynUI.BareMetal", "BuiltIn", "Collections", "String"],
                 optional_libraries=["OperatingSystem", "Process", "DateTime"],
                 search_order=[
                     "PlatynUI.BareMetal",
@@ -669,12 +715,59 @@ class ExecutionSession:
 
         return None
 
+    # Explicit-mobile signals: when any of these is present, the scenario is
+    # mobile regardless of desktop nouns (change: platynui-desktop-safety-
+    # isolation). Deliberately excludes the generic token "app".
+    _EXPLICIT_MOBILE_SIGNALS = (
+        r"\bandroid\b", r"\bios\b", r"\bappium\b", r"\bapk\b", r"\bipa\b",
+        r"\bbundle\s+id\b", r"\bemulator\b", r"\bsimulator\b", r"\bdevice\b",
+        r"\buiautomator2?\b", r"\bxcuitest\b", r"\bespresso\b",
+        r"\btap\b", r"\bswipe\b", r"\bpinch\b",
+        r"\bmobile\b", r"\bbrowserstack\b", r"\bsauce\s+labs\b",
+    )
+    # Desktop signals: a desktop-app name or a desktop toolkit/marker.
+    _DESKTOP_SIGNALS = (
+        r"\bplatynui\b", r"\bbaremetal\b",
+        r"\bdesktop\b", r"\bnative\s+(window|app|application|ui|desktop)\b",
+        r"\b(gnome|kde|gtk|qt|win32|wpf|winforms|x11|wayland)\b",
+        r"\b(uia|ui\s+automation|at-?spi2?|accessibility\s+tree)\b",
+        r"\b(calculator|notepad|gedit|text\s+editor|file\s+manager)\b",
+        r"\b\S+\.exe\b",
+    )
+
+    def _desktop_vs_mobile_precedence(self, text_lower: str) -> Optional["SessionType"]:
+        """Return a forced SessionType when desktop/mobile precedence applies.
+
+        Precedence (change: platynui-desktop-safety-isolation):
+          1. explicit mobile signal present -> MOBILE_TESTING
+          2. else desktop signal present    -> DESKTOP_TESTING
+          3. else None (fall through to weighted scoring)
+        """
+        has_mobile = any(re.search(p, text_lower) for p in self._EXPLICIT_MOBILE_SIGNALS)
+        if has_mobile:
+            return SessionType.MOBILE_TESTING
+        has_desktop = any(re.search(p, text_lower) for p in self._DESKTOP_SIGNALS)
+        if has_desktop:
+            return SessionType.DESKTOP_TESTING
+        return None
+
     def detect_session_type_from_scenario(self, scenario_text: str) -> SessionType:
         """Detect session type from scenario text with enhanced multi-pass pattern matching."""
         if not scenario_text:
             return SessionType.UNKNOWN
 
         text_lower = scenario_text.lower()
+
+        # Normative desktop-vs-mobile precedence (change:
+        # platynui-desktop-safety-isolation). The weighted scoring below gives
+        # the bare token "app" a mobile weight that wrongly beat desktop-app
+        # names ("calculator app" -> mobile). Apply an explicit precedence
+        # FIRST: an explicit mobile signal wins; otherwise a desktop signal
+        # yields desktop; "app" alone never forces mobile.
+        decided = self._desktop_vs_mobile_precedence(text_lower)
+        if decided is not None:
+            return decided
+
         profiles = self._get_session_profiles()
         scores = {session_type: 0 for session_type in profiles.keys()}
 
@@ -843,8 +936,18 @@ class ExecutionSession:
         # had multiple types with equal max (ambiguous scenario)
         return SessionType.MIXED
 
-    def configure_from_scenario(self, scenario_text: str) -> None:
-        """Configure session based on scenario analysis."""
+    def configure_from_scenario(
+        self, scenario_text: str, context: Optional[str] = None
+    ) -> None:
+        """Configure session based on scenario analysis.
+
+        Args:
+            scenario_text: Natural-language scenario.
+            context: Optional explicit automation context (e.g. ``"desktop"``).
+                When ``"desktop"`` is passed, the session type is forced to
+                DESKTOP_TESTING regardless of the text classifier — the caller
+                explicitly requested a native desktop session.
+        """
         if self.auto_configured:
             logger.debug(
                 f"Session {self.session_id} already auto-configured, skipping scenario analysis"
@@ -858,8 +961,13 @@ class ExecutionSession:
             scenario_text
         )
 
-        # Detect session type
-        self.session_type = self.detect_session_type_from_scenario(scenario_text)
+        # Detect session type — an explicit desktop context overrides the
+        # weighted text classifier (change: desktop-mcp-workflow-correctness).
+        if (context or "").lower() == "desktop":
+            self.session_type = SessionType.DESKTOP_TESTING
+            self.platform_type = PlatformType.DESKTOP
+        else:
+            self.session_type = self.detect_session_type_from_scenario(scenario_text)
 
         # Configure session based on detected type and preferences
         self._apply_session_configuration()

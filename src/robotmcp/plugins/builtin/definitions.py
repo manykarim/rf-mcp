@@ -115,6 +115,26 @@ BUILTIN_LIBRARY_DEFINITIONS = [
         "is_deprecated": False,
         "load_priority": 25,
         "default_enabled": True,
+        # Declared so unqualified Process keywords resolve to this library
+        # (change: desktop-stepwise-followups) — a desktop session can then
+        # launch its AUT with `Start Process` without dotted-name qualification.
+        "keywords": [
+            "Run Process",
+            "Start Process",
+            "Get Process Id",
+            "Get Process Object",
+            "Get Process Result",
+            "Is Process Running",
+            "Process Should Be Running",
+            "Process Should Be Stopped",
+            "Send Signal To Process",
+            "Switch Process",
+            "Terminate All Processes",
+            "Terminate Process",
+            "Wait For Process",
+            "Split Command Line",
+            "Join Command Line",
+        ],
     },
     {
         "name": "Screenshot",

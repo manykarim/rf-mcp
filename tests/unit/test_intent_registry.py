@@ -169,15 +169,17 @@ class TestHasMapping:
 class TestGetSupportedIntents:
     """Test intent enumeration per library."""
 
-    def test_browser_all_9(self, registry):
-        # Browser supports every intent verb after OBS-06's EXTRACT.
+    def test_browser_all_web_verbs(self, registry):
+        # Browser supports every WEB intent verb. ENSURE_FOCUSED is a
+        # desktop-only verb (platynui-focused-execution) and not applicable.
         intents = registry.get_supported_intents("Browser")
-        assert set(intents) == set(IntentVerb)
+        assert set(intents) == set(IntentVerb) - {IntentVerb.ENSURE_FOCUSED}
 
-    def test_selenium_all_9(self, registry):
-        # SeleniumLibrary supports every intent verb after OBS-06's EXTRACT.
+    def test_selenium_all_web_verbs(self, registry):
+        # SeleniumLibrary supports every WEB intent verb; ENSURE_FOCUSED is
+        # desktop-only (platynui-focused-execution) and not applicable.
         intents = registry.get_supported_intents("SeleniumLibrary")
-        assert set(intents) == set(IntentVerb)
+        assert set(intents) == set(IntentVerb) - {IntentVerb.ENSURE_FOCUSED}
 
     def test_appium_7(self, registry):
         # AppiumLibrary still lacks HOVER + SELECT. After OBS-06 it gains

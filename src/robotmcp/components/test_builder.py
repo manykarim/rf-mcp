@@ -268,6 +268,7 @@ class TestBuilder:
         remove_library_prefixes: bool = True,
         bdd_style: bool = False,
         data_driven_mode: str = "auto",
+        include_pre_start: bool = False,
     ) -> Dict[str, Any]:
         """
         Generate Robot Framework test suite from successful execution steps.
@@ -294,27 +295,50 @@ class TestBuilder:
             if self.execution_engine:
                 session = self.execution_engine.sessions.get(session_id)
 
+            # Pre-start step accounting (set in multi-test mode below).
+            excluded_pre_start_count = 0
+
             if session and session.test_registry.is_multi_test_mode():
-                # MULTI-TEST MODE: build from TestRegistry
-                # Auto-end any running test
-                if session.test_registry.current_test_name:
-                    session.test_registry.end_test(status="pass")
-                    try:
-                        from robotmcp.components.execution.rf_native_context_manager import (
-                            get_rf_native_context_manager,
-                        )
-                        mgr = get_rf_native_context_manager()
-                        mgr.end_test_in_context(session_id)
-                    except Exception:
-                        pass
+                # MULTI-TEST MODE: build from TestRegistry.
+                #
+                # NON-DESTRUCTIVE (change: desktop-test-scoping-and-close-
+                # lifecycle, D7): this used to AUTO-END any running test —
+                # the run-3 root cause: stepwise agents call build_test_suite
+                # between steps, the first build silently ended the active
+                # test, and every later step fell into suite_level_steps
+                # (43/46 lost). The still-running test's live step list
+                # renders fine without ending it, and recording continues
+                # into it after the build.
+
+                # Pre-start steps = the flat session.steps recorded BEFORE the
+                # first start_test (in multi-test mode they never route to a
+                # test). They are excluded from the generated body by default so
+                # exploratory steps do not contaminate the suite (maintainer-
+                # report #9/#10). include_pre_start=True restores prior adoption.
+                # change: desktop-mcp-workflow-correctness.
+                pre_start_steps = list(getattr(session, "steps", []) or [])
+                if pre_start_steps and not include_pre_start:
+                    excluded_pre_start_count = len(pre_start_steps)
+                elif pre_start_steps and include_pre_start:
+                    logger.info(
+                        "build_test_suite: adopting %d pre-start step(s) into the "
+                        "suite (include_pre_start=True). This adoption is "
+                        "deprecated; prefer recording interactions after start_test.",
+                        len(pre_start_steps),
+                    )
 
                 test_cases = []
                 for name, test_info in session.test_registry.tests.items():
                     # Fix 1: Adopt legacy steps as template body when test has
-                    # data_rows but no steps (agent executed before start_test)
+                    # data_rows but no steps (agent executed before start_test).
+                    # Gated on include_pre_start (default False excludes them).
                     if test_info.template and (test_info.data_rows or test_info.named_data_rows):
-                        if not test_info.steps and hasattr(session, 'steps') and session.steps:
-                            test_info.steps = list(session.steps)
+                        if (
+                            include_pre_start
+                            and not test_info.steps
+                            and pre_start_steps
+                        ):
+                            test_info.steps = list(pre_start_steps)
 
                     if not test_info.steps and not test_info.data_rows and not test_info.named_data_rows:
                         continue
@@ -417,6 +441,23 @@ class TestBuilder:
                 # Create test suite
                 suite = await self._build_test_suite([test_case], session_id)
 
+            # Stepwise-suite hygiene (change: desktop-stepwise-execution-fidelity,
+            # finding #10): for desktop sessions, drop exploratory Query/Evaluate
+            # introspection probes from the generated body so the suite reflects
+            # validated intent, not investigation history. Dependency-aware —
+            # a probe whose assigned variable is consumed by a retained step is
+            # kept so the suite still compiles. Desktop-gated to avoid touching
+            # web/api suites (BuiltIn.Evaluate is common there).
+            introspection_filtered_count = 0
+            if session is not None and getattr(session, "is_desktop_session", None):
+                try:
+                    if session.is_desktop_session():
+                        introspection_filtered_count = (
+                            self._filter_exploratory_introspection(suite)
+                        )
+                except Exception as _hyg_exc:  # pragma: no cover - defensive
+                    logger.debug("suite hygiene filter skipped: %s", _hyg_exc)
+
             # Apply library prefix removal if requested
             if remove_library_prefixes:
                 suite = self._apply_prefix_removal(suite)
@@ -428,6 +469,21 @@ class TestBuilder:
             # Apply BDD transformation if requested
             if bdd_style:
                 suite = self._transform_to_bdd_style(suite)
+
+            # Desktop replay-environment preamble (change: desktop-suite-
+            # replay-environment): generated desktop suites must be
+            # self-sufficient under plain `robot` — a Wayland host otherwise
+            # selects PlatynUI's stub Wayland backend and GTK AUTs escape via
+            # the wayland-0 fallback (user replay failure, 2026-06-12).
+            replay_env_mode = None
+            try:
+                _is_desktop = getattr(session, "is_desktop_session", None)
+                if callable(_is_desktop) and _is_desktop() is True:
+                    replay_env_mode = self._inject_desktop_replay_environment(
+                        suite, session
+                    )
+            except Exception as _replay_exc:  # pragma: no cover - defensive
+                logger.debug("replay-environment preamble skipped: %s", _replay_exc)
 
             # Generate Robot Framework API objects
             rf_suite = await self._create_rf_suite(suite)
@@ -450,6 +506,64 @@ class TestBuilder:
                 ]
             stats = await self._generate_statistics(successful_steps, suite)
 
+            # Step accounting (change: platynui-visible-safe-targeting, I-1):
+            # surface executed vs recorded vs failed so a stepwise session that
+            # silently produced an empty suite is visible to the operator.
+            steps_executed = int(getattr(session, "executed_step_count", 0) or 0) if session else 0
+            steps_failed = int(getattr(session, "failed_step_count", 0) or 0) if session else 0
+            steps_recorded = 0
+            if session is not None:
+                try:
+                    steps_recorded = session.recorded_step_count()
+                except Exception:
+                    steps_recorded = 0
+            stats["steps_executed"] = steps_executed
+            stats["steps_recorded"] = steps_recorded
+            stats["steps_failed"] = steps_failed
+
+            empty_suite_warning = None
+            if (
+                steps_executed >= 3
+                and steps_failed >= 1
+                and self._suite_body_is_launch_only(suite)
+            ):
+                empty_suite_warning = (
+                    f"{steps_executed} step(s) were executed but only "
+                    f"{steps_recorded} recorded — failed steps are never "
+                    f"recorded, so the generated suite body is empty or "
+                    f"contains only launch/setup steps. Check execute_step "
+                    f"results for the {steps_failed} failed step(s)."
+                )
+
+            # Orphaned suite-level steps (change: desktop-test-scoping-and-
+            # close-lifecycle, D3): in multi-test mode, steps recorded while
+            # no test was active land in suite_level_steps and are NOT
+            # rendered in any test body. Run 3 lost 43/46 steps this way —
+            # surface the count and warn when the imbalance dominates. The
+            # more specific scoping warning takes precedence over the
+            # empty-suite warning.
+            suite_level_step_count = 0
+            if session is not None:
+                try:
+                    suite_level_step_count = len(session.suite_level_steps or [])
+                except Exception:
+                    suite_level_step_count = 0
+            if (
+                session is not None
+                and suite_level_step_count > 0
+                and session.test_registry.is_multi_test_mode()
+            ):
+                in_test_count = len(session.test_registry.all_steps_flat())
+                if suite_level_step_count > in_test_count:
+                    empty_suite_warning = (
+                        f"{suite_level_step_count} recorded step(s) sit OUTSIDE "
+                        f"any named test (suite-level) versus {in_test_count} "
+                        "inside — they are NOT rendered in test bodies. Call "
+                        "start_test BEFORE executing steps (and check that "
+                        "start_test succeeded), or rebuild without multi-test "
+                        "mode."
+                    )
+
             # Check for untracked variables (referenced in steps but not in Variables section)
             # This provides early warning when generated tests may be incomplete
             variable_warnings = self._check_untracked_variables(suite, session_id)
@@ -467,6 +581,40 @@ class TestBuilder:
                 "session_id": session_id,
                 # Include warnings about potentially missing variables
                 "warnings": variable_warnings if variable_warnings else None,
+                # Empty/near-empty stepwise suite signal (I-1) or orphaned
+                # suite-level steps signal (D3)
+                "warning": empty_suite_warning,
+                # Steps recorded outside any named test (D3 visibility)
+                "suite_level_step_count": suite_level_step_count,
+                # Desktop replay-environment preamble status
+                # (change: desktop-suite-replay-environment)
+                "replay_environment": replay_env_mode,
+                "replay_environment_hint": (
+                    f"A '{self._REPLAY_ENV_KEYWORD_NAME}' keyword was emitted "
+                    "but NOT wired as Suite Setup because the session defines "
+                    "its own suite setup — call it from your setup (or first "
+                    "test step) so standalone replay pins the display "
+                    "environment before the first PlatynUI keyword."
+                    if replay_env_mode == "keyword_only" else None
+                ),
+                # Pre-start step isolation (change: desktop-mcp-workflow-correctness)
+                "excluded_pre_start_count": excluded_pre_start_count,
+                # Stepwise-suite hygiene (change: desktop-stepwise-execution-fidelity)
+                "introspection_filtered_count": introspection_filtered_count,
+                "introspection_summary": (
+                    f"{introspection_filtered_count} exploratory desktop "
+                    f"introspection step(s) (Query/Evaluate) were excluded from "
+                    f"the suite body; load-bearing captures were retained."
+                    if introspection_filtered_count
+                    else None
+                ),
+                "pre_start_summary": (
+                    f"{excluded_pre_start_count} exploratory step(s) executed "
+                    f"before start_test were excluded from the suite body "
+                    f"(pass include_pre_start=True to adopt them)."
+                    if excluded_pre_start_count
+                    else None
+                ),
                 "suite": {
                         "name": suite.name,
                         "documentation": suite.documentation,
@@ -1864,9 +2012,14 @@ class TestBuilder:
         for test_case in test_cases:
             for step in test_case.steps:
                 kw = step.keyword or ""
-                # Explicit prefix (Library.Keyword)
+                # Explicit prefix (Library.Keyword). RF keyword names contain
+                # no dots, so the library is everything before the LAST dot —
+                # split-on-first-dot truncated dotted library names
+                # ("PlatynUI.BareMetal.Take Screenshot" imported the
+                # "PlatynUI" placeholder; standalone replay failed with
+                # "No keyword with name ..." — run-4 standalone validation).
                 if "." in kw:
-                    prefix = kw.split(".", 1)[0].strip()
+                    prefix = kw.rsplit(".", 1)[0].strip()
                     if prefix and prefix != "BuiltIn":
                         all_imports.add(prefix)
                         continue
@@ -2810,6 +2963,246 @@ class TestBuilder:
     # to avoid late-in-test coincidental matches.
     _OBS11_LOOKBACK_STEPS: int = 10
 
+    # Keywords whose captures are introspection probes, not load-bearing test
+    # data — their captured values must not drive literal substitution.
+    _OBS11_NONPROPAGATING_SOURCES: frozenset = frozenset({"evaluate", "query"})
+
+    @classmethod
+    def _is_introspection_source(cls, keyword: Optional[str]) -> bool:
+        """True when ``keyword`` is an introspection/Evaluate probe whose
+        captured value should not drive OBS-11 literal substitution."""
+        if not keyword:
+            return False
+        base = keyword.strip().lower().rsplit(".", 1)[-1]
+        return base in cls._OBS11_NONPROPAGATING_SOURCES
+
+    # Desktop introspection keywords filtered from the generated suite body
+    # (finding #10). Matched on the keyword basename, case-insensitive.
+    _INTROSPECTION_KEYWORDS: frozenset = frozenset({"query", "evaluate"})
+
+    @staticmethod
+    def _referenced_var_names(arguments: Optional[List[str]]) -> set:
+        """Variable names referenced in ``arguments``, covering both the
+        ``${VAR}`` form and the bare ``$VAR`` form used inside Evaluate
+        expressions (e.g. ``$text_nodes``)."""
+        import re as _re
+
+        names: set = set()
+        for arg in arguments or []:
+            if not isinstance(arg, str):
+                continue
+            for m in _re.findall(r"\$\{(\w+)\}", arg):
+                names.add(m)
+            for m in _re.findall(r"\$(\w+)", arg):
+                names.add(m)
+        return names
+
+    @staticmethod
+    def _bare_var_name(name: str) -> str:
+        """Strip an RF variable wrapper to its bare name: ``${result}`` and
+        ``$result`` both → ``result``. ``ExecutionStep.assigned_variables`` are
+        stored in ``${VAR}`` form (``_normalize_variable_name``), so they must be
+        normalized before comparing against ``_referenced_var_names`` output."""
+        n = (name or "").strip()
+        if n.startswith("${") and n.endswith("}"):
+            return n[2:-1]
+        if n.startswith("$"):
+            return n[1:]
+        return n
+
+    # Keywords that constitute launch/setup scaffolding, not test substance —
+    # a suite body containing ONLY these is "near-empty" for the I-1 warning
+    # (change: platynui-visible-safe-targeting).
+    _LAUNCH_SETUP_KEYWORDS = frozenset({
+        "start process",
+        "run process",
+        "sleep",
+        "set variable",
+        "log",
+        # Evidence/scaffolding keywords (change: desktop-evidence-and-
+        # display-scoping, D8): a suite of launch + screenshots + process
+        # probes with every interaction failed is still "near-empty".
+        "take screenshot",
+        "create directory",
+        "is process running",
+        "get process id",
+        "terminate process",
+        "wait for process",
+    })
+
+    _REPLAY_ENV_KEYWORD_NAME = "Prepare Desktop Display Environment"
+
+    def _inject_desktop_replay_environment(self, suite, session) -> Optional[str]:
+        """Make a desktop suite self-sufficient for standalone replay
+        (change: desktop-suite-replay-environment).
+
+        Emits a ``Prepare Desktop Display Environment`` keyword pinning the
+        display/backend env BEFORE the first PlatynUI keyword creates the
+        (lazy) runtime, adds ``OperatingSystem`` to the imports, and wires it
+        as Suite Setup unless the user defined one. Returns ``"wired"`` /
+        ``"keyword_only"`` / None.
+        """
+        existing = [
+            kw for kw in (suite.bdd_keywords or [])
+            if kw.name == self._REPLAY_ENV_KEYWORD_NAME
+        ]
+        if existing:
+            return None  # idempotent across repeated builds
+
+        display = None
+        try:
+            from robotmcp.components.execution.desktop_display_safety import (
+                classify_bound_display_detailed,
+            )
+
+            display = classify_bound_display_detailed().get("display")
+        except Exception:
+            display = None
+
+        steps = [
+            TestCaseStep(
+                keyword="[Documentation]",
+                arguments=[
+                    "Pin the PlatynUI runtime and GUI toolkits to the bound X "
+                    "display BEFORE the first PlatynUI keyword (lazy runtime). "
+                    "On a Wayland host, XDG_SESSION_TYPE=wayland selects the "
+                    "unimplemented Wayland backend, and GTK apps escape to the "
+                    "host compositor via the wayland-0 fallback even with "
+                    "DISPLAY set."
+                ],
+            ),
+        ]
+        if display:
+            steps.append(TestCaseStep(
+                keyword="Set Environment Variable", arguments=["DISPLAY", display]
+            ))
+        steps.extend([
+            TestCaseStep(
+                keyword="Set Environment Variable",
+                arguments=["XDG_SESSION_TYPE", "x11"],
+            ),
+            TestCaseStep(
+                keyword="Set Environment Variable",
+                arguments=["GDK_BACKEND", "x11"],
+            ),
+            TestCaseStep(
+                keyword="Set Environment Variable",
+                arguments=["QT_QPA_PLATFORM", "xcb"],
+            ),
+            # Force the AT-SPI accessibility bridge so a freshly launched GTK app
+            # under test exposes its control tree. The value MUST be the backend
+            # NAME "atspi" — modern GTK rejects GTK_A11Y=1 ("Unrecognized
+            # accessibility backend") and the app then publishes NO AT-SPI tree.
+            # (Harness finding, change: desktop-a11y-atspi-backend.)
+            TestCaseStep(
+                keyword="Set Environment Variable",
+                arguments=["GTK_A11Y", "atspi"],
+            ),
+            TestCaseStep(
+                keyword="Remove Environment Variable",
+                arguments=["WAYLAND_DISPLAY"],
+            ),
+        ])
+        preamble = BddKeyword(
+            name=self._REPLAY_ENV_KEYWORD_NAME, steps=steps, bdd_intent="given"
+        )
+        suite.bdd_keywords = list(suite.bdd_keywords or []) + [preamble]
+
+        if suite.imports is None:
+            suite.imports = []
+        if "OperatingSystem" not in suite.imports:
+            suite.imports.append("OperatingSystem")
+
+        user_setup = getattr(session, "suite_setup", None)
+        if suite.setup is None and not user_setup:
+            suite.setup = TestCaseStep(
+                keyword=self._REPLAY_ENV_KEYWORD_NAME, arguments=[]
+            )
+            return "wired"
+        return "keyword_only"
+
+    def _suite_body_is_launch_only(self, suite) -> bool:
+        """True when every test-case step is launch/setup scaffolding (or the
+        suite has no steps at all). Empty-keyword steps (template data rows)
+        count as substance.
+        """
+        if not getattr(suite, "test_cases", None):
+            return True
+        for tc in suite.test_cases:
+            for step in getattr(tc, "steps", None) or []:
+                kw = (step.keyword or "").strip().lower()
+                if not kw:
+                    return False  # template data row = real content
+                base = kw.rsplit(".", 1)[-1]
+                if base not in self._LAUNCH_SETUP_KEYWORDS:
+                    return False
+        return True
+
+    def _filter_exploratory_introspection(self, suite) -> int:
+        """Drop exploratory desktop introspection steps (``Query``/``Evaluate``)
+        from each test case in ``suite``, keeping any whose assigned variable is
+        consumed (transitively) by a retained step. Mutates the suite in place;
+        returns the number of steps removed.
+
+        change: desktop-stepwise-execution-fidelity (finding #10).
+        """
+        if not getattr(suite, "test_cases", None):
+            return 0
+
+        total_removed = 0
+        for tc in suite.test_cases:
+            steps = getattr(tc, "steps", None)
+            if not steps:
+                continue
+
+            def _is_introspection(step) -> bool:
+                base = (step.keyword or "").strip().lower().rsplit(".", 1)[-1]
+                return base in self._INTROSPECTION_KEYWORDS
+
+            # Seed: variables referenced by ALL non-introspection (always-kept)
+            # steps — interactions, assertions, setup. These protect captures.
+            needed: set = set()
+            for step in steps:
+                if not _is_introspection(step):
+                    needed |= self._referenced_var_names(step.arguments)
+
+            def _is_removal_candidate(step) -> bool:
+                # Only an introspection probe that CAPTURED a variable (a data
+                # probe) is a removal candidate. A standalone unassigned
+                # Query/Evaluate may be a side-effect/existence assertion — never
+                # silently erase it (Codex review #2).
+                return _is_introspection(step) and bool(step.assigned_variables)
+
+            # Fixpoint: an introspection probe whose assigned variable is needed
+            # becomes kept, and its OWN argument references then become needed
+            # (a kept Evaluate may consume an earlier probe's variable).
+            # assigned_variables are stored in ${VAR} form — normalize to bare
+            # before comparing against the bare ``needed`` set (Codex review #1).
+            kept_introspection = set()
+            changed = True
+            while changed:
+                changed = False
+                for i, step in enumerate(steps):
+                    if not _is_removal_candidate(step) or i in kept_introspection:
+                        continue
+                    assigned = {
+                        self._bare_var_name(v) for v in (step.assigned_variables or [])
+                    }
+                    if assigned & needed:
+                        kept_introspection.add(i)
+                        needed |= self._referenced_var_names(step.arguments)
+                        changed = True
+
+            new_steps = []
+            for i, step in enumerate(steps):
+                if _is_removal_candidate(step) and i not in kept_introspection:
+                    total_removed += 1
+                    continue
+                new_steps.append(step)
+            tc.steps = new_steps
+
+        return total_removed
+
     def _propagate_assigned_variables_to_literal_args(
         self,
         steps: List["TestCaseStep"],
@@ -2888,6 +3281,19 @@ class TestBuilder:
                 cap_value = step.captured_value
                 if not cap_value.strip():
                     # Empty / whitespace-only captures aren't useful.
+                    continue
+                # OBS-11 guard (change: desktop-stepwise-execution-fidelity,
+                # finding #9): do NOT let an introspection/Evaluate probe (a
+                # step whose purpose is to inspect the tree or apply a side
+                # effect, not to produce load-bearing test data) drive literal
+                # substitution. The GNOME trace corrupted
+                # ``Keyboard Type ${None} 1`` into
+                # ``Keyboard Type ${None} ${active_desktop_override}`` purely
+                # because an ``Evaluate`` env-override step captured the string
+                # "1". The source keyword — not the value length — is the
+                # discriminator: a legitimate ``Get Element Count`` capturing
+                # "5" is still a real dependency and must keep propagating.
+                if self._is_introspection_source(step.keyword):
                     continue
                 cap_var = step.assigned_variables[0]
                 # Prepend so most-recent captures are checked first.
@@ -3673,6 +4079,16 @@ class TestBuilder:
         # which RF interprets back as the literal characters at runtime.
         arg = arg.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
 
+        # Dash-prefixed args containing '=' would be MISPARSED as named
+        # arguments on standalone replay (RF named-arg syntax) — and Python
+        # kwarg names can never start with '-', so escaping the first '=' is
+        # always safe and preserves the runtime value (I-4 at generation
+        # time; change: desktop-suite-replay-environment, found by the
+        # replay smoke: '-env:UserInstallation=…' regenerated unescaped).
+        if arg.startswith("-") and "=" in arg and "\\=" not in arg:
+            head, _, rest = arg.partition("=")
+            arg = f"{head}\\={rest}"
+
         # Escape arguments starting with # (treated as comments in RF)
         if arg.startswith("#"):
             return f"\\{arg}"
@@ -3692,7 +4108,12 @@ class TestBuilder:
             Keyword name without library prefix
         """
         if "." in keyword:
-            return keyword.split(".", 1)[1]  # Return everything after first dot
+            # RF keyword names contain no dots — the keyword is the segment
+            # after the LAST dot. Split-on-first-dot mangled dotted library
+            # names: "PlatynUI.BareMetal.Take Screenshot" became the
+            # unresolvable "BareMetal.Take Screenshot" (replay smoke,
+            # change: desktop-suite-replay-environment).
+            return keyword.rsplit(".", 1)[1]
         return keyword
 
     def _apply_prefix_removal(self, suite: GeneratedTestSuite) -> GeneratedTestSuite:

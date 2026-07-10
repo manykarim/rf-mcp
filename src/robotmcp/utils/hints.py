@@ -746,6 +746,65 @@ def _check_element_interaction_errors(ctx: HintContext) -> List[Hint]:
     return hints
 
 
+# ── Process `=`-argument misparse (change: platynui-visible-safe-targeting,
+# I-4) ──────────────────────────────────────────────────────────────────────
+
+_PROCESS_LAUNCH_KEYWORDS = {"start process", "run process"}
+
+
+def detect_process_eq_arg_misparse(keyword: str, arguments: List[Any]) -> List[str]:
+    """Return Start/Run Process arguments RF would swallow as named args.
+
+    A dash-prefixed positional argument containing an unescaped ``=`` (e.g.
+    LibreOffice's ``-env:UserInstallation=file:///…``) is parsed by RF as a
+    named argument and silently dropped from the command line. Legitimate
+    Process configuration (``env:NAME=value``, ``shell=True``, ``cwd=…``) is
+    not dash-prefixed and is never flagged. Detection only — callers must
+    not rewrite the argument.
+    """
+    base = (keyword or "").strip().lower().rsplit(".", 1)[-1]
+    if base not in _PROCESS_LAUNCH_KEYWORDS:
+        return []
+    flagged: List[str] = []
+    for arg in arguments or []:
+        if not isinstance(arg, str) or "=" not in arg:
+            continue
+        head, _, _ = arg.partition("=")
+        if not head.startswith("-"):
+            continue
+        if head.endswith("\\"):  # already escaped: `-env:X\=value`
+            continue
+        flagged.append(arg)
+    return flagged
+
+
+def _escaped_form(arg: str) -> str:
+    head, _, rest = arg.partition("=")
+    return f"{head}\\={rest}"
+
+
+def _check_process_named_arg_misparse(ctx: HintContext, err: str) -> List[Hint]:
+    """Reactive checker for failed Process launches (task 5.2)."""
+    flagged = detect_process_eq_arg_misparse(ctx.keyword, ctx.arguments)
+    if not flagged:
+        return []
+    examples = [
+        {"keyword": "Start Process", "arguments": ["soffice", _escaped_form(a)]}
+        for a in flagged[:2]
+    ]
+    listed = ", ".join(f"'{a}'" for a in flagged)
+    return [Hint(
+        title="Process argument may be parsed as a named argument",
+        message=(
+            f"Robot Framework may parse {listed} as a named argument and "
+            "drop it from the command line. Escape the first '=' as '\\=' "
+            "so it stays a positional command-line argument."
+        ),
+        examples=examples,
+        relevance=85,
+    )]
+
+
 def generate_hints(ctx: HintContext) -> List[Dict[str, Any]]:
     """Generate a prioritized list of hint dicts suitable for inclusion in responses."""
     hints: List[Hint] = []
@@ -1430,6 +1489,9 @@ def generate_hints(ctx: HintContext) -> List[Dict[str, Any]]:
 
     # Element interaction errors (library-aware)
     hints.extend(_check_element_interaction_errors(ctx))
+
+    # Process `=`-argument misparse on failed launches (I-4)
+    hints.extend(_check_process_named_arg_misparse(ctx, err))
 
     # Transform to serializable list of dicts, limited to top 3 by relevance
     hints_sorted = sorted(hints, key=lambda h: h.relevance, reverse=True)[:3]

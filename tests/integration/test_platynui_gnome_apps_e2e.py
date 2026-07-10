@@ -51,6 +51,10 @@ E2E_DISPLAY = ":99"
 os.environ["XDG_SESSION_TYPE"] = "x11"
 os.environ["DISPLAY"] = E2E_DISPLAY
 os.environ.pop("WAYLAND_DISPLAY", None)
+# This suite provisions its OWN isolated Xvfb — mark it isolated so the
+# active-desktop safety guard (change: platynui-desktop-safety-isolation)
+# allows operations here.
+os.environ["ROBOTMCP_PLATYNUI_ISOLATED_DISPLAY"] = E2E_DISPLAY
 
 
 def _platynui_available() -> bool:
@@ -761,3 +765,155 @@ class TestCrossApplicationE2E:
         await _editor_type(mcp_client, sid, "<Ctrl+A><Delete>answer is 42")
         count = await _editor_char_count(mcp_client, sid, "flow_count")
         assert count == len("answer is 42"), count
+
+
+# ===========================================================================
+# Maintainer-report workflow end-to-end (change: desktop-mcp-workflow-correctness)
+# Reproduces the full flow from docs/gnome-calculator-mcp-maintainer-report.md:
+# analyze(context=desktop) -> discover PlatynUI keywords -> inspect ui_tree ->
+# stepwise calculator interactions with per-entry/result assertions ->
+# build_test_suite (real interactions, no pre-start contamination).
+# ===========================================================================
+
+
+class TestReportWorkflowE2E:
+    @pytest.mark.asyncio
+    async def test_full_report_flow_reaches_real_interactions(
+        self, calculator, mcp_client
+    ):
+        sid = _sid("report-flow")
+
+        # 1. analyze_scenario(context="desktop") must yield a desktop session,
+        #    PlatynUI-led, with Appium NOT recommended (findings #1, #2).
+        analysis = await mcp_client.call_tool(
+            "analyze_scenario",
+            {
+                "scenario": (
+                    "Open GNOME Calculator desktop application, perform several "
+                    "calculations and assert each entered value and the result"
+                ),
+                "context": "desktop",
+                "session_id": sid,
+            },
+        )
+        adata = analysis.data
+        assert adata["success"] is True, adata
+        caps = set(adata["scenario"]["required_capabilities"])
+        assert "PlatynUI.BareMetal" in caps, adata
+        assert "AppiumLibrary" not in caps, adata
+        assert adata["analysis"]["detected_session_type"] == "desktop_testing", adata
+
+        # 2. find_keywords surfaces PlatynUI desktop keywords (finding #5).
+        kws = await mcp_client.call_tool(
+            "find_keywords",
+            {"query": "", "strategy": "catalog", "library_name": "PlatynUI", "session_id": sid},
+        )
+        assert kws.data["library"] == "PlatynUI.BareMetal", kws.data
+        names = {c["name"] for c in kws.data["results"]}
+        assert "Pointer Click" in names, kws.data
+
+        # 3. get_session_state must inspect ui_tree, never the mobile source
+        #    (finding #4).
+        state = await mcp_client.call_tool(
+            "get_session_state",
+            {
+                "session_id": sid,
+                "sections": ["page_source"],
+                "elements_of_interest": ["gnome-calculator"],
+            },
+        )
+        ps = state.data["sections"]["page_source"]
+        assert ps["source"] == "desktop", ps
+        assert "mobile source" not in (ps.get("message") or "").lower(), ps
+        assert "ui_tree" in state.data["sections"], state.data
+
+        # 4. stepwise interactions with per-entry + result assertions.
+        _raise_x11_window("Calculator")
+        await _verified_calc_sequence(
+            mcp_client, sid, calculator, ["C", "3", "×", "9", "="], "27"
+        )
+        await _assert_history_result(
+            mcp_client, sid, calculator, "27", equation="3×9"
+        )
+
+        # 5. build_test_suite reflects real interactions (finding #10), and
+        #    reports pre-start accounting (finding #9).
+        suite = await mcp_client.call_tool(
+            "build_test_suite",
+            {"session_id": sid, "test_name": "Calculator 3x9"},
+        )
+        sdata = suite.data
+        assert sdata["success"] is True, sdata
+        assert "excluded_pre_start_count" in sdata, sdata
+        rf_text = sdata.get("rf_text") or ""
+        if "Content saved to " in rf_text and ".robotmcp_artifacts" in rf_text:
+            artifact = rf_text.split("Content saved to ", 1)[1].split(" (", 1)[0]
+            rf_text = Path(artifact).read_text()
+        assert "Pointer Click" in rf_text, rf_text
+        assert "Close Browser" not in rf_text, rf_text
+
+    @pytest.mark.asyncio
+    async def test_execute_batch_preserves_arguments(self, calculator, mcp_client):
+        """execute_batch must honor the canonical ``arguments`` key (finding #8)."""
+        sid = _sid("report-batch")
+        await _init_session(mcp_client, sid)
+        batch = await mcp_client.call_tool(
+            "execute_batch",
+            {
+                "session_id": sid,
+                "steps": [
+                    {
+                        "keyword": "Pointer Click",
+                        "arguments": [f"{calculator}//control:Button[@Name='C']"],
+                    },
+                    {
+                        "keyword": "Pointer Click",
+                        "arguments": [f"{calculator}//control:Button[@Name='4']"],
+                    },
+                ],
+            },
+        )
+        # Both steps received their single locator argument (not "got 0").
+        assert batch.data["status"] in ("PASS", "RECOVERED"), batch.data
+
+    @pytest.mark.asyncio
+    async def test_generated_suite_is_clean_not_a_debug_trace(
+        self, calculator, mcp_client
+    ):
+        """build_test_suite serializes validated intent, not investigation
+        history: exploratory Query/Evaluate probes are filtered, real
+        interactions remain (change: desktop-stepwise-execution-fidelity,
+        finding #10)."""
+        sid = _sid("report-clean")
+        await _init_session(mcp_client, sid)
+        _raise_x11_window("Calculator")
+        # Mix exploratory introspection probes with real interactions.
+        await mcp_client.call_tool(
+            "execute_step",
+            {"keyword": "Query", "arguments": ["//app:*[@Name='gnome-calculator']"],
+             "session_id": sid, "assign_to": "probe_nodes"},
+        )
+        await mcp_client.call_tool(
+            "execute_step",
+            {"keyword": "Evaluate", "arguments": ["[1, 2, 3]"],
+             "session_id": sid, "assign_to": "probe_list"},
+        )
+        await _verified_calc_sequence(
+            mcp_client, sid, calculator, ["C", "8", "×", "9", "="], "72"
+        )
+        await _assert_history_result(mcp_client, sid, calculator, "72", equation="8×9")
+
+        suite = await mcp_client.call_tool(
+            "build_test_suite", {"session_id": sid, "test_name": "Calculator Clean 8x9"}
+        )
+        sdata = suite.data
+        assert sdata["success"] is True, sdata
+        # The exploratory probes were filtered and reported.
+        assert sdata.get("introspection_filtered_count", 0) >= 1, sdata
+        rf_text = sdata.get("rf_text") or ""
+        if "Content saved to " in rf_text and ".robotmcp_artifacts" in rf_text:
+            artifact = rf_text.split("Content saved to ", 1)[1].split(" (", 1)[0]
+            rf_text = Path(artifact).read_text()
+        assert "Pointer Click" in rf_text
+        # The exploratory Evaluate list probe must not appear in the body.
+        assert "[1, 2, 3]" not in rf_text

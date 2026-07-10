@@ -377,6 +377,19 @@ class RobotFrameworkNativeContextManager:
             if "BuiltIn" not in imported_libraries:
                 imported_libraries.insert(0, "BuiltIn")
 
+            # Active-test state preservation (change: desktop-evidence-and-
+            # display-scoping, D6): when this method runs again for a session
+            # that already has a context entry (e.g. the build_test_suite
+            # dry-run path), the None-initialized _initial_*_test values must
+            # NOT clobber an active start_test bracket — that produced
+            # "No active test to end" on the 2026-06-11 rerun.
+            _prev_ctx_entry = self._session_contexts.get(session_id)
+            if _prev_ctx_entry is not None:
+                if _initial_run_test is None:
+                    _initial_run_test = _prev_ctx_entry.get("current_run_test")
+                if _initial_res_test is None:
+                    _initial_res_test = _prev_ctx_entry.get("current_res_test")
+
             self._session_contexts[session_id] = {
                 "context": ctx,
                 "variables": variables,

@@ -26,6 +26,10 @@ class StaticLibraryPlugin(LibraryPlugin):
     install_actions: Optional[List[InstallAction]] = None
     hints: Optional[LibraryHints] = None
     prompt_bundle: Optional[PromptBundle] = None
+    # Optional unqualified-keyword -> library-name map. Lets a static builtin
+    # (e.g. Process) declare its keywords so they resolve unqualified
+    # (change: desktop-stepwise-followups).
+    keyword_library_map: Optional[Dict[str, str]] = None
 
     schema_version: int = 1
 
@@ -51,7 +55,7 @@ class StaticLibraryPlugin(LibraryPlugin):
         return None
 
     def get_keyword_library_map(self) -> Optional[Dict[str, str]]:  # type: ignore[override]
-        return None
+        return self.keyword_library_map
 
     def get_keyword_overrides(self):  # type: ignore[override]
         return None

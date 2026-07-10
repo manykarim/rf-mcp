@@ -1741,6 +1741,184 @@ Handle WebView
                 "description": "Keyboard Type/Press/Release accept chord syntax",
                 "examples": ["Hello World", "<Ctrl+A>", "<Ctrl+C>then more text", "<Enter>"],
             },
+            "focus_and_visibility": {
+                "description": (
+                    "rf-mcp focuses the application-under-test (AUT) window "
+                    "before every pointer/keyboard step by default, so input "
+                    "cannot leak to another active window. Operations against "
+                    "a non-visible AUT window warn (and fail-fast if enabled)."
+                ),
+                "rules": [
+                    "LAUNCH the app VISIBLY (e.g. Process.Start Process) and "
+                    "wait for its window (Query the control:Frame) before "
+                    "interacting — do not rely on a tree that exists without a "
+                    "shown window.",
+                    "Do NOT run any PlatynUI keyword BEFORE launching the AUT: "
+                    "the desktop tree is snapshotted on the first PlatynUI "
+                    "keyword; apps started afterwards may be invisible to the "
+                    "session.",
+                    "Keep descriptors app-scoped (/app:*[@Name='X']//...). "
+                    "Unscoped // descriptors can match elements in OTHER "
+                    "applications and get flagged.",
+                    "After switching between apps in one session, the next "
+                    "operation re-focuses the AUT automatically; you may also "
+                    "call the focus intent / Activate Window explicitly.",
+                    "Verify visibility before asserting: get_session_state("
+                    "sections=['ui_tree'], elements_of_interest=['<app>']) "
+                    "reports whether the window is visible/on-screen.",
+                ],
+                "escape_hatch": (
+                    "Disable focus-before-act with ROBOTMCP_PLATYNUI_NO_FOCUS=1 "
+                    "(process) for advanced flows that manage focus themselves."
+                ),
+            },
+            "process_and_recovery": {
+                "description": (
+                    "Launch the AUT and any recovery tooling via the Process "
+                    "library. For a desktop session, the executable in the first "
+                    "argument is resolved to an absolute path against the server "
+                    "PATH before dispatch, so a tool present for the server "
+                    "(e.g. xdotool) is found without relying on an interactive "
+                    "shell's startup environment."
+                ),
+                "rules": [
+                    "BuiltIn.Evaluate accepts a SINGLE Python EXPRESSION, not "
+                    "statements — `import os; os.system(...)` raises SyntaxError.",
+                    "For recovery logic that needs imports or multiple "
+                    "statements, use Process.Run Process (statement-capable, "
+                    "runs a real executable), not Evaluate.",
+                    "If a Process launch reports the tool is not found, the tool "
+                    "is not on the SERVER PATH — install it or pass an absolute "
+                    "path; rf-mcp does not inherit a login shell's PATH.",
+                ],
+            },
+            "node_attribute_api": {
+                "description": (
+                    "When you must touch a UiNode in Evaluate, use the REAL "
+                    "API — guessing wastes steps. The exploratory trace failed "
+                    "with `'UiNode' object has no attribute 'get_attribute'`."
+                ),
+                "supported": [
+                    "node.name — the accessible Name",
+                    "node.role — the control role",
+                    "node.attribute(<name>) — a single attribute object",
+                    "list(node.attributes()) then attr.value() — all attributes",
+                ],
+                "not_supported": ["node.get_attribute(...)  # does NOT exist"],
+                "prefer_keyword": (
+                    "Prefer the `Get Attribute` keyword over raw Evaluate "
+                    "introspection — e.g. `Get Attribute    <descriptor>    Name` "
+                    "(read the history Labels' Name to assert results; see "
+                    "display_state_reading). Evaluate probes are filtered out of "
+                    "the generated suite as exploratory noise."
+                ),
+            },
+            "tree_freshness": {
+                "description": (
+                    "The desktop accessibility tree is CACHED. An application "
+                    "launched after the last snapshot can be invisible to "
+                    "name-based queries until the cache is refreshed."
+                ),
+                "rules": [
+                    "rf-mcp auto-refreshes the cache after a desktop launch "
+                    "(`Start Process`) and again before the first tree-resolving "
+                    "keyword that follows — so launch the AUT, then query.",
+                    "If a name-based locator still fails right after launch "
+                    "(ElementNotFoundError, empty Query, no app root), the tree "
+                    "may be stale: call "
+                    "`get_session_state(sections=['ui_tree'], "
+                    "elements_of_interest=['<app>'])` to force a refresh, then "
+                    "re-query — do NOT drop to absolute-coordinate clicks or OCR "
+                    "as the first resort.",
+                    "Give the app a moment to register in AT-SPI after launch "
+                    "(a short wait) before the first query.",
+                ],
+            },
+            "accessibility_exposure": {
+                "description": (
+                    "An empty tree right after launch can mean the app started "
+                    "but exposes NO accessibility (AT-SPI) tree — not that your "
+                    "locator is wrong."
+                ),
+                "rules": [
+                    "If get_session_state(sections=['ui_tree']) returns no "
+                    "application AND an `accessibility_diagnostic` of type "
+                    "`accessibility_not_exposed`, the window is present but "
+                    "publishes no AT-SPI tree: fix the accessibility bridge "
+                    "(GTK_A11Y=atspi — the backend NAME, not '1', which modern "
+                    "GTK rejects — / toolkit-accessibility / AT-SPI bus), "
+                    "relaunch, and retry — do NOT switch to coordinate clicks or OCR.",
+                    "`app_window_absent` means the app did not start on this "
+                    "display; verify the launch and DISPLAY.",
+                    "GTK/Qt apps can ESCAPE the bound X display to the host "
+                    "Wayland compositor even with WAYLAND_DISPLAY unset — "
+                    "libwayland falls back to the literal 'wayland-0' socket. "
+                    "rf-mcp pins GDK_BACKEND=x11 / QT_QPA_PLATFORM=xcb when a "
+                    "Wayland socket is reachable so AUTs render on the bound "
+                    "DISPLAY (change: desktop-evidence-and-display-scoping).",
+                    "rf-mcp uses PlatynUI's native API wherever it provides the "
+                    "capability; window-presence/WM detection use a documented "
+                    "EWMH fallback only because the native API exposes no "
+                    "equivalent (it queries windows through the AT-SPI tree).",
+                ],
+            },
+            "duplicate_roots_and_controls": {
+                "description": (
+                    "On Wayland/AT-SPI a single application can expose MULTIPLE "
+                    "live application-root nodes, and a control query can return "
+                    "duplicate nodes with different bounds (e.g. three '1' "
+                    "buttons). Do not blindly index the raw query result."
+                ),
+                "rules": [
+                    "List roots first: `Query    //app:*[@Name='X']` — expect >1.",
+                    "Scope to one root with `Set Root    <app-node>` then use "
+                    "short relative descriptors (`//control:Button[@Name='1']`).",
+                    "Prefer the interactable, in-view node — check "
+                    "`control:IsVisible` / `control:IsInView` / `control:Bounds` "
+                    "via `Get Attribute` rather than guessing the index.",
+                    "Inspect structure with get_session_state(sections=['ui_tree'], "
+                    "elements_of_interest=['X']) before interacting.",
+                ],
+            },
+            "control_naming": {
+                "description": (
+                    "Desktop control names are inconsistent across roles — "
+                    "discover exact names via ui_tree instead of guessing."
+                ),
+                "rules": [
+                    "Operator KEYS expose symbol Names on Buttons: "
+                    "`//control:Button[@Name='+']` (not 'plus').",
+                    "The same operator may read as a WORD on a Label: "
+                    "`//control:Label[@Name='plus']`.",
+                    "When a name guess fails, list the subtree "
+                    "(get_session_state ui_tree) and read the exact @Name "
+                    "rather than trying more guesses.",
+                ],
+            },
+            "display_state_reading": {
+                "description": (
+                    "GTK4 does not reliably expose the live entry's text over "
+                    "AT-SPI. Assert against the history/result Labels FIRST — "
+                    "that is the path that actually works on GNOME Calculator."
+                ),
+                "rules": [
+                    "PRIMARY — assert the history/result Labels. Each completed "
+                    "calculation lands in the history as Labels named with the "
+                    "equation AND the result value: `Get Attribute    "
+                    "<app>//control:Label[@Name='56']    Name` (or "
+                    "`//control:Label[@Name='7×8']`). This is the reliable "
+                    "per-result assertion path.",
+                    "SECONDARY — `Get Attribute    <app>//control:Text    "
+                    "native:Text.CharacterCount` as a length proxy for the live "
+                    "entry. WARNING: this may report 0 on some GTK builds even "
+                    "when the display visibly changed (observed on GNOME "
+                    "Calculator) — do NOT rely on it alone; a 0 is not evidence "
+                    "of no input. Scope to the active window/root first.",
+                    "LAST RESORT — if neither the Labels nor CharacterCount are "
+                    "usable, take a screenshot (`Take Screenshot`) and OCR it "
+                    "(e.g. tesseract via `Run Process`) to read the display.",
+                ],
+            },
             "tips": [
                 "Descriptors resolve lazily with retry (default 30s timeout, "
                 "0.1s interval) — no explicit waits needed for appearing elements",
@@ -1751,6 +1929,12 @@ Handle WebView
                 "Window keywords (Activate/Maximize/Close Window...) accept "
                 "Frame/Window/Dialog elements alike",
                 "Take Screenshot supports filename=EMBED for log embedding",
+                "BuiltIn.Evaluate is expression-only; use Process.Run Process "
+                "for multi-statement recovery logic.",
+                "UiNode has NO get_attribute(): use node.attribute()/attributes() "
+                "+ attr.value(), or the Get Attribute keyword.",
+                "An app may expose multiple roots/duplicate controls — Set Root "
+                "and prefer the in-view node; don't blind-index query results.",
             ],
         }
 

@@ -99,11 +99,13 @@ def _install_fake_native(monkeypatch, apps, shutdown_log, call_order, raise_impo
         call_order.append("ensure_x11")
         return None
 
-    # ui_tree_service imports ensure_x11_session_env lazily from the plugin
-    # module inside _collect_ui_tree_sync, so patch it at the source.
+    # ui_tree_service now obtains the runtime from the plugin's runtime broker
+    # (change: platynui-desktop-safety-isolation). Patch ensure_x11 at the
+    # source and reset the broker so each test binds the fresh fake Runtime.
     import robotmcp.plugins.builtin.platynui_plugin as plugin_mod
 
     monkeypatch.setattr(plugin_mod, "ensure_x11_session_env", _fake_ensure)
+    plugin_mod._reset_runtime_broker_for_tests()
 
 
 # =============================================================================
@@ -173,11 +175,18 @@ class TestDesktopHappyPath:
         assert result["expanded_applications"] == 0
         assert "hint" in result
 
-    def test_shutdown_always_called(self, monkeypatch):
+    def test_runtime_not_shut_down_per_call(self, monkeypatch):
+        # Change platynui-desktop-safety-isolation: ui_tree now reuses the
+        # shared runtime broker and must NOT shut the runtime down per call
+        # (the per-call create+shutdown was the root cause of "not available
+        # after shutdown"). Two calls reuse the same broker runtime.
         shutdown_log, call_order = [], []
         _install_fake_native(monkeypatch, self._apps(), shutdown_log, call_order)
         run(get_ui_tree(_DesktopSession()))
-        assert shutdown_log == [True]
+        run(get_ui_tree(_DesktopSession()))
+        assert shutdown_log == []  # never shut down per-call
+        # ensure_x11 + a single Runtime bind across both calls
+        assert call_order.count("ensure_x11") == 1
 
     def test_ensure_x11_invoked_before_runtime(self, monkeypatch):
         shutdown_log, call_order = [], []
