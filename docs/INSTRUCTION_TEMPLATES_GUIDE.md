@@ -113,7 +113,8 @@ Use the standard template — works well for most LLMs.
       "args": ["run", "-m", "robotmcp.server"],
       "env": {
         "ROBOTMCP_INSTRUCTIONS": "default",
-        "ROBOTMCP_INSTRUCTIONS_TEMPLATE": "standard"
+        "ROBOTMCP_INSTRUCTIONS_TEMPLATE": "standard",
+        "UV_COMPILE_BYTECODE": "1"
       }
     }
   }

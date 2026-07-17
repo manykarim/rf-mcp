@@ -28,7 +28,8 @@ rf-mcp sends server-level instructions to LLMs via the MCP `initialize` response
       "args": ["run", "-m", "robotmcp.server"],
       "env": {
         "ROBOTMCP_INSTRUCTIONS": "default",
-        "ROBOTMCP_INSTRUCTIONS_TEMPLATE": "detailed"
+        "ROBOTMCP_INSTRUCTIONS_TEMPLATE": "detailed",
+        "UV_COMPILE_BYTECODE": "1"
       }
     }
   }
