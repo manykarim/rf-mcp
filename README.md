@@ -575,7 +575,45 @@ RobotMCP provides a comprehensive toolset organized by function. Highlights:
 
 ### Locator Guidance
 
-- `get_locator_guidance` – Consolidated Browser/Selenium/Appium selector guidance with structured output.
+- `get_locator_guidance` – Consolidated Browser/Selenium/Appium selector guidance with structured output. Also serves non-locator topics: `library="requests"` (API request/response cookbook) and `library="visual"` (visual-validation cookbook — see below).
+- `visual_check` – Capture the current screen/page to disk and, on explicit opt-in, return the image for multimodal inspection (see [Visual validation](#-visual-validation-multimodal)).
+
+### Visual validation (multimodal)
+
+Some checks are impossible from the DOM / ARIA tree alone — text baked into a
+`<canvas>` or an image, layout/overlap, an element visually obscured by an
+overlay, color/state, charts, or transient UI states. When the coding agent's
+model is multimodal, a screenshot closes that gap. RobotMCP exposes this
+**pull-not-push** so it stays token-cheap by default:
+
+- **Default (cheap, ~no extra tokens):** every successful screenshot step
+  advertises an absolute `screenshot_path` plus a one-line `visual_hint` in its
+  response. No image bytes are sent. A multimodal agent that can read files
+  opens the path on demand; a text-only agent simply ignores it. The run never
+  depends on the model being multimodal.
+- **Guidance topic:** `get_locator_guidance(library="visual")` (aliases:
+  `screenshot`, `vision`, `image`) returns a cookbook — the vision-only case
+  categories, the **dual read-back** pattern (prefer `Get Text` when a node
+  exposes the value; use a screenshot to *confirm*; go screenshot-primary only
+  when no node exposes it), and the caveats.
+- **Opt-in image escape hatch:** the `visual_check` tool. By default it returns
+  `{screenshot_path, size, mode, visual_hint}` — **text only**. It returns an
+  actual image content block **only** when called with `return_image=true`
+  *and* `ROBOTMCP_SCREENSHOT_MODE` is `image` or `auto`. A missing/failed
+  capture degrades to the evidence-missing hint and never raises.
+
+**`ROBOTMCP_SCREENSHOT_MODE`** (default `file`):
+
+| Value   | Behavior |
+| ------- | -------- |
+| `file`  | Always path-only; `return_image=true` is ignored. Safe default for text-only deployments. |
+| `image` | Honor `return_image=true` and return the image block. |
+| `auto`  | Same as `image` where supported, else falls back to path-only. |
+
+**Caveats:** each attached image costs roughly 800 tokens, so keep it on-demand;
+prefer `Get Text` for exact text/number assertions that live in the DOM;
+screenshots may capture PII; and pixel comparisons are not deterministic across
+renderers — use vision for *gestalt* validation, not byte-exact diffs.
 
 ### Memory (optional, requires `rf-mcp[memory]`)
 

@@ -17,7 +17,7 @@
 
 ## 4. Cross-library naming + docstrings
 - [x] 4.1 One shared sentence in the Browser/Selenium/Appium/PlatynUI screenshot surfaces + `visual_check`: "saved to <path>; read it to validate visually (multimodal) — use for canvas/image text, layout/overlap, obscured elements, color, charts"
-- [ ] 4.2 README: short "Visual validation (multimodal)" section documenting the default (path) + opt-in (image) + the `ROBOTMCP_SCREENSHOT_MODE` knob + caveats (determinism, PII, file-access)
+- [x] 4.2 README: "Visual validation (multimodal)" section under MCP Tools Overview documenting the default (path) + opt-in (image) + the `ROBOTMCP_SCREENSHOT_MODE` table + caveats (determinism, PII, file-access), plus a `visual_check` tool entry
 
 ## 5. Tests
 - [x] 5.1 `get_locator_guidance(library="visual")` returns the case list + dual-read-back + caveats; alias `screenshot` resolves
