@@ -1,8 +1,12 @@
 """Unit tests: lazy + torch-free + offline-safe keyword embeddings
 (change: lazy-offline-embeddings)."""
 import sys
-import numpy as np
 import pytest
+
+# numpy is a transitive dep of the (optional) embedding extras. The optional
+# dependency matrix installs a single extra without it, so skip cleanly rather
+# than erroring at collection — the cosine path under test is inert without it.
+np = pytest.importorskip("numpy")
 
 from robotmcp.components.keyword_matcher import KeywordMatcher
 

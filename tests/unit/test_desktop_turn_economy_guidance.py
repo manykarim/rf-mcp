@@ -10,12 +10,22 @@ import json
 
 import pytest
 
+import importlib.util as _ilu
+
 from robotmcp.components.execution import desktop_guidance as dg
 from robotmcp.domains.instruction.value_objects import InstructionTemplate
 from robotmcp.domains.instruction.adapters.fastmcp_adapter import InstructionTemplateType
 from robotmcp.models.session_models import ExecutionSession, SessionType
 
+# The guidance bundle is derived live from LibraryDocumentation("PlatynUI.BareMetal");
+# without the native library installed get_desktop_guidance() returns None by design.
+requires_platynui = pytest.mark.skipif(
+    _ilu.find_spec("platynui_native") is None or _ilu.find_spec("PlatynUI") is None,
+    reason="PlatynUI (platynui_native) not installed — desktop keyword catalog unavailable",
+)
 
+
+@requires_platynui
 class TestDesktopGuidanceBundle:
     def test_bundle_has_full_keyword_surface_and_crib(self):
         b = dg.get_desktop_guidance()

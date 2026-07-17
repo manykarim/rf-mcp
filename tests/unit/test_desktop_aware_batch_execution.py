@@ -7,7 +7,16 @@ platform-filtered so a desktop session never gets browser recovery actions.
 
 from __future__ import annotations
 
+import importlib.util as _ilu
+
 import pytest
+
+# get_desktop_guidance() derives its bundle live from the installed PlatynUI
+# library; it returns None when the native library is absent (e.g. CI).
+requires_platynui = pytest.mark.skipif(
+    _ilu.find_spec("platynui_native") is None or _ilu.find_spec("PlatynUI") is None,
+    reason="PlatynUI (platynui_native) not installed — desktop guidance bundle unavailable",
+)
 
 from robotmcp.domains.recovery.aggregates import RecoveryEngine
 from robotmcp.domains.recovery.value_objects import (
@@ -70,6 +79,7 @@ class TestPlatformAwareStrategies:
 
 
 class TestBatchSteer:
+    @requires_platynui
     def test_desktop_guidance_steers_to_batch(self):
         from robotmcp.components.execution.desktop_guidance import get_desktop_guidance
 

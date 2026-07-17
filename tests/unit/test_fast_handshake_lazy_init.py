@@ -36,7 +36,9 @@ class TestLazyLibdocStorage:
         fi = s.failed_imports
         assert "BuiltIn" in libs  # stdlib (robot.libraries) — never gated
         if "DatabaseLibrary" in s.common_libraries:
-            assert fi.get("DatabaseLibrary") == "not installed (skipped)"
+            # Either loaded (installed via the `database` extra, e.g. --all-extras
+            # CI) or cleanly gated out; never a hard crash. Do not assume absent.
+            assert "DatabaseLibrary" in libs or fi.get("DatabaseLibrary") == "not installed (skipped)"
         if "PlatynUI.BareMetal" in s.common_libraries:
             # gated by module name "PlatynUI", not dist "robotframework-PlatynUI"
             assert "PlatynUI.BareMetal" in libs or "PlatynUI.BareMetal" in fi

@@ -14,8 +14,16 @@ Batch arg compat (D5) lives in
 from __future__ import annotations
 
 import asyncio
+import importlib.util as _ilu
 
 import pytest
+
+# PlatynUI keyword-catalog discovery needs the native library installed; skip
+# these when it is absent (CI does not install the external PlatynUI wheels).
+requires_platynui = pytest.mark.skipif(
+    _ilu.find_spec("platynui_native") is None or _ilu.find_spec("PlatynUI") is None,
+    reason="PlatynUI (platynui_native) not installed — desktop keyword catalog unavailable",
+)
 
 from robotmcp.components.library_recommender import LibraryRecommender
 
@@ -280,6 +288,7 @@ class TestDesktopStateInspection:
 # ── D4: find_keywords surfaces PlatynUI desktop keywords ────────────
 
 
+@requires_platynui
 @pytest.mark.asyncio
 class TestPlatynUIKeywordDiscovery:
     async def _find(self, **kwargs):
