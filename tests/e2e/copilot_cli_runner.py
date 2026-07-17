@@ -98,6 +98,8 @@ class CopilotRunResult:
     rate_limit_message: str = ""
     auth_error: bool = False
     auth_error_message: str = ""
+    model_unavailable: bool = False
+    model_unavailable_message: str = ""
     raw_events: List[Dict[str, Any]] = field(default_factory=list)
     stderr: str = ""
     total_output_tokens: int = 0
@@ -458,6 +460,20 @@ def _detect_auth_error(events: List[Dict[str, Any]], stderr: str) -> Optional[st
     return None
 
 
+def _detect_model_unavailable(stderr: str) -> Optional[str]:
+    """Detect a Copilot 'model not available' error.
+
+    Copilot's catalog of ``--model`` values drifts independently of this repo
+    (a model served last month may be retired). That is an external environment
+    change, not an rf-mcp regression, so tests skip on it rather than fail.
+    Example stderr: ``Model "claude-haiku-4.5" from --model flag is not available.``
+    """
+    low = stderr.lower()
+    if "not available" in low and ("model" in low or "--model" in low):
+        return stderr.strip()
+    return None
+
+
 def run_copilot_cli(
     prompt: str,
     model: str = "gpt-5-mini",
@@ -553,6 +569,8 @@ def run_copilot_cli(
         is_rate_limited = bool(rl_msg)
         auth_msg = _detect_auth_error(events, result.stderr) or ""
         is_auth_error = bool(auth_msg)
+        mu_msg = _detect_model_unavailable(result.stderr) or ""
+        is_model_unavailable = bool(mu_msg)
 
         return CopilotRunResult(
             model=model,
@@ -563,11 +581,16 @@ def run_copilot_cli(
             premium_requests=metrics.get("premium_requests", 0),
             api_duration_ms=metrics.get("api_duration_ms", 0),
             session_duration_ms=metrics.get("session_duration_ms", 0),
-            success=result.returncode == 0 and not is_rate_limited and not is_auth_error,
+            success=result.returncode == 0
+            and not is_rate_limited
+            and not is_auth_error
+            and not is_model_unavailable,
             rate_limited=is_rate_limited,
             rate_limit_message=rl_msg,
             auth_error=is_auth_error,
             auth_error_message=auth_msg,
+            model_unavailable=is_model_unavailable,
+            model_unavailable_message=mu_msg,
             raw_events=events,
             stderr=result.stderr,
             total_output_tokens=sum(m.output_tokens for m in messages),

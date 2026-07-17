@@ -32,3 +32,8 @@ def skip_if_rate_limited(result) -> None:
         pytest.skip(f"Copilot auth failed: {result.auth_error_message[:120]}")
     if result.rate_limited:
         pytest.skip(f"Copilot rate limited: {result.rate_limit_message[:120]}")
+    if getattr(result, "model_unavailable", False):
+        pytest.skip(
+            f"Copilot model unavailable (external catalog drift): "
+            f"{result.model_unavailable_message[:120]}"
+        )
