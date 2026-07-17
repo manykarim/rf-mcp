@@ -161,6 +161,20 @@ class EmbeddingService:
         else:
             raise RuntimeError(f"Unknown backend: {self._backend.backend_name}")
 
+    def encode_texts(self, texts: List[str]):
+        """Sync encode → a numpy array (one row per text), reusing the backend
+        dispatch. For the keyword-ranking path which is synchronous and needs raw
+        vectors, not EmbeddingVector objects (change: lazy-offline-embeddings)."""
+        import numpy as _np
+
+        self._ensure_model()
+        cleaned = [t.strip()[:2000] for t in texts]
+        if self._backend.backend_name in ("model2vec", "sentence-transformers"):
+            return _np.asarray(self._model.encode(cleaned))
+        if self._backend.backend_name == "fastembed":
+            return _np.asarray(list(self._model.embed(cleaned)))
+        raise RuntimeError(f"Unknown backend: {self._backend.backend_name}")
+
 
 # ---------------------------------------------------------------------------
 # MemoryQueryService

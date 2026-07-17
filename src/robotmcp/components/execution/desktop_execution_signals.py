@@ -202,6 +202,106 @@ def input_effect_hint(
 
 
 # --- Close liveness (change: desktop-test-scoping-and-close-lifecycle, D5).
+# --- Steering-confidence verdict (change: desktop-steering-confidence-gate).
+# Composes the already-computed landing signals (verified-focus, input-effect,
+# Wayland-drop risk) into ONE machine-parseable verdict, so a "success" that
+# never reached the application is caught instead of trusted. Pure function.
+
+import os as _os
+
+_STEERING_CONFIDENCE_ENV = "ROBOTMCP_PLATYNUI_STEERING_CONFIDENCE"
+
+# Verdict values.
+SC_CONFIRMED = "confirmed"
+SC_UNCONFIRMED = "unconfirmed"
+SC_CONTRADICTED = "contradicted"
+
+
+def steering_confidence_mode(environ: Optional[Dict[str, str]] = None) -> str:
+    """Return "warn" when enforcement is opted down, else "enforce" (default).
+
+    Mirrors ``desktop_display_safety.warn_mode`` — ``=warn`` downgrades a
+    ``contradicted`` verdict from a step failure to an attached warning.
+    """
+    env = environ if environ is not None else _os.environ
+    return "warn" if env.get(_STEERING_CONFIDENCE_ENV, "").strip().lower() == "warn" else "enforce"
+
+
+def steering_confidence(
+    *,
+    keyword: str,
+    success: bool,
+    verified_focus: Optional[bool],
+    state_before: Any,
+    state_after: Any,
+    wayland_risk: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Compose a steering-confidence verdict for a desktop interaction step.
+
+    Returns ``None`` for non-interaction keywords or a non-success step (no
+    landing question to answer). Otherwise a dict:
+    ``{"verdict", "type", "message", "signals"}`` where ``verdict`` is one of
+    ``confirmed`` / ``unconfirmed`` / ``contradicted``:
+
+    - ``confirmed``    — focus was verified OR the target's accessible state
+      changed (positive evidence the input landed).
+    - ``contradicted`` — success reported but focus was NOT verified AND the
+      state did not change (input-effect absent), or a Wayland input-drop risk
+      applies to an unverified target. The provable "passed but did not touch
+      the app" case.
+    - ``unconfirmed``  — no positive or negative evidence (e.g. a widget with no
+      readable state and focus not positively verified).
+
+    Pure decision function — no I/O — so the caller wiring stays best-effort and
+    the contract is unit-testable without a live desktop.
+    """
+    if not success or not is_interaction_keyword(keyword):
+        return None
+
+    vf = verified_focus is True
+    effect_known = state_before is not None and state_after is not None
+    effect_observed = effect_known and state_before != state_after
+    effect_absent = effect_known and state_before == state_after
+
+    if vf or effect_observed:
+        verdict = SC_CONFIRMED
+        msg = (
+            "Input landing is confirmed "
+            + ("(window focus verified)" if vf else "(target state changed)")
+            + "."
+        )
+    elif effect_absent or wayland_risk:
+        verdict = SC_CONTRADICTED
+        why = (
+            "the target's accessible state did not change"
+            if effect_absent
+            else "synthetic X11 input is likely dropped by the Wayland compositor"
+        )
+        msg = (
+            f"'{keyword}' returned success but the input did not demonstrably "
+            f"reach the application ({why}, and window focus was not verified). "
+            "Re-verify focus (Activate Window on the app-scoped Frame) and retry."
+        )
+    else:
+        verdict = SC_UNCONFIRMED
+        msg = (
+            f"'{keyword}' succeeded but the effect could not be confirmed "
+            "(no readable target state and focus not positively verified)."
+        )
+
+    return {
+        "type": "desktop_steering_confidence",
+        "verdict": verdict,
+        "message": msg,
+        "signals": {
+            "verified_focus": vf,
+            "effect_observed": effect_observed,
+            "effect_absent": effect_absent,
+            "wayland_risk": bool(wayland_risk),
+        },
+    }
+
+
 # Run 3: the LibreOffice document window closed but the process survived as
 # a start-center frame with no signal — the agent burned retries on Alt+F4
 # loops. Mirrors launch_liveness_hint. -------------------------------------

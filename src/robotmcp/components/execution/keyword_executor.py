@@ -137,6 +137,45 @@ def _resolve_record_gate(
     return keyword.lower().strip() not in _INSPECTION_ONLY_KEYWORDS
 
 
+def _read_native_character_count(node):
+    """Read ``native:Text.CharacterCount`` from a PlatynUI node, returning an int
+    or None. Best-effort; never raises.
+
+    The string accessor ``node.attribute("native:Text.CharacterCount")`` returns
+    None on the PlatynUI new-core runtime (confirmed via the docker AT-SPI probe,
+    2026-07-17: it resolves the metadata list but not a bare colon-string). The
+    working read enumerates ``node.attributes()`` and calls ``.value()`` on the
+    matching descriptor — that returns the live count (e.g. 5 for "hello"). We
+    try the string accessor first for forward-compat, then fall back.
+    """
+    def _val(attr):
+        if attr is None:
+            return None
+        v = attr.value() if hasattr(attr, "value") and callable(attr.value) else attr
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    # 1) string accessor (forward-compat; currently returns None on new-core)
+    attr_fn = getattr(node, "attribute", None)
+    if callable(attr_fn):
+        got = _val(attr_fn("native:Text.CharacterCount"))
+        if got is not None:
+            return got
+    # 2) enumerate the node's attribute descriptors and read the match
+    attrs_fn = getattr(node, "attributes", None)
+    if callable(attrs_fn):
+        for a in attrs_fn() or []:
+            if getattr(a, "name", None) == "Text.CharacterCount" and getattr(
+                a, "namespace", "native"
+            ) in ("native", None, ""):
+                got = _val(a)
+                if got is not None:
+                    return got
+    return None
+
+
 class KeywordExecutor:
     """Handles keyword execution with proper library routing and error handling."""
 
@@ -331,22 +370,30 @@ class KeywordExecutor:
                 return arguments
             from robotmcp.components.execution.desktop_launch_env import (
                 build_desktop_launch_env,
+                gui_launch_overrides,
                 is_desktop_gui_launch,
             )
 
-            binary = is_desktop_gui_launch(list(arguments or []))
+            # Evidence-based detection: recognize any GUI AUT in a desktop
+            # session, not just the 8-binary gnome allow-set (change:
+            # desktop-launch-env-generalization).
+            binary = is_desktop_gui_launch(
+                list(arguments or []), is_desktop_session=True
+            )
             if binary is None:
                 return arguments
             # Already carries explicit env: overrides? leave it to the author.
             if any(isinstance(a, str) and a.startswith("env:") for a in (arguments or [])):
                 return arguments
             sanitize = not bool(getattr(session, "platynui_no_sanitize", False))
+            # Base display pins + accessibility overlay so ANY GTK/Qt AUT comes
+            # up on X11 with a populated AT-SPI tree (GTK_A11Y=atspi), not just
+            # the gnome binaries the image happens to export env for.
             display_env = {
                 "DISPLAY": os.environ.get("DISPLAY", ""),
-                "XDG_SESSION_TYPE": "x11",
-                "GDK_BACKEND": "x11",
                 "WAYLAND_DISPLAY": "",
             }
+            display_env.update(gui_launch_overrides(binary))
             clean = build_desktop_launch_env(
                 arguments[0], display_env=display_env, sanitize=sanitize
             )
@@ -356,6 +403,7 @@ class KeywordExecutor:
                 "LD_LIBRARY_PATH", "GTK_PATH", "GIO_MODULE_DIR",
                 "GIO_EXTRA_MODULES", "GSETTINGS_SCHEMA_DIR", "QT_PLUGIN_PATH",
                 "XDG_DATA_DIRS", "DISPLAY", "XDG_SESSION_TYPE", "GDK_BACKEND",
+                "GTK_A11Y", "QT_QPA_PLATFORM", "NO_AT_BRIDGE",
             )
             extra = []
             for var in inject_vars:
@@ -366,9 +414,22 @@ class KeywordExecutor:
                 if var in os.environ and var not in clean:
                     extra.append(f"env:{var}=")
             if extra:
+                applied_keys = [
+                    e.split("=", 1)[0].split(":", 1)[1]
+                    for e in extra
+                    if isinstance(e, str) and e.startswith("env:") and "=" in e
+                ]
                 logger.info(
-                    "PlatynUI desktop launch: sanitized env for %s (%d overrides)",
-                    binary, len(extra),
+                    "PlatynUI desktop launch: %s recognized as GUI AUT; applied "
+                    "%d env overrides (a11y/backend: %s)",
+                    binary,
+                    len(extra),
+                    ",".join(
+                        k for k in applied_keys
+                        if k in ("GTK_A11Y", "GDK_BACKEND", "QT_QPA_PLATFORM",
+                                 "XDG_SESSION_TYPE", "NO_AT_BRIDGE")
+                    )
+                    or "none",
                 )
                 return list(arguments) + extra
             return arguments
@@ -468,14 +529,8 @@ class KeywordExecutor:
             node = res[0] if isinstance(res, (list, tuple)) and res else res
             if node is None:
                 return None
-            attr_fn = getattr(node, "attribute", None)
-            if not callable(attr_fn):
-                return None
-            attr = attr_fn("native:Text.CharacterCount")
-            if attr is None:
-                return None
-            val = attr.value() if hasattr(attr, "value") else attr
-            return int(val)
+            val = _read_native_character_count(node)
+            return int(val) if val is not None else None
         except Exception as exc:  # pragma: no cover - env dependent
             logger.debug("desktop input-effect snapshot skipped: %s", exc)
             return None
@@ -2415,7 +2470,10 @@ class KeywordExecutor:
                             is_interaction_keyword,
                             is_launch_keyword,
                             launch_liveness_hint,
+                            steering_confidence,
+                            steering_confidence_mode,
                             wayland_input_warning,
+                            SC_CONTRADICTED,
                         )
 
                         # Close liveness (change: desktop-test-scoping-and-
@@ -2474,6 +2532,7 @@ class KeywordExecutor:
                         # D1: success-with-no-effect — compare the BEFORE snapshot
                         # to an AFTER snapshot; warn when a keyboard step succeeded
                         # but the target's CharacterCount did not change.
+                        _after = None
                         if _input_effect_before is not None:
                             _after = self._desktop_text_count_before(keyword, arguments)
                             _eh = input_effect_hint(
@@ -2484,6 +2543,68 @@ class KeywordExecutor:
                             )
                             if _eh:
                                 result.setdefault("hints", []).append(_eh)
+
+                        # Steering-confidence verdict (change: desktop-steering-
+                        # confidence-gate): compose the verified-focus, input-
+                        # effect and Wayland-drop signals into one machine-
+                        # parseable verdict; a `contradicted` interaction fails
+                        # the step by default (opt-out via
+                        # ROBOTMCP_PLATYNUI_STEERING_CONFIDENCE=warn), so
+                        # "success" means the input demonstrably reached the app.
+                        if is_interaction_keyword(keyword):
+                            try:
+                                _vf = None
+                                if _focus_outcome is not None and hasattr(
+                                    _focus_outcome, "has_verified_focus"
+                                ):
+                                    _vf = bool(_focus_outcome.has_verified_focus())
+                                _wr = False
+                                try:
+                                    from robotmcp.plugins.builtin.platynui_plugin import (
+                                        was_wayland_session,
+                                    )
+
+                                    _wr = bool(was_wayland_session())
+                                except Exception:
+                                    _wr = False
+                                _sc = steering_confidence(
+                                    keyword=keyword,
+                                    success=True,
+                                    verified_focus=_vf,
+                                    state_before=_input_effect_before,
+                                    state_after=_after,
+                                    wayland_risk=_wr,
+                                )
+                                if _sc is not None:
+                                    result["steering_confidence"] = _sc["verdict"]
+                                    result.setdefault("hints", []).append(_sc)
+                                    if (
+                                        _sc["verdict"] == SC_CONTRADICTED
+                                        and steering_confidence_mode() == "enforce"
+                                    ):
+                                        # Downgrade the false success to a failure:
+                                        # the input did not demonstrably land.
+                                        result["success"] = False
+                                        result["error"] = _sc["message"]
+                                        try:
+                                            step.mark_failure(_sc["message"])
+                                        except Exception:
+                                            pass
+                                        # Un-record the step optimistically added
+                                        # above (failed steps are not kept).
+                                        if result.get("recorded") and getattr(
+                                            session, "steps", None
+                                        ):
+                                            try:
+                                                if session.steps and session.steps[-1] is step:
+                                                    session.steps.pop()
+                                                    result["recorded"] = False
+                                            except Exception:
+                                                pass
+                            except Exception as _sc_exc:  # pragma: no cover - defensive
+                                logger.debug(
+                                    "steering_confidence skipped: %s", _sc_exc
+                                )
 
                         if is_launch_keyword(keyword):
                             proc = step_result_value

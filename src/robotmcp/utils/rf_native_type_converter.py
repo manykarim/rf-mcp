@@ -1380,6 +1380,19 @@ class RobotFrameworkNativeConverter:
         
         return guidance
     
+    def get_requests_guidance(self, error_message: str = None, keyword_name: str = None) -> Dict[str, Any]:
+        """Provide a proactive RequestsLibrary request/response cookbook (change:
+        api-cookbook) — the API analog of the Browser/Selenium locator guidance.
+
+        Content lives in the single-source ``utils/requests_guidance`` module
+        (also referenced by the reactive on-failure hints, so the two cannot
+        drift). Returns the same ``{tips, warnings, examples}`` shape as the
+        other guidance methods.
+        """
+        from robotmcp.utils.requests_guidance import build_requests_cookbook
+
+        return build_requests_cookbook(error_message, keyword_name)
+
     def _analyze_browser_error(self, error_message: str, keyword_name: str) -> Dict[str, Any]:
         """Analyze Browser Library specific errors and provide targeted guidance."""
         analysis = {}

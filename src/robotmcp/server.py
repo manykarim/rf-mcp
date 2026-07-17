@@ -1845,6 +1845,24 @@ async def recommend_libraries(
             logger.debug(f"LLM recommendation failed, using rule-based: {e}")
             result["llm_refined"] = False
 
+    # Steer API sessions to the proactive RequestsLibrary cookbook (change:
+    # api-cookbook) so the agent pulls the response-access patterns UP FRONT
+    # instead of rediscovering them through failed Evaluate steps.
+    try:
+        _rec_names = result.get("recommended_libraries") or [
+            r.get("library_name") for r in (result.get("recommendations") or [])
+        ]
+        if any((n or "") == "RequestsLibrary" for n in _rec_names):
+            result["api_guidance_hint"] = (
+                "API testing: call get_locator_guidance(library='requests') for the "
+                "RequestsLibrary request/response cookbook (session setup, "
+                "${resp.json()[\"field\"]} access, Status Should Be, Cookie token "
+                "header, expected_status= for non-2xx) BEFORE writing Evaluate-based "
+                "assertions."
+            )
+    except Exception:  # pragma: no cover - defensive
+        pass
+
     # Track for instruction learning
     if session_id:
         _track_tool_result(
@@ -5214,6 +5232,11 @@ async def execute_batch(
             - "stop": abort immediately
             - "retry": retry without recovery logic
             - "recover" (default): attempt tiered recovery before giving up
+            On DESKTOP (PlatynUI) sessions, retries are restricted to failures
+            where the input provably never fired (element-not-found); any other
+            desktop failure records immediately instead of blindly re-firing a
+            click/keystroke, and retries run with a capped descriptor-resolution
+            timeout so a bad locator cannot burn the whole budget.
         max_recovery_attempts: Max recovery retries per failed step (1-10, default 2).
         timeout_ms: Total batch time budget in milliseconds (1000-600000, default 120000).
 
@@ -6587,10 +6610,16 @@ async def get_locator_guidance(
     error_message: str | None = None,
     keyword_name: str | None = None,
 ) -> Dict[str, Any]:
-    """Provide locator/selector guidance for Browser, SeleniumLibrary, AppiumLibrary, or PlatynUI.BareMetal.
+    """Provide locator/selector guidance for Browser, SeleniumLibrary, AppiumLibrary, PlatynUI.BareMetal, or RequestsLibrary.
+
+    For API testing, call with library="requests" (or "api") to get a
+    RequestsLibrary request/response cookbook — session setup, response-field
+    access (${resp.json()["field"]}), the $resp-in-Evaluate rule, Status Should
+    Be, JSON body/headers, the Cookie token header, and expected_status= for
+    non-2xx — BEFORE writing Evaluate-based assertions.
 
     Args:
-        library: Target library ("Browser", "SeleniumLibrary", "AppiumLibrary", or "PlatynUI.BareMetal"). Case-insensitive.
+        library: Target library ("Browser", "SeleniumLibrary", "AppiumLibrary", "PlatynUI.BareMetal", or "RequestsLibrary"/"api"). Case-insensitive.
         error_message: Optional error text to tailor guidance (e.g., from a failed keyword).
         keyword_name: Optional keyword name for context-specific hints.
 
@@ -6631,9 +6660,18 @@ async def get_locator_guidance(
         result.setdefault("success", True)
         return result
 
+    if lib_norm in {"requests", "requestslibrary", "api", "rest"}:
+        # Proactive RequestsLibrary request/response cookbook (change:
+        # api-cookbook) — the API analog agents should pull BEFORE hand-rolling
+        # Evaluate-based assertions.
+        result = converter.get_requests_guidance(error_message, keyword_name)
+        result["library"] = "RequestsLibrary"
+        result.setdefault("success", True)
+        return result
+
     return {
         "success": False,
-        "error": f"Unsupported library '{library}'. Choose Browser, SeleniumLibrary, AppiumLibrary, or PlatynUI.BareMetal.",
+        "error": f"Unsupported library '{library}'. Choose Browser, SeleniumLibrary, AppiumLibrary, PlatynUI.BareMetal, or RequestsLibrary (api).",
     }
 
 

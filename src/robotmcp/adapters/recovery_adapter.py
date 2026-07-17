@@ -6,7 +6,9 @@ coordinating ErrorClassifier + RecoveryEngine + Tier1/Tier2 services.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -20,12 +22,35 @@ from robotmcp.domains.batch_execution.entities import RecoveryAttempt
 
 logger = logging.getLogger(__name__)
 
+_BATCH_RETRY_TIMEOUT_ENV = "ROBOTMCP_PLATYNUI_BATCH_RETRY_TIMEOUT"
+_BATCH_RETRY_TIMEOUT_DEFAULT = 5.0
+
+
+def _batch_retry_timeout_cap_seconds() -> float:
+    """Capped PlatynUI descriptor-resolution timeout (seconds) for batch
+    retries; env-overridable, default 5s. Falls back to the default on a bad
+    value."""
+    raw = os.environ.get(_BATCH_RETRY_TIMEOUT_ENV, "").strip()
+    if not raw:
+        return _BATCH_RETRY_TIMEOUT_DEFAULT
+    try:
+        val = float(raw)
+        return val if val > 0 else _BATCH_RETRY_TIMEOUT_DEFAULT
+    except ValueError:
+        return _BATCH_RETRY_TIMEOUT_DEFAULT
+
 
 class RecoveryServiceAdapter:
     """Bridges batch_execution <-> recovery domain.
 
     Implements RecoveryServiceProtocol from batch_execution.services.
     """
+
+    # Opt-in marker: BatchRunner only invokes the desktop retry-safety gate and
+    # descriptor-timeout cap when this is truthy on the recovery service, so a
+    # Mock/AsyncMock recovery service in tests never triggers them (change:
+    # desktop-aware-batch-execution §4/§5).
+    supports_desktop_batch_hooks = True
 
     def __init__(
         self,
@@ -55,6 +80,74 @@ class RecoveryServiceAdapter:
         except Exception:
             pass
         return "web"
+
+    def desktop_retry_blocked(self, session_id: str, error_message: str) -> bool:
+        """Desktop retry-safety gate (change: desktop-aware-batch-execution §5).
+
+        On a desktop session a batch step may be retried ONLY when the input
+        provably never fired — i.e. the failure classifies as ELEMENT_NOT_FOUND
+        (descriptor resolution precedes the pointer/keyboard action). Every other
+        desktop failure may have partially acted, so a blind retry is a
+        spray-input hazard: return True to block it (record failure immediately).
+        Web/api sessions are never blocked. Never raises.
+        """
+        try:
+            if self._resolve_platform(session_id) != "desktop":
+                return False
+            from robotmcp.domains.recovery.value_objects import ErrorClassification
+
+            classification = self._classifier.classify(error_message)
+            return classification != ErrorClassification.ELEMENT_NOT_FOUND
+        except Exception:  # pragma: no cover - defensive
+            return False
+
+    def _resolve_baremetal(self, session_id: str) -> Optional[Any]:
+        """Best-effort resolve the live PlatynUI.BareMetal RF library instance
+        (RF execution context is process-global). Returns None on any failure."""
+        try:
+            from robot.running.context import EXECUTION_CONTEXTS
+
+            ctx = EXECUTION_CONTEXTS.current
+            if ctx is None:
+                return None
+            return ctx.namespace.get_library_instance("PlatynUI.BareMetal")
+        except Exception:
+            return None
+
+    @contextlib.contextmanager
+    def retry_timeout_cap(self, session_id: str):
+        """Cap PlatynUI descriptor-resolution timeout during desktop RETRIES
+        (change: desktop-aware-batch-execution §4).
+
+        The initial attempt keeps the native ~30s budget; recovery re-attempts
+        run with ``BareMetal.query_settings.timeout`` temporarily capped (default
+        5s, ``ROBOTMCP_PLATYNUI_BATCH_RETRY_TIMEOUT``) so a bad-descriptor batch
+        cannot burn ~30s × retries. No-op — yields unchanged — for non-desktop
+        sessions or when the library / ``query_settings`` cannot be resolved, so
+        it never crashes a batch. The original timeout is always restored.
+        """
+        qs = None
+        original = None
+        try:
+            if self._resolve_platform(session_id) == "desktop":
+                lib = self._resolve_baremetal(session_id)
+                qs = getattr(lib, "query_settings", None) if lib is not None else None
+        except Exception:  # pragma: no cover - defensive
+            qs = None
+        try:
+            if qs is not None and hasattr(qs, "timeout"):
+                try:
+                    original = qs.timeout
+                    qs.timeout = _batch_retry_timeout_cap_seconds()
+                except Exception:  # pragma: no cover - defensive
+                    original = None
+            yield
+        finally:
+            if qs is not None and original is not None:
+                try:
+                    qs.timeout = original
+                except Exception:  # pragma: no cover - defensive
+                    pass
 
     async def attempt_recovery(
         self, session_id: str, keyword: str, args: List[str],

@@ -9,13 +9,14 @@ from dataclasses import dataclass, field
 import asyncio
 from difflib import SequenceMatcher
 
+# Semantic keyword ranking uses a torch-free embedder resolved LAZILY via the
+# shared EmbeddingBackend.detect() (default model2vec). No eager sentence-
+# transformers/torch/scipy import here (change: lazy-offline-embeddings).
 try:
-    from sentence_transformers import SentenceTransformer
     import numpy as np
-    from scipy.spatial.distance import cosine
-    EMBEDDINGS_AVAILABLE = True
+    NUMPY_AVAILABLE = True
 except ImportError:
-    EMBEDDINGS_AVAILABLE = False
+    NUMPY_AVAILABLE = False
 
 try:
     from robot.libraries import STDLIBS
@@ -356,39 +357,16 @@ class KeywordMatcher:
     
     def __init__(self):
         self.keyword_registry: Dict[str, List[KeywordInfo]] = {}
+        # embeddings_model is an EmbeddingService (torch-free backend, default
+        # model2vec) or None — loaded LAZILY, never at construction/import
+        # (change: lazy-offline-embeddings). OBS-30: the semantic strategy
+        # gracefully degrades to token + difflib lexical ranking.
         self.embeddings_model = None
-        self.keyword_embeddings: Dict[str, np.ndarray] = {}
+        self.keyword_embeddings: Dict[str, "np.ndarray"] = {}
         self._initialized = False
+        self._embeddings_attempted = False
+        self._embed_backend = None
 
-        # OBS-30 — Initialize embeddings model if the optional
-        # ``[semantic]`` extra is installed. Log the mode clearly so
-        # operators can tell whether semantic ranking is using
-        # embeddings or the difflib + tag-based fallback.
-        if EMBEDDINGS_AVAILABLE:
-            try:
-                self.embeddings_model = SentenceTransformer('all-MiniLM-L6-v2')
-                logger.info(
-                    "find_keywords semantic strategy: embedding similarity "
-                    "ACTIVE (sentence-transformers installed; model "
-                    "all-MiniLM-L6-v2)"
-                )
-            except Exception as e:
-                logger.warning(f"Could not load embeddings model: {e}")
-                self.embeddings_model = None
-                logger.info(
-                    "find_keywords semantic strategy: embedding similarity "
-                    "DISABLED (load error). Falling back to pattern + tag "
-                    "+ difflib SequenceMatcher ranking."
-                )
-        else:
-            logger.info(
-                "find_keywords semantic strategy: embedding similarity "
-                "DISABLED (sentence-transformers not installed). Falling "
-                "back to pattern + tag + difflib SequenceMatcher ranking. "
-                "Install via ``uv add robotmcp[semantic]`` for embedding-"
-                "based ranking."
-            )
-        
         # Common keyword patterns for different actions
         self.action_keyword_mapping = {
             'setup_browser': {
@@ -541,27 +519,94 @@ class KeywordMatcher:
             
             self.keyword_registry[library_name] = keywords
             logger.debug(f"Loaded {len(keywords)} keywords from {library_name} using LibraryDocumentation")
-            
-            # Generate embeddings for keywords if model is available
-            if self.embeddings_model and keywords:
-                await self._generate_keyword_embeddings(library_name, keywords)
-                
+            # Keyword embeddings are built LAZILY on first semantic use
+            # (_build_keyword_embeddings), not eagerly at registration
+            # (change: lazy-offline-embeddings).
+
         except Exception as e:
             logger.warning(f"Could not load library {library_name}: {e}")
             # Try fallback method
             await self._load_library_keywords_fallback(library_name)
 
-    async def _generate_keyword_embeddings(self, library_name: str, keywords: List[KeywordInfo]) -> None:
-        """Generate embeddings for keywords for semantic matching."""
+    @staticmethod
+    def _semantic_enabled() -> bool:
+        """Semantic embedding ranking is opt-in via ROBOTMCP_SEMANTIC_KEYWORDS
+        (default off), mirroring the memory subsystem — installation alone does
+        NOT activate it (change: lazy-offline-embeddings)."""
+        import os
+        return os.environ.get("ROBOTMCP_SEMANTIC_KEYWORDS", "").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+
+    def _ensure_embeddings(self):
+        """Lazily resolve a torch-free embedding backend on first semantic use.
+
+        Returns the EmbeddingService (default model2vec via the shared
+        EmbeddingBackend.detect()) or None → the lexical token+difflib fallback.
+        Fire-once, offline-safe: never raises, never blocks the caller. Honors
+        HF_HUB_OFFLINE via the underlying loader. change: lazy-offline-embeddings.
+        """
+        if self._embeddings_attempted:
+            return self.embeddings_model
+        self._embeddings_attempted = True
+        if not self._semantic_enabled():
+            logger.info(
+                "find_keywords semantic: not enabled (set ROBOTMCP_SEMANTIC_KEYWORDS=1); "
+                "using token + difflib lexical ranking"
+            )
+            return None
         try:
-            for keyword in keywords:
-                # Create text for embedding: keyword name + documentation
-                embedding_text = f"{keyword.name} {keyword.documentation}"
-                embedding = self.embeddings_model.encode(embedding_text)
-                self.keyword_embeddings[f"{library_name}.{keyword.name}"] = embedding
-                
+            from robotmcp.domains.memory.aggregates import EmbeddingBackend
+            from robotmcp.domains.memory.services import EmbeddingService
+
+            backend = EmbeddingBackend.detect()
+            if not getattr(backend, "is_available", False):
+                logger.info(
+                    "find_keywords semantic enabled but no torch-free embedder available "
+                    "(install robotmcp[memory] for model2vec); using lexical fallback"
+                )
+                return None
+            svc = EmbeddingService(backend)
+            svc._ensure_model()  # load now so offline/missing-model errors surface here
+            self.embeddings_model = svc
+            self._embed_backend = backend.backend_name
+            logger.info(
+                "find_keywords semantic: backend=%s (torch-free)", backend.backend_name
+            )
+            return svc
+        except Exception as e:  # offline / air-gapped / load error → degrade
+            logger.warning(
+                "find_keywords semantic embedder unavailable (%s); using lexical fallback", e
+            )
+            self.embeddings_model = None
+            return None
+
+    @staticmethod
+    def _cosine(a, b) -> float:
+        """Cosine similarity via numpy (no scipy dependency)."""
+        na = np.linalg.norm(a)
+        nb = np.linalg.norm(b)
+        if na == 0 or nb == 0:
+            return 0.0
+        return float(np.dot(a, b) / (na * nb))
+
+    def _build_keyword_embeddings(self) -> None:
+        """Embed every registered keyword once (lazy, batched) for semantic
+        matching. No-op when the embedder is unavailable."""
+        if self.keyword_embeddings or self.embeddings_model is None:
+            return
+        pairs = []  # (key, text)
+        for library_name, keywords in self.keyword_registry.items():
+            for kw in keywords:
+                pairs.append((f"{library_name}.{kw.name}", f"{kw.name} {kw.documentation}"))
+        if not pairs:
+            return
+        try:
+            vecs = self.embeddings_model.encode_texts([t for _, t in pairs])
+            for (key, _), v in zip(pairs, vecs):
+                self.keyword_embeddings[key] = v
         except Exception as e:
-            logger.warning(f"Could not generate embeddings for {library_name}: {e}")
+            logger.warning("Could not build keyword embeddings: %s", e)
 
     async def discover_keywords(
         self,
@@ -605,8 +650,9 @@ class KeywordMatcher:
             pattern_matches = await self._pattern_based_matching(normalized_action, action_type, context)
             matches.extend(pattern_matches)
 
-            # Strategy 2: Semantic similarity matching (if embeddings available)
-            if self.embeddings_model:
+            # Strategy 2: Semantic similarity matching — lazily loads the
+            # torch-free embedder only when enabled (change: lazy-offline-embeddings)
+            if self._ensure_embeddings() is not None:
                 semantic_matches = await self._semantic_matching(normalized_action, context)
                 matches.extend(semantic_matches)
 
@@ -754,17 +800,20 @@ class KeywordMatcher:
     async def _semantic_matching(self, action: str, context: str) -> List[KeywordMatch]:
         """Match keywords using semantic similarity."""
         matches = []
-        
-        if not self.embeddings_model or not self.keyword_embeddings:
+
+        if self.embeddings_model is None:
             return matches
-        
+        self._build_keyword_embeddings()  # lazy, once
+        if not self.keyword_embeddings:
+            return matches
+
         try:
-            # Generate embedding for the action
-            action_embedding = self.embeddings_model.encode(action)
-            
+            # Generate embedding for the action (uniform sync encode)
+            action_embedding = self.embeddings_model.encode_texts([action])[0]
+
             # Calculate similarity with all keyword embeddings
             for keyword_key, keyword_embedding in self.keyword_embeddings.items():
-                similarity = 1 - cosine(action_embedding, keyword_embedding)
+                similarity = self._cosine(action_embedding, keyword_embedding)
                 
                 if similarity > 0.3:  # Minimum similarity threshold
                     library_name, keyword_name = keyword_key.split('.', 1)
@@ -862,8 +911,19 @@ class KeywordMatcher:
         return matches
 
     def _calculate_string_similarity(self, str1: str, str2: str) -> float:
-        """Calculate similarity between two strings."""
-        return SequenceMatcher(None, str1.lower(), str2.lower()).ratio()
+        """Similarity = max(difflib SequenceMatcher ratio, token-overlap Jaccard).
+
+        The token-overlap term lifts the zero-dependency lexical floor on
+        synonym/word-order cases that char-level difflib misses (benchmark
+        recall@5 0.90 vs 0.80) at no dependency cost. `max` is conservative — it
+        only raises the score for genuinely word-overlapping pairs
+        (change: lazy-offline-embeddings §4)."""
+        s1, s2 = str1.lower(), str2.lower()
+        seq = SequenceMatcher(None, s1, s2).ratio()
+        t1 = set(re.findall(r"[a-z0-9]+", s1))
+        t2 = set(re.findall(r"[a-z0-9]+", s2))
+        jac = (len(t1 & t2) / len(t1 | t2)) if (t1 or t2) else 0.0
+        return max(seq, jac)
 
     def _calculate_context_relevance(
         self,
@@ -969,11 +1029,8 @@ class KeywordMatcher:
             
             self.keyword_registry[library_name] = keywords
             logger.debug(f"Loaded {len(keywords)} keywords from {library_name} using fallback method")
-            
-            # Generate embeddings for keywords if model is available
-            if self.embeddings_model and keywords:
-                await self._generate_keyword_embeddings(library_name, keywords)
-                
+            # Embeddings built lazily on first semantic use (change: lazy-offline-embeddings).
+
         except Exception as e:
             logger.warning(f"Fallback loading failed for library {library_name}: {e}")
     

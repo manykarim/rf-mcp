@@ -11,6 +11,11 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
+# Single-source RequestsLibrary recipe text shared with the proactive cookbook
+# (change: api-cookbook) so reactive on-failure hints and the proactive
+# get_locator_guidance(library="requests") cookbook cannot drift.
+from robotmcp.utils.requests_guidance import EVALUATE_VAR_RULE
+
 
 @dataclass
 class Hint:
@@ -944,8 +949,9 @@ def generate_hints(ctx: HintContext) -> List[Dict[str, Any]]:
                 Hint(
                     title="Evaluate: Use $var inside expressions",
                     message=(
-                        "Use $var (not ${var}) inside Evaluate. For method calls in other keywords, use ${resp.json()}. "
-                        "When indexing with a loop variable, use $dict[$item] or $dict[$item[0]] inside Evaluate."
+                        f"{EVALUATE_VAR_RULE} "
+                        "When indexing with a loop variable, use $dict[$item] or $dict[$item[0]] inside Evaluate. "
+                        "Full API recipes: get_locator_guidance(library='requests')."
                     ),
                     examples=[
                         {

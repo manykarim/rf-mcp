@@ -30,10 +30,14 @@ api = ["robotframework-requests"]
 database = ["robotframework-databaselibrary"]
 memory = ["sqlite-vec>=0.1.6", "model2vec>=0.4.0"]
 tokens = ["tiktoken>=0.7.0"]
-# OBS-30 — Optional embedding similarity for find_keywords semantic
-# strategy. Without this, the matcher falls back to pattern + tag +
-# difflib-based ranking. The full library is heavy (~2GB with torch);
-# install only when you want true embedding similarity.
+# OBS-30 / lazy-offline-embeddings — semantic find_keywords ranking runs on a
+# TORCH-FREE backend by default (model2vec, pulled by [memory]; benchmark
+# recall@5=0.97 == fastembed). Enable with ROBOTMCP_SEMANTIC_KEYWORDS=1.
+# This `semantic` extra installs sentence-transformers + torch (~2GB) as an
+# OPTIONAL max-quality backend only — NOT required and NOT the default. Do not
+# install it via `uv sync --all-extras` unless you specifically want the torch
+# path; `[all]` deliberately excludes it. fastembed (ONNX, torch-free) is the
+# lighter middle option.
 semantic = ["sentence-transformers>=2.2.0", "scipy>=1.10.0"]
 all = [
     "robotframework-browser",
@@ -47,18 +51,10 @@ all = [
     "model2vec>=0.4.0",
     "tiktoken>=0.7.0",
 ]
-dev = [
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
-    "black>=22.0.0",
-    "mypy>=1.0.0",
-    "pre-commit>=2.20.0",
-    "python-dotenv>=1.0.1",
-    "openai>=1.51.0",
-    "pydantic-ai>=1.37.0",
-    "coverage[toml]>=7.6.0",
-    "invoke>=2.2.0",
-]
+# NOTE: dev tooling lives in [dependency-groups].dev (PEP 735), which is what
+# `uv sync` / CI use. The former [project.optional-dependencies].dev extra was
+# unused legacy (no `pip install .[dev]` anywhere) and was removed to avoid drift
+# (change: lazy-offline-embeddings §5.2).
 
 [project.urls]
 Homepage = "https://github.com/manykarim/rf-mcp"
@@ -99,13 +95,21 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 
 [dependency-groups]
+# Single source of truth for dev tooling (change: lazy-offline-embeddings §5.2/§5.3).
 dev = [
     "pytest>=8.4.1",
     "pytest-asyncio>=1.1.0",
     "pytest-playwright>=0.7.1",
     "pytest-rerunfailures>=14.0",
+    "black>=22.0.0",
+    "mypy>=1.0.0",
+    "pre-commit>=2.20.0",
     "openai>=1.51.0",
-    "pydantic-ai>=1.37.0",
+    # §5.3: pydantic-ai-slim with ONLY the extras the 3 e2e test files use
+    # (Agent/TestModel/UsageLimits core + OpenAIModel + FastMCPToolset). Drops the
+    # bedrock/cohere/temporal/google/groq/vertexai zoo (boto3/botocore, temporalio,
+    # fastavro, cohere, grpc — ~150MB of dev-only weight).
+    "pydantic-ai-slim[openai,fastmcp]>=1.37.0",
     "python-dotenv>=1.0.1",
     "coverage[toml]>=7.6.0",
     "invoke>=2.2.0",

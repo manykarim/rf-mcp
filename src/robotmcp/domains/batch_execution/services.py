@@ -5,6 +5,7 @@ StepVariableResolver, BatchStateManager, and Protocol definitions.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from dataclasses import dataclass, field
@@ -201,6 +202,36 @@ class BatchRunner:
             batch.record_failure(step, resolved_args, error_msg, total_time_ms, failure)
             return
 
+        # Desktop retry-safety gate (change: desktop-aware-batch-execution §5):
+        # a desktop step may be retried only when the input provably never fired
+        # (ELEMENT_NOT_FOUND). Any other desktop failure may have partially
+        # acted, so a blind retry is a spray-input hazard — record failure now.
+        # Gated on an explicit capability marker so a Mock recovery service in
+        # tests never triggers the desktop hooks.
+        _desktop_hooks = (
+            getattr(self.recovery_service, "supports_desktop_batch_hooks", False)
+            is True
+        )
+        _retry_blocked = getattr(self.recovery_service, "desktop_retry_blocked", None)
+        if _desktop_hooks and callable(_retry_blocked):
+            try:
+                blocked = _retry_blocked(batch.session_id, error_msg)
+            except Exception:  # pragma: no cover - defensive
+                blocked = False
+            if blocked:
+                evidence = await self._collect_evidence(batch.session_id)
+                failure = FailureDetail(
+                    step_index=step.index, error=error_msg,
+                    screenshot_base64=evidence.get("screenshot_base64"),
+                    page_source_snippet=evidence.get("page_source_snippet"),
+                    current_url=evidence.get("current_url"),
+                    page_title=evidence.get("page_title"),
+                )
+                batch.record_failure(
+                    step, resolved_args, error_msg, total_time_ms, failure
+                )
+                return
+
         # RETRY or RECOVER — attempt recovery loop
         recovery_log: List[RecoveryAttempt] = []
         recovered = False
@@ -230,12 +261,23 @@ class BatchRunner:
                 batch.record_timeout()
                 return
 
+            # Cap PlatynUI descriptor-resolution timeout during desktop retries
+            # (change: desktop-aware-batch-execution §4) so a bad descriptor
+            # cannot re-pay the native ~30s budget on each retry. No-op for
+            # non-desktop sessions or when the cap cannot be resolved.
+            _cap = getattr(self.recovery_service, "retry_timeout_cap", None)
+            _cm = (
+                _cap(batch.session_id)
+                if (_desktop_hooks and callable(_cap))
+                else contextlib.nullcontext()
+            )
             try:
-                result = await self.keyword_executor.execute_keyword(
-                    batch.session_id, step.keyword, resolved_args,
-                    timeout=step.timeout.rf_format if step.timeout else None,
-                    assign_to=step.assign_to,
-                )
+                with _cm:
+                    result = await self.keyword_executor.execute_keyword(
+                        batch.session_id, step.keyword, resolved_args,
+                        timeout=step.timeout.rf_format if step.timeout else None,
+                        assign_to=step.assign_to,
+                    )
                 time_ms = int((time.monotonic() - step_start) * 1000)
 
                 if result.get("success", False):

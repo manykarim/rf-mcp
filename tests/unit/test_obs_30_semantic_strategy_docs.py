@@ -81,35 +81,30 @@ class TestMatcherLogsEmbeddingMode:
     operators can tell whether semantic ranking is using embeddings
     or the fallback."""
 
-    def test_logs_fallback_when_embeddings_unavailable(self, caplog):
-        """In an environment without sentence-transformers (the
-        current default), __init__ logs the DISABLED message."""
+    def test_logs_mode_on_first_semantic_use(self, caplog, monkeypatch):
+        """change: lazy-offline-embeddings — the embedding mode is logged
+        LAZILY at first semantic use (not at __init__/import). With the
+        opt-in flag off, the operator-visible fallback signal must surface."""
+        monkeypatch.delenv("ROBOTMCP_SEMANTIC_KEYWORDS", raising=False)
         caplog.set_level(logging.INFO, logger="robotmcp")
         from robotmcp.components.keyword_matcher import KeywordMatcher
-        KeywordMatcher()
+        m = KeywordMatcher()
+        m._ensure_embeddings()  # the lazy decision point that logs the mode
         log_text = "\n".join(r.getMessage() for r in caplog.records).lower()
-        # Either "ACTIVE" (embeddings installed) or "DISABLED" (fallback)
-        # must appear — the exact one depends on the test environment,
-        # but the operator-visible signal must surface either way.
-        assert (
-            "embedding similarity active" in log_text
-            or "embedding similarity disabled" in log_text
-        ), f"expected embedding-mode log line; got: {log_text}"
-
-    def test_fallback_log_mentions_install_path(self, caplog):
-        """When the fallback path triggers, the log line must tell
-        operators how to enable embeddings."""
-        from robotmcp.components.keyword_matcher import (
-            EMBEDDINGS_AVAILABLE, KeywordMatcher,
+        assert "find_keywords semantic" in log_text and "lexical" in log_text, (
+            f"expected a lazy semantic-mode log line; got: {log_text}"
         )
-        if EMBEDDINGS_AVAILABLE:
-            pytest.skip(
-                "sentence-transformers IS installed in this env; "
-                "fallback-log test does not apply"
-            )
+
+    def test_fallback_log_mentions_enable_flag(self, caplog, monkeypatch):
+        """change: lazy-offline-embeddings — with the opt-in flag off, the
+        fallback log must tell operators how to enable embedding ranking
+        (the ROBOTMCP_SEMANTIC_KEYWORDS flag), not merely how to install."""
+        monkeypatch.delenv("ROBOTMCP_SEMANTIC_KEYWORDS", raising=False)
         caplog.set_level(logging.INFO, logger="robotmcp")
-        KeywordMatcher()
+        from robotmcp.components.keyword_matcher import KeywordMatcher
+        m = KeywordMatcher()
+        m._ensure_embeddings()
         log_text = "\n".join(r.getMessage() for r in caplog.records).lower()
-        assert "robotmcp[semantic]" in log_text, (
-            f"fallback log should mention the install command; got: {log_text}"
+        assert "robotmcp_semantic_keywords" in log_text, (
+            f"fallback log should name the enable flag; got: {log_text}"
         )
