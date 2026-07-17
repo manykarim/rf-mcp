@@ -2,6 +2,9 @@
 (change: platynui-desktop-safety-isolation, tasks 1.2/3.4)."""
 
 import os
+import sys
+
+import pytest
 
 from robotmcp.components.execution.desktop_launch_env import (
     build_desktop_launch_env,
@@ -19,6 +22,10 @@ SNAP_PARENT = {
 }
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="snap/LD_LIBRARY_PATH stripping uses ':' pathsep — POSIX only",
+)
 def test_strips_snap_segments_from_path_lists():
     env = build_desktop_launch_env(
         "gnome-calculator", parent_env=SNAP_PARENT,

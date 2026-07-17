@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util as _ilu
+import sys
 
 import pytest
 
@@ -23,6 +24,13 @@ import pytest
 requires_platynui = pytest.mark.skipif(
     _ilu.find_spec("platynui_native") is None or _ilu.find_spec("PlatynUI") is None,
     reason="PlatynUI (platynui_native) not installed — desktop keyword catalog unavailable",
+)
+
+# Unix executable resolution (resolve_executable("sh") -> /..., /bin/sh) is
+# POSIX; Windows has no such paths. macOS is POSIX and passes.
+_posix_only = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX executable-path resolution (sh, /bin/sh) — not on Windows",
 )
 
 from robotmcp.components.library_recommender import LibraryRecommender
@@ -329,6 +337,7 @@ class TestPlatynUIKeywordDiscovery:
 
 
 class TestDesktopExecResolution:
+    @_posix_only
     def test_resolve_server_resolvable_tool(self):
         from robotmcp.components.execution.desktop_launch_env import resolve_executable
 
@@ -336,6 +345,7 @@ class TestDesktopExecResolution:
         assert resolved is not None
         assert resolved.startswith("/")
 
+    @_posix_only
     def test_resolve_absolute_existing_path(self):
         from robotmcp.components.execution.desktop_launch_env import resolve_executable
 
@@ -359,6 +369,7 @@ class TestDesktopExecResolution:
         assert isinstance(get_effective_path(), str)
         assert get_effective_path({"PATH": "/x:/y"}) == "/x:/y"
 
+    @_posix_only
     def test_executor_resolves_desktop_process_launch(self):
         from robotmcp.components.execution.keyword_executor import KeywordExecutor
 

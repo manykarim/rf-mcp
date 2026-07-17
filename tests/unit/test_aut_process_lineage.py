@@ -11,6 +11,7 @@ on a confirmed foreign process.
 from __future__ import annotations
 
 import os
+import sys
 
 import pytest
 
@@ -78,6 +79,10 @@ class TestLineageTiers:
         assert pid_in_aut_lineage(10, 99, 4242, **readers) is True
 
 
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="reads real /proc lineage — Linux only (no /proc on Windows/macOS)",
+)
 class TestLiveProc:
     def test_own_process_lineage_via_real_proc(self):
         # Live smoke: this test process is in our own session's lineage.

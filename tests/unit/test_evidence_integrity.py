@@ -9,10 +9,18 @@ that did not warn because evidence steps counted as substance.
 
 from __future__ import annotations
 
+import sys
 import types
 from unittest.mock import MagicMock
 
 import pytest
+
+# The path guard validates POSIX absolute roots (/tmp, /etc); on macOS /tmp is a
+# symlink to /private/tmp and on Windows these paths are meaningless.
+_linux_path_semantics = pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="POSIX absolute-root path semantics — Linux only",
+)
 
 from robotmcp.components.execution.desktop_execution_signals import (
     evidence_missing_hint,
@@ -102,11 +110,13 @@ class TestScreenshotPathGuard:
     def setup_method(self):
         self.executor = KeywordExecutor.__new__(KeywordExecutor)
 
+    @_linux_path_semantics
     def test_tmp_path_allowed(self):
         assert self.executor._screenshot_path_guard(
             "Take Screenshot", ["/tmp/run/shots/a.png"]
         ) is None
 
+    @_linux_path_semantics
     def test_disallowed_path_refused_with_roots_hint(self):
         out = self.executor._screenshot_path_guard(
             "Take Screenshot", ["/etc/shot.png"]
