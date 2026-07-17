@@ -2457,6 +2457,23 @@ class KeywordExecutor:
                 # D2a: surface a Process-vs-discovery disagreement for a desktop
                 # launch — the handle is dead (e.g. snap exec 127) while
                 # PlatynUI may still observe stale nodes (finding #2). Uses the
+                # Visual-validation hint (change: visual-inspection-guidance):
+                # for ANY successful screenshot step (web or desktop), advertise
+                # the saved artifact + a one-line pointer so a multimodal agent
+                # knows it can read the file for checks the DOM/ARIA can't do.
+                # Token-cheap: a path + one line, no image bytes.
+                try:
+                    from robotmcp.components.execution.desktop_execution_signals import (
+                        visual_validation_hint,
+                    )
+
+                    _vv = visual_validation_hint(keyword, arguments, step_result_value)
+                    if _vv:
+                        result.setdefault("hints", []).append(_vv)
+                        result["screenshot_path"] = _vv["screenshot_path"]
+                except Exception:  # pragma: no cover - defensive
+                    pass
+
                 # handle's own ``poll()`` — NON-reentrant, no RF re-execution
                 # under the lock. change: desktop-stepwise-execution-fidelity.
                 try:

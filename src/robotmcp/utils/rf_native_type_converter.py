@@ -1393,6 +1393,15 @@ class RobotFrameworkNativeConverter:
 
         return build_requests_cookbook(error_message, keyword_name)
 
+    def get_visual_guidance(self, error_message: str = None, keyword_name: str = None) -> Dict[str, Any]:
+        """Visual-validation guidance (change: visual-inspection-guidance) — WHEN a
+        screenshot beats the DOM/ARIA/AT-SPI tree, the dual read-back pattern, and the
+        multimodal + file-access caveats. Content lives in the single-source
+        ``utils/visual_guidance`` module."""
+        from robotmcp.utils.visual_guidance import build_visual_cookbook
+
+        return build_visual_cookbook(error_message, keyword_name)
+
     def _analyze_browser_error(self, error_message: str, keyword_name: str) -> Dict[str, Any]:
         """Analyze Browser Library specific errors and provide targeted guidance."""
         analysis = {}
@@ -1699,6 +1708,10 @@ Handle WebView
         XPath 2.0-style queries over the accessibility tree (Windows UIA,
         Linux AT-SPI2). There are NO css=/id=/text= prefixes.
 
+        Tip: instead of hand-crafting descriptors, call
+        ``get_session_state(sections=["actionable_controls"])`` for a flat,
+        app-scoped list of interactive controls with ready-made descriptors.
+
         Args:
             error_message: Optional error message to analyze
             keyword_name: Optional keyword name that failed
@@ -1707,6 +1720,11 @@ Handle WebView
             Dict with PlatynUI descriptor syntax guidance
         """
         guidance = {
+            "discover_controls": (
+                "Prefer get_session_state(sections=[\"actionable_controls\"]) — it "
+                "returns a flat, app-scoped list of interactive controls with "
+                "ready-to-use descriptors, so you rarely need to hand-craft one."
+            ),
             "locator_strategies": {
                 "xpath": (
                     "The ONLY strategy: XPath over the desktop accessibility "

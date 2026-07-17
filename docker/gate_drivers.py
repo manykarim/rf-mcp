@@ -384,9 +384,54 @@ def probe():
     return r
 
 
+# ── ACTIONABLE: desktop-actionable-controls §5.4 docker-lab e2e ──────────────
+def actionable():
+    """Exercise walk_actionable_controls against REAL AT-SPI (gnome-calculator):
+    a flat, app-scoped list of interactive controls with ready descriptors."""
+    from robotmcp.components.execution.ui_tree_service import walk_actionable_controls
+
+    r = {"gate": "ACTIONABLE", "passed": False}
+    proc, _ = launch("gnome-calculator", [], overlay=True)
+    try:
+        app = resolve_by_pid(proc.pid, 40.0, name_substrings=("calc",))
+        if app is None:
+            r["error"] = "calculator did not resolve"
+            return r
+        res = walk_actionable_controls(app, app.name)
+        controls = res.get("controls", []) or []
+        r["control_count"] = res.get("control_count")
+        r["roles"] = sorted({c.get("role") for c in controls})[:15]
+        r["sample_descriptors"] = [c.get("descriptor") for c in controls[:5]]
+        has_buttons = any(c.get("role") == "Button" for c in controls)
+        # descriptors are flat + app-anchored to the resolved application
+        # app-anchored: descriptor references the resolved app (allow the
+        # (/app:*...)[n] paren-wrapped form used for duplicate controls).
+        app_anchored = bool(controls) and all(
+            isinstance(c.get("descriptor"), str)
+            and "/app:" in c["descriptor"]
+            and app.name in c["descriptor"]
+            for c in controls[:10]
+        )
+        # digit buttons 7 and 6 should be discoverable (calculator)
+        names = {c.get("name") for c in controls}
+        r["has_digits_7_6"] = {"7", "6"}.issubset(names)
+        r["has_buttons"] = has_buttons
+        r["app_anchored"] = app_anchored
+        r["passed"] = bool(
+            res.get("success")
+            and (res.get("control_count") or 0) > 0
+            and has_buttons
+            and app_anchored
+        )
+    finally:
+        _try(proc.terminate)
+    return r
+
+
 def main():
     which = sys.argv[1] if len(sys.argv) > 1 else "all"
-    gates = {"guard": guard, "g2": g2, "g3": g3, "g6": g6, "probe": probe}
+    gates = {"guard": guard, "g2": g2, "g3": g3, "g6": g6, "probe": probe,
+             "actionable": actionable}
     todo = list(gates) if which == "all" else [which]
     out = {}
     rc = 0

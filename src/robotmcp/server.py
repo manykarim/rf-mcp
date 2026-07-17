@@ -6618,6 +6618,12 @@ async def get_locator_guidance(
     Be, JSON body/headers, the Cookie token header, and expected_status= for
     non-2xx — BEFORE writing Evaluate-based assertions.
 
+    For VISUAL validation, call with library="visual" (or "screenshot") to learn
+    WHEN a screenshot beats the DOM/ARIA tree (canvas/image text, layout/overlap,
+    obscured elements, color, charts) and the dual read-back pattern — useful for
+    any UI library (Browser/Selenium/Appium/PlatynUI) when a multimodal model
+    drives rf-mcp.
+
     Args:
         library: Target library ("Browser", "SeleniumLibrary", "AppiumLibrary", "PlatynUI.BareMetal", or "RequestsLibrary"/"api"). Case-insensitive.
         error_message: Optional error text to tailor guidance (e.g., from a failed keyword).
@@ -6669,10 +6675,107 @@ async def get_locator_guidance(
         result.setdefault("success", True)
         return result
 
+    if lib_norm in {"visual", "screenshot", "vision", "image"}:
+        # Visual-validation guidance (change: visual-inspection-guidance) — WHEN a
+        # screenshot beats the DOM/ARIA tree, the dual read-back pattern, and the
+        # multimodal/file-access caveats.
+        result = converter.get_visual_guidance(error_message, keyword_name)
+        result["library"] = "visual"
+        result.setdefault("success", True)
+        return result
+
     return {
         "success": False,
-        "error": f"Unsupported library '{library}'. Choose Browser, SeleniumLibrary, AppiumLibrary, PlatynUI.BareMetal, or RequestsLibrary (api).",
+        "error": f"Unsupported library '{library}'. Choose Browser, SeleniumLibrary, AppiumLibrary, PlatynUI.BareMetal, RequestsLibrary (api), or visual.",
     }
+
+
+def _screenshot_mode() -> str:
+    """ROBOTMCP_SCREENSHOT_MODE: file | image | auto (default file). Governs whether
+    visual_check may return an image content block (change: visual-inspection-guidance)."""
+    m = os.environ.get("ROBOTMCP_SCREENSHOT_MODE", "file").strip().lower()
+    return m if m in ("file", "image", "auto") else "file"
+
+
+@mcp.tool
+async def visual_check(
+    session_id: str,
+    return_image: bool = False,
+    filename: str | None = None,
+) -> Any:
+    """Capture a screenshot of the current UI for VISUAL validation (change:
+    visual-inspection-guidance).
+
+    Token-cheap by DEFAULT: saves the screenshot to disk and returns the PATH as
+    text — a multimodal agent WITH file access reads that file on demand for checks
+    the DOM/ARIA can't do (canvas/image text, layout/overlap, obscured elements,
+    color, charts). Call get_locator_guidance(library="visual") for when to use it.
+
+    Set return_image=true ONLY if your model is multimodal AND cannot read the saved
+    file (e.g. a hosted/remote MCP): the response then includes an image content
+    block. This requires ROBOTMCP_SCREENSHOT_MODE to allow images (image|auto);
+    text-only deployments (mode=file, the default) always return just the path so a
+    text-only model is never sent unsupported image content.
+
+    Works across Browser/SeleniumLibrary/AppiumLibrary/PlatynUI (uses the session's
+    screenshot keyword). Degrades cleanly if capture fails.
+    """
+    import tempfile
+    from robotmcp.utils.visual_guidance import VISUAL_HINT_ONE_LINER
+
+    session = execution_engine.session_manager.get_session(session_id)
+    if session is None:
+        return {"success": False, "error": f"No session '{session_id}'"}
+
+    out_dir = os.environ.get("ROBOTMCP_SCREENSHOT_DIR", "").strip() or tempfile.gettempdir()
+    path = filename if (filename and os.path.isabs(filename)) else os.path.join(
+        out_dir, f"visual_check_{session_id}.png"
+    )
+
+    # Screenshot keyword differs per library — try the Browser/PlatynUI form
+    # (filename=<path>) first, then the Selenium/Appium form (positional path).
+    attempts = [
+        ("Take Screenshot", [f"filename={path}"]),
+        ("Capture Page Screenshot", [path]),
+    ]
+    captured = None
+    for kw, args in attempts:
+        try:
+            res = await execution_engine.execute_step(
+                kw, args, session_id, detail_level="minimal", use_context=True
+            )
+        except Exception:
+            continue
+        if res.get("success"):
+            captured = res.get("screenshot_path") or path
+            break
+
+    if not captured or not os.path.isfile(captured):
+        return {
+            "success": False,
+            "error": "screenshot capture failed or produced no file on disk",
+            "hint": "ensure a UI library (Browser/Selenium/Appium/PlatynUI) is active in this session",
+        }
+
+    size = os.path.getsize(captured)
+    base = {
+        "success": True,
+        "screenshot_path": captured,
+        "size_bytes": size,
+        "mode": _screenshot_mode(),
+        "visual_hint": VISUAL_HINT_ONE_LINER,
+    }
+
+    if return_image and _screenshot_mode() in ("image", "auto"):
+        try:
+            from fastmcp.utilities.types import Image
+
+            # Return the image content block for a multimodal model, plus the path.
+            return [base, Image(path=captured)]
+        except Exception:
+            base["image_error"] = "Image content unavailable; returning path only"
+            return base
+    return base
 
 
 @mcp.tool(**DISABLED_TOOL_KWARGS)

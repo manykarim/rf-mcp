@@ -456,3 +456,51 @@ def evidence_missing_hint(
             "this step's evidence as absent."
         ),
     }
+
+
+def visual_validation_hint(
+    keyword: str,
+    arguments: Any,
+    result_value: Any,
+    *,
+    _isfile=None,
+) -> Optional[Dict[str, Any]]:
+    """Advertise a saved screenshot as a visual-validation opportunity
+    (change: visual-inspection-guidance).
+
+    Returns ``{type, screenshot_path, message}`` when a screenshot step succeeded
+    AND the file EXISTS on disk — so a multimodal agent with file access knows it
+    can read the artifact for checks the DOM/ARIA can't do. Token-cheap: a path +
+    one line, no image bytes. Returns None when not a screenshot, or when the file
+    is missing (``evidence_missing_hint`` covers that case). Never raises.
+    """
+    import os as _os
+
+    isfile = _isfile if _isfile is not None else _os.path.isfile
+    if not is_screenshot_keyword(keyword):
+        return None
+    path: Optional[str] = None
+    if (
+        isinstance(result_value, str)
+        and result_value.lower().endswith(_SCREENSHOT_EXTENSIONS)
+        and _os.path.isabs(result_value)
+    ):
+        path = result_value
+    if path is None:
+        requested = screenshot_request_path(keyword, arguments)
+        if requested and _os.path.isabs(requested):
+            path = requested
+    if path is None:
+        return None
+    try:
+        if not isfile(path):
+            return None
+    except Exception:
+        return None
+    from robotmcp.utils.visual_guidance import VISUAL_HINT_ONE_LINER
+
+    return {
+        "type": "visual_validation",
+        "screenshot_path": path,
+        "message": f"saved to {path} — {VISUAL_HINT_ONE_LINER}",
+    }
