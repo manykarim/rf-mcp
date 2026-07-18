@@ -390,6 +390,10 @@ class SuiteExecutionService:
             
             # Prepare Robot Framework options
             rf_options = [
+                # Defense-in-depth (change: mcp-stdio-log-safety): --console none
+                # so RF's VerboseWriter (which binds sys.__stdout__, not the
+                # redirected sys.stdout) never writes progress toward fd 1.
+                "--console", "none",
                 "--outputdir", output_dir,
                 "--output", "output.xml",
                 "--report", "report.html",

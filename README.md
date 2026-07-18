@@ -381,6 +381,15 @@ Three environment variables control instruction behavior:
 | `ROBOTMCP_INSTRUCTIONS` | `off` / `default` / `custom` | `default` |
 | `ROBOTMCP_INSTRUCTIONS_TEMPLATE` | `minimal` / `standard` / `detailed` / `browser-focused` / `api-focused` | `standard` |
 | `ROBOTMCP_INSTRUCTIONS_FILE` | Path to `.txt` or `.md` file | *(none, required when mode=custom)* |
+| `ROBOTMCP_LOG_LEVEL` | `DEBUG` / `INFO` / `WARNING` / `ERROR` — stderr log verbosity | `WARNING` |
+| `ROBOTMCP_MCP_LOG_NOTIFICATIONS` | set to `1` to also forward logs to the client as MCP `notifications/message` (structured, level-tagged) | *(off)* |
+
+> **Output & logging.** The MCP stdio channel (stdout) carries only JSON-RPC; all
+> logs and a one-line readiness banner go to stderr. Logging defaults to `WARNING`
+> so the client is not flooded — set `ROBOTMCP_LOG_LEVEL=INFO`/`DEBUG` to
+> troubleshoot. Logging never blocks execution (it is drained on a background
+> thread with drop-on-overflow), and fd 1 is never redirected out from under the
+> transport.
 
 ### Built-in Templates
 

@@ -8329,7 +8329,24 @@ def main(argv: List[str] | None = None) -> None:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.INFO, stream=__import__("sys").stderr)
+    # Stdio-safe logging (change: mcp-stdio-log-safety): stderr defaults to
+    # WARNING (ROBOTMCP_LOG_LEVEL overrides), a blocked/broken stderr pipe can
+    # never freeze execution, and — when ROBOTMCP_MCP_LOG_NOTIFICATIONS is set —
+    # records are forwarded to the client as structured log notifications.
+    from robotmcp.utils.logging_setup import (
+        configure_logging,
+        mcp_log_notifications_enabled,
+        build_log_sink_middleware,
+    )
+
+    configure_logging()
+    if mcp_log_notifications_enabled():
+        try:
+            _mw = build_log_sink_middleware()
+            if _mw is not None:
+                mcp.add_middleware(_mw)
+        except Exception:
+            logger.warning("Could not attach MCP log-notification middleware")
 
     # Protect MCP stdio transport from RF console output contamination.
     # Must run before mcp.run() so sys.__stdout__ is redirected before any
@@ -8422,6 +8439,15 @@ def main(argv: List[str] | None = None) -> None:
         transport = args.transport or "stdio"
         run_kwargs["transport"] = transport
 
+        # Suppress FastMCP's decorative startup banner — it is pure noise on the
+        # stderr stream that MCP clients render as warnings (change: mcp-stdio-log-safety).
+        try:
+            import inspect as _inspect
+            if "show_banner" in _inspect.signature(mcp.run).parameters:
+                run_kwargs["show_banner"] = False
+        except Exception:
+            pass
+
         # log_level is accepted by both stdio and http
         if args.log_level:
             run_kwargs["log_level"] = args.log_level
@@ -8453,6 +8479,15 @@ def main(argv: List[str] | None = None) -> None:
             threading.Thread(
                 target=_warm_up_engine, name="robotmcp-engine-warmup", daemon=True
             ).start()
+
+        # One deliberate, always-visible readiness line on stderr (the server is
+        # about to serve) with its key config — replaces the suppressed FastMCP
+        # banner (change: mcp-stdio-log-safety).
+        try:
+            from robotmcp.utils.logging_setup import emit_ready_banner
+            emit_ready_banner(transport)
+        except Exception:
+            pass
 
         mcp.run(**run_kwargs)
     except KeyboardInterrupt:

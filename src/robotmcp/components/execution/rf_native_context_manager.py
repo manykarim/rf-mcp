@@ -34,73 +34,33 @@ except ImportError as e:
     logger.error(f"Robot Framework native components not available: {e}")
 
 
-# ── P2: Thread-safe fd 1 redirect with reference counting ────────────
-# A process-global lock + counter ensures that concurrent RF executions
-# (dispatched via asyncio.to_thread) keep fd 1 redirected until the LAST
-# thread exits.  Without this, Thread A restoring fd 1 while Thread B is
-# still inside RF would expose the MCP transport to contamination.
-_stdout_redirect_lock = _threading.Lock()
-_stdout_redirect_count = 0
-_stdout_saved_fd = None
+# ── stdout safety (change: mcp-stdio-log-safety) ─────────────────────
+# _suppress_stdout() used to os.dup2(2, 1) — redirecting fd 1 (the JSON-RPC
+# stdio channel) to stderr during RF execution. That fd-level redirect is
+# process-global and races the MCP transport: the SDK writes responses via
+# sys.stdout.buffer (fileno 1), so a response written while the redirect is
+# active lands on stderr and the client hangs. It is also unnecessary — RF with
+# console='none' uses NoOutput (zero bytes to fd 1), and library print()/
+# Log To Console are handled at the Python level by _protect_mcp_stdout()
+# (which redirects sys.__stdout__ without touching fd 1). So the guard is now a
+# no-op; fd 1 is never redirected out from under the transport.
 
 
 def _suppress_stdout():
-    """Context manager that redirects fd 1 → fd 2 (stderr) to prevent RF console
-    output from corrupting the MCP stdio transport.
+    """No-op stdout guard (change: mcp-stdio-log-safety).
 
-    RF's Output class writes test progress (suite/test names, dots) directly
-    to file descriptor 1 via a C-level buffered file object.  In MCP stdio
-    mode fd 1 IS the JSON-RPC transport, so any non-JSON bytes corrupt the
-    protocol and cause the client to hang waiting for a valid response.
-
-    Uses reference counting so concurrent threads all keep fd 1 redirected
-    until the last thread exits.  The lock is only held during fd operations,
-    never during the (potentially slow) RF keyword execution.
+    Previously this os.dup2(2, 1)'d fd 1 to stderr during RF execution, which
+    misrouted JSON-RPC responses written in that window to stderr and hung the
+    client. fd 1 must never be redirected while the MCP transport owns it.
+    With ``console='none'`` RF's console writer is ``NoOutput`` (nothing reaches
+    fd 1), and library ``print()`` / ``Log To Console`` are redirected safely at
+    the Python level by ``_protect_mcp_stdout()``. So no fd-level guard is needed
+    and this returns an inert context manager. The call sites are kept for
+    readability; they no longer touch fd 1.
     """
     import contextlib
 
-    @contextlib.contextmanager
-    def _redirect():
-        global _stdout_redirect_count, _stdout_saved_fd
-
-        redirect_ok = False
-        with _stdout_redirect_lock:
-            _stdout_redirect_count += 1
-            if _stdout_redirect_count == 1:
-                # First redirector — save original fd 1 and redirect
-                try:
-                    _stdout_saved_fd = _os.dup(1)
-                    _os.dup2(2, 1)  # fd 1 → stderr
-                    redirect_ok = True
-                except OSError:
-                    _stdout_redirect_count -= 1
-            else:
-                # Another thread already redirected — just piggyback
-                redirect_ok = True
-
-        if not redirect_ok:
-            # Could not redirect (OSError on dup) — execute unprotected
-            yield
-            return
-
-        try:
-            yield
-        finally:
-            with _stdout_redirect_lock:
-                _stdout_redirect_count -= 1
-                if _stdout_redirect_count == 0 and _stdout_saved_fd is not None:
-                    # Last redirector — restore fd 1 to MCP transport
-                    try:
-                        _os.dup2(_stdout_saved_fd, 1)
-                    except OSError:
-                        pass
-                    try:
-                        _os.close(_stdout_saved_fd)
-                    except OSError:
-                        pass
-                    _stdout_saved_fd = None
-
-    return _redirect()
+    return contextlib.nullcontext()
 
 
 class RobotFrameworkNativeContextManager:
@@ -236,8 +196,9 @@ class RobotFrameworkNativeContextManager:
                     logger.debug("BuiltIn eager import skipped during context creation; will import into context next")
 
                 # Start execution context (must not be dry_run to actually execute keywords)
-                # Wrap in _suppress_stdout() to prevent RF console output from
-                # corrupting the MCP stdio transport (fd 1 = JSON-RPC channel).
+                # _suppress_stdout() is now a no-op (change: mcp-stdio-log-safety) —
+                # fd 1 is never redirected; RF console output is kept off fd 1 by
+                # console='none' (NoOutput) + _protect_mcp_stdout(). Kept for shape.
                 with _suppress_stdout():
                     if output:
                         ctx = EXECUTION_CONTEXTS.start_suite(suite, namespace, output, dry_run=False)
@@ -336,8 +297,9 @@ class RobotFrameworkNativeContextManager:
                             failed_imports[lib_name] = str(fallback_error)
 
             # Apply RF search order and initialize suite/test scopes in Namespace and Context.
-            # Wrap in _suppress_stdout() because ctx.start_test() writes the test name
-            # to fd 1 via the Output console writer, which would corrupt MCP stdio.
+            # _suppress_stdout() is a no-op now (change: mcp-stdio-log-safety);
+            # start_test's console writer is NoOutput under console='none', so it
+            # writes nothing to fd 1. No fd-level redirect (that raced the transport).
             with _suppress_stdout():
                 try:
                     if imported_libraries:
@@ -748,7 +710,8 @@ class RobotFrameworkNativeContextManager:
 
             # Push test scope in ExecutionContext (which calls namespace.start_test()
             # internally — ADR-020 F1: do NOT call namespace.start_test() separately).
-            # Suppress stdout: ctx.start_test writes test name via console writer.
+            # _suppress_stdout() is a no-op (change: mcp-stdio-log-safety); the
+            # console writer is NoOutput under console='none' so nothing hits fd 1.
             with _suppress_stdout():
                 ctx.start_test(run_test, res_test)
 

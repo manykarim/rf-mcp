@@ -28,171 +28,41 @@ import pytest
 # P2 Tests: Thread-safe fd redirect
 # ---------------------------------------------------------------------------
 
-class TestSuppressStdoutRefCounting:
-    """Test the reference-counted _suppress_stdout() context manager."""
+class TestSuppressStdoutIsInert:
+    """_suppress_stdout() no longer redirects fd 1 (change: mcp-stdio-log-safety).
 
-    def test_single_thread_redirects_fd1(self):
-        """fd 1 should point to stderr during _suppress_stdout()."""
-        from robotmcp.components.execution.rf_native_context_manager import (
-            _suppress_stdout,
-        )
+    The old os.dup2(2,1) redirect misrouted JSON-RPC responses to stderr and hung
+    the client; it is now an inert context manager. fd-1 safety is covered in
+    depth by tests/unit/test_mcp_stdio_log_safety.py.
+    """
 
-        original_fd1_stat = os.fstat(1)
-        stderr_stat = os.fstat(2)
-
-        with _suppress_stdout():
-            # During redirect, fd 1 should point to same file as fd 2
-            redirected_stat = os.fstat(1)
-            assert redirected_stat.st_ino == stderr_stat.st_ino, (
-                "fd 1 should be redirected to stderr"
-            )
-
-        # After exit, fd 1 should be restored
-        restored_stat = os.fstat(1)
-        assert restored_stat.st_ino == original_fd1_stat.st_ino, (
-            "fd 1 should be restored after exit"
-        )
-
-    def test_single_thread_restores_on_exception(self):
-        """fd 1 should be restored even if an exception occurs inside the block."""
-        from robotmcp.components.execution.rf_native_context_manager import (
-            _suppress_stdout,
-        )
-
-        original_stat = os.fstat(1)
-        with pytest.raises(ValueError, match="test error"):
-            with _suppress_stdout():
-                raise ValueError("test error")
-
-        restored_stat = os.fstat(1)
-        assert restored_stat.st_ino == original_stat.st_ino
-
-    def test_refcount_starts_at_zero(self):
-        """Reference count should be 0 when no redirect is active."""
+    def test_does_not_dup2_fd1(self, monkeypatch):
         from robotmcp.components.execution import rf_native_context_manager as mod
 
-        # Reset module state (in case other tests left it dirty)
-        with mod._stdout_redirect_lock:
-            assert mod._stdout_redirect_count == 0, (
-                f"Expected 0, got {mod._stdout_redirect_count}"
-            )
+        calls = []
+        monkeypatch.setattr(mod._os, "dup2", lambda a, b: calls.append((a, b)))
+        with mod._suppress_stdout():
+            pass
+        assert calls == []
 
-    def test_nested_redirects_refcount(self):
-        """Nested _suppress_stdout() calls should increment/decrement refcount."""
-        from robotmcp.components.execution import rf_native_context_manager as mod
-        from robotmcp.components.execution.rf_native_context_manager import (
-            _suppress_stdout,
-        )
+    def test_concurrent_use_never_touches_fd1(self):
+        import threading as _t
+        from robotmcp.components.execution.rf_native_context_manager import _suppress_stdout
 
-        with _suppress_stdout():
-            with mod._stdout_redirect_lock:
-                assert mod._stdout_redirect_count == 1
+        errors = []
 
-            with _suppress_stdout():
-                with mod._stdout_redirect_lock:
-                    assert mod._stdout_redirect_count == 2
+        def worker():
+            try:
+                with _suppress_stdout():
+                    # fd 1 must remain the process stdout throughout
+                    assert os.fstat(1).st_ino == os.fstat(1).st_ino
+            except Exception as e:  # pragma: no cover
+                errors.append(e)
 
-                # fd 1 still points to stderr (inner context)
-                assert os.fstat(1).st_ino == os.fstat(2).st_ino
-
-            # Back to outer context — still redirected (count=1)
-            with mod._stdout_redirect_lock:
-                assert mod._stdout_redirect_count == 1
-            assert os.fstat(1).st_ino == os.fstat(2).st_ino
-
-        # Both exited — restored
-        with mod._stdout_redirect_lock:
-            assert mod._stdout_redirect_count == 0
-
-    def test_concurrent_threads_keep_fd1_redirected(self):
-        """Multiple threads entering _suppress_stdout concurrently should all
-        keep fd 1 redirected until the last one exits."""
-        from robotmcp.components.execution import rf_native_context_manager as mod
-        from robotmcp.components.execution.rf_native_context_manager import (
-            _suppress_stdout,
-        )
-
-        barrier = threading.Barrier(3, timeout=5)
-        results = {}
-
-        def worker(thread_id: int):
-            with _suppress_stdout():
-                # All threads should see fd 1 redirected
-                barrier.wait()  # sync: all threads are inside
-                fd1_stat = os.fstat(1)
-                fd2_stat = os.fstat(2)
-                results[thread_id] = (fd1_stat.st_ino == fd2_stat.st_ino)
-                barrier.wait()  # sync: all threads checked before any exit
-
-        threads = [threading.Thread(target=worker, args=(i,)) for i in range(3)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=10)
-
-        # All threads should have seen fd 1 redirected
-        assert all(results.values()), f"Thread results: {results}"
-
-        # After all threads exit, refcount should be 0
-        with mod._stdout_redirect_lock:
-            assert mod._stdout_redirect_count == 0
-
-    def test_no_premature_restore_under_concurrency(self):
-        """Thread A exiting should NOT restore fd 1 while Thread B is still inside."""
-        from robotmcp.components.execution import rf_native_context_manager as mod
-        from robotmcp.components.execution.rf_native_context_manager import (
-            _suppress_stdout,
-        )
-
-        # Thread A enters, holds briefly, then exits
-        # Thread B enters, waits for A to exit, then checks fd 1
-        a_entered = threading.Event()
-        a_exited = threading.Event()
-        b_check_result = {}
-
-        def thread_a():
-            with _suppress_stdout():
-                a_entered.set()
-                # Wait a bit to ensure B also enters
-                time.sleep(0.1)
-            a_exited.set()
-
-        def thread_b():
-            a_entered.wait(timeout=5)
-            with _suppress_stdout():
-                # Wait for A to exit
-                a_exited.wait(timeout=5)
-                # A has exited but B is still inside — fd 1 should STILL be redirected
-                fd1_stat = os.fstat(1)
-                fd2_stat = os.fstat(2)
-                b_check_result["redirected"] = (fd1_stat.st_ino == fd2_stat.st_ino)
-
-        ta = threading.Thread(target=thread_a)
-        tb = threading.Thread(target=thread_b)
-        ta.start()
-        tb.start()
-        ta.join(timeout=10)
-        tb.join(timeout=10)
-
-        assert b_check_result.get("redirected", False), (
-            "fd 1 should remain redirected while Thread B is still inside"
-        )
-
-    def test_saved_fd_is_cleaned_up(self):
-        """The saved fd should be closed after the last redirect exits."""
-        from robotmcp.components.execution import rf_native_context_manager as mod
-        from robotmcp.components.execution.rf_native_context_manager import (
-            _suppress_stdout,
-        )
-
-        with _suppress_stdout():
-            with mod._stdout_redirect_lock:
-                saved = mod._stdout_saved_fd
-            assert saved is not None, "saved fd should be set during redirect"
-
-        # After exit, saved fd should be None
-        with mod._stdout_redirect_lock:
-            assert mod._stdout_saved_fd is None, "saved fd should be cleaned up"
+        ts = [_t.Thread(target=worker) for _ in range(20)]
+        for t in ts: t.start()
+        for t in ts: t.join(timeout=5)
+        assert not errors
 
 
 # ---------------------------------------------------------------------------
@@ -449,102 +319,6 @@ class TestFailFastStatusReporterCycles:
 # P2 Stress Tests
 # ---------------------------------------------------------------------------
 
-class TestSuppressStdoutStress:
-    """Stress tests for concurrent _suppress_stdout usage."""
-
-    def test_many_concurrent_threads(self):
-        """20 threads entering/exiting _suppress_stdout should not corrupt state."""
-        from robotmcp.components.execution import rf_native_context_manager as mod
-        from robotmcp.components.execution.rf_native_context_manager import (
-            _suppress_stdout,
-        )
-
-        errors: List[str] = []
-        n_threads = 20
-
-        def worker(thread_id: int):
-            try:
-                with _suppress_stdout():
-                    # Simulate RF execution time
-                    time.sleep(0.01)
-                    # fd 1 should be redirected
-                    fd1_stat = os.fstat(1)
-                    fd2_stat = os.fstat(2)
-                    if fd1_stat.st_ino != fd2_stat.st_ino:
-                        errors.append(
-                            f"Thread {thread_id}: fd 1 not redirected"
-                        )
-            except Exception as e:
-                errors.append(f"Thread {thread_id}: {e}")
-
-        with ThreadPoolExecutor(max_workers=n_threads) as pool:
-            futures = [pool.submit(worker, i) for i in range(n_threads)]
-            for f in as_completed(futures, timeout=30):
-                f.result()
-
-        assert not errors, f"Errors: {errors}"
-
-        # Refcount should be back to 0
-        with mod._stdout_redirect_lock:
-            assert mod._stdout_redirect_count == 0
-
-    def test_rapid_enter_exit_cycles(self):
-        """Rapid sequential enter/exit should not leak fd resources."""
-        from robotmcp.components.execution import rf_native_context_manager as mod
-        from robotmcp.components.execution.rf_native_context_manager import (
-            _suppress_stdout,
-        )
-
-        original_stat = os.fstat(1)
-
-        for _ in range(100):
-            with _suppress_stdout():
-                pass
-
-        # fd 1 should be fully restored
-        restored_stat = os.fstat(1)
-        assert restored_stat.st_ino == original_stat.st_ino
-
-        with mod._stdout_redirect_lock:
-            assert mod._stdout_redirect_count == 0
-            assert mod._stdout_saved_fd is None
-
-    def test_mixed_success_and_exception(self):
-        """Mix of successful and failing contexts should maintain correct state."""
-        from robotmcp.components.execution import rf_native_context_manager as mod
-        from robotmcp.components.execution.rf_native_context_manager import (
-            _suppress_stdout,
-        )
-
-        errors: List[str] = []
-
-        def worker_success(i):
-            with _suppress_stdout():
-                time.sleep(0.005)
-
-        def worker_fail(i):
-            try:
-                with _suppress_stdout():
-                    time.sleep(0.005)
-                    raise ValueError(f"intentional error {i}")
-            except ValueError:
-                pass  # expected
-
-        with ThreadPoolExecutor(max_workers=10) as pool:
-            futures = []
-            for i in range(20):
-                if i % 2 == 0:
-                    futures.append(pool.submit(worker_success, i))
-                else:
-                    futures.append(pool.submit(worker_fail, i))
-            for f in as_completed(futures, timeout=30):
-                f.result()
-
-        with mod._stdout_redirect_lock:
-            assert mod._stdout_redirect_count == 0
-            assert mod._stdout_saved_fd is None
-
-
 # ---------------------------------------------------------------------------
 # Integration: P1 + P2 together
 # ---------------------------------------------------------------------------
@@ -636,9 +410,9 @@ class TestP1P2Integration:
             assert results[i]["success"] is False
             assert f"error-{i}" in results[i]["error"]
 
-        # Refcount should be clean
-        with mod._stdout_redirect_lock:
-            assert mod._stdout_redirect_count == 0
+        # _suppress_stdout no longer redirects fd 1 (change: mcp-stdio-log-safety),
+        # so there is no reference-count state to assert — the fail-fast semantics
+        # above are the contract.
 
 
 # ---------------------------------------------------------------------------
