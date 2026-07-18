@@ -259,6 +259,81 @@ If you are using a virtual environment (venv) for your project, I recommend to i
 
 ---
 
+## 📦 Install as a tool & wire it into your coding agent
+
+The fastest way to use rf-mcp from a coding agent is to install it as a standalone
+CLI tool and let it register itself into the agents you use.
+
+### 1. Install
+
+```bash
+# API testing only (pure Python, nothing else to do)
+uv tool install "rf-mcp[api]"
+
+# Web + API (Selenium works with a system browser; Browser/Playwright adds one step)
+uv tool install "rf-mcp[web,api]"
+
+# Everything (Browser, Selenium, Appium, Requests, Database, …)
+uv tool install "rf-mcp[all]"
+```
+
+This puts a `robotmcp` command (aliased `rf-mcp`) on your PATH. Extras control which
+test libraries are available:
+
+| Extra | Adds | Post-install |
+| --- | --- | --- |
+| `api` | RequestsLibrary | none |
+| `web` | SeleniumLibrary + Browser | Selenium: none (Selenium Manager fetches the driver); Browser: `robotmcp init --browsers` |
+| `mobile` | AppiumLibrary | Appium server (external) |
+| `database` | DatabaseLibrary | a DB driver |
+| `all` | all of the above | as above |
+
+### 2. Prepare & diagnose
+
+```bash
+robotmcp init            # reports libraries, prints the MCP config to paste
+robotmcp init --browsers # also initializes the Playwright browser (needs Node.js)
+robotmcp doctor          # read-only health: version, libraries, browser, Node
+robotmcp --version
+```
+
+`robotmcp init` runs the bundled `rfbrowser init` inside rf-mcp's own environment,
+so Playwright lands where the installed Browser library looks for it. It advises
+(rather than fails) if the `web` extra or Node.js is missing.
+
+### 3. Register into coding agents
+
+```bash
+robotmcp list                              # supported agents + what's detected/registered
+robotmcp install                           # interactive: registers into detected agents
+robotmcp install --agents claude-code,codex,gemini
+robotmcp install --agents all --scope user
+robotmcp install --dry-run                 # show the plan, write nothing
+robotmcp uninstall                         # safe, reversible removal
+```
+
+Supported agents (each written in its own file/format, other MCP servers preserved):
+**Claude Code, OpenAI Codex, GitHub Copilot, opencode, Gemini CLI, Kilo Code, goose,
+Cursor** (plus `pi`, listed as *planned* until its config convention is confirmed).
+
+**Scope.** Installs default to `--scope project` (writes into the current project,
+e.g. `./.mcp.json`) where the agent supports it; use `--scope user` for a global
+(home-directory) install. goose only supports user scope.
+
+**Safe & reversible.** Every change is recorded in a hash-tracked manifest
+(`~/.local/state/robotmcp/install-manifest.json`). `robotmcp uninstall` removes only
+entries that are unchanged since install — if you edited an rf-mcp entry by hand it
+is left in place and reported, and unrelated servers are never touched. Use
+`--dry-run` on either command to preview.
+
+**Manual fallback.** If you prefer to edit config yourself, add:
+
+```json
+{ "mcpServers": { "robotmcp": { "command": "robotmcp" } } }
+```
+
+---
+
 ## 🔌 Library Plugins
 
 Extend RobotMCP with custom libraries via the plugin system. Two discovery modes are available:

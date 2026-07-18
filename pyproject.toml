@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rf-mcp"
-version = "0.31.2"
+version = "0.33.0"
 description = "Robot Framework MCP Server - Natural Language Test Automation Bridge"
 authors = [{ name = "Many Kasiriha" }]
 license = { text = "Apache-2.0" }
@@ -17,8 +17,8 @@ dependencies = [
     "beautifulsoup4>=4.11.0",
     "lxml>=4.9.0",
     "python-dotenv>=1.0.1",
-    "pyyaml>=6.0.0"
-
+    "pyyaml>=6.0.0",
+    "tomlkit>=0.12.0"
 ]
 
 [project.optional-dependencies]
@@ -63,7 +63,8 @@ Repository = "https://github.com/manykarim/rf-mcp"
 Documentation = "https://github.com/manykarim/rf-mcp#readme"
 
 [project.scripts]
-robotmcp = "robotmcp.server:main"
+robotmcp = "robotmcp.entry:main"
+rf-mcp = "robotmcp.entry:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/robotmcp"]

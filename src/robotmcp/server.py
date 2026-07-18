@@ -8305,8 +8305,26 @@ def _protect_mcp_stdout() -> None:
         pass  # RF not installed or API changed
 
 
+# Onboarding subcommands handled before the server starts (see robotmcp.onboarding).
+# Kept as literals here so importing server.py does not pull in the installer.
+_ONBOARDING_SUBCOMMANDS = frozenset({"init", "install", "uninstall", "list", "doctor"})
+_ONBOARDING_VERSION_FLAGS = frozenset({"--version", "-V"})
+
+
 def main(argv: List[str] | None = None) -> None:
-    """Start the RobotMCP server, optionally booting the Django frontend."""
+    """Start the RobotMCP server, optionally booting the Django frontend.
+
+    Onboarding subcommands (``init``/``install``/``uninstall``/``list``/``doctor``)
+    and ``--version`` are dispatched here BEFORE the server parser and exit without
+    starting the MCP server; bare ``robotmcp`` still launches the server.
+    """
+    import sys as _sys
+
+    _argv = list(_sys.argv[1:] if argv is None else argv)
+    if _argv and (_argv[0] in _ONBOARDING_SUBCOMMANDS or _argv[0] in _ONBOARDING_VERSION_FLAGS):
+        from robotmcp.onboarding import run as _run_onboarding
+
+        raise SystemExit(_run_onboarding(_argv))
 
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
