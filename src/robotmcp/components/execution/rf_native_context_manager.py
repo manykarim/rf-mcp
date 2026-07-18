@@ -231,7 +231,9 @@ class RobotFrameworkNativeContextManager:
                     _builtin_ok = True
                 except Exception:
                     _builtin_ok = False
-                    logger.warning("BuiltIn library import failed during context creation")
+                    # Recoverable: BuiltIn is re-imported into the context moments
+                    # later ("imported BuiltIn … using correct API"). Not a failure.
+                    logger.debug("BuiltIn eager import skipped during context creation; will import into context next")
 
                 # Start execution context (must not be dry_run to actually execute keywords)
                 # Wrap in _suppress_stdout() to prevent RF console output from
@@ -678,7 +680,9 @@ class RobotFrameworkNativeContextManager:
             return self._final_fallback_execution(keyword_name, arguments)
 
         except Exception as e:
-            logger.error(f"Generic keyword execution failed for '{keyword_name}': {e}")
+            # Re-raised to the caller, which logs a single WARNING summary; keep
+            # this inner note at DEBUG to avoid double-logging expected failures.
+            logger.debug(f"Generic keyword execution failed for '{keyword_name}': {e}")
             raise
 
     # ADR-020 F3: _try_execute_from_library removed. Direct Python method calls
@@ -1056,9 +1060,13 @@ class RobotFrameworkNativeContextManager:
             }
             
         except Exception as e:
-            logger.error(f"RF native execution failed for {keyword_name}: {e}")
+            # Expected keyword failures (bad HTTP status, unknown keyword,
+            # unresolved variable) are returned to the client as structured
+            # errors — keep a one-line summary here and move the full traceback
+            # to DEBUG so stderr is not flooded with stacks for handled failures.
+            logger.warning(f"RF native execution failed for {keyword_name}: {e}")
             import traceback
-            logger.error(f"RF native execution traceback: {traceback.format_exc()}")
+            logger.debug(f"RF native execution traceback: {traceback.format_exc()}")
 
             # H2: Surface failed library imports when keyword resolution fails.
             # If the keyword's library failed to import during context creation,

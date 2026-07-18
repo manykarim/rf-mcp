@@ -92,13 +92,26 @@ class PageSourceService:
                 )
                 return ""
 
+            # API / non-web sessions have no DOM either. If no web/mobile library
+            # is loaded, short-circuit instead of falling back to the full
+            # candidate list — otherwise a get_session_state on a Requests-only
+            # session cascades browser DOM keywords into failures. Evaluated live
+            # from the current imported set so a late web-library load re-enables it.
+            imported = getattr(session, "imported_libraries", []) or []
+            web_libs = set(self._SOURCE_KEYWORDS)  # Browser / SeleniumLibrary / AppiumLibrary
+            if not (web_libs & set(imported)):
+                logger.debug(
+                    "Page source skipped for non-web session %s (no web library loaded: %s)",
+                    session.session_id, imported,
+                )
+                return ""
+
             from robotmcp.components.execution.rf_native_context_manager import (
                 get_rf_native_context_manager,
             )
 
             rf_mgr = get_rf_native_context_manager()
             # Select library-appropriate keywords to avoid log noise
-            imported = getattr(session, "imported_libraries", []) or []
             candidates = self._keyword_candidates(self._SOURCE_KEYWORDS, imported)
             logger.info(
                 "Page source retrieval for session %s: imported=%s, candidates=%s",

@@ -434,7 +434,9 @@ class LibraryManager:
 
             # Check if we have an active execution context
             if not EXECUTION_CONTEXTS.current:
-                logger.warning(f"No active RF execution context for {library_name}")
+                # Normal during lazy bootstrap — the caller imports the library
+                # on demand into the context that is created moments later.
+                logger.debug(f"No active RF execution context yet for {library_name}; will import on demand")
                 return False
 
             current_context = EXECUTION_CONTEXTS.current
@@ -466,9 +468,12 @@ class LibraryManager:
 
             # Register the library in RF execution context
             # This is the critical fix - ensure the library is available to RF keyword resolution
-            # Use Robot Framework's native library import mechanism
+            # Use Robot Framework's native library import mechanism.
+            # NB: do not pass the `notify` keyword — RF 7.4 removed it from
+            # Namespace.import_library (RF <=7.3 defaulted it to True), so passing
+            # it raises TypeError on current RF and silently degrades registration.
             current_context.namespace.import_library(
-                library_name, args=[], alias=None, notify=True
+                library_name, args=[], alias=None
             )
 
             logger.info(

@@ -980,13 +980,15 @@ class KeywordMatcher:
     async def _load_library_keywords_fallback(self, library_name: str) -> None:
         """Fallback method for loading keywords without LibraryDocumentation."""
         try:
-            # Import the library to get its keywords
+            # Import the library to get its keywords.
+            import importlib
             if library_name in STDLIBS:
-                # Handle standard libraries
-                lib_module = STDLIBS[library_name]
+                # robot.libraries.STDLIBS is a frozenset of *names*, not a
+                # name->module map — import the stdlib module and take its class.
+                _mod = importlib.import_module(f"robot.libraries.{library_name}")
+                lib_module = getattr(_mod, library_name, _mod)
             else:
                 # Try to import external library
-                import importlib
                 lib_module = importlib.import_module(library_name)
             
             keywords = []
@@ -1031,7 +1033,11 @@ class KeywordMatcher:
             logger.debug(f"Loaded {len(keywords)} keywords from {library_name} using fallback method")
             # Embeddings built lazily on first semantic use (change: lazy-offline-embeddings).
 
+        except (ImportError, ModuleNotFoundError) as e:
+            # Optional library simply not installed — expected, not a problem.
+            logger.debug(f"Optional library {library_name} not available (skipped): {e}")
         except Exception as e:
+            # An unexpected error (not a missing module) is worth surfacing.
             logger.warning(f"Fallback loading failed for library {library_name}: {e}")
     
     def _generate_usage_example(self, keyword_info: KeywordInfo, action: str) -> str:

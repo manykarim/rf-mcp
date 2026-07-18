@@ -12,6 +12,14 @@ from .execution_models import ExecutionStep, TestRegistry
 
 logger = logging.getLogger(__name__)
 
+# Common short names agents pass for RF libraries → their canonical package name.
+_LIBRARY_NAME_ALIASES = {
+    "Requests": "RequestsLibrary",
+    "Selenium": "SeleniumLibrary",
+    "Appium": "AppiumLibrary",
+    "Database": "DatabaseLibrary",
+}
+
 
 class PlatformType(Enum):
     """Platform types for test automation."""
@@ -305,6 +313,16 @@ class ExecutionSession:
         Raises:
             ValueError: If trying to import a conflicting library without force=True
         """
+        # Normalize common short names agents get wrong (e.g. 'Requests' →
+        # 'RequestsLibrary') so a recoverable naming slip is a WARNING, not an
+        # ERROR-level ModuleNotFoundError.
+        _canonical = _LIBRARY_NAME_ALIASES.get(library_name)
+        if _canonical and _canonical != library_name:
+            logger.warning(
+                f"Library '{library_name}' resolved to '{_canonical}' (common name normalization)"
+            )
+            library_name = _canonical
+
         if library_name not in self.imported_libraries:
             # Validate library is appropriate for session type
             if not force and not self.validate_library_for_session(library_name):

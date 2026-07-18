@@ -3063,8 +3063,11 @@ class KeywordExecutor:
                     )
 
                 else:
-                    logger.warning(
-                        f"Failed to register {library_name} in RF context for keyword: {keyword}"
+                    # Recoverable: the keyword still resolves via on-demand import
+                    # into the freshly-created context, so this is a lazy-bootstrap
+                    # note, not a failure.
+                    logger.debug(
+                        f"Deferred registration of {library_name} in RF context for keyword: {keyword} (will import on demand)"
                     )
 
         except Exception as e:
@@ -3316,6 +3319,15 @@ class KeywordExecutor:
             "Run Process",
             "Run",
             "Get Environment Variable",
+            # API - RequestsLibrary: request keywords return the Response object
+            "On Session",  # matches GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS On Session
+            "GET On Session",
+            "POST On Session",
+            "PUT On Session",
+            "DELETE On Session",
+            "PATCH On Session",
+            "HEAD On Session",
+            "OPTIONS On Session",
         }
 
         keyword_lower = keyword.lower()

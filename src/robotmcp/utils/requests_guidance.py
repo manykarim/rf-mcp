@@ -32,9 +32,20 @@ ON_SESSION_RULE = (
 )
 
 JSON_BODY_RULE = (
-    "Send a JSON body with json=${body} (a dict) — NOT data=. Set headers with "
-    "headers=${headers}. A 400/415 usually means data= was used or "
-    "Content-Type: application/json is missing."
+    "Send a JSON body with json=<dict> — NOT data=. Set headers with "
+    "headers=${headers}. A 400/415 usually means data= was used, the body was a "
+    "string, or Content-Type: application/json is missing."
+)
+
+# How to CONSTRUCT the body dict — the step weak models thrash on. Two ways:
+JSON_BODY_BUILD_RULE = (
+    "Build the JSON body dict, do NOT pass a repr-string. Easiest: inline Python "
+    'eval — json=${{ {"firstname": "Jane", "totalprice": 111, "depositpaid": True, '
+    '"bookingdates": {"checkin": "2024-01-01"}} }} (a real Python literal, so True/'
+    "False/None and nested dicts work). Or define it first and pass it: assign "
+    '${body}= via Evaluate  {"firstname": "Jane", ...}  THEN reference json=${body} '
+    "in the POST — never POST before ${body} exists. Avoid Set Variable/Create "
+    "Dictionary gymnastics for JSON bodies."
 )
 
 NAMED_ARGS_RULE = (
@@ -62,6 +73,7 @@ def build_requests_cookbook(
         "Evaluate equality on ${resp.status_code}. This is the biggest "
         "Evaluate-call remover.",
         f"BODY/HEADERS: {JSON_BODY_RULE}",
+        f"BODY CONSTRUCTION: {JSON_BODY_BUILD_RULE}",
         "AUTH TOKEN: capture the token from ${resp.json()[\"token\"]}, then send "
         'it as a cookie header: headers=${{"Cookie": "token=" + $token}} '
         "(or a &{headers} dict). Required for PUT/DELETE on restful-booker.",
@@ -81,8 +93,12 @@ def build_requests_cookbook(
     examples = [
         {"keyword": "Create Session", "arguments": ["rb", "https://restful-booker.herokuapp.com"],
          "note": "alias + base URL"},
+        {"keyword": "POST On Session",
+         "arguments": ["rb", "/booking",
+                       'json=${{ {"firstname": "Jane", "lastname": "Doe", "totalprice": 111, "depositpaid": True, "bookingdates": {"checkin": "2024-01-01", "checkout": "2024-01-05"}} }}'],
+         "assign_to": "resp", "note": "build the JSON body inline with ${{ }} — no Set Variable/Create Dictionary"},
         {"keyword": "POST On Session", "arguments": ["rb", "/auth", "json=${creds}"],
-         "assign_to": "resp", "note": "capture response"},
+         "assign_to": "resp", "note": "or define ${creds}= first, then reference it (never POST before it exists)"},
         {"keyword": "Status Should Be", "arguments": ["200", "${resp}"],
          "note": "native status assertion (not Evaluate)"},
         {"keyword": "Set Variable", "arguments": ['${resp.json()["token"]}'],

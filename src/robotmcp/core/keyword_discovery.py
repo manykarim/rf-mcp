@@ -174,12 +174,16 @@ class KeywordDiscovery:
                     # Track shadowed keyword
                     if simple_key not in self.shadowed_keywords:
                         self.shadowed_keywords[simple_key] = [(existing_lib, existing)]
+                    already = any(lib == lib_info.name for lib, _ in self.shadowed_keywords[simple_key])
                     self.shadowed_keywords[simple_key].append((lib_info.name, keyword_info))
                     self.ambiguous_keywords.add(simple_key)
-                    logger.warning(
-                        f"Keyword '{keyword_name}' from {lib_info.name} shadows "
-                        f"existing keyword from {existing_lib}. Use 'Library.{keyword_name}' for disambiguation."
-                    )
+                    # Log once per (keyword, library) pair to avoid duplicate notices
+                    # when the same library is (re)loaded.
+                    if not already:
+                        logger.warning(
+                            f"Keyword '{keyword_name}' from {lib_info.name} shadows "
+                            f"existing keyword from {existing_lib}. Use 'Library.{keyword_name}' for disambiguation."
+                        )
             else:
                 self.keyword_cache[simple_key] = keyword_info
 

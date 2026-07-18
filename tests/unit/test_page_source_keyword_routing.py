@@ -276,13 +276,15 @@ class TestPageSourceViaRfContext:
         assert "Get Page Source" in called
         assert "Get Source" in called
 
-    def test_no_web_library_falls_back(self, service):
-        """When no web library is imported, falls back to trying all keywords."""
+    def test_no_web_library_short_circuits(self, service):
+        """When no web/mobile library is imported (e.g. an API/Requests session),
+        the service short-circuits instead of cascading DOM keywords
+        (change: mcp-diagnostics-hygiene)."""
         session = _make_session(["BuiltIn", "Collections"])
-        _, called = self._run_with_tracking(service, session, None)
-        # Should attempt fallback keywords
+        source, called = self._run_with_tracking(service, session, None)
         source_calls = [k for k in called if "Source" in k or "source" in k.lower()]
-        assert len(source_calls) >= 1
+        assert source_calls == [], "non-web session must not attempt DOM keywords"
+        assert source == ""
 
 
 # ---------------------------------------------------------------------------
