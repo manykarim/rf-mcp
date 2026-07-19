@@ -2,12 +2,21 @@
 
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://python.org)
 [![Robot Framework](https://img.shields.io/badge/robot%20framework-7.0+-green.svg)](https://robotframework.org)
-[![FastMCP](https://img.shields.io/badge/fastmcp-2.8+-orange.svg)](https://github.com/jlowin/fastmcp)
+[![FastMCP](https://img.shields.io/badge/fastmcp-3.0+-orange.svg)](https://github.com/jlowin/fastmcp)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-**Transform natural language into production-ready Robot Framework tests using AI agents and MCP protocol.**
+**Plain English in, real Robot Framework tests out — with an AI agent doing the typing.**
 
-RobotMCP is a comprehensive Model Context Protocol (MCP) server that bridges the gap between human language and Robot Framework automation. It enables AI agents to understand test intentions, execute steps interactively, and generate complete test suites from successful executions.
+RobotMCP (`rf-mcp`) is a Model Context Protocol (MCP) server that hands your coding
+agent the keys to Robot Framework. The agent discovers keywords, runs steps *live*
+against Browser, Selenium, Appium, Requests, a database, or the desktop, sees what
+actually happens, and — once the steps pass — writes you a clean `.robot` suite.
+No guessed locators, no hallucinated keywords, no "works on my machine". Built on
+Robot Framework: open source, and always evolving.
+
+> **New to rf-mcp?** Jump to **[Getting Started](docs/GETTING_STARTED.md)**. Want the
+> full picture? See the **[MCP tool reference](docs/MCP_TOOLS.md)**,
+> **[configuration](docs/CONFIGURATION.md)**, and **[worked examples](docs/EXAMPLES.md)**.
 
 **📺 Video Tutorial**
 
@@ -21,15 +30,39 @@ https://github.com/user-attachments/assets/ad89064f-cab3-4ae6-a4c4-5e8c241301a1
 
 ## ✨ Quick Start
 
-### 1️⃣ Install
+Three commands and a sentence. That's the whole setup.
+
+### 1️⃣ Install it as a tool
 
 ```bash
-pip install rf-mcp
+# Everything (Browser, Selenium, Appium, Requests, Database)
+uv tool install "rf-mcp[all]"
+
+# ...or just what you need — API testing is pure Python, nothing else to do:
+uv tool install "rf-mcp[api]"
 ```
 
-### 2️⃣ Add to VS Code (Cline/Claude Desktop)
+This puts a `robotmcp` command on your PATH. Extras decide which test libraries come
+along — see the [extras table](#-install-as-a-tool--wire-it-into-your-coding-agent).
 
-#### STDIO
+### 2️⃣ Wire it into your coding agent
+
+```bash
+robotmcp init            # detects libraries, prints the MCP config to paste
+robotmcp install         # registers rf-mcp into the agents it finds
+```
+
+`robotmcp install` writes the right MCP config for **Claude Code, Codex, GitHub
+Copilot, opencode, Gemini CLI, Kilo Code, goose, and Cursor** — each in its own
+format, without touching your other servers. Prefer to do it by hand? Every agent
+accepts:
+
+```json
+{ "mcpServers": { "robotmcp": { "command": "robotmcp" } } }
+```
+
+<details>
+<summary>Legacy / manual config (running from a checkout, HTTP transport)</summary>
 
 ```json
 {
@@ -76,7 +109,9 @@ Then configure your AI agent:
 claude mcp add rf-mcp -- uvx rf-mcp
 ```
 
-### 3️⃣ Start Testing with AI
+</details>
+
+### 3️⃣ Start testing — just ask
 
 ```
 Use #robotmcp to create a TestSuite and execute it step wise.
@@ -90,7 +125,21 @@ Use Selenium Library.
 Execute the test suite stepwise and build the final version afterwards.
 ```
 
-**That's it!** RobotMCP will guide the AI through the entire testing workflow.
+**That's it.** rf-mcp walks the agent through discovery, live execution, and suite
+generation — you just describe the test.
+
+---
+
+## 📚 Documentation
+
+| Guide | What's inside |
+|-------|---------------|
+| **[Getting Started](docs/GETTING_STARTED.md)** | Install, wire into your agent, run your first test |
+| **[MCP Tool Reference](docs/MCP_TOOLS.md)** | Every tool rf-mcp exposes to the agent — parameters, returns, when to reach for it |
+| **[Configuration](docs/CONFIGURATION.md)** | Every `ROBOTMCP_*` environment variable and CLI flag |
+| **[Examples](docs/EXAMPLES.md)** | Copy-pasteable web / API / mobile / desktop / BDD / data-driven walkthroughs |
+| **[Library Plugins](docs/library-plugin-authoring.md)** | Teach rf-mcp about your own Robot Framework libraries |
+| **[Instruction Templates](docs/INSTRUCTION_TEMPLATES_GUIDE.md)** | Steer the agent's behavior per project |
 
 ---
 
