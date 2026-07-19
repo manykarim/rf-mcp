@@ -8,22 +8,24 @@ from pathlib import Path
 from tests.e2e.models import Scenario
 from tests.e2e.fixtures import mcp_server, metrics_collector
 from tests.e2e.agent_integration import MCPAgentIntegration
+from tests.e2e.minimax_support import default_agent_model, real_llm_available
 from tests.e2e.test_agent_tool_discovery import load_scenario, get_all_scenarios
 
 
 def should_use_real_llm() -> bool:
-    """Check if tests should use real LLM."""
-    use_real = os.getenv("USE_REAL_LLM", "false").lower()
-    return use_real in ("true", "1", "yes")
+    """Check if tests should use a real LLM (OpenAI opt-in OR MiniMax key set)."""
+    return real_llm_available()
 
 
 def get_model_name() -> str:
     """Get the model name to use for testing.
 
+    Prefers MiniMax when MINIMAX_API_KEY is set (see minimax_support), else OpenAI.
+
     Returns:
         Model name from environment or default
     """
-    return os.getenv("OPENAI_MODEL", "gpt-5-mini")
+    return default_agent_model()
 
 
 @pytest.mark.asyncio

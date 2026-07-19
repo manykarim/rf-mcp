@@ -333,3 +333,111 @@ jobs:
           path: results/pytest.xml
           reporter: java-junit
 
+
+  e2e-no-llm:
+    name: E2E No-LLM (tool discovery)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: 'latest'
+
+      - name: Setup Python 3.12 (via uv)
+        run: uv python install 3.12
+
+      - name: Install dependencies (dev)
+        run: uv sync --all-extras --group dev
+
+      - name: Prepare results directory
+        run: mkdir -p results
+
+      # test_agent_tool_discovery needs NO LLM and NO external secret. It was previously
+      # run by no CI job (build-and-test --ignore=tests/e2e). Run it per-commit so a
+      # tool-registration/discovery regression (the class the FastMCP 3.x upgrade hit)
+      # is caught deterministically with real assertions.
+      - name: Run no-LLM e2e tool discovery
+        run: |
+          uv run pytest tests/e2e/test_agent_tool_discovery.py \
+            -v --junitxml=results/e2e-no-llm.xml
+
+      # test_mcp_stdout_leak.py is a diagnostic reproduction script (collects leak
+      # evidence, no assertions), run informationally — it must not gate the build.
+      - name: MCP stdout leak diagnostics (informational)
+        continue-on-error: true
+        run: uv run pytest tests/e2e/test_mcp_stdout_leak.py -q
+
+      - name: Test Report
+        uses: dorny/test-reporter@main
+        if: success() || failure()
+        with:
+          name: E2E No-LLM Tests
+          path: results/e2e-no-llm.xml
+          reporter: java-junit
+
+  e2e-minimax-smoke:
+    name: E2E MiniMax Autonomous Smoke (quality gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      # Single strongest tier for the per-commit quality signal; the full matrix
+      # (M2/M2.5/M2.7/M3) runs in the weekly e2e workflow.
+      MINIMAX_MODELS: 'MiniMax-M3'
+    steps:
+      - name: Check MiniMax key
+        run: |
+          if [ -z "$MINIMAX_API_KEY" ]; then
+            echo "::warning::MINIMAX_API_KEY secret not set — skipping MiniMax smoke"
+            echo "SKIP_MINIMAX=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout repository
+        if: env.SKIP_MINIMAX != 'true'
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        if: env.SKIP_MINIMAX != 'true'
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: 'latest'
+
+      - name: Setup Python 3.12 (via uv)
+        if: env.SKIP_MINIMAX != 'true'
+        run: uv python install 3.12
+
+      - name: Install dependencies (dev)
+        if: env.SKIP_MINIMAX != 'true'
+        run: uv sync --all-extras --group dev
+
+      - name: Create metrics + results directories
+        if: env.SKIP_MINIMAX != 'true'
+        run: mkdir -p tests/e2e/metrics/minimax results
+
+      # HARD quality gate: fails the job only on a real rf-mcp regression (tool
+      # registration broken, server fault, recursion). MiniMax's own model-framing
+      # flakiness degrades to a warning and stays green (see tests/e2e/quality_gate.py).
+      - name: Run MiniMax autonomous smoke
+        if: env.SKIP_MINIMAX != 'true'
+        run: |
+          uv run pytest tests/e2e/test_minimax_autonomous.py -v -s \
+            --junitxml=results/e2e-minimax-smoke.xml
+
+      - name: Upload MiniMax metrics
+        if: env.SKIP_MINIMAX != 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-minimax-smoke-metrics
+          path: tests/e2e/metrics/minimax/**/*.json
+
+      - name: Test Report
+        uses: dorny/test-reporter@main
+        if: env.SKIP_MINIMAX != 'true' && (success() || failure())
+        with:
+          name: E2E MiniMax Smoke
+          path: results/e2e-minimax-smoke.xml
+          reporter: java-junit

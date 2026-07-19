@@ -225,3 +225,80 @@ jobs:
           name: OpenCode Intent Action E2E
           path: results/e2e-intent-action.xml
           reporter: java-junit
+
+  minimax-autonomous:
+    name: E2E MiniMax Autonomous Matrix (M2/M2.5/M2.7/M3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      # Full comparison matrix across all four tiers.
+      MINIMAX_MODELS: 'MiniMax-M2,MiniMax-M2.5,MiniMax-M2.7,MiniMax-M3'
+
+    steps:
+      - name: Check MiniMax key
+        run: |
+          if [ -z "$MINIMAX_API_KEY" ]; then
+            echo "::warning::MINIMAX_API_KEY secret not set — skipping MiniMax matrix"
+            echo "SKIP_MINIMAX=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout repository
+        if: env.SKIP_MINIMAX != 'true'
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        if: env.SKIP_MINIMAX != 'true'
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: 'latest'
+
+      - name: Setup Python 3.12 (via uv)
+        if: env.SKIP_MINIMAX != 'true'
+        run: uv python install 3.12
+
+      - name: Install dependencies (dev)
+        if: env.SKIP_MINIMAX != 'true'
+        run: uv sync --all-extras --group dev
+
+      - name: Create metrics + results directories
+        if: env.SKIP_MINIMAX != 'true'
+        run: mkdir -p tests/e2e/metrics/minimax results
+
+      # Runs the autonomous quality gate across all four MiniMax tiers. HARD failures
+      # (real rf-mcp regressions) fail the job; per-model framing flakiness warns only.
+      - name: Run MiniMax autonomous matrix
+        if: env.SKIP_MINIMAX != 'true'
+        run: |
+          uv run pytest tests/e2e/test_minimax_autonomous.py -v -s \
+            --junitxml=results/minimax-autonomous.xml
+        continue-on-error: true
+        timeout-minutes: 40
+
+      # Also exercise the shared pydantic-ai autonomous suite under MiniMax (M3).
+      - name: Run shared autonomous suite under MiniMax
+        if: env.SKIP_MINIMAX != 'true'
+        env:
+          E2E_AGENT_MODEL: 'MiniMax-M3'
+        run: |
+          uv run pytest tests/e2e/test_autonomous_agents.py -v \
+            --junitxml=results/minimax-shared-autonomous.xml
+        continue-on-error: true
+        timeout-minutes: 30
+
+      - name: Upload MiniMax matrix metrics
+        if: env.SKIP_MINIMAX != 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-minimax-matrix-metrics
+          path: |
+            tests/e2e/metrics/minimax/**/*.json
+            tests/e2e/metrics/autonomous/**/*.json
+
+      - name: Test Report
+        uses: dorny/test-reporter@main
+        if: env.SKIP_MINIMAX != 'true' && (success() || failure())
+        with:
+          name: E2E MiniMax Matrix
+          path: results/minimax-*.xml
+          reporter: java-junit

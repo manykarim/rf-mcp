@@ -5,13 +5,13 @@ from typing import Any, Dict, Optional
 from dataclasses import dataclass
 
 from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.toolsets.fastmcp import FastMCPToolset
 from pydantic_ai.usage import UsageLimits
 from fastmcp import FastMCP
 
 from tests.e2e.metrics_collector import MetricsCollector
+from tests.e2e.minimax_support import resolve_model
 
 
 @dataclass
@@ -76,7 +76,9 @@ class MCPAgentIntegration:
         if use_test_model:
             model = TestModel()
         else:
-            model = OpenAIModel(model_name)
+            # resolve_model routes MiniMax model IDs to the MiniMax OpenAI-compatible
+            # endpoint (MINIMAX_API_KEY); gpt-* keep the default OpenAI provider.
+            model = resolve_model(model_name)
 
         if system_prompt is None:
             system_prompt = """You are a test automation assistant using Robot Framework MCP server.
@@ -183,12 +185,16 @@ The 'Create List' keyword is in BuiltIn, NOT in Collections."""
 
         return toolset
 
-    async def run_agent_with_scenario(self, agent: Agent, prompt: str):
+    async def run_agent_with_scenario(
+        self, agent: Agent, prompt: str, request_limit: int = 100
+    ):
         """Run agent with a scenario prompt.
 
         Args:
             agent: Pydantic AI agent to run
             prompt: Scenario prompt to give to the agent
+            request_limit: Max model requests before UsageLimitExceeded. Lower it for
+                weaker/looping models (e.g. MiniMax M2) to bound cost and wall-clock.
 
         Returns:
             Tuple of (output string, messages list)
@@ -199,10 +205,10 @@ The 'Create List' keyword is in BuiltIn, NOT in Collections."""
             session_id=None
         )
 
-        # Run the agent with increased request limit for complex scenarios
+        # Run the agent with a bounded request limit for complex scenarios.
         # Default pydantic-ai limit is 50, but complex scenarios with error recovery
-        # may need more iterations
-        usage_limits = UsageLimits(request_limit=100)
+        # may need more iterations.
+        usage_limits = UsageLimits(request_limit=request_limit)
         result = await agent.run(prompt, deps=context, usage_limits=usage_limits)
 
         # Extract output and messages
