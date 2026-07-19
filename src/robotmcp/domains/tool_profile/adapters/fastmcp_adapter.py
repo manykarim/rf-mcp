@@ -15,7 +15,7 @@ import copy
 import logging
 from typing import Any, Callable, Dict, FrozenSet, Optional
 
-from robotmcp.compat.fastmcp_compat import ToolManagerCompat
+from robotmcp.compat.fastmcp_compat import FASTMCP_V3, ToolManagerCompat
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,17 @@ class ToolManagerAdapter:
             description: The description text to use.
             schema: The JSON schema to use for parameters.
         """
+        if FASTMCP_V3:
+            # v3 degrades gracefully: FastMCP 3.x has no enable-with-a-new-description
+            # path, so the mode-specific description is not applied — the tool keeps its
+            # original one. Re-enable purely by name; do NOT clone + re-register (that
+            # churns the tool-provider chain and can recurse list_tools()). Works even
+            # when the tool was never snapshotted (e.g. tools with no descriptor).
+            if not await self._compat.has_tool(tool_name):
+                self._compat.enable_tool(tool_name)
+                logger.debug(f"Re-enabled tool: {tool_name} (v3, original description)")
+            return
+
         original = self._original_tools.get(tool_name)
         if original is None:
             logger.warning(f"No original tool found for '{tool_name}', cannot add")
@@ -136,6 +147,11 @@ class ToolManagerAdapter:
             description: The new description text.
             schema: The new JSON schema.
         """
+        if FASTMCP_V3:
+            # v3 has no per-profile descriptions and the tool is already visible, so a
+            # swap is a no-op. Crucially, do NOT disable+re-enable: that churn corrupts
+            # FastMCP 3.x's tool-provider chain into unbounded list_tools() recursion.
+            return
         await self.remove_tool(tool_name)
         await self.add_tool_with_description(tool_name, description, schema)
 
@@ -166,6 +182,13 @@ class ToolManagerAdapter:
         to ensure original schemas are intact. Only restores tools that
         were enabled at snapshot time.
         """
+        if FASTMCP_V3:
+            # Bulk re-enable every snapshotted tool by name in a single call — no
+            # remove-then-add churn (which recurses the v3 tool-provider). Descriptions
+            # are already the originals on v3, so nothing else to restore.
+            self._compat.enable_tools(set(self._original_tools.keys()))
+            logger.info("All original tools restored (v3 enable-by-name)")
+            return
         for name, tool in self._original_tools.items():
             if await self._compat.has_tool(name):
                 self._compat.remove_tool(name)

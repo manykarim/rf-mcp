@@ -170,6 +170,19 @@ class TestToolManagerCompat:
         assert "tool_b" in tools
 
     @pytest.mark.asyncio
+    @pytest.mark.skipif(not FASTMCP_V3, reason="v3-native list_tools() enumeration")
+    async def test_get_tools_v3_uses_list_tools(self):
+        """On v3 (no _tool_manager, no get_tools), enumerate via async list_tools()
+        — returning the tools, not {} (change: fastmcp3-tool-profile-v3-native)."""
+        server = MagicMock(spec=["list_tools"])  # only list_tools, no _tool_manager/get_tools
+        ta = MagicMock(); ta.name = "tool_a"
+        tb = MagicMock(); tb.name = "tool_b"
+        server.list_tools = AsyncMock(return_value=[ta, tb])
+        compat = ToolManagerCompat(server)
+        tools = await compat.get_tools()
+        assert set(tools) == {"tool_a", "tool_b"}, "v3 get_tools must not return empty"
+
+    @pytest.mark.asyncio
     @pytest.mark.skipif(FASTMCP_V3, reason="exercises the FASTMCP_V3=False (v2) code path")
     async def test_has_tool_v2(self):
         server = self._make_v2_server()
@@ -381,3 +394,60 @@ class TestDisabledToolNamesConsistency:
             f"  In decorators but not in set: {decorator_names - set_names}\n"
             f"  In set but not in decorators: {set_names - decorator_names - conditionally_decorated}"
         )
+
+
+# ── v3 no-churn tool-profile degradation (change: fastmcp3-tool-profile-v3-native) ──
+# The v3 profile path must toggle tool visibility purely by NAME. Cloning + re-adding
+# Tool objects, or disable→re-enable churn on description swaps, drives FastMCP 3.x's
+# tool-provider chain into unbounded list_tools() recursion. These guard that.
+
+
+class TestV3ToolProfileNoChurn:
+    """On v3 the adapter degrades to name-based enable/disable — no clone, no churn."""
+
+    def _v3_server(self):
+        server = MagicMock(spec=["list_tools", "enable", "disable"])
+        return server
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not FASTMCP_V3, reason="v3-only degradation path")
+    async def test_swap_description_is_noop_on_v3(self):
+        from robotmcp.domains.tool_profile.adapters.fastmcp_adapter import (
+            ToolManagerAdapter,
+        )
+
+        server = self._v3_server()
+        adapter = ToolManagerAdapter(server)
+        await adapter.swap_tool_description("manage_session", "new desc", {})
+        # No disable/re-enable churn — the exact operations that recurse the provider.
+        server.disable.assert_not_called()
+        server.enable.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not FASTMCP_V3, reason="v3-only degradation path")
+    async def test_add_with_description_enables_by_name_on_v3(self):
+        from robotmcp.domains.tool_profile.adapters.fastmcp_adapter import (
+            ToolManagerAdapter,
+        )
+
+        server = self._v3_server()
+        server.list_tools = AsyncMock(return_value=[])  # tool currently hidden
+        adapter = ToolManagerAdapter(server)
+        # Even with no snapshot object, v3 re-enables by name (no clone, no warning-skip).
+        await adapter.add_tool_with_description("execute_batch", "desc", {})
+        server.enable.assert_called_once_with(names={"execute_batch"})
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not FASTMCP_V3, reason="v3-only degradation path")
+    async def test_restore_all_bulk_enables_by_name_on_v3(self):
+        from robotmcp.domains.tool_profile.adapters.fastmcp_adapter import (
+            ToolManagerAdapter,
+        )
+
+        server = self._v3_server()
+        adapter = ToolManagerAdapter(server)
+        adapter._original_tools = {"a": object(), "b": object(), "c": object()}
+        await adapter.restore_all()
+        # One bulk enable(names=...), no per-tool remove/disable churn.
+        server.disable.assert_not_called()
+        server.enable.assert_called_once_with(names={"a", "b", "c"})

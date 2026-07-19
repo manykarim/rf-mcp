@@ -150,12 +150,21 @@ class ToolManagerCompat:
         """Return all registered tools as {name: Tool}."""
         if not FASTMCP_V3:
             return await self._server._tool_manager.get_tools()
-        # v3: try public API first, fall back to private
+        # v3: prefer a public get_tools() if present (future-proofing)...
         if hasattr(self._server, "get_tools"):
             tools = self._server.get_tools()
             if hasattr(tools, "__await__"):
                 tools = await tools
             return tools
+        # ...otherwise enumerate via the v3-native async list_tools(). FastMCP 3.x
+        # has no `_tool_manager` and no `get_tools()`, so this is the working path;
+        # returning {} here (the old behavior) left _original_tools empty and made
+        # the profile switch silently no-op (change: fastmcp3-tool-profile-v3-native).
+        if hasattr(self._server, "list_tools"):
+            tools = self._server.list_tools()
+            if hasattr(tools, "__await__"):
+                tools = await tools
+            return {getattr(t, "name", None): t for t in tools if getattr(t, "name", None)}
         if hasattr(self._server, "_tool_manager"):
             return await self._server._tool_manager.get_tools()
         logger.warning("Cannot get tools: no compatible API found")
@@ -207,10 +216,32 @@ class ToolManagerCompat:
                 pass
         tool_name = getattr(tool, "name", None) or getattr(tool, "key", None)
         if tool_name:
-            try:
-                self._server.enable(names={tool_name})
-            except Exception as e:
-                logger.warning("Failed to add/enable tool '%s': %s", tool_name, e)
+            self.enable_tool(tool_name)
+
+    def enable_tool(self, name: str) -> None:
+        """Re-enable a single tool by name (v3 native).
+
+        On v3 there is no register-with-new-description path; visibility is
+        toggled purely by name. Cloning + re-adding a Tool object churns the
+        FastMCP tool-provider chain and can drive ``list_tools()`` into
+        unbounded recursion, so name-based enable is the only safe primitive.
+        """
+        if not FASTMCP_V3:
+            # v2 has no enable-by-name; the caller re-adds the Tool object instead.
+            return
+        try:
+            self._server.enable(names={name})
+        except Exception as e:
+            logger.warning("Failed to enable tool '%s': %s", name, e)
+
+    def enable_tools(self, names: Set[str]) -> None:
+        """Re-enable many tools by name in a single v3 call (no per-tool churn)."""
+        if not FASTMCP_V3 or not names:
+            return
+        try:
+            self._server.enable(names=set(names))
+        except Exception as e:
+            logger.warning("Failed to enable %d tools: %s", len(names), e)
 
 
 # ── Lifespan compatibility ────────────────────────────────────────
