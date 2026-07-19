@@ -38,10 +38,10 @@ class TestVersionDetection:
         major = int(FASTMCP_VERSION.split(".")[0])
         assert FASTMCP_V3 == (major >= 3)
 
-    def test_current_version_is_v2(self):
-        """We're running on fastmcp 2.x in the test environment."""
-        assert not FASTMCP_V3
-        assert FASTMCP_VERSION.startswith("2.")
+    def test_current_version_is_v3(self):
+        """The project pins fastmcp>=3.0 (change: fastmcp3-failed-step-warning)."""
+        assert FASTMCP_V3
+        assert FASTMCP_VERSION.startswith("3.")
 
 
 # =============================================================================
@@ -161,6 +161,7 @@ class TestToolManagerCompat:
         return server
 
     @pytest.mark.asyncio
+    @pytest.mark.skipif(FASTMCP_V3, reason="exercises the FASTMCP_V3=False (v2) code path")
     async def test_get_tools_v2(self):
         server = self._make_v2_server()
         compat = ToolManagerCompat(server)
@@ -169,6 +170,7 @@ class TestToolManagerCompat:
         assert "tool_b" in tools
 
     @pytest.mark.asyncio
+    @pytest.mark.skipif(FASTMCP_V3, reason="exercises the FASTMCP_V3=False (v2) code path")
     async def test_has_tool_v2(self):
         server = self._make_v2_server()
         compat = ToolManagerCompat(server)
@@ -248,6 +250,8 @@ class TestToolManagerAdapterFiltersDisabled:
             "enabled_tool": mock_tool_enabled,
             "disabled_tool": mock_tool_disabled,
         })
+        # v3 path uses the public server.get_tools() (change: fastmcp3-failed-step-warning)
+        server.get_tools = server._tool_manager.get_tools
 
         adapter = ToolManagerAdapter(server)
         await adapter.initialize()
@@ -275,6 +279,8 @@ class TestToolManagerAdapterFiltersDisabled:
             "visible_b": mock_enabled,
             "hidden_c": mock_disabled,
         })
+        # v3 path uses the public server.get_tools() (change: fastmcp3-failed-step-warning)
+        server.get_tools = server._tool_manager.get_tools
 
         adapter = ToolManagerAdapter(server)
         names = await adapter.get_visible_tool_names()

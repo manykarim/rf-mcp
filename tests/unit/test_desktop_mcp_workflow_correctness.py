@@ -12,6 +12,7 @@ Batch arg compat (D5) lives in
 """
 
 from __future__ import annotations
+from robotmcp.compat.fastmcp_compat import get_tool_fn
 
 import asyncio
 import importlib.util as _ilu
@@ -235,7 +236,7 @@ class TestDesktopStateInspection:
 
         monkeypatch.setattr(ui_tree_service, "get_ui_tree", _fake_ui_tree)
 
-        return await server.get_session_state.fn(session_id=session.session_id, sections=sections)
+        return await get_tool_fn(server.get_session_state)(session_id=session.session_id, sections=sections)
 
     def _desktop_session(self, sid="d-state"):
         from robotmcp.models.session_models import ExecutionSession
@@ -284,7 +285,7 @@ class TestDesktopStateInspection:
 
         monkeypatch.setattr(server, "_get_page_source_payload", _fake_payload)
 
-        result = await server.get_session_state.fn(
+        result = await get_tool_fn(server.get_session_state)(
             session_id="w-state", sections=["page_source"]
         )
         assert captured.get("called") is True
@@ -304,7 +305,7 @@ class TestPlatynUIKeywordDiscovery:
 
         kwargs.setdefault("query", "")
         kwargs.setdefault("strategy", "catalog")
-        return await find_keywords.fn(**kwargs)
+        return await get_tool_fn(find_keywords)(**kwargs)
 
     async def test_library_listing_returns_keywords(self):
         r = await self._find(library_name="PlatynUI.BareMetal")
@@ -520,7 +521,7 @@ class TestStepwiseSuiteIsolation:
             "get_session",
             lambda sid: sess,
         )
-        result = await server.manage_session.fn(
+        result = await get_tool_fn(server.manage_session)(
             action="start_test", session_id="ps3", test_name="T1"
         )
         assert "warning" in result

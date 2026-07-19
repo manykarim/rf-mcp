@@ -36,6 +36,27 @@ from typing import Any, Callable, Set
 
 logger = logging.getLogger(__name__)
 
+
+# ── Expected-failure signaling (change: fastmcp3-failed-step-warning) ──
+def tool_error(message: str, level: int = logging.WARNING) -> Exception:
+    """Build a FastMCP ToolError for an EXPECTED, user-facing tool/step failure.
+
+    On FastMCP 3.x, ToolError carries a ``log_level`` — the server logs it at that
+    level with ``exc_info=False`` (a clean line, no traceback), reserving
+    ERROR+traceback for genuinely unexpected exceptions. On 2.x (no ``log_level``
+    kwarg) it degrades to a plain ToolError — still ``isError=True`` with the full
+    message preserved — rather than a TypeError that would destroy the payload.
+
+    Usage: ``raise tool_error(detailed_error)``.
+    """
+    from fastmcp.exceptions import ToolError
+
+    try:
+        return ToolError(message, log_level=level)  # FastMCP 3.x
+    except TypeError:
+        return ToolError(message)  # FastMCP 2.x fallback
+
+
 # ── Version detection ─────────────────────────────────────────────
 
 try:

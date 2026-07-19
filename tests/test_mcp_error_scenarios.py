@@ -1,5 +1,6 @@
 """Error scenario tests for MCP tools to ensure robust error handling."""
 
+from robotmcp.compat.fastmcp_compat import get_tool_fn
 import pytest
 import pytest_asyncio
 import asyncio
@@ -193,7 +194,7 @@ class TestMCPErrorScenarios:
 
         monkeypatch.setattr(server_module.execution_engine, "get_page_source", fake_get_page_source)
 
-        result = await server_module.get_session_state.fn(
+        result = await get_tool_fn(server_module.get_session_state)(
             session_id="attach_fallback_session",
             sections=["page_source"],
             page_source_filtered=False,

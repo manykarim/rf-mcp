@@ -17,6 +17,7 @@ Playwright machinery does not have to be running.
 """
 
 from __future__ import annotations
+from robotmcp.compat.fastmcp_compat import get_tool_fn
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch

@@ -11,6 +11,7 @@ tools end to end.
 """
 
 from __future__ import annotations
+from robotmcp.compat.fastmcp_compat import get_tool_fn
 
 import pytest
 
@@ -18,13 +19,13 @@ from robotmcp import server
 
 
 async def _start_test(sid, name, **kwargs):
-    return await server.manage_session.fn(
+    return await get_tool_fn(server.manage_session)(
         action="start_test", session_id=sid, test_name=name, **kwargs
     )
 
 
 async def _end_test(sid, **kwargs):
-    return await server.manage_session.fn(
+    return await get_tool_fn(server.manage_session)(
         action="end_test", session_id=sid, **kwargs
     )
 
@@ -89,10 +90,10 @@ class TestRun3Interleaving:
             assert r["success"] is True
 
         await _step("one")
-        b1 = await server.build_test_suite.fn(session_id=sid, test_name="")
+        b1 = await get_tool_fn(server.build_test_suite)(session_id=sid, test_name="")
         assert b1["success"] is True
         await _step("two")
-        b2 = await server.build_test_suite.fn(session_id=sid, test_name="")
+        b2 = await get_tool_fn(server.build_test_suite)(session_id=sid, test_name="")
         assert b2["success"] is True
         await _step("three")
         ended = await _end_test(sid)
@@ -102,7 +103,7 @@ class TestRun3Interleaving:
         test = session.test_registry.tests["Interleaved Test"]
         assert len(test.steps) == 3
         assert len(session.suite_level_steps) == 0
-        final = await server.build_test_suite.fn(session_id=sid, test_name="")
+        final = await get_tool_fn(server.build_test_suite)(session_id=sid, test_name="")
         assert final["success"] is True
         assert final.get("suite_level_step_count", 0) == 0
         rf_text = final.get("rf_text") or ""

@@ -8,6 +8,7 @@ Covers the following improvements from docs/issues/get_session_state_attach_brid
   S5 - Enrich summary section with bridge data
 """
 
+from robotmcp.compat.fastmcp_compat import get_tool_fn
 from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
@@ -486,7 +487,7 @@ class TestGetSessionStateIntegration:
         from robotmcp.server import get_session_state
 
         # Access the underlying function
-        get_state_fn = get_session_state.fn
+        get_state_fn = get_tool_fn(get_session_state)
 
         result = await get_state_fn(
             session_id="test",

@@ -10,6 +10,7 @@ See:
 - docs/proposals/explicit_library_detection_fix_proposal.md (v5)
 """
 
+from robotmcp.compat.fastmcp_compat import get_tool_fn
 import asyncio
 
 import pytest
@@ -716,7 +717,7 @@ class TestSamplingOverrideCoherence:
             pass
 
         result = _run(
-            analyze_tool.fn(
+            get_tool_fn(analyze_tool)(
                 scenario="Use playwright to test demoshop",
                 context="web",
                 session_id="test_sampling_no_override",
@@ -748,7 +749,7 @@ class TestSamplingOverrideCoherence:
             pass
 
         result = _run(
-            analyze_tool.fn(
+            get_tool_fn(analyze_tool)(
                 scenario="Use playwright to test demoshop",
                 context="web",
                 session_id="test_sampling_override",

@@ -9,6 +9,7 @@ fix-step resolution and the failed-step retry through the real tool.
 """
 
 from __future__ import annotations
+from robotmcp.compat.fastmcp_compat import get_tool_fn
 
 from datetime import datetime
 
@@ -54,7 +55,7 @@ class TestResumeArgumentFidelity:
         ]
         _seed_state("batch_testargs0001", steps, failed_at=0, session_id=sid)
 
-        result = await server.resume_batch.fn(batch_id="batch_testargs0001")
+        result = await get_tool_fn(server.resume_batch)(batch_id="batch_testargs0001")
         statuses = [(s.get("keyword"), s.get("status")) for s in result.get("steps", [])]
         # The retried Sleep must NOT fail with "got 0" — it passes with its arg.
         assert result.get("status") == "PASS", result
@@ -67,7 +68,7 @@ class TestResumeArgumentFidelity:
         steps = [BatchStep(index=0, keyword="BuiltIn.Sleep", args=["0.01s"])]
         _seed_state("batch_testargs0002", steps, failed_at=0, session_id=sid)
 
-        result = await server.resume_batch.fn(
+        result = await get_tool_fn(server.resume_batch)(
             batch_id="batch_testargs0002",
             fix_steps=[{"keyword": "BuiltIn.Log", "arguments": ["fix-hello"]}],
         )
@@ -82,7 +83,7 @@ class TestResumeArgumentFidelity:
         steps = [BatchStep(index=0, keyword="BuiltIn.Sleep", args=["0.01s"])]
         _seed_state("batch_testargs0003", steps, failed_at=0, session_id=sid)
 
-        result = await server.resume_batch.fn(
+        result = await get_tool_fn(server.resume_batch)(
             batch_id="batch_testargs0003",
             fix_steps=[{"keyword": "BuiltIn.Log", "args": ["fix-alias"]}],
         )

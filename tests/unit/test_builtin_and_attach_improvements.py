@@ -11,6 +11,7 @@ Covers the following improvements:
   R8 - Timeout forwarding (mcp_attach.py, external_rf_client.py)
 """
 
+from robotmcp.compat.fastmcp_compat import get_tool_fn
 import json
 from types import SimpleNamespace
 from typing import Any, Dict
@@ -362,7 +363,7 @@ class TestServerAttachImprovements:
 
         # analyze_scenario is decorated with @mcp.tool, so access .fn for the
         # underlying coroutine.
-        analyze_fn = server_module.analyze_scenario.fn
+        analyze_fn = get_tool_fn(server_module.analyze_scenario)
 
         result = await analyze_fn(scenario="Open browser to example.com", context="web")
 

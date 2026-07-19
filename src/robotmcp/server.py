@@ -4445,7 +4445,8 @@ async def execute_step(
             if is_connectivity_error:
                 logger.error(f"ATTACH mode connectivity error: {err}")
                 if strict or mode == "force":
-                    raise Exception(
+                    from robotmcp.compat.fastmcp_compat import tool_error
+                    raise tool_error(
                         f"Attach bridge call failed: {err}. Is MCP Serve running and token/port correct?"
                     )
                 # Only fall back to local execution for connectivity errors
@@ -4569,7 +4570,11 @@ async def execute_step(
         if "step_id" in result:
             detailed_error += f"\nStep ID: {result['step_id']}"
 
-        raise Exception(detailed_error)
+        # Expected step failure: signal as a FastMCP ToolError logged at WARNING
+        # (no traceback on FastMCP 3.x), payload preserved for the agent
+        # (change: fastmcp3-failed-step-warning).
+        from robotmcp.compat.fastmcp_compat import tool_error
+        raise tool_error(detailed_error)
 
     result["mode"] = mode_norm
     result.setdefault("keyword", keyword_to_run)

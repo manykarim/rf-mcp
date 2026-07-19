@@ -27,6 +27,7 @@ Test Coverage:
         - Fallback to local execution when bridge fails
 """
 
+from robotmcp.compat.fastmcp_compat import get_tool_fn
 import concurrent.futures
 import json
 import threading
@@ -827,7 +828,7 @@ class TestBridgeIntegration:
 
         from robotmcp.server import get_session_state
 
-        get_state_fn = get_session_state.fn
+        get_state_fn = get_tool_fn(get_session_state)
 
         result = await get_state_fn(
             session_id="test",
