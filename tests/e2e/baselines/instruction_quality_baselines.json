@@ -1,0 +1,56 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "description": "Per-model rf-mcp instruction-quality baselines for the agentic e2e gate. Lowering a number here is a human-reviewed ratchet: it means rf-mcp's tool descriptions / MCP instructions got measurably worse for a fixed model. Recapture with E2E_CAPTURE_BASELINE=1 (see tests/e2e/README.md).",
+    "aggregation": "median for rates, mean for completion",
+    "capture_command": "MINIMAX_API_KEY=... E2E_CAPTURE_BASELINE=1 E2E_RUNS=5 MINIMAX_MODELS=MiniMax-M3 uv run pytest tests/e2e/test_minimax_autonomous.py"
+  },
+  "reference_models": [
+    "MiniMax-M3"
+  ],
+  "hard_gate_models": [],
+  "inform_models": [
+    "MiniMax-M2",
+    "MiniMax-M2.5",
+    "MiniMax-M2.7"
+  ],
+  "tolerances": {
+    "tool_success_rate": 0.1,
+    "tool_hit_rate": 0.1,
+    "task_completion_rate": 0.1
+  },
+  "absolute_floors": {
+    "MiniMax-M3": {
+      "tool_success_rate": 0.7,
+      "tool_hit_rate": 0.8,
+      "task_completion_best_of_n": 1
+    }
+  },
+  "scenarios": {
+    "minimax_basic_list": {
+      "MiniMax-M3": {
+        "tool_success_rate": 1.0,
+        "tool_hit_rate": 1.0,
+        "task_completion_rate": 1.0,
+        "n_runs": 3,
+        "per_run": {
+          "tool_success_rate": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tool_hit_rate": [
+            1.0,
+            1.0,
+            0.6667
+          ]
+        },
+        "iqr": {
+          "tool_success_rate": 0.0,
+          "tool_hit_rate": 0.1667,
+          "task_completion_rate": 0.0
+        }
+      }
+    }
+  }
+}

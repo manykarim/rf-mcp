@@ -57,6 +57,41 @@ class MCPAgentIntegration:
             self._toolset = FastMCPToolset(self.mcp_server)
         return self._toolset
 
+    # A DELIBERATELY NEUTRAL system prompt. It must NOT restate rf-mcp's own tool
+    # guidance (which tools to call, in what order, session_id threading, keyword
+    # libraries) — doing so masks the quality of rf-mcp's tool descriptions and MCP
+    # instructions, defeating the whole point of the agentic e2e gate. The agent must
+    # rely on rf-mcp's ACTUAL tool descriptions + injected server instructions, so that
+    # degrading them is observable in the metrics.
+    NEUTRAL_SYSTEM_PROMPT = (
+        "You are a test-automation agent. You have access to a set of MCP tools for "
+        "building and running Robot Framework tests. Read each tool's description and "
+        "the server guidance below, then discover and use the appropriate tools to "
+        "accomplish the user's task. Follow the tools' own instructions for sequencing, "
+        "sessions, arguments and keyword usage — do not rely on outside knowledge of the "
+        "tool set."
+    )
+
+    def _resolve_system_prompt(self, system_prompt: Optional[str]) -> str:
+        """Build the agent system prompt: neutral base + the server's MCP instructions.
+
+        The rf-mcp server instructions (the WORKFLOW GUIDE) are injected here because
+        FastMCPToolset forwards only per-tool descriptions, not the server's
+        ``instructions`` — so without this the agent never sees the MCP instructions and
+        the gate cannot measure their quality. Reading them from the live server object
+        means degrading them (e.g. ROBOTMCP_INSTRUCTIONS=off) is reflected in the agent's
+        behaviour and the metrics.
+        """
+        if system_prompt is not None:
+            return system_prompt
+        server_instructions = (getattr(self.mcp_server, "instructions", "") or "").strip()
+        if server_instructions:
+            return (
+                f"{self.NEUTRAL_SYSTEM_PROMPT}\n\n"
+                f"--- MCP server guidance ---\n{server_instructions}"
+            )
+        return self.NEUTRAL_SYSTEM_PROMPT
+
     def create_agent_with_mcp_tools(
         self,
         model_name: str = "gpt-5-mini",
@@ -68,7 +103,10 @@ class MCPAgentIntegration:
         Args:
             model_name: OpenAI model name to use
             use_test_model: Whether to use TestModel instead of real LLM
-            system_prompt: Optional custom system prompt
+            system_prompt: Optional custom system prompt. When None, a NEUTRAL prompt is
+                used plus the server's own MCP instructions — so the agent depends on
+                rf-mcp's real tool descriptions/instructions, which is what the gate
+                measures.
 
         Returns:
             Configured Pydantic AI Agent with ALL MCP tools available
@@ -80,27 +118,7 @@ class MCPAgentIntegration:
             # endpoint (MINIMAX_API_KEY); gpt-* keep the default OpenAI provider.
             model = resolve_model(model_name)
 
-        if system_prompt is None:
-            system_prompt = """You are a test automation assistant using Robot Framework MCP server.
-You have access to MCP tools for creating and executing Robot Framework tests.
-
-When given a test scenario:
-1. Use analyze_scenario to understand the requirements and create a session
-2. Use execute_step to build the test step by step
-3. Use build_test_suite to generate the final test suite
-
-Always use the appropriate MCP tools to accomplish testing tasks.
-Extract the session_id from analyze_scenario and use it in all subsequent calls.
-
-IMPORTANT: Common Robot Framework keywords are in these libraries:
-- BuiltIn: Create List, Log, Should Be Equal, Should Contain, Set Variable, Length Should Be, etc.
-- Collections: Sort List, Append To List, Get From List, List Should Contain Value, etc.
-- String: Convert To String, Split String, Replace String, etc.
-- XML: Parse XML, Get Element, Get Element Text, Get Element Attribute, Elements Should Match, etc.
-- OperatingSystem: Create File, File Should Exist, Get File, etc.
-
-When using keywords, call them WITHOUT library prefix (e.g., 'Create List' not 'BuiltIn.Create List' or 'Collections.Create List').
-The 'Create List' keyword is in BuiltIn, NOT in Collections."""
+        system_prompt = self._resolve_system_prompt(system_prompt)
 
         # Create toolset with metrics wrapping
         toolset = self._create_metrics_wrapped_toolset()

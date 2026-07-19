@@ -385,9 +385,13 @@ jobs:
     timeout-minutes: 20
     env:
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
-      # Single strongest tier for the per-commit quality signal; the full matrix
-      # (M2/M2.5/M2.7/M3) runs in the weekly e2e workflow.
+      # Reference tier (M3) for the per-commit instruction-quality signal; the full
+      # matrix (M2/M2.5/M2.7/M3) runs in the weekly e2e workflow. The gate compares
+      # M3's N-run aggregate against the committed baseline
+      # (tests/e2e/baselines/instruction_quality_baselines.json) — a regression in
+      # rf-mcp's tool descriptions / MCP instructions fails the job.
       MINIMAX_MODELS: 'MiniMax-M3'
+      E2E_RUNS: '3'
     steps:
       - name: Check MiniMax key
         run: |
@@ -418,11 +422,14 @@ jobs:
         if: env.SKIP_MINIMAX != 'true'
         run: mkdir -p tests/e2e/metrics/minimax results
 
-      # HARD quality gate: fails the job only on a real rf-mcp regression (tool
-      # registration broken, server fault, recursion). MiniMax's own model-framing
-      # flakiness degrades to a warning and stays green (see tests/e2e/quality_gate.py).
+      # Instruction-quality gate: M3's aggregate tool-call quality (success / hit /
+      # completion) must not regress below its committed baseline, and must clear the
+      # reference absolute floors. A drop signals degraded rf-mcp tool descriptions or
+      # MCP instructions and fails the job. Infra faults (recursion/registration) fail
+      # on any run. See tests/e2e/quality_gate.py.
       - name: Run MiniMax autonomous smoke
         if: env.SKIP_MINIMAX != 'true'
+        timeout-minutes: 15
         run: |
           uv run pytest tests/e2e/test_minimax_autonomous.py -v -s \
             --junitxml=results/e2e-minimax-smoke.xml

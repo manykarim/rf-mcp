@@ -224,6 +224,9 @@ playwright*.txt
 /debug_*.py
 
 tests/e2e/**/*.json
+# ...but the instruction-quality baselines are source (the "no decrease" ratchet), not
+# generated metrics — keep them under version control.
+!tests/e2e/baselines/*.json
 
 /*.robot
 

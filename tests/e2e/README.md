@@ -28,34 +28,61 @@ OpenAI-compatible endpoint (`https://api.minimax.io/v1`). Wiring lives in
 there automatically (everything else keeps the default OpenAI provider).
 
 - `test_minimax_autonomous.py` — runs each MiniMax tier through a deterministic
-  workflow and enforces the **quality gate** (`quality_gate.py`).
+  workflow and enforces the **instruction-quality gate** (`quality_gate.py`).
 - The shared `test_autonomous_agents.py` also runs under MiniMax when `MINIMAX_API_KEY`
   is set (it prefers MiniMax; override with `E2E_AGENT_MODEL`).
 
 Env knobs: `MINIMAX_MODELS` (comma-separated subset, default all four),
-`E2E_AGENT_MODEL` (force one model for the shared suite).
+`E2E_AGENT_MODEL` (force one model for the shared suite), `E2E_RUNS` (runs per model
+for aggregation, default 3).
 
-### Quality gate — "no rf-mcp quality decrease"
+### Harness fidelity — the agent depends on rf-mcp's own instructions
 
-`quality_gate.py` separates **model-agnostic rf-mcp health** (HARD, fails the build)
-from **model-choice noise** (SOFT, warns only), by attributing each failed tool call:
+The whole point is to measure rf-mcp's **instruction quality** — whether its tool
+descriptions and MCP instructions let an agent discover and drive the tools. So the
+harness must NOT hand the agent a cheat-sheet:
 
-- **rf-mcp fault** (HARD): tool not registered, server exception/traceback, recursion,
-  handshake/libdoc failure — a real regression.
-- **model-framing fault** (SOFT): graceful RF keyword/argument hints, malformed args
-  rejected at the pydantic boundary, or the agent going off-script — weak-tier
-  flakiness that must not red the build.
+- The system prompt is **neutral** (`agent_integration.NEUTRAL_SYSTEM_PROMPT`) — it does
+  not restate which tools to call or how. The agent relies on the tools' real
+  descriptions.
+- The server's **MCP instructions** (the WORKFLOW GUIDE, `mcp.instructions`) are injected
+  into the agent context — `FastMCPToolset` does not forward them otherwise, so without
+  this the MCP instructions would be untested. Degrading them (e.g.
+  `ROBOTMCP_INSTRUCTIONS=off`) now changes agent behaviour and the metrics.
 
-So a flaky MiniMax run stays green (warn), while a genuine rf-mcp regression (e.g. the
-FastMCP tool-registration recursion) trips a HARD failure. Per-model metrics + gate
-verdicts are written to `metrics/minimax/`.
+### Instruction-quality gate — "ensure no decrease"
+
+Wrong / failed / absent tool calls ARE the signal: for a **pinned** model, only rf-mcp's
+instruction surface can have changed, so a drop in tool-call quality means rf-mcp got
+worse. `quality_gate.py`:
+
+- Measures per run: `tool_success_rate` (successful/total calls), `tool_hit_rate`,
+  `task_completion` (start + artifact tools succeeded), and infra faults.
+- Aggregates **N runs** (median for rates) and compares against that model's committed
+  **baseline** (`baselines/instruction_quality_baselines.json`). A drop below
+  `baseline − tolerance` (tolerance = `max(0.10, IQR@capture)`) is a **regression → HARD
+  fail**. This is the "no decrease" ratchet — lowering a baseline number is a reviewed
+  commit.
+- **Reference tier** (M3) also enforces absolute floors (success ≥ 0.70, hit ≥ 0.80,
+  completes in ≥ 1 of N). **Inform tiers** (M2/M2.5/M2.7 until baselines are captured)
+  only warn on regression. **Infra faults** (recursion/registration/handshake) HARD-fail
+  any tier on any run.
+
+Update baselines deliberately (a reviewed diff) after an intended instruction change:
+
+```bash
+MINIMAX_API_KEY=... E2E_CAPTURE_BASELINE=1 E2E_RUNS=5 MINIMAX_MODELS=MiniMax-M3 \
+    uv run pytest tests/e2e/test_minimax_autonomous.py
+```
+
+Per-model metrics + gate verdicts are written to `metrics/minimax/`.
 
 ## CI
 
 | Workflow / job | Gate | What runs |
 |---|---|---|
 | `ci.yml` → `e2e-no-llm` | none (always) | `test_agent_tool_discovery` (gates tool registration); `test_mcp_stdout_leak` runs informationally |
-| `ci.yml` → `e2e-minimax-smoke` | `MINIMAX_API_KEY` | MiniMax-M3 autonomous smoke + quality gate (per commit) |
+| `ci.yml` → `e2e-minimax-smoke` | `MINIMAX_API_KEY` | MiniMax-M3 autonomous smoke + instruction-quality gate vs baseline (per commit) |
 | `ci.yml` → `e2e-tests` | `PERSONAL_ACCESS_TOKEN` | Copilot CLI autonomous / workflow suites |
 | `e2e-weekly.yml` → `minimax-autonomous` | `MINIMAX_API_KEY` | Full MiniMax matrix (M2/M2.5/M2.7/M3) + metrics |
 | `e2e-weekly.yml` → `opencode-e2e` | `OPENROUTER_API_KEY` | opencode small-LLM intent-action + realistic e2e |
