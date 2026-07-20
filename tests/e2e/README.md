@@ -56,26 +56,54 @@ Wrong / failed / absent tool calls ARE the signal: for a **pinned** model, only 
 instruction surface can have changed, so a drop in tool-call quality means rf-mcp got
 worse. `quality_gate.py`:
 
-- Measures per run: `tool_success_rate` (successful/total calls), `tool_hit_rate`,
-  `task_completion` (start + artifact tools succeeded), and infra faults.
+- Measures per run: `task_completion` and `first_try_ok` (**primary**, robust — a
+  floundering agent cannot inflate them), `tool_success_rate`, plus `tool_hit_rate`,
+  `unexpected_tool_rate`, `discovery:execute` ratio and `artifact_executes`
+  (`run_test_suite` passed). `tool_hit_rate` is reported and gates only on **validated**
+  scenarios (it is non-monotonic — a floundering agent inflates it).
 - Aggregates **N runs** (median for rates) and compares against that model's committed
   **baseline** (`baselines/instruction_quality_baselines.json`). A drop below
   `baseline − tolerance` (tolerance = `max(0.10, IQR@capture)`) is a **regression → HARD
-  fail**. This is the "no decrease" ratchet — lowering a baseline number is a reviewed
-  commit.
-- **Reference tier** (M3) also enforces absolute floors (success ≥ 0.70, hit ≥ 0.80,
-  completes in ≥ 1 of N). **Inform tiers** (M2/M2.5/M2.7 until baselines are captured)
-  only warn on regression. **Infra faults** (recursion/registration/handshake) HARD-fail
-  any tier on any run.
+  fail** (the "no decrease" ratchet — lowering a baseline is a reviewed commit).
+- **Reference tier** also enforces absolute floors (success ≥ 0.70, first-try ≥ 0.50,
+  completes in ≥ 1 of N). **Inform tiers** only warn on regression. **Infra faults**
+  (recursion/registration/handshake) HARD-fail any tier on any run. **Excluded models**
+  (broken tool-calling, e.g. `llama-3.1-8b`) are not run.
 
-Update baselines deliberately (a reviewed diff) after an intended instruction change:
+### Scenario validation protocol (the keystone)
+
+A scenario hard-gates only when a **validation canary** proves it is:
+- **calibrated** — the reference model completes it on good rf-mcp (headroom to drop); and
+- **sensitive** — degrading the relevant instruction surface lowers the metric
+  monotonically.
+
+Scenarios that fail this (e.g. `custom_library_keyword_discovery`: reference can't
+complete it, and degradation made hit-rate *rise*) are `_validated: false` and demoted to
+inform — they cannot hard-fail, because an invalid probe gives misleading signal. New
+scenarios (`desktop_discovery`, `data_driven_generic`, `locator_ergonomics`) are tagged
+`needs-validation` until the canary admits them (`validate_scenario` in `quality_gate.py`).
+
+### Model roster & the reference model
+
+Tiers live in the baseline file (`reference_models` / `hard_gate_models` /
+`inform_models` / `excluded_models`). The **active reference is `MiniMax-M3`** (proven
+reliable 3/3). The **goal** is a pinnable **self-hostable** reference
+(`qwen/qwen3-coder-30b-a3b`, Apache-2.0) to eliminate baseline drift — but OpenRouter's
+*default* routing for it is **not reproducible** (it intermittently returns prose with
+zero tool calls: N=3 → success `[0,0,1]`). Realizing the self-hostable reference needs
+OpenRouter **provider pinning** or actual self-hosting; until then it runs inform-only.
+See `reference_pin.note` in the baseline file.
+
+Update baselines deliberately (a reviewed diff) after an intended instruction change
+(capture refuses degenerate/infra results):
 
 ```bash
-MINIMAX_API_KEY=... E2E_CAPTURE_BASELINE=1 E2E_RUNS=5 MINIMAX_MODELS=MiniMax-M3 \
+MINIMAX_API_KEY=... E2E_CAPTURE_BASELINE=1 E2E_RUNS=5 E2E_MODELS=MiniMax-M3 \
     uv run pytest tests/e2e/test_minimax_autonomous.py
 ```
 
-Per-model metrics + gate verdicts are written to `metrics/minimax/`.
+Per-model metrics + gate verdicts (with provenance: `captured_at`, `captured_pin`,
+`rf_mcp_git_sha`) are written to `metrics/minimax/` and the baseline file.
 
 ## CI
 

@@ -83,12 +83,41 @@ def test_default_agent_model_empty_openai_model_falls_back(monkeypatch):
 
 def test_real_llm_available(monkeypatch):
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("USE_REAL_LLM", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     assert real_llm_available() is False
 
     monkeypatch.setenv("MINIMAX_API_KEY", "k")
     assert real_llm_available() is True  # MiniMax key alone enables the harness
+
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    assert real_llm_available() is True  # OpenRouter key alone also enables it
+
+
+def test_provider_routing(monkeypatch):
+    from tests.e2e.minimax_support import provider_for, is_openrouter_model, REFERENCE_MODEL
+    assert provider_for("MiniMax-M3") == "minimax"
+    assert provider_for("qwen/qwen3-coder-30b-a3b-instruct") == "openrouter"
+    assert provider_for("gpt-5-mini") == "openai"
+    assert is_openrouter_model(REFERENCE_MODEL) is True
+    assert is_openrouter_model("MiniMax-M3") is False
+
+
+def test_resolve_openrouter_points_at_openrouter(monkeypatch):
+    from tests.e2e.minimax_support import resolve_model, REFERENCE_MODEL
+    monkeypatch.setenv("OPENROUTER_API_KEY", "dummy")
+    model = resolve_model(REFERENCE_MODEL)
+    base = str(getattr(getattr(model, "client", None), "base_url", ""))
+    assert "openrouter.ai/api/v1" in base
+
+
+def test_resolve_openrouter_requires_key(monkeypatch):
+    from tests.e2e.minimax_support import resolve_model, REFERENCE_MODEL
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
+        resolve_model(REFERENCE_MODEL)
 
 
 def test_minimax_models_to_test(monkeypatch):
@@ -149,7 +178,7 @@ def _baselines(**over):
         "hard_gate_models": ["MiniMax-M2.7"],
         "inform_models": ["MiniMax-M2"],
         "tolerances": {"tool_success_rate": 0.1, "tool_hit_rate": 0.1, "task_completion_rate": 0.1},
-        "absolute_floors": {"MiniMax-M3": {"tool_success_rate": 0.7, "tool_hit_rate": 0.8, "task_completion_best_of_n": 1}},
+        "absolute_floors": {"MiniMax-M3": {"tool_success_rate": 0.7, "first_try_selection_rate": 0.5, "task_completion_best_of_n": 1}},
         "scenarios": {"s": {
             "MiniMax-M3": {"tool_success_rate": 1.0, "tool_hit_rate": 1.0, "task_completion_rate": 1.0, "iqr": {}},
             "MiniMax-M2.7": {"tool_success_rate": 0.8, "tool_hit_rate": 0.7, "task_completion_rate": 0.8, "iqr": {}},
@@ -258,3 +287,109 @@ def test_capture_entry_valid_and_refuses_infra():
     assert entry is not None and entry["tool_success_rate"] == 1.0  # median(1,1,0.5)
     infra = _rm([_record("execute_step", False, error="maximum recursion depth exceeded")])
     assert capture_entry([_healthy(), infra, _healthy()]) is None  # refuses to bless a broken state
+
+
+# ── new metrics + validation protocol (change: autonomous-e2e-coverage) ──
+
+from tests.e2e.quality_gate import (  # noqa: E402
+    aggregate as _aggregate,
+    is_excluded_model,
+    is_scenario_validated,
+    staleness_warning,
+    validate_scenario,
+)
+
+
+def test_first_try_metric_not_inflated_by_flailing():
+    # First call is a wrong/unexpected tool -> first_try_ok False even if later calls hit.
+    good = _rm([_record("analyze_scenario", True), _record("execute_step", True), _record("build_test_suite", True)])
+    assert good.first_try_ok is True
+    floundering = _rm([_record("get_session_state", True)] + [_record("execute_step", True)] * 6)
+    assert floundering.first_try_ok is False  # first call not an expected tool
+
+
+def test_artifact_executes_metric():
+    without = _rm([_record("analyze_scenario", True), _record("build_test_suite", True)])
+    assert without.artifact_executes is False
+    with_run = _rm([_record("analyze_scenario", True), _record("build_test_suite", True), _record("run_test_suite", True)])
+    assert with_run.artifact_executes is True
+
+
+def test_validate_scenario_calibrated_and_sensitive():
+    good = _aggregate([_healthy(), _healthy(), _healthy()])
+    degraded = _aggregate([_degraded(), _degraded(), _degraded()])
+    ok, reason = validate_scenario(good, degraded)
+    assert ok is True, reason
+
+
+def test_validate_scenario_rejects_uncalibrated():
+    # reference never completes on "good" -> no headroom -> invalid probe
+    notdone = _rm([_record("find_keywords", True)])  # completion tools never succeed
+    good = _aggregate([notdone, notdone, notdone])
+    degraded = _aggregate([notdone, notdone, notdone])
+    ok, reason = validate_scenario(good, degraded)
+    assert ok is False and "uncalibrated" in reason
+
+
+def test_validate_scenario_rejects_insensitive():
+    # degradation does not lower any metric (e.g. metric inverts/stays) -> invalid probe
+    good = _aggregate([_healthy(), _healthy(), _healthy()])
+    ok, reason = validate_scenario(good, good)  # degraded == good
+    assert ok is False and "insensitive" in reason
+
+
+def test_unvalidated_scenario_demotes_to_warn():
+    b = _baselines()
+    b["scenarios"]["s"]["_validated"] = False  # canary rejected this scenario
+    v = evaluate("MiniMax-M3", "s", [_degraded(), _degraded(), _degraded()], _ALL_TOOLS, b)
+    assert v.overall != "fail"  # regression warns, never hard-fails on an invalid probe
+
+
+def test_excluded_model_is_not_gated():
+    b = _baselines()
+    b["excluded_models"] = ["broken-model"]
+    assert is_excluded_model("broken-model", b) is True
+    from tests.e2e.quality_gate import model_tier
+    assert model_tier("broken-model", b) == "excluded"
+
+
+def test_hit_rate_drop_hard_fails_on_validated_scenario():
+    # On a VALIDATED scenario a hit-rate DROP is a legitimate regression (the validation
+    # protocol guarantees monotonicity), so it hard-fails even if completion holds.
+    b = _baselines()
+    b["scenarios"]["s"]["MiniMax-M3"]["tool_hit_rate"] = 1.0
+    low_hit = _rm([_record("analyze_scenario", True), _record("execute_step", True), _record("build_test_suite", True)], hit_rate=0.5)
+    v = evaluate("MiniMax-M3", "s", [low_hit, low_hit, low_hit], _ALL_TOOLS, b)
+    assert v.overall == "fail"
+    assert any("tool_hit_rate" in h for h in v.hard_failures)
+
+
+def test_staleness_warning_on_pin_mismatch():
+    b = _baselines()
+    b["reference_pin"] = {"model": "qwen/qwen3-coder-30b-a3b-instruct"}
+    b["reference_models"] = ["qwen/qwen3-coder-30b-a3b-instruct"]
+    entry = {"captured_pin": "old-model-slug"}
+    w = staleness_warning(entry, "qwen/qwen3-coder-30b-a3b-instruct", b)
+    assert w and "stale baseline" in w
+
+
+def test_is_scenario_validated_default_and_explicit():
+    b = _baselines()
+    assert is_scenario_validated("s", b) is True          # missing marker => allowed
+    b["scenarios"]["s"]["_validated"] = False
+    assert is_scenario_validated("s", b) is False
+
+
+def test_openrouter_provider_pinning(monkeypatch):
+    # OPENROUTER_PROVIDER pins a single provider (reproducibility fix for routing variance).
+    from tests.e2e.minimax_support import resolve_model, REFERENCE_MODEL
+    monkeypatch.setenv("OPENROUTER_API_KEY", "dummy")
+    monkeypatch.setenv("OPENROUTER_PROVIDER", "Novita")
+    model = resolve_model(REFERENCE_MODEL)
+    eb = getattr(getattr(model, "settings", None), "get", lambda *_: None)("extra_body") \
+        if isinstance(getattr(model, "settings", None), dict) else getattr(getattr(model, "settings", None), "extra_body", None)
+    # settings may be a TypedDict-like mapping; assert the provider order is pinned
+    settings = getattr(model, "settings", None) or {}
+    body = settings.get("extra_body") if hasattr(settings, "get") else None
+    assert body and body.get("provider", {}).get("order") == ["Novita"]
+    assert body["provider"]["allow_fallbacks"] is False

@@ -226,16 +226,17 @@ jobs:
           path: results/e2e-intent-action.xml
           reporter: java-junit
 
-  minimax-autonomous:
-    name: E2E MiniMax Autonomous Matrix (M2/M2.5/M2.7/M3)
+  instruction-quality-matrix:
+    name: E2E Instruction-Quality Matrix (full roster)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
-      # Full comparison matrix across all four tiers. M3 is the reference (hard-gates on
-      # baseline regression + absolute floors); M2/M2.5/M2.7 are inform-tier (regression
-      # warns, only infra faults fail) until per-model baselines are captured.
-      MINIMAX_MODELS: 'MiniMax-M2,MiniMax-M2.5,MiniMax-M2.7,MiniMax-M3'
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      # Full roster from the baseline file (reference + inform: MiniMax tiers + open-weight
+      # candidates via OpenRouter), minus excluded models. E2E_MODELS unset => roster.
+      # M3 (reference) hard-gates on baseline regression + floors; the rest are inform
+      # (warn on regression) until stabilized/captured. N=5 for stable medians.
       E2E_RUNS: '5'
 
     steps:

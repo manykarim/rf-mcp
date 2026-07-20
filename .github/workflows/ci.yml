@@ -379,72 +379,74 @@ jobs:
           path: results/e2e-no-llm.xml
           reporter: java-junit
 
-  e2e-minimax-smoke:
-    name: E2E MiniMax Autonomous Smoke (quality gate)
+  e2e-instruction-smoke:
+    name: E2E Instruction-Quality Smoke (reference model)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
-      # Reference tier (M3) for the per-commit instruction-quality signal; the full
-      # matrix (M2/M2.5/M2.7/M3) runs in the weekly e2e workflow. The gate compares
-      # M3's N-run aggregate against the committed baseline
-      # (tests/e2e/baselines/instruction_quality_baselines.json) — a regression in
-      # rf-mcp's tool descriptions / MCP instructions fails the job.
-      MINIMAX_MODELS: 'MiniMax-M3'
+      # Per-commit signal: the ACTIVE reference model (MiniMax-M3, proven reliable 3/3)
+      # over the fast validated scenario subset. Its N-run aggregate is compared against
+      # the committed baseline (tests/e2e/baselines/instruction_quality_baselines.json);
+      # a regression in rf-mcp's tool descriptions / MCP instructions fails the job.
+      # NOTE: the aspirational self-hostable reference (qwen3-coder) is inform-only until
+      # its OpenRouter route is provider-pinned (default routing is non-reproducible —
+      # see reference_pin.note). The full roster runs weekly.
+      E2E_MODELS: 'MiniMax-M3'
       E2E_RUNS: '3'
     steps:
       - name: Check MiniMax key
         run: |
           if [ -z "$MINIMAX_API_KEY" ]; then
-            echo "::warning::MINIMAX_API_KEY secret not set — skipping MiniMax smoke"
-            echo "SKIP_MINIMAX=true" >> "$GITHUB_ENV"
+            echo "::warning::MINIMAX_API_KEY secret not set — skipping instruction smoke"
+            echo "SKIP_SMOKE=true" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout repository
-        if: env.SKIP_MINIMAX != 'true'
+        if: env.SKIP_SMOKE != 'true'
         uses: actions/checkout@v4
 
       - name: Setup uv
-        if: env.SKIP_MINIMAX != 'true'
+        if: env.SKIP_SMOKE != 'true'
         uses: astral-sh/setup-uv@v2
         with:
           version: 'latest'
 
       - name: Setup Python 3.12 (via uv)
-        if: env.SKIP_MINIMAX != 'true'
+        if: env.SKIP_SMOKE != 'true'
         run: uv python install 3.12
 
       - name: Install dependencies (dev)
-        if: env.SKIP_MINIMAX != 'true'
+        if: env.SKIP_SMOKE != 'true'
         run: uv sync --all-extras --group dev
 
       - name: Create metrics + results directories
-        if: env.SKIP_MINIMAX != 'true'
+        if: env.SKIP_SMOKE != 'true'
         run: mkdir -p tests/e2e/metrics/minimax results
 
-      # Instruction-quality gate: M3's aggregate tool-call quality (success / hit /
-      # completion) must not regress below its committed baseline, and must clear the
-      # reference absolute floors. A drop signals degraded rf-mcp tool descriptions or
-      # MCP instructions and fails the job. Infra faults (recursion/registration) fail
-      # on any run. See tests/e2e/quality_gate.py.
-      - name: Run MiniMax autonomous smoke
-        if: env.SKIP_MINIMAX != 'true'
+      # Instruction-quality gate: the reference model's aggregate tool-call quality must
+      # not regress below its committed baseline on the VALIDATED scenarios and must clear
+      # the reference absolute floors. A drop signals degraded rf-mcp tool descriptions or
+      # MCP instructions and fails the job. Infra faults (recursion/registration) fail on
+      # any run. See tests/e2e/quality_gate.py.
+      - name: Run instruction-quality smoke
+        if: env.SKIP_SMOKE != 'true'
         timeout-minutes: 15
         run: |
           uv run pytest tests/e2e/test_minimax_autonomous.py -v -s \
-            --junitxml=results/e2e-minimax-smoke.xml
+            --junitxml=results/e2e-instruction-smoke.xml
 
-      - name: Upload MiniMax metrics
-        if: env.SKIP_MINIMAX != 'true' && always()
+      - name: Upload instruction-quality metrics
+        if: env.SKIP_SMOKE != 'true' && always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-minimax-smoke-metrics
+          name: e2e-instruction-smoke-metrics
           path: tests/e2e/metrics/minimax/**/*.json
 
       - name: Test Report
         uses: dorny/test-reporter@main
-        if: env.SKIP_MINIMAX != 'true' && (success() || failure())
+        if: env.SKIP_SMOKE != 'true' && (success() || failure())
         with:
-          name: E2E MiniMax Smoke
-          path: results/e2e-minimax-smoke.xml
+          name: E2E Instruction Smoke
+          path: results/e2e-instruction-smoke.xml
           reporter: java-junit

@@ -67,7 +67,16 @@ RF_MCP_INFRA_PATTERNS = (
     "attributeerror: 'nonetype'",
 )
 
-_GATE_METRICS = ("tool_success_rate", "tool_hit_rate", "task_completion_rate")
+# Discovery/signposting tools — used for the discovery:execute ratio signal.
+DISCOVERY_TOOLS = frozenset(
+    {"find_keywords", "recommend_libraries", "get_keyword_info", "get_locator_guidance"}
+)
+
+# Metrics that can trigger a HARD regression. task_completion + first_try are the PRIMARY
+# (robust) signals; tool_success_rate is robust; tool_hit_rate is included but guarded so
+# it can never HARD-fail ALONE (it is inflated by a floundering agent — see evaluate()).
+_PRIMARY_GATE_METRICS = ("task_completion_rate", "first_try_selection_rate", "tool_success_rate")
+_GATE_METRICS = _PRIMARY_GATE_METRICS + ("tool_hit_rate",)
 _TOL_FLOOR = 0.10
 
 
@@ -88,10 +97,13 @@ class RunMetrics:
     tool_success_rate: float
     tool_hit_rate: float
     completed: bool
+    first_try_ok: bool
     total_calls: int
     successful_calls: int
     infra_faults: int
     unexpected_tool_calls: int
+    discovery_execute_ratio: float
+    artifact_executes: bool
     aborted: bool
 
     def to_dict(self) -> Dict[str, object]:
@@ -99,10 +111,13 @@ class RunMetrics:
             "tool_success_rate": round(self.tool_success_rate, 4),
             "tool_hit_rate": round(self.tool_hit_rate, 4),
             "completed": self.completed,
+            "first_try_ok": self.first_try_ok,
             "total_calls": self.total_calls,
             "successful_calls": self.successful_calls,
             "infra_faults": self.infra_faults,
             "unexpected_tool_calls": self.unexpected_tool_calls,
+            "discovery_execute_ratio": round(self.discovery_execute_ratio, 4),
+            "artifact_executes": self.artifact_executes,
             "aborted": self.aborted,
         }
 
@@ -120,6 +135,12 @@ def compute_run_metrics(
     - tool_success_rate: successful calls / total calls (0 if no calls — no calls is the
       worst outcome, never a vacuous pass).
     - completed: every completion tool was called AND succeeded at least once.
+    - first_try_ok: the agent's FIRST tool call was an expected tool AND succeeded — a
+      pure discoverability signal that a floundering agent cannot inflate (unlike
+      tool_hit_rate, which rises when the agent brute-forces more tools).
+    - discovery_execute_ratio: discovery calls / successful execute_step calls — churning
+      discovery without executing signals weak signposting. Reported, not hard-gated.
+    - artifact_executes: run_test_suite was called AND succeeded (built suite runs).
     - infra_faults: failed calls attributed to rf-mcp/infra (see is_infra_fault).
     - aborted: the run made no tool calls and ended on a transport/usage error.
     """
@@ -142,16 +163,30 @@ def compute_run_metrics(
         name in succeeded_by_tool for name in completion_tool_names
     )
 
+    # first-try: the FIRST call is a right tool and succeeds (un-gameable by later flailing)
+    first_try_ok = bool(calls) and calls[0].tool_name in expected and calls[0].success
+
+    discovery_calls = sum(1 for tc in calls if tc.tool_name in DISCOVERY_TOOLS)
+    exec_ok = sum(1 for tc in calls if tc.tool_name == "execute_step" and tc.success)
+    discovery_execute_ratio = discovery_calls / exec_ok if exec_ok else float(discovery_calls)
+
+    artifact_executes = any(
+        tc.tool_name == "run_test_suite" and tc.success for tc in calls
+    )
+
     aborted = total == 0 and bool(run_error)
 
     return RunMetrics(
         tool_success_rate=success_rate,
         tool_hit_rate=float(result.tool_hit_rate),
         completed=completed,
+        first_try_ok=first_try_ok,
         total_calls=total,
         successful_calls=successful,
         infra_faults=infra,
         unexpected_tool_calls=unexpected,
+        discovery_execute_ratio=discovery_execute_ratio,
+        artifact_executes=artifact_executes,
         aborted=aborted,
     )
 
@@ -163,7 +198,10 @@ class AggMetrics:
     tool_success_rate: float
     tool_hit_rate: float
     task_completion_rate: float
+    first_try_selection_rate: float
     completion_best_of_n: int
+    discovery_execute_ratio: float
+    artifact_execute_rate: float
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -172,7 +210,10 @@ class AggMetrics:
             "tool_success_rate": round(self.tool_success_rate, 4),
             "tool_hit_rate": round(self.tool_hit_rate, 4),
             "task_completion_rate": round(self.task_completion_rate, 4),
+            "first_try_selection_rate": round(self.first_try_selection_rate, 4),
             "completion_best_of_n": self.completion_best_of_n,
+            "discovery_execute_ratio": round(self.discovery_execute_ratio, 4),
+            "artifact_execute_rate": round(self.artifact_execute_rate, 4),
         }
 
 
@@ -184,14 +225,18 @@ def aggregate(runs: Sequence[RunMetrics]) -> AggMetrics:
     """Aggregate valid runs: median for rates (outlier-robust), mean for completion."""
     valid = _valid_runs(runs)
     if not valid:
-        return AggMetrics(len(runs), 0, 0.0, 0.0, 0.0, 0)
+        return AggMetrics(len(runs), 0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0.0)
+    n = len(valid)
     return AggMetrics(
         n_total=len(runs),
-        n_valid=len(valid),
+        n_valid=n,
         tool_success_rate=float(median(r.tool_success_rate for r in valid)),
         tool_hit_rate=float(median(r.tool_hit_rate for r in valid)),
-        task_completion_rate=sum(1 for r in valid if r.completed) / len(valid),
+        task_completion_rate=sum(1 for r in valid if r.completed) / n,
+        first_try_selection_rate=sum(1 for r in valid if r.first_try_ok) / n,
         completion_best_of_n=1 if any(r.completed for r in valid) else 0,
+        discovery_execute_ratio=float(median(r.discovery_execute_ratio for r in valid)),
+        artifact_execute_rate=sum(1 for r in valid if r.artifact_executes) / n,
     )
 
 
@@ -220,7 +265,9 @@ def load_baselines(path: Path) -> dict:
 
 
 def model_tier(model: str, baselines: dict) -> str:
-    """Return 'reference' | 'hard_gate' | 'inform' | 'unknown' for a model."""
+    """Return 'reference' | 'hard_gate' | 'inform' | 'excluded' | 'unknown' for a model."""
+    if model in baselines.get("excluded_models", []):
+        return "excluded"
     if model in baselines.get("reference_models", []):
         return "reference"
     if model in baselines.get("hard_gate_models", []):
@@ -230,11 +277,90 @@ def model_tier(model: str, baselines: dict) -> str:
     return "unknown"
 
 
+def is_excluded_model(model: str, baselines: dict) -> bool:
+    """True when a model is on the excluded list (demonstrated broken tool-calling)."""
+    return model in baselines.get("excluded_models", [])
+
+
 def _tolerance(metric: str, base_entry: dict, baselines: dict) -> float:
     tol_cfg = baselines.get("tolerances", {})
     floor = float(tol_cfg.get(metric, _TOL_FLOOR))
     measured_iqr = float((base_entry.get("iqr") or {}).get(metric, 0.0))
     return max(floor, measured_iqr)
+
+
+# ── scenario validation protocol ──────────────────────────────────
+
+_SENSITIVITY_METRICS = (
+    "task_completion_rate", "first_try_selection_rate", "tool_success_rate", "tool_hit_rate"
+)
+
+
+def validate_scenario(
+    good: "AggMetrics",
+    degraded: "AggMetrics",
+    *,
+    min_completion: float = 0.5,
+    min_drop: float = 0.10,
+) -> tuple[bool, str]:
+    """Decide whether a scenario is a VALID instruction-quality probe.
+
+    A scenario may hard-gate only if it is:
+    - CALIBRATED: the reference model completes it on good rf-mcp
+      (``good.task_completion_rate >= min_completion``) so there is headroom to drop; and
+    - SENSITIVE: degrading the relevant instruction surface lowers SOME quality metric
+      monotonically (``good - degraded >= min_drop`` for at least one sensitivity metric).
+
+    The custom-library-discovery experiment fails BOTH (good completion 0.0; degradation
+    made hit-rate rise) — this catches exactly that class of invalid probe.
+    """
+    if good.task_completion_rate < min_completion:
+        return False, (
+            f"uncalibrated: good task_completion {good.task_completion_rate:.2f} "
+            f"< {min_completion:.2f} (no headroom to detect a drop)"
+        )
+    best_drop = max(
+        getattr(good, m) - getattr(degraded, m) for m in _SENSITIVITY_METRICS
+    )
+    if best_drop < min_drop:
+        return False, (
+            f"insensitive: no metric dropped >= {min_drop:.2f} under degradation "
+            f"(best drop {best_drop:.2f}) — degradation is not observable"
+        )
+    return True, f"validated (calibrated + sensitive; best drop {best_drop:.2f})"
+
+
+def is_scenario_validated(scenario_id: str, baselines: dict) -> bool:
+    """True unless the scenario is explicitly marked ``_validated: false``.
+
+    Missing marker => allowed (backward-compatible with pre-protocol baselines); an
+    explicit false (a scenario the canary rejected) demotes it to inform-only.
+    """
+    sc = baselines.get("scenarios", {}).get(scenario_id, {}) or {}
+    return sc.get("_validated", True) is not False
+
+
+def staleness_warning(base_entry: Optional[dict], model: str, baselines: dict) -> Optional[str]:
+    """Return a staleness warning if the baseline's captured pin no longer matches.
+
+    Compares the pin the entry was captured against (``captured_pin``) to the current pin
+    (the reference pin for reference models, else the model slug). A mismatch means the
+    baseline was recorded against different weights and any delta is not attributable to
+    rf-mcp — the gate warns so the baseline gets recaptured.
+    """
+    if not base_entry:
+        return None
+    captured_pin = base_entry.get("captured_pin")
+    if model in baselines.get("reference_models", []):
+        current_pin = (baselines.get("reference_pin") or {}).get("model") or model
+    else:
+        current_pin = model
+    if captured_pin and current_pin and captured_pin != current_pin:
+        return (
+            f"stale baseline for {model}: captured against pin '{captured_pin}' "
+            f"but current pin is '{current_pin}' — recapture"
+        )
+    return None
 
 
 @dataclass
@@ -283,8 +409,15 @@ def evaluate(
     quorum = math.ceil(n / 2) if n else 1
     inconclusive = agg.n_valid < quorum
 
+    # A scenario the validation canary rejected (or never validated) is inform-only:
+    # regressions warn but never hard-fail (an invalid probe gives misleading signal).
+    validated = is_scenario_validated(scenario_id, baselines)
+
     # STEP 3/4/5 — regression + absolute floors (only if we have a quorum and a tier).
     base_entry = (baselines.get("scenarios", {}).get(scenario_id, {}) or {}).get(model)
+    _sw = staleness_warning(base_entry, model, baselines)
+    if _sw:
+        warn.append(_sw)
     if not inconclusive and tier in ("reference", "hard_gate", "inform"):
         if base_entry is None:
             msg = f"no baseline for ({model}, {scenario_id})"
@@ -293,25 +426,38 @@ def evaluate(
             else:
                 hard.append(msg + " (fail closed — capture a baseline)")
         else:
+            regressions: Dict[str, str] = {}
             for m in _GATE_METRICS:
                 tol = _tolerance(m, base_entry, baselines)
                 agg_v = getattr(agg, m)
                 base_v = float(base_entry.get(m, 0.0))
                 if agg_v < base_v - tol:
-                    line = (
+                    regressions[m] = (
                         f"regression {m}: {agg_v:.2f} < baseline {base_v:.2f} - tol {tol:.2f}"
                     )
-                    (warn if tier == "inform" else hard).append(line)
+            # tool_hit_rate must NEVER hard-fail ALONE — a floundering agent inflates it, so
+            # a lone hit-rate dip (no primary-signal drop) is not a reliable rf-mcp regression.
+            # Gameability of tool_hit_rate (it can RISE when the agent flounders, masking
+            # a regression) is handled by the scenario VALIDATION protocol — a scenario is
+            # only admitted when degradation drops its metric monotonically. So on a
+            # VALIDATED scenario a hit-rate drop is a legitimate regression and hard-gates;
+            # on a non-validated scenario every regression is demoted to warn.
+            demote = (tier == "inform") or (not validated)
+            for m, line in regressions.items():
+                if demote:
+                    suffix = "" if tier == "inform" else " (scenario not validated — inform only)"
+                    warn.append(line + suffix)
+                else:
+                    hard.append(line)
 
-        if tier == "reference":
+        if tier == "reference" and validated:
             floors = (baselines.get("absolute_floors", {}) or {}).get(model, {})
-            for m in ("tool_success_rate", "tool_hit_rate"):
-                if m in floors and getattr(agg, m) < float(floors[m]):
-                    hard.append(f"absolute floor breach {m}: {getattr(agg, m):.2f} < {floors[m]}")
-            if "task_completion_best_of_n" in floors and agg.completion_best_of_n < int(
-                floors["task_completion_best_of_n"]
-            ):
-                hard.append("reference model completed the task in ZERO of N runs")
+            for m, fv in floors.items():
+                if m == "task_completion_best_of_n":
+                    if agg.completion_best_of_n < int(fv):
+                        hard.append("reference model completed the task in ZERO of N runs")
+                elif hasattr(agg, m) and getattr(agg, m) < float(fv):
+                    hard.append(f"absolute floor breach {m}: {getattr(agg, m):.2f} < {fv}")
 
     if tier == "unknown":
         warn.append(f"model '{model}' has no tier in baselines — not gated")
@@ -335,12 +481,14 @@ def evaluate(
     )
 
 
-def capture_entry(runs: Sequence[RunMetrics]) -> Optional[dict]:
+def capture_entry(runs: Sequence[RunMetrics], provenance: Optional[dict] = None) -> Optional[dict]:
     """Build a baseline entry from capture runs, or None if the capture is invalid.
 
     Refuses to bless a broken state: aborts (returns None) if any run had an infra fault
-    or if there is no valid quorum. The aggregates + per-run values + IQR are stored so
-    the gate can widen tolerance to measured noise and reviewers can audit a change.
+    or if there is no valid quorum. Stores aggregates + per-run values + IQR (so the gate
+    can widen tolerance to measured noise) and any provenance (captured_at, captured_pin,
+    rf_mcp_git_sha) the caller supplies so staleness and the no-decrease ratchet are
+    auditable in the committed diff.
     """
     if any(r.infra_faults for r in runs):
         return None
@@ -348,21 +496,36 @@ def capture_entry(runs: Sequence[RunMetrics]) -> Optional[dict]:
     if not valid or len(valid) < math.ceil(len(runs) / 2):
         return None
     agg = aggregate(runs)
-    return {
+    # Refuse a DEGENERATE capture: if the model could not drive the tools at all
+    # (no completion or zero successful calls in aggregate), it is not a usable baseline
+    # — blessing it would make the gate vacuous (nothing can regress below zero). This is
+    # what caught qwen3-coder's flaky OpenRouter route (intermittent no-tool-call runs).
+    if agg.task_completion_rate <= 0.0 or agg.tool_success_rate <= 0.0:
+        return None
+    rate_metrics = (
+        "tool_success_rate", "tool_hit_rate", "first_try_selection_rate"
+    )
+    entry = {
         "tool_success_rate": round(agg.tool_success_rate, 4),
         "tool_hit_rate": round(agg.tool_hit_rate, 4),
         "task_completion_rate": round(agg.task_completion_rate, 4),
+        "first_try_selection_rate": round(agg.first_try_selection_rate, 4),
+        "artifact_execute_rate": round(agg.artifact_execute_rate, 4),
         "n_runs": len(runs),
         "per_run": {
-            m: [round(getattr(r, m), 4) for r in valid]
-            for m in ("tool_success_rate", "tool_hit_rate")
+            "tool_success_rate": [round(r.tool_success_rate, 4) for r in valid],
+            "tool_hit_rate": [round(r.tool_hit_rate, 4) for r in valid],
         },
         "iqr": {
             "tool_success_rate": round(iqr([r.tool_success_rate for r in valid]), 4),
             "tool_hit_rate": round(iqr([r.tool_hit_rate for r in valid]), 4),
+            "first_try_selection_rate": round(iqr([1.0 if r.first_try_ok else 0.0 for r in valid]), 4),
             "task_completion_rate": 0.0,
         },
     }
+    if provenance:
+        entry.update(provenance)
+    return entry
 
 
 def overall_verdict(verdicts: Sequence[GateVerdict]) -> str:

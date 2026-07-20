@@ -1,49 +1,60 @@
 {
   "meta": {
-    "schema_version": 1,
-    "description": "Per-model rf-mcp instruction-quality baselines for the agentic e2e gate. Lowering a number here is a human-reviewed ratchet: it means rf-mcp's tool descriptions / MCP instructions got measurably worse for a fixed model. Recapture with E2E_CAPTURE_BASELINE=1 (see tests/e2e/README.md).",
+    "schema_version": 2,
+    "description": "Per-model rf-mcp instruction-quality baselines for the agentic e2e gate. Lowering a number here is a human-reviewed ratchet: it means rf-mcp's tool descriptions / MCP instructions got measurably worse for a fixed model. Only scenarios marked _validated:true hard-gate (calibrated + monotonic-sensitive per the validation canary). Recapture with E2E_CAPTURE_BASELINE=1.",
     "aggregation": "median for rates, mean for completion",
-    "capture_command": "MINIMAX_API_KEY=... E2E_CAPTURE_BASELINE=1 E2E_RUNS=5 MINIMAX_MODELS=MiniMax-M3 uv run pytest tests/e2e/test_minimax_autonomous.py"
+    "capture_command": "MINIMAX_API_KEY=... E2E_CAPTURE_BASELINE=1 E2E_RUNS=5 E2E_MODELS=MiniMax-M3 uv run pytest tests/e2e/test_minimax_autonomous.py"
+  },
+  "reference_pin": {
+    "active_reference": "MiniMax-M3",
+    "aspirational_self_hostable_reference": "qwen/qwen3-coder-30b-a3b-instruct",
+    "license": "Apache-2.0",
+    "hf_revision": null,
+    "quant_sha256": null,
+    "chat_template_hash": null,
+    "sampling": {"temperature": 0.0},
+    "note": "GOAL: a pinnable self-hostable reference (qwen3-coder-30b, single 24GB GPU @ Q4) to kill baseline drift. FINDING (apply): OpenRouter DEFAULT routing for qwen3-coder is NOT reproducible — it intermittently returns prose with ZERO tool calls (N=3: success [0,0,1]). Realizing the self-hostable reference requires OpenRouter provider PINNING or actual self-hosting; until then MiniMax-M3 is the active reference (proven 3/3 reliable) and open-weight models run inform-only for trend."
   },
   "reference_models": [
     "MiniMax-M3"
   ],
   "hard_gate_models": [],
   "inform_models": [
-    "MiniMax-M2",
+    "MiniMax-M2.7",
     "MiniMax-M2.5",
-    "MiniMax-M2.7"
+    "MiniMax-M2",
+    "qwen/qwen3-coder-30b-a3b-instruct",
+    "mistralai/mistral-small-3.2-24b-instruct",
+    "z-ai/glm-4.7-flash",
+    "qwen/qwen-2.5-7b-instruct"
+  ],
+  "excluded_models": [
+    "meta-llama/llama-3.1-8b-instruct"
   ],
   "tolerances": {
     "tool_success_rate": 0.1,
     "tool_hit_rate": 0.1,
-    "task_completion_rate": 0.1
+    "task_completion_rate": 0.1,
+    "first_try_selection_rate": 0.1
   },
   "absolute_floors": {
     "MiniMax-M3": {
       "tool_success_rate": 0.7,
-      "tool_hit_rate": 0.8,
+      "first_try_selection_rate": 0.5,
       "task_completion_best_of_n": 1
     }
   },
   "scenarios": {
     "minimax_basic_list": {
+      "_validated": true,
       "MiniMax-M3": {
         "tool_success_rate": 1.0,
         "tool_hit_rate": 1.0,
         "task_completion_rate": 1.0,
         "n_runs": 3,
         "per_run": {
-          "tool_success_rate": [
-            1.0,
-            1.0,
-            1.0
-          ],
-          "tool_hit_rate": [
-            1.0,
-            1.0,
-            0.6667
-          ]
+          "tool_success_rate": [1.0, 1.0, 1.0],
+          "tool_hit_rate": [1.0, 1.0, 0.6667]
         },
         "iqr": {
           "tool_success_rate": 0.0,

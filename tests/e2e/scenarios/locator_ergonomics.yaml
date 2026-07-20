@@ -1,0 +1,28 @@
+id: locator_ergonomics
+name: Locator ergonomics guidance (display-free)
+description: |
+  Probe the locator-ergonomics instruction surface (get_locator_guidance) without a live
+  page: the agent should consult rf-mcp's locator cookbook before planning web selectors.
+context: web
+prompt: |
+  You are about to automate a login form (username field, password field, submit button)
+  on a web page using the Browser library. Before writing any selectors, use the MCP
+  tools to learn rf-mcp's recommended locator strategy and syntax for the Browser
+  library, then produce a test suite skeleton with well-formed locators for those three
+  elements. Do not open a real browser.
+expected_tools:
+  - tool_name: get_locator_guidance
+    min_calls: 1
+    max_calls: 3
+  - tool_name: build_test_suite
+    min_calls: 1
+    max_calls: 2
+expected_outcome: |
+  Consults get_locator_guidance for the Browser library and produces a suite skeleton
+  with recommended locator forms for the three form elements — no live browser.
+min_tool_hit_rate: 0.6
+tags:
+  - ergonomics
+  - locator-guidance
+  - display-free
+  - needs-validation

@@ -32,11 +32,31 @@ _ALLOWED_SERVICE_TIERS = {None, "auto", "default", "flex", "scale", "priority"}
 # MiniMax's OpenAI-compatible base URL. Use api.minimax.io (NOT .com — .com 401s).
 MINIMAX_BASE_URL = "https://api.minimax.io/v1"
 
+# OpenRouter's OpenAI-compatible base URL — routes open-weight (self-hostable) models.
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
 # Exact model IDs the MiniMax API expects (casing is significant).
 MINIMAX_MODELS: List[str] = ["MiniMax-M2", "MiniMax-M2.5", "MiniMax-M2.7", "MiniMax-M3"]
 
 # The most reliable MiniMax tier for a single-model smoke (strongest tool framing).
 MINIMAX_DEFAULT_MODEL = "MiniMax-M3"
+
+# The pinnable, self-hostable REFERENCE model (Apache-2.0). Verified to match MiniMax-M3
+# on the calibrated scenario while being pinnable to exact weights -> reproducible
+# baselines. See change autonomous-e2e-coverage / design.md.
+REFERENCE_MODEL = "qwen/qwen3-coder-30b-a3b-instruct"
+
+# Pin descriptor for the reference — records HOW the weights are pinned so a baseline
+# change is attributable to rf-mcp, not a silent model update. Filled in when a
+# self-hosted/pinned instance is used; the slug alone identifies the OpenRouter route.
+REFERENCE_PIN = {
+    "model": REFERENCE_MODEL,
+    "license": "Apache-2.0",
+    "hf_revision": None,      # HF commit SHA when self-hosted / pinned
+    "quant_sha256": None,     # quantized weight file hash when self-hosted
+    "chat_template_hash": None,
+    "sampling": {"temperature": 0.0},
+}
 
 
 def minimax_api_key() -> Optional[str]:
@@ -45,19 +65,35 @@ def minimax_api_key() -> Optional[str]:
     return key or None
 
 
+def openrouter_api_key() -> Optional[str]:
+    """Return the OpenRouter API key from the environment, or None if unset/blank."""
+    key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    return key or None
+
+
 def is_minimax_model(model_name: str) -> bool:
     """True when ``model_name`` targets a MiniMax model (case-insensitive prefix)."""
     return model_name.lower().startswith("minimax")
 
 
-class _MiniMaxSanitizingTransport(httpx.AsyncBaseTransport):
-    """Strip non-OpenAI-conformant fields from MiniMax chat-completion responses.
+def is_openrouter_model(model_name: str) -> bool:
+    """True when ``model_name`` is an OpenRouter slug (``vendor/model`` form).
+
+    OpenRouter model IDs contain a ``/`` (e.g. ``qwen/qwen3-coder-30b-a3b-instruct``),
+    which distinguishes them from MiniMax IDs and bare OpenAI IDs (``gpt-5-mini``).
+    """
+    return "/" in model_name and not is_minimax_model(model_name)
+
+
+class _ServiceTierSanitizingTransport(httpx.AsyncBaseTransport):
+    """Strip non-OpenAI-conformant ``service_tier`` from chat-completion responses.
 
     MiniMax's OpenAI-compatible endpoint returns ``service_tier="standard"`` (and a few
-    extra top-level keys). The extra keys are ignored by the openai SDK, but
-    ``service_tier="standard"`` fails its strict ``Literal`` validation and would abort
-    the run before any tool call. We drop that field (leaving it unset/None) so the
-    response parses. Non-JSON and streaming bodies pass through untouched.
+    extra top-level keys); some OpenRouter backends do likewise. The extra keys are
+    ignored by the openai SDK, but a ``service_tier`` outside its strict ``Literal`` set
+    aborts the run before any tool call. We drop that field (leaving it unset/None) so the
+    response parses. Non-JSON and streaming bodies pass through untouched. Applies to both
+    the MiniMax and OpenRouter providers.
     """
 
     def __init__(self, inner: httpx.AsyncBaseTransport) -> None:
@@ -93,22 +129,27 @@ class _MiniMaxSanitizingTransport(httpx.AsyncBaseTransport):
         )
 
 
-_SHARED_MINIMAX_CLIENT: Optional[httpx.AsyncClient] = None
+_SHARED_SANITIZING_CLIENT: Optional[httpx.AsyncClient] = None
 
 
-def _minimax_http_client() -> httpx.AsyncClient:
-    """Process-shared httpx client that sanitizes MiniMax responses for the openai SDK.
+def _sanitizing_http_client() -> httpx.AsyncClient:
+    """Process-shared httpx client that sanitizes responses for the openai SDK.
 
     Cached as a single instance (httpx clients are built for reuse) so a multi-model
     sweep does not leak one open connection pool per model — the client outlives all
-    the per-model providers and is reclaimed at interpreter exit.
+    the per-model providers and is reclaimed at interpreter exit. Shared by the MiniMax
+    and OpenRouter providers.
     """
-    global _SHARED_MINIMAX_CLIENT
-    if _SHARED_MINIMAX_CLIENT is None:
-        _SHARED_MINIMAX_CLIENT = httpx.AsyncClient(
-            transport=_MiniMaxSanitizingTransport(httpx.AsyncHTTPTransport())
+    global _SHARED_SANITIZING_CLIENT
+    if _SHARED_SANITIZING_CLIENT is None:
+        _SHARED_SANITIZING_CLIENT = httpx.AsyncClient(
+            transport=_ServiceTierSanitizingTransport(httpx.AsyncHTTPTransport())
         )
-    return _SHARED_MINIMAX_CLIENT
+    return _SHARED_SANITIZING_CLIENT
+
+
+# Backwards-compatible alias (older callers / experiment scripts import this name).
+_minimax_http_client = _sanitizing_http_client
 
 
 def _openai_model_cls():
@@ -123,34 +164,58 @@ def _openai_model_cls():
     return getattr(_openai, "OpenAIChatModel", None) or _openai.OpenAIModel
 
 
-def resolve_model(model_name: str) -> Any:
-    """Build a pydantic-ai model object for ``model_name``.
+def provider_for(model_name: str) -> str:
+    """Return the provider routing for a model slug: 'minimax' | 'openrouter' | 'openai'."""
+    if is_minimax_model(model_name):
+        return "minimax"
+    if is_openrouter_model(model_name):
+        return "openrouter"
+    return "openai"
 
-    MiniMax models are routed to the MiniMax OpenAI-compatible endpoint using
-    ``MINIMAX_API_KEY``; everything else uses the default (real OpenAI) provider,
-    preserving the existing behaviour for ``gpt-*`` models.
+
+def resolve_model(model_name: str) -> Any:
+    """Build a pydantic-ai model object for ``model_name``, routed by provider.
+
+    - MiniMax IDs (``MiniMax-*``)      -> MiniMax OpenAI-compatible endpoint (MINIMAX_API_KEY)
+    - OpenRouter slugs (``vendor/id``) -> OpenRouter endpoint (OPENROUTER_API_KEY)
+    - bare IDs (``gpt-5-mini``)        -> default OpenAI provider (unchanged behaviour)
+
+    Both custom providers reuse the service_tier sanitizing http client.
 
     Raises:
-        RuntimeError: if a MiniMax model is requested but ``MINIMAX_API_KEY`` is unset.
+        RuntimeError: if a routed provider's API key is unset.
     """
     model_cls = _openai_model_cls()
-    if is_minimax_model(model_name):
-        key = minimax_api_key()
-        if not key:
-            raise RuntimeError(
-                f"MiniMax model '{model_name}' requested but MINIMAX_API_KEY is not set"
-            )
-        from pydantic_ai.providers.openai import OpenAIProvider
+    provider = provider_for(model_name)
+    if provider == "openai":
+        return model_cls(model_name)
 
-        return model_cls(
-            model_name,
-            provider=OpenAIProvider(
-                base_url=MINIMAX_BASE_URL,
-                api_key=key,
-                http_client=_minimax_http_client(),
-            ),
+    from pydantic_ai.providers.openai import OpenAIProvider
+
+    if provider == "minimax":
+        key, base = minimax_api_key(), MINIMAX_BASE_URL
+        keyname = "MINIMAX_API_KEY"
+    else:  # openrouter
+        key, base = openrouter_api_key(), OPENROUTER_BASE_URL
+        keyname = "OPENROUTER_API_KEY"
+    if not key:
+        raise RuntimeError(f"Model '{model_name}' requires {keyname} but it is not set")
+
+    settings = None
+    # OpenRouter routes the SAME slug across providers at different quantizations/uptimes
+    # (non-reproducible; the cause of qwen3-coder's flaky no-tool-call runs). Pin a single
+    # provider (and thus quant) via OPENROUTER_PROVIDER for a reproducible reference.
+    pin = os.getenv("OPENROUTER_PROVIDER", "").strip() if provider == "openrouter" else ""
+    if pin:
+        from pydantic_ai.models.openai import OpenAIChatModelSettings
+
+        settings = OpenAIChatModelSettings(
+            extra_body={"provider": {"order": [pin], "allow_fallbacks": False}}
         )
-    return model_cls(model_name)
+    kwargs = {"provider": OpenAIProvider(base_url=base, api_key=key, http_client=_sanitizing_http_client())}
+    if settings is not None:
+        kwargs["settings"] = settings
+    return model_cls(model_name, **kwargs)
 
 
 def default_agent_model() -> str:
@@ -169,12 +234,12 @@ def default_agent_model() -> str:
 
 
 def real_llm_available() -> bool:
-    """True when a real LLM can drive the agent (OpenAI opt-in OR MiniMax key set)."""
+    """True when a real LLM can drive the agent (OpenAI opt-in, MiniMax, or OpenRouter)."""
     openai_ready = (
         os.getenv("USE_REAL_LLM", "false").lower() in ("true", "1", "yes")
         and bool(os.getenv("OPENAI_API_KEY", "").strip())
     )
-    return openai_ready or bool(minimax_api_key())
+    return openai_ready or bool(minimax_api_key()) or bool(openrouter_api_key())
 
 
 def minimax_models_to_test() -> List[str]:

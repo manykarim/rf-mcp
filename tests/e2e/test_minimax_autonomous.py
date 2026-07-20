@@ -34,23 +34,27 @@ import pytest
 
 from tests.e2e.agent_integration import MCPAgentIntegration
 from tests.e2e.fixtures import mcp_server, metrics_collector
+import subprocess
+from datetime import datetime, timezone
+
 from tests.e2e.minimax_support import (
-    MINIMAX_BASE_URL,
-    minimax_api_key,
-    minimax_models_to_test,
+    REFERENCE_MODEL,
+    provider_for,
+    real_llm_available,
 )
 from tests.e2e.models import ExpectedToolCall, Scenario
 from tests.e2e.quality_gate import (
+    capture_entry,
     compute_run_metrics,
     evaluate,
+    is_excluded_model,
     load_baselines,
     write_gate_report,
 )
-from tests.e2e.quality_gate import capture_entry
 
 pytestmark = pytest.mark.skipif(
-    not minimax_api_key(),
-    reason="Requires MINIMAX_API_KEY (MiniMax platform key) to be set",
+    not real_llm_available(),
+    reason="Requires a model API key (MINIMAX_API_KEY or OPENROUTER_API_KEY)",
 )
 
 _METRICS_DIR = Path(__file__).parent / "metrics" / "minimax"
@@ -91,6 +95,37 @@ def _runs_per_model() -> int:
         return 3
 
 
+def _models_to_test() -> list[str]:
+    """Models to run: E2E_MODELS / MINIMAX_MODELS env, else the baseline roster.
+
+    The roster (reference + hard_gate + inform, minus excluded) lives in the baseline
+    file so promoting/demoting a model is a reviewed config change.
+    """
+    for env in ("E2E_MODELS", "MINIMAX_MODELS"):
+        raw = os.getenv(env, "").strip()
+        if raw:
+            return [m.strip() for m in raw.split(",") if m.strip()]
+    b = load_baselines(_BASELINE_PATH)
+    roster = (
+        b.get("reference_models", []) + b.get("hard_gate_models", []) + b.get("inform_models", [])
+    )
+    excluded = set(b.get("excluded_models", []))
+    return [m for m in roster if m not in excluded] or [REFERENCE_MODEL]
+
+
+def _git_sha() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=Path(__file__).parent, text=True
+        ).strip()
+    except Exception:
+        return "unknown"
+
+
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _capture_mode() -> bool:
     return os.getenv("E2E_CAPTURE_BASELINE", "").lower() in ("1", "true", "yes")
 
@@ -102,7 +137,7 @@ async def _registered_tool_names(mcp_server) -> list[str]:
 
 async def _one_run(model_name: str, mcp_server, metrics_collector):
     """Execute the scenario once; return (RunMetrics, ScenarioResult, registered_tools)."""
-    request_limit = 30 if model_name.endswith("M3") else 18
+    request_limit = 24
     integration = MCPAgentIntegration(mcp_server, metrics_collector)
     agent = integration.create_agent_with_mcp_tools(model_name=model_name, use_test_model=False)
 
@@ -130,16 +165,23 @@ async def _one_run(model_name: str, mcp_server, metrics_collector):
 
 
 def _write_baseline_entry(model_name: str, entry: dict) -> None:
-    """Merge a captured entry for (model, scenario) into the baseline file."""
+    """Merge a captured entry for (model, scenario) into the baseline file, marking the
+    scenario validated (a capture only succeeds when the reference completed cleanly)."""
     data = json.loads(_BASELINE_PATH.read_text(encoding="utf-8"))
-    data.setdefault("scenarios", {}).setdefault(_BASIC_SCENARIO.id, {})[model_name] = entry
+    scen = data.setdefault("scenarios", {}).setdefault(_BASIC_SCENARIO.id, {})
+    scen.setdefault("_validated", True)
+    scen[model_name] = entry
     _BASELINE_PATH.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model_name", minimax_models_to_test())
-async def test_minimax_instruction_quality_gate(model_name, mcp_server, metrics_collector):
-    """Run a MiniMax model N times and enforce the instruction-quality gate (or capture)."""
+@pytest.mark.parametrize("model_name", _models_to_test())
+async def test_instruction_quality_gate(model_name, mcp_server, metrics_collector):
+    """Run a model N times and enforce the instruction-quality gate (or capture)."""
+    baselines = load_baselines(_BASELINE_PATH)
+    if is_excluded_model(model_name, baselines):
+        pytest.skip(f"{model_name} is excluded (broken tool-calling)")
+
     n = _runs_per_model()
     runs, last_result, registered = [], None, []
     for _ in range(n):
@@ -153,7 +195,12 @@ async def test_minimax_instruction_quality_gate(model_name, mcp_server, metrics_
         metrics_collector.save_metrics(last_result, _METRICS_DIR)
 
     if _capture_mode():
-        entry = capture_entry(runs)
+        provenance = {
+            "captured_at": _utcnow(),
+            "captured_pin": model_name,
+            "rf_mcp_git_sha": _git_sha(),
+        }
+        entry = capture_entry(runs, provenance=provenance)
         print(f"\n=== CAPTURE {model_name} ({_BASIC_SCENARIO.id}) ===")
         if entry is None:
             pytest.fail(
@@ -164,14 +211,13 @@ async def test_minimax_instruction_quality_gate(model_name, mcp_server, metrics_
         print(json.dumps(entry, indent=2))
         return
 
-    baselines = load_baselines(_BASELINE_PATH)
     verdict = evaluate(model_name, _BASIC_SCENARIO.id, runs, registered, baselines)
 
     safe = model_name.replace("/", "_")
     write_gate_report([verdict], _METRICS_DIR / f"gate_{safe}.json")
 
     print(f"\n=== Instruction-quality gate: {model_name} ===")
-    print(f"Endpoint: {MINIMAX_BASE_URL} | tier: {verdict.details.get('tier')}")
+    print(f"Provider: {provider_for(model_name)} | tier: {verdict.details.get('tier')}")
     print(f"Aggregate: {json.dumps(verdict.details.get('aggregate'))}")
     print(f"Verdict: {verdict.overall}")
     for w in verdict.warnings:

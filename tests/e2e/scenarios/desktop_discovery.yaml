@@ -1,0 +1,33 @@
+id: desktop_discovery
+name: Desktop automation discovery (display-free)
+description: |
+  Discover how rf-mcp guides desktop (PlatynUI) automation WITHOUT launching an app.
+  Probes the desktop discoverability surface: library recommendation, keyword search,
+  and locator guidance for the desktop context.
+context: desktop
+prompt: |
+  You need to plan a desktop UI automation for a native application. Without running or
+  launching anything, use the available MCP tools to find out which library rf-mcp
+  recommends for desktop automation, discover the relevant keywords for clicking and
+  reading desktop controls, and learn how desktop element locators are written.
+  Summarize what you found.
+expected_tools:
+  - tool_name: recommend_libraries
+    min_calls: 1
+    max_calls: 3
+  - tool_name: find_keywords
+    min_calls: 1
+    max_calls: 4
+  - tool_name: get_locator_guidance
+    min_calls: 0
+    max_calls: 3
+expected_outcome: |
+  Identifies PlatynUI (or the desktop library) via recommend_libraries, finds desktop
+  interaction keywords via find_keywords, and reports desktop locator syntax — with no
+  execution/launch.
+min_tool_hit_rate: 0.6
+tags:
+  - desktop
+  - discovery
+  - display-free
+  - needs-validation

@@ -1,0 +1,31 @@
+id: data_driven_generic
+name: Generic data-driven suite (display-free)
+description: |
+  Build a data-driven ([Template]) Robot Framework suite over pure BuiltIn keywords —
+  no browser/display. Probes the data-driven build instruction surface (build_test_suite
+  templates + add_data_row) that the existing DD scenarios only cover with a display.
+context: generic
+prompt: |
+  Create a data-driven Robot Framework test that checks string length for several inputs.
+  For each of these (text, expected length) pairs — ("apple", 5), ("kiwi", 4),
+  ("banana", 6) — the test should verify the text has the expected length. Produce a
+  final data-driven test suite that runs the same logic over all three rows.
+expected_tools:
+  - tool_name: analyze_scenario
+    min_calls: 1
+    max_calls: 1
+  - tool_name: execute_step
+    min_calls: 1
+    max_calls: 12
+  - tool_name: build_test_suite
+    min_calls: 1
+    max_calls: 2
+expected_outcome: |
+  A data-driven suite (template keyword + 3 data rows) that verifies string lengths, built
+  via build_test_suite, using only BuiltIn/String keywords (no display).
+min_tool_hit_rate: 0.6
+tags:
+  - data-driven
+  - generic
+  - display-free
+  - needs-validation
