@@ -73,8 +73,12 @@ DISCOVERY_TOOLS = frozenset(
 )
 
 # Metrics that can trigger a HARD regression. task_completion + first_try are the PRIMARY
-# (robust) signals; tool_success_rate is robust; tool_hit_rate is included but guarded so
-# it can never HARD-fail ALONE (it is inflated by a floundering agent — see evaluate()).
+# (robust) signals — a floundering agent cannot inflate them. tool_success_rate is robust.
+# tool_hit_rate IS gate-eligible but only on VALIDATED scenarios: its gameability (it can
+# RISE when the agent flounders, masking a regression) is handled by the scenario
+# validation protocol (a scenario is only admitted when degradation drops its metric),
+# and noise-driven dips are absorbed by the IQR-widened tolerance (tol = max(0.10,
+# IQR@capture)) — a metric that was noisy at capture gets a wider band automatically.
 _PRIMARY_GATE_METRICS = ("task_completion_rate", "first_try_selection_rate", "tool_success_rate")
 _GATE_METRICS = _PRIMARY_GATE_METRICS + ("tool_hit_rate",)
 _TOL_FLOOR = 0.10
@@ -352,7 +356,8 @@ def staleness_warning(base_entry: Optional[dict], model: str, baselines: dict) -
         return None
     captured_pin = base_entry.get("captured_pin")
     if model in baselines.get("reference_models", []):
-        current_pin = (baselines.get("reference_pin") or {}).get("model") or model
+        pin = baselines.get("reference_pin") or {}
+        current_pin = pin.get("active_reference") or pin.get("model") or model
     else:
         current_pin = model
     if captured_pin and current_pin and captured_pin != current_pin:
@@ -427,7 +432,15 @@ def evaluate(
                 hard.append(msg + " (fail closed — capture a baseline)")
         else:
             regressions: Dict[str, str] = {}
+            missing_metrics: List[str] = []
             for m in _GATE_METRICS:
+                if m not in base_entry:
+                    # A gate metric absent from the baseline has base_v=0, so it can never
+                    # regress — the ratchet is silently inactive for it. Surface that so a
+                    # pre-metric baseline (e.g. an M3 entry captured before first_try
+                    # existed) gets recaptured instead of quietly not gating.
+                    missing_metrics.append(m)
+                    continue
                 tol = _tolerance(m, base_entry, baselines)
                 agg_v = getattr(agg, m)
                 base_v = float(base_entry.get(m, 0.0))
@@ -435,6 +448,11 @@ def evaluate(
                     regressions[m] = (
                         f"regression {m}: {agg_v:.2f} < baseline {base_v:.2f} - tol {tol:.2f}"
                     )
+            if missing_metrics and tier in ("reference", "hard_gate"):
+                warn.append(
+                    f"baseline for ({model}, {scenario_id}) missing gate metric(s) "
+                    f"{missing_metrics} — regression ratchet inactive for them; recapture"
+                )
             # tool_hit_rate must NEVER hard-fail ALONE — a floundering agent inflates it, so
             # a lone hit-rate dip (no primary-signal drop) is not a reliable rf-mcp regression.
             # Gameability of tool_hit_rate (it can RISE when the agent flounders, masking
@@ -462,10 +480,14 @@ def evaluate(
     if tier == "unknown":
         warn.append(f"model '{model}' has no tier in baselines — not gated")
 
-    if inconclusive:
-        overall = "inconclusive"
-    elif hard:
+    # HARD failures take precedence over inconclusive: a definite infra/registration
+    # fault is a FAIL, not "couldn't determine" — even when the same faults invalidated
+    # the run set (dropping n_valid below quorum). Only when there are no hard failures
+    # does a lack of quorum become inconclusive.
+    if hard:
         overall = "fail"
+    elif inconclusive:
+        overall = "inconclusive"
     elif warn:
         overall = "warn"
     else:

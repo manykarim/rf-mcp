@@ -269,18 +269,20 @@ jobs:
         if: env.SKIP_MINIMAX != 'true'
         run: mkdir -p tests/e2e/metrics/minimax results
 
-      # Runs the autonomous quality gate across all four MiniMax tiers. HARD failures
-      # (real rf-mcp regressions) fail the job; per-model framing flakiness warns only.
-      - name: Run MiniMax autonomous matrix
+      # Runs the instruction-quality gate across the full roster (reference MiniMax-M3 +
+      # inform tiers: MiniMax M2.x + OpenRouter open-weight). A reference HARD failure or
+      # an infra fault fails the job (NOT continue-on-error); inform-tier regressions only
+      # warn (the test asserts overall not in fail/inconclusive, which inform never hits).
+      - name: Run instruction-quality matrix
         if: env.SKIP_MINIMAX != 'true'
         run: |
           uv run pytest tests/e2e/test_minimax_autonomous.py -v -s \
             --junitxml=results/minimax-autonomous.xml
-        continue-on-error: true
-        timeout-minutes: 40
+        timeout-minutes: 60
 
-      # Also exercise the shared pydantic-ai autonomous suite under MiniMax (M3).
-      - name: Run shared autonomous suite under MiniMax
+      # Supplementary: the shared pydantic-ai autonomous suite under M3. Informational
+      # (continue-on-error) — the authoritative reference gate is the matrix step above.
+      - name: Run shared autonomous suite under MiniMax (informational)
         if: env.SKIP_MINIMAX != 'true'
         env:
           E2E_AGENT_MODEL: 'MiniMax-M3'

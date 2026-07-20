@@ -180,9 +180,9 @@ def _baselines(**over):
         "tolerances": {"tool_success_rate": 0.1, "tool_hit_rate": 0.1, "task_completion_rate": 0.1},
         "absolute_floors": {"MiniMax-M3": {"tool_success_rate": 0.7, "first_try_selection_rate": 0.5, "task_completion_best_of_n": 1}},
         "scenarios": {"s": {
-            "MiniMax-M3": {"tool_success_rate": 1.0, "tool_hit_rate": 1.0, "task_completion_rate": 1.0, "iqr": {}},
-            "MiniMax-M2.7": {"tool_success_rate": 0.8, "tool_hit_rate": 0.7, "task_completion_rate": 0.8, "iqr": {}},
-            "MiniMax-M2": {"tool_success_rate": 0.5, "tool_hit_rate": 0.4, "task_completion_rate": 0.5, "iqr": {}},
+            "MiniMax-M3": {"tool_success_rate": 1.0, "tool_hit_rate": 1.0, "task_completion_rate": 1.0, "first_try_selection_rate": 1.0, "iqr": {}},
+            "MiniMax-M2.7": {"tool_success_rate": 0.8, "tool_hit_rate": 0.7, "task_completion_rate": 0.8, "first_try_selection_rate": 0.8, "iqr": {}},
+            "MiniMax-M2": {"tool_success_rate": 0.5, "tool_hit_rate": 0.4, "task_completion_rate": 0.5, "first_try_selection_rate": 0.5, "iqr": {}},
         }},
     }
     b.update(over)
@@ -393,3 +393,21 @@ def test_openrouter_provider_pinning(monkeypatch):
     body = settings.get("extra_body") if hasattr(settings, "get") else None
     assert body and body.get("provider", {}).get("order") == ["Novita"]
     assert body["provider"]["allow_fallbacks"] is False
+
+
+def test_infra_fault_is_fail_not_inconclusive_even_without_quorum():
+    # A single infra-fault run (n=1) invalidates the only run -> no quorum. HARD infra
+    # must still make overall='fail', not 'inconclusive' (a crash is a fail, not "unknown").
+    infra = _rm([_record("execute_step", False, error="maximum recursion depth exceeded")])
+    v = evaluate("MiniMax-M3", "s", [infra], _ALL_TOOLS, _baselines())
+    assert v.overall == "fail"
+    assert any("infra fault" in h for h in v.hard_failures)
+
+
+def test_missing_gate_metric_warns_on_reference():
+    # A reference baseline lacking a gate metric (e.g. first_try) must WARN (ratchet
+    # inactive), not silently skip.
+    b = _baselines()
+    b["scenarios"]["s"]["MiniMax-M3"] = {"tool_success_rate": 1.0, "task_completion_rate": 1.0, "iqr": {}}
+    v = evaluate("MiniMax-M3", "s", [_healthy(), _healthy(), _healthy()], _ALL_TOOLS, b)
+    assert any("missing gate metric" in w for w in v.warnings)
