@@ -8309,6 +8309,21 @@ def _protect_mcp_stdout() -> None:
     except (ImportError, AttributeError):
         pass  # RF not installed or API changed
 
+    # Phase 4: Drop RF's global console logger (change: mcp-stdio-log-safety).
+    # robot.output.logger.LOGGER registers a VerboseOutput console logger at
+    # import time, BOUND to the real sys.__stdout__ (fd 1) captured then — before
+    # this function's Phase-2 swap. Per-context Output(console='none') does NOT
+    # unregister it, so the first start_test broadcast writes the padded test-name
+    # banner ("MCP_Test_<sid>" + spaces, no newline) straight to fd 1, corrupting
+    # the JSON-RPC stream and hanging the client on its first keyword until timeout.
+    # Unregister it outright: rf-mcp never wants RF console output on any fd.
+    try:
+        from robot.output.logger import LOGGER as _RF_LOGGER
+
+        _RF_LOGGER.unregister_console_logger()
+    except (ImportError, AttributeError):
+        pass  # RF not installed or API changed
+
 
 # Onboarding subcommands handled before the server starts (see robotmcp.onboarding).
 # Kept as literals here so importing server.py does not pull in the installer.

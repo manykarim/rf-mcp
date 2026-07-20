@@ -51,6 +51,37 @@ def test_console_none_uses_nooutput():
     assert isinstance(inner, NoOutput)
 
 
+# ── cold-start banner leak: RF's global console logger must be unregistered ──
+def test_protect_mcp_stdout_unregisters_rf_console_logger():
+    """Regression: RF's global LOGGER registers a VerboseOutput console logger at
+    import time, bound to the real fd 1. Per-context Output(console='none') does
+    NOT remove it, so the first start_test broadcast wrote the padded test-name
+    banner ('MCP_Test_<sid>' + spaces, no newline) to fd 1 — corrupting the
+    JSON-RPC stream and hanging the client on its first keyword until timeout.
+    _protect_mcp_stdout() must drop that console logger outright."""
+    import sys
+    from robot.output.logger import LOGGER
+
+    saved_stdout = sys.__stdout__
+    saved_console = LOGGER._console_logger
+    try:
+        # ensure a console logger is present to begin with (RF default)
+        if LOGGER._console_logger is None:
+            LOGGER.register_console_logger()
+        assert LOGGER._console_logger is not None
+
+        from robotmcp.server import _protect_mcp_stdout
+
+        _protect_mcp_stdout()
+        assert LOGGER._console_logger is None, (
+            "RF global console logger must be unregistered so no console banner "
+            "can reach fd 1 (the JSON-RPC channel)"
+        )
+    finally:
+        sys.__stdout__ = saved_stdout
+        LOGGER._console_logger = saved_console
+
+
 # ── §5.3 logging setup: default WARNING, env override, formatter ────────────
 def test_configure_logging_default_warning(monkeypatch):
     monkeypatch.delenv("ROBOTMCP_LOG_LEVEL", raising=False)
