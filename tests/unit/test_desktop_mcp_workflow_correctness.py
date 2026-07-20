@@ -177,6 +177,21 @@ class TestDesktopContextRouting:
             "Open the website in chrome and click the link"
         ) == PlatformType.WEB
 
+    def test_platform_detector_app_substring_in_apple_not_mobile(self):
+        # Regression: the mobile token 'app' is a SUBSTRING of 'apple', and the
+        # fallback scoring used substring matching — so a generic data scenario
+        # ("a list of fruits: apple, banana, cherry") scored mobile and was
+        # auto-configured with AppiumLibrary. Word-boundary matching keeps 'app'
+        # from matching inside 'apple'/'application', so this stays on the
+        # (non-mobile) default path.
+        from robotmcp.components.execution.session_manager import SessionManager
+        from robotmcp.models.session_models import PlatformType
+
+        sm = SessionManager()
+        assert sm.detect_platform_from_scenario(
+            "Create a list of three fruits (apple, banana, cherry) and verify its length is 3"
+        ) == PlatformType.WEB
+
     # Site (c): configure_from_scenario
     def test_configure_from_scenario_desktop_context(self):
         from robotmcp.models.session_models import (

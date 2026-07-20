@@ -331,9 +331,22 @@ class SessionManager:
                        'json', 'xml', 'http', 'graphql']
         
         # Count keyword matches
-        mobile_score = sum(1 for keyword in mobile_keywords if keyword in scenario_lower)
-        web_score = sum(1 for keyword in web_keywords if keyword in scenario_lower)
-        api_score = sum(1 for keyword in api_keywords if keyword in scenario_lower)
+        # Word-boundary matching, not substring: the short tokens above ('app',
+        # 'ios', 'tap', ...) otherwise false-match inside ordinary words — e.g.
+        # 'app' inside 'apple'/'application', 'ios' inside 'kiosk' — wrongly
+        # routing a generic/data scenario ("a list of fruits: apple, banana ...")
+        # to a mobile (AppiumLibrary) session. Explicit mobile signals are already
+        # handled by _desktop_vs_mobile_precedence() above; this is the fallback.
+        def _kw_hits(keywords: list) -> int:
+            return sum(
+                1
+                for kw in keywords
+                if re.search(rf"\b{re.escape(kw)}\b", scenario_lower)
+            )
+
+        mobile_score = _kw_hits(mobile_keywords)
+        web_score = _kw_hits(web_keywords)
+        api_score = _kw_hits(api_keywords)
         
         # Determine platform based on scores
         if mobile_score > web_score and mobile_score > api_score:
