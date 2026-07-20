@@ -105,6 +105,60 @@ MINIMAX_API_KEY=... E2E_CAPTURE_BASELINE=1 E2E_RUNS=5 E2E_MODELS=MiniMax-M3 \
 Per-model metrics + gate verdicts (with provenance: `captured_at`, `captured_pin`,
 `rf_mcp_git_sha`) are written to `metrics/minimax/` and the baseline file.
 
+### Experiment findings — self-hostable model calibration (2026-07-20)
+
+Capable self-hostable (24–32 GB) models were run across four technologies
+(data-driven / XML / suite-exec / API), OpenRouter provider-pinned to ≥98%-uptime
+fp8/bf16 backends. Tool-call reliability ranking (s=success, c=completed):
+
+| Model (pinned) | data-driven | xml | suite-exec | API | tier |
+|---|---|---|---|---|---|
+| `MiniMax-M3` (ref) | s0.77 c✓ | s1.00 | s1.00 c✓ | s0.98 | reference |
+| `glm-4.7-flash` (DeepInfra) | s1.00 c✓ | s0.93 | s0.89 c✓ | s0.54 | inform *(top promotion candidate)* |
+| `qwen3-coder-30b` (Novita) | s0.91 c✓ | s0.86 c✓ | s1.00 c✓ | s0.00 ⚠ | inform *(aspirational ref; API no-call flake)* |
+| `mistral-small-24b` (DeepInfra) | s0.46 | s0.38 *(78 calls)* | s0.83 c✓ | s0.00 | inform *(weak/flails)* |
+| `gemma-3-27b` (DeepInfra) | s0.00 | s0.00 | s0.00 | s0.00 | **excluded** *(zero tool calls)* |
+
+Notes: `gemma-3-27b` emits **zero tool calls** everywhere (broken, like `llama-3.1-8b`) →
+excluded. `qwen3-coder-30b`'s API no-call reproduces the routing flake even under a
+provider pin. No model is promotable to hard-gate on one run each — promotion needs
+N≥5 reliable captures, ideally self-hosted. Technology difficulty: suite-exec < data-driven
+< xml < **API** (the instruction-sensitive surface).
+
+### Experiment findings — scenario validation & the degradation lever (2026-07-20)
+
+The canary **rejected all 3 new scenarios** (`desktop_discovery`, `data_driven_generic`,
+`locator_ergonomics`) as INVALID probes — the validation protocol working correctly. Root
+cause: **blanking tool *descriptions* is too weak a degradation when the tool *names* are
+self-explanatory** (`find_keywords`, `build_test_suite`…) — a capable model infers usage
+from the name, so degradation is insensitive (one even *inverted*). A scenario is a valid
+probe only when correct usage depends on **non-obvious** instructions.
+
+Stronger degradation levers (for future scenario validation):
+1. Blank only the **`session_id` arg prose** (session-threading is the most
+   name-underdetermined contract — the same surface that makes `basic_list` sensitive).
+2. Stub the **runtime output** of `get_locator_guidance` / requests-guidance (the
+   non-obvious knowledge is in the returned cookbook, not the tool name).
+3. Remove **one specific fact** (e.g. `EVALUATE_VAR_RULE`, the `[Template]` recipe).
+4. Inject a **plausible-*wrong*** instruction (adversarial > absent — absent lets
+   name-obvious tools self-recover).
+
+Best valid-probe candidate: **`restful_booker_api`** — RequestsLibrary response access
+(`${resp.json()}`, `json=` not `data=`, `…On Session`) is genuinely non-obvious. Its
+completion definition was also fixed (`build_test_suite` **OR** `run_test_suite` OR an
+asserting flow — see `compute_run_metrics` OR-groups) so a drive-and-assert run isn't
+scored incomplete for not building a suite.
+
+**Open problem — sensitive degradation is hard.** A re-canary of `suite_validation` with a
+plausible-*wrong* instruction *also* inverted (wrong: comp 1.00 vs good: comp 0.50) because
+the wrong instruction accidentally *simplified* the flow. A degradation only yields the
+required monotonic drop when it makes the agent emit *failing* calls (e.g. a false
+`session_id` contract on a scenario that truly threads it) — not merely absent or simpler
+guidance. So far only `minimax_basic_list` is a validated probe; admitting a non-toy one
+needs a lever tied to a genuinely failing contract (the requests-guidance stub on the API
+scenario is the leading candidate). The validation protocol has correctly rejected 4
+candidate probes to date — that refusal is the feature.
+
 ## CI
 
 | Workflow / job | Gate | What runs |

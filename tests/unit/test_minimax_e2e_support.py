@@ -411,3 +411,41 @@ def test_missing_gate_metric_warns_on_reference():
     b["scenarios"]["s"]["MiniMax-M3"] = {"tool_success_rate": 1.0, "task_completion_rate": 1.0, "iqr": {}}
     v = evaluate("MiniMax-M3", "s", [_healthy(), _healthy(), _healthy()], _ALL_TOOLS, b)
     assert any("missing gate metric" in w for w in v.warnings)
+
+
+def test_validate_scenario_rejects_low_first_try_calibration():
+    # good completes but reference does NOT reliably pick the right tool first -> uncalibrated
+    from tests.e2e.quality_gate import aggregate as _agg, validate_scenario as _vs
+    # first call is a non-expected tool -> first_try_ok False in all good runs
+    bad_first = _rm([_record("get_session_state", True), _record("analyze_scenario", True), _record("build_test_suite", True)])
+    good = _agg([bad_first, bad_first, bad_first])
+    degraded = _agg([_degraded(), _degraded(), _degraded()])
+    ok, reason = _vs(good, degraded)
+    assert ok is False and "first_try" in reason
+
+
+def test_validate_scenario_reports_inversion():
+    # degraded BETTER than good on all metrics -> INVERTED (the desktop_discovery failure mode)
+    from tests.e2e.quality_gate import aggregate as _agg, validate_scenario as _vs
+    weak_good = _rm([_record("analyze_scenario", True), _record("execute_step", False, error="No keyword X"), _record("build_test_suite", True)], hit_rate=0.6)
+    strong_degraded = _rm([_record("analyze_scenario", True), _record("execute_step", True), _record("build_test_suite", True)], hit_rate=1.0)
+    good = _agg([weak_good, weak_good, weak_good])
+    degraded = _agg([strong_degraded, strong_degraded, strong_degraded])
+    ok, reason = _vs(good, degraded)
+    assert ok is False and "INVERTED" in reason
+
+
+def test_completion_or_group():
+    # OR-group completion: (build_test_suite OR run_test_suite) satisfies the terminal artifact
+    from tests.e2e.quality_gate import compute_run_metrics
+    calls = [_record("analyze_scenario", True), _record("run_test_suite", True)]
+    rm = compute_run_metrics(_result(calls), _ALL_TOOLS,
+        expected_tool_names=_EXPECTED,
+        completion_tool_names=["analyze_scenario", ["build_test_suite", "run_test_suite"]])
+    assert rm.completed is True
+    # neither terminal artifact -> not completed
+    calls2 = [_record("analyze_scenario", True), _record("execute_step", True)]
+    rm2 = compute_run_metrics(_result(calls2), _ALL_TOOLS,
+        expected_tool_names=_EXPECTED,
+        completion_tool_names=["analyze_scenario", ["build_test_suite", "run_test_suite"]])
+    assert rm2.completed is False

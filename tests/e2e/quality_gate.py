@@ -163,8 +163,18 @@ def compute_run_metrics(
     unexpected = sum(1 for tc in calls if tc.tool_name not in allowed)
 
     succeeded_by_tool = {tc.tool_name for tc in calls if tc.success}
+
+    # completion_tool_names entries may be OR-groups (a list/tuple): the group is met when
+    # ANY member succeeded. This lets a drive-and-assert scenario (e.g. the API scenario)
+    # define a terminal artifact as build_test_suite OR run_test_suite OR an asserting
+    # flow, instead of being scored incomplete for not calling one specific tool.
+    def _group_ok(entry) -> bool:
+        if isinstance(entry, (list, tuple, set, frozenset)):
+            return any(m in succeeded_by_tool for m in entry)
+        return entry in succeeded_by_tool
+
     completed = bool(completion_tool_names) and all(
-        name in succeeded_by_tool for name in completion_tool_names
+        _group_ok(entry) for entry in completion_tool_names
     )
 
     # first-try: the FIRST call is a right tool and succeeds (un-gameable by later flailing)
@@ -305,31 +315,42 @@ def validate_scenario(
     degraded: "AggMetrics",
     *,
     min_completion: float = 0.5,
+    min_first_try: float = 0.5,
     min_drop: float = 0.10,
 ) -> tuple[bool, str]:
     """Decide whether a scenario is a VALID instruction-quality probe.
 
     A scenario may hard-gate only if it is:
-    - CALIBRATED: the reference model completes it on good rf-mcp
-      (``good.task_completion_rate >= min_completion``) so there is headroom to drop; and
+    - CALIBRATED: the reference model reliably completes it on good rf-mcp
+      (``good.task_completion_rate >= min_completion`` AND
+      ``good.first_try_selection_rate >= min_first_try``) so there is headroom to drop; and
     - SENSITIVE: degrading the relevant instruction surface lowers SOME quality metric
       monotonically (``good - degraded >= min_drop`` for at least one sensitivity metric).
 
-    The custom-library-discovery experiment fails BOTH (good completion 0.0; degradation
-    made hit-rate rise) — this catches exactly that class of invalid probe.
+    Empirically (2026-07-20) three discovery/data-driven scenarios failed this: their
+    expected tools have self-explanatory names, so blanking descriptions was insensitive
+    (one even INVERTED — degraded > good on every metric). This guard refuses exactly that
+    class. The thresholds mirror the reference absolute_floors (completion best-of-1,
+    first_try 0.5), so a scenario the reference cannot reliably drive cannot be admitted.
     """
     if good.task_completion_rate < min_completion:
         return False, (
             f"uncalibrated: good task_completion {good.task_completion_rate:.2f} "
             f"< {min_completion:.2f} (no headroom to detect a drop)"
         )
-    best_drop = max(
-        getattr(good, m) - getattr(degraded, m) for m in _SENSITIVITY_METRICS
-    )
-    if best_drop < min_drop:
+    if good.first_try_selection_rate < min_first_try:
         return False, (
-            f"insensitive: no metric dropped >= {min_drop:.2f} under degradation "
-            f"(best drop {best_drop:.2f}) — degradation is not observable"
+            f"uncalibrated: good first_try {good.first_try_selection_rate:.2f} "
+            f"< {min_first_try:.2f} (reference does not reliably pick the right tool first)"
+        )
+    drops = {m: getattr(good, m) - getattr(degraded, m) for m in _SENSITIVITY_METRICS}
+    best_drop = max(drops.values())
+    if best_drop < min_drop:
+        inverted = all(d <= 0 for d in drops.values())
+        why = "INVERTED (degradation improved every metric)" if inverted else "no metric dropped enough"
+        return False, (
+            f"insensitive: {why}; best drop {best_drop:.2f} < {min_drop:.2f} — "
+            f"degradation is not observable (drops={ {m: round(d,2) for m,d in drops.items()} })"
         )
     return True, f"validated (calibrated + sensitive; best drop {best_drop:.2f})"
 
