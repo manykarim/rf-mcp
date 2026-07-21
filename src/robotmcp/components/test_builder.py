@@ -110,6 +110,39 @@ class GeneratedTestSuite:
     column_headers: Optional[List[str]] = None
 
 
+# change: fix-suite-arg-escape-roundtrip. RF recognizes only \n \r \t (+ \xHH \uHHHH
+# \UHHHHHHHH) as escapes and drops the backslash for anything else. Preserve those and the
+# syntax escapes rf-mcp/agents rely on; double every other literal backslash so RF's parser
+# recovers the value. Idempotent: an already-doubled \\ is kept as a pair.
+_RF_ESCAPE_PRESERVE_NEXT = frozenset("nrtxuU=#$@&%{} ")
+
+
+def _escape_aware_backslashes(s: str) -> str:
+    """Double literal backslashes that RF would drop, preserving real/intended escapes."""
+    if "\\" not in s:
+        return s
+    out: List[str] = []
+    i, n = 0, len(s)
+    while i < n:
+        c = s[i]
+        if c == "\\":
+            nxt = s[i + 1] if i + 1 < n else ""
+            if nxt == "\\":
+                out.append("\\\\")      # keep an existing \\ pair verbatim (idempotent)
+                i += 2
+                continue
+            if nxt in _RF_ESCAPE_PRESERVE_NEXT:
+                out.append("\\")        # recognized/intended escape — do not double
+                i += 1
+                continue
+            out.append("\\\\")          # unrecognized escape / trailing lone \ — double it
+            i += 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 class TestBuilder:
     """Builds Robot Framework test suites from successful execution steps."""
 
@@ -4104,12 +4137,17 @@ class TestBuilder:
         # RF-escape-safe. Without this, RF's escape processing corrupts a literal
         # backslash path (C:\WINDOWS -> C:WINDOWS; C:\name -> embedded newline).
         # Only the unambiguous drive-letter shape is touched; flags (/w), URLs
-        # (https://…), regexes (\d+), UNC paths (\\srv) and variable references do NOT
-        # match and are left unchanged. (Broader backslash round-trip escaping for
-        # regex/relative/UNC values is deferred — see change fix-suite-path-escaping
-        # design: it needs escape-aware handling to stay idempotent, not blanket doubling.)
+        # (https://…) and variable references do NOT match and are left unchanged.
         if re.match(r"^[A-Za-z]:[\\/]", arg):
             arg = arg.replace("\\", "/")
+
+        # Escape-aware backslash round-trip (change: fix-suite-arg-escape-roundtrip). RF
+        # drops the backslash for every escape it does not recognize (\d -> d, \W -> W), so
+        # a literal backslash (regex, relative Windows path) is corrupted on parse. Double
+        # a backslash ONLY where RF would drop it; PRESERVE RF's real escapes (\n \r \t,
+        # \x \u \U), an already-doubled \\, and the intended syntax escapes (\= \# \$ \{ \}
+        # \@ \& \% \<space>). Idempotent, and leaves ${..} references (no backslash) intact.
+        arg = _escape_aware_backslashes(arg)
 
         # Escape literal newlines/tabs so they don't break the .robot line structure.
         # RF uses \n / \t as escape sequences, so we emit \\n / \\t in the text
