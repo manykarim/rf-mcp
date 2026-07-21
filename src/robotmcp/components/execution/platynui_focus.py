@@ -1052,7 +1052,7 @@ def x11_window_present(
     try:
         proc = subprocess.run(
             [sys.executable, "-c", _X11_WINDOW_PROBE_SRC, *names],
-            capture_output=True, text=True, timeout=5, env=env,
+            capture_output=True, text=True, timeout=5, env=env, stdin=subprocess.DEVNULL,
         )
         out = (proc.stdout or "").strip()
         return out if out in ("present", "absent", "unknown") else "unknown"
@@ -1143,7 +1143,7 @@ def x11_display_pids() -> Optional[frozenset]:
     try:
         proc = subprocess.run(
             [sys.executable, "-c", _X11_PID_LIST_PROBE_SRC],
-            capture_output=True, text=True, timeout=5, env=dict(os.environ),
+            capture_output=True, text=True, timeout=5, env=dict(os.environ), stdin=subprocess.DEVNULL,
         )
         out = (proc.stdout or "").strip()
         if not out or out == "unknown":

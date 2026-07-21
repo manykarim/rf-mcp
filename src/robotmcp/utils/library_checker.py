@@ -97,9 +97,12 @@ class LibraryAvailabilityChecker:
     def check_pip_package_installed(self, package_name: str) -> bool:
         """Check if a pip package is installed using pip list."""
         try:
+            # stdin=DEVNULL: never inherit the MCP server's stdin — an inherited
+            # synchronous stdin pipe deadlocks this child on Windows behind the server's
+            # pending JSON-RPC read (change: fix-mcp-subprocess-stdin-deadlock).
             result = subprocess.run([
                 sys.executable, '-m', 'pip', 'list', '--format=freeze'
-            ], capture_output=True, text=True, timeout=10)
+            ], capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
             
             if result.returncode == 0:
                 installed_packages = result.stdout.lower()

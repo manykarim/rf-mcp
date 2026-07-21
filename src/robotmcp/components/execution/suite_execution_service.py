@@ -13,6 +13,7 @@ import json
 import io
 import subprocess
 import sys
+import signal
 from contextlib import redirect_stdout, redirect_stderr
 
 try:
@@ -29,6 +30,37 @@ except ImportError:
 from robotmcp.models.config_models import ExecutionConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _kill_process_tree(proc: "subprocess.Popen") -> None:
+    """Best-effort terminate a child process AND all of its descendants.
+
+    change: fix-mcp-subprocess-stdin-deadlock. A plain ``proc.kill()`` reaps only the
+    direct child; a surviving grandchild (e.g. the uv-trampoline launcher's real
+    interpreter) keeps the captured stdout/stderr pipes open and hangs the post-kill
+    ``communicate()``. On Windows we ``taskkill /F /T`` the PID tree; on POSIX we
+    ``killpg`` (the child is spawned with ``start_new_session=True``). Never raises.
+    """
+    pid = getattr(proc, "pid", None)
+    if pid is not None:
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                )
+            else:
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+        except Exception:
+            pass  # missing taskkill / already-dead / permission — fall through
+    # Ensure the direct child is gone regardless.
+    try:
+        proc.kill()
+    except Exception:
+        pass
 
 
 class SuiteExecutionService:
@@ -297,6 +329,12 @@ class SuiteExecutionService:
             start_time = datetime.now()
             
             # Prepare Robot Framework options
+            # NOTE: do NOT add --console none here. The dry-run captures RF's console output
+            # via a PIPE and the validation parser reads it (there is no output.xml —
+            # --output NONE), so suppressing the console would blank suite_info/test_count.
+            # The stdin=DEVNULL isolation below (change: fix-mcp-subprocess-stdin-deadlock)
+            # is what fixes the Windows deadlock; the captured stdout is a pipe, not an
+            # inherited handle, so there is nothing to defend against with --console none.
             rf_options = ["--dryrun", "--output", "NONE", "--report", "NONE", "--log", "NONE"]
             
             # Add validation level options (execution_options may override loglevel)
@@ -325,20 +363,42 @@ class SuiteExecutionService:
             # write to the underlying stdout fd and bypass contextlib.redirect_stdout).
             def run_robot_dry():
                 cmd = [sys.executable, "-m", "robot", *rf_options]
+                # stdin=DEVNULL: the dry-run child MUST NOT inherit the MCP server's stdin
+                # (its JSON-RPC read channel). On Windows an inherited synchronous stdin
+                # pipe deadlocks the child's C-runtime stdio init behind the server's
+                # pending read → the dry-run hangs the full timeout (change:
+                # fix-mcp-subprocess-stdin-deadlock). Popen (not subprocess.run) so a
+                # timeout can reap the whole tree BEFORE draining the pipes.
+                popen_kwargs = dict(
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                if os.name != "nt":
+                    popen_kwargs["start_new_session"] = True  # own group for killpg
                 try:
-                    proc = subprocess.run(
-                        cmd,
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        timeout=timeout_s,
-                    )
-                    return proc.returncode, proc.stdout or "", proc.stderr or ""
+                    proc = subprocess.Popen(cmd, **popen_kwargs)
+                except Exception as e:
+                    logger.error(f"Robot Framework dry run error: {e}")
+                    return 252, "", str(e)
+                try:
+                    stdout, stderr = proc.communicate(timeout=timeout_s)
+                    return proc.returncode, stdout or "", stderr or ""
                 except subprocess.TimeoutExpired:
+                    # Reap the whole tree so an orphaned grandchild cannot keep the
+                    # capture pipes open and hang the drain below.
+                    _kill_process_tree(proc)
+                    try:
+                        proc.communicate(timeout=5)
+                    except Exception:
+                        pass
                     raise
                 except Exception as e:
                     logger.error(f"Robot Framework dry run error: {e}")
+                    _kill_process_tree(proc)
                     return 252, "", str(e)
 
             loop = asyncio.get_event_loop()
