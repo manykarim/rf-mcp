@@ -42,6 +42,16 @@ support for the new core + CLI in rf-mcp.
 - Python: PlatynUI needs ≥3.12 (abi3-py312). rf-mcp supports ≥3.10 → PlatynUI stays an
   **optional** integration, never a hard dependency.
 
+> **UPDATE (2026-07-21): the new-core RF library is now published to PyPI.**
+> `robotframework-PlatynUI==0.13.0.dev2` (and matching `platynui-native` / `platynui-cli`)
+> are on PyPI with prebuilt wheels — the "source install required" and "must come from the
+> same source commit" findings above are **superseded**. `robotframework-PlatynUI` declares
+> `platynui-native==<same version>`, so the native Rust core is pulled at the matching
+> version automatically (no more manual skew management). This is now packaged as the
+> `desktop` extra: `uv pip install --pre "rf-mcp[desktop]"` (Python 3.12+). Verified live at
+> `0.13.0.dev2`: `PlatynUI.BareMetal` loads (30 keywords, up from 24 in 0.12). The ≥3.12 /
+> optional-only conclusion still holds — the extra carries `python_version >= "3.12"` markers.
+
 ### E2 — Wayland portal hang (CRITICAL)
 - On a Wayland session, `Runtime::new()` synchronously initializes platform modules. On
   GNOME/KDE the Wayland input backend does a `org.freedesktop.portal.RemoteDesktop`

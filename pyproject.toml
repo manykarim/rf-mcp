@@ -28,6 +28,21 @@ frontend = ["django>=4.2,<5.0", "uvicorn[standard]>=0.24"]
 mobile = ["robotframework-appiumlibrary"]
 api = ["robotframework-requests"]
 database = ["robotframework-databaselibrary"]
+# PlatynUI new-core (Rust) native desktop automation (ADR-025). These are DEV
+# PRERELEASES tracking the latest Rust core and REQUIRE Python 3.12+ (the native
+# core ships cp312-abi3 wheels; robotframework-PlatynUI declares requires-python
+# >=3.12). The `python_version >= "3.12"` markers keep `pip install rf-mcp[desktop]`
+# resolvable on rf-mcp's 3.10/3.11 baseline (it just installs nothing there).
+# robotframework-PlatynUI pins `platynui-native==<same version>`, so the native
+# Rust core is pulled automatically at the matching version — do NOT pin it
+# separately (that risks a lockstep conflict on the next bump). platynui-cli is the
+# optional diagnostic CLI (window/snapshot/highlight, used by the display-safety
+# probes). Exact-pinned for reproducibility; bump both together to a newer dev.
+# The version references a prerelease, so resolvers accept it WITHOUT a global --pre.
+desktop = [
+    "robotframework-PlatynUI==0.13.0.dev2; python_version >= '3.12'",
+    "platynui-cli==0.13.0.dev2; python_version >= '3.12'",
+]
 memory = ["sqlite-vec>=0.1.6", "model2vec>=0.4.0"]
 tokens = ["tiktoken>=0.7.0"]
 # OBS-30 / lazy-offline-embeddings — semantic find_keywords ranking runs on a

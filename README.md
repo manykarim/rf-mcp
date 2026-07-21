@@ -167,10 +167,11 @@ uv pip install rf-mcp[web]       # Browser Library + SeleniumLibrary
 uv pip install rf-mcp[mobile]    # AppiumLibrary
 uv pip install rf-mcp[api]       # RequestsLibrary
 uv pip install rf-mcp[database]  # DatabaseLibrary
+uv pip install --pre rf-mcp[desktop]  # PlatynUI new-core (Rust) native desktop — Python 3.12+, prerelease
 uv pip install rf-mcp[frontend]  # Django-based web frontend dashboard
 uv pip install rf-mcp[memory]    # Persistent semantic memory (sqlite-vec + model2vec)
 uv pip install rf-mcp[semantic]  # Sentence-transformers for find_keywords embedding ranking
-uv pip install rf-mcp[all]       # All optional Robot Framework libraries
+uv pip install rf-mcp[all]       # All optional Robot Framework libraries (desktop is separate — prerelease/3.12+)
 
 # Alternatively, add to an existing uv project
 uv init

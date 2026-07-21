@@ -4,8 +4,10 @@ requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and sys_platform != 'win32'",
-    "python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform != 'win32'",
     "python_full_version < '3.11'",
 ]
 
@@ -31,8 +33,10 @@ source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and sys_platform != 'win32'",
-    "python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform != 'win32'",
 ]
 dependencies = [
     { name = "caio", marker = "python_full_version >= '3.11'" },
@@ -2024,8 +2028,10 @@ source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and sys_platform != 'win32'",
-    "python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform != 'win32'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6a/51/63fe664f3908c97be9d2e4f1158eb633317598cfa6e1fc14af5383f17512/networkx-3.6.1.tar.gz", hash = "sha256:26b7c357accc0c8cde558ad486283728b65b6a95d85ee1cd66bafab4c8168509", size = 2517025, upload-time = "2025-12-08T17:02:39.908Z" }
 wheels = [
@@ -2113,8 +2119,10 @@ source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and sys_platform != 'win32'",
-    "python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform != 'win32'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/57/fd/0005efbd0af48e55eb3c7208af93f2862d4b1a56cd78e84309a2d959208d/numpy-2.4.2.tar.gz", hash = "sha256:659a6107e31a83c4e33f763942275fd278b21d095094044eb35569e86a21ddae", size = 20723651, upload-time = "2026-01-31T23:13:10.135Z" }
 wheels = [
@@ -2442,6 +2450,30 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/cf/86/0248f086a84f01b37aaec0fa567b397df1a119f73c16f6c7a9aac73ea309/platformdirs-4.5.1.tar.gz", hash = "sha256:61d5cdcc6065745cdd94f0f878977f8de9437be93de97c1c12f853c9c0cdcbda", size = 21715, upload-time = "2025-12-05T13:52:58.638Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cb/28/3bfe2fa5a7b9c46fe7e13c97bda14c895fb10fa2ebf1d0abb90e0cea7ee1/platformdirs-4.5.1-py3-none-any.whl", hash = "sha256:d03afa3963c806a9bed9d5125c8f4cb2fdaf74a55ab60e5d59b3fde758104d31", size = 18731, upload-time = "2025-12-05T13:52:56.823Z" },
+]
+
+[[package]]
+name = "platynui-cli"
+version = "0.13.0.dev2"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/58/dd/c5b14f92a0807d78d4a920a67b3f5ea01a558b9a7883602857a106428649/platynui_cli-0.13.0.dev2-py3-none-macosx_11_0_arm64.whl", hash = "sha256:6b4e57ef01e5fde233c98bae7b5278dbd677de54e9f15a82649e613c695087ff", size = 3074651, upload-time = "2026-07-14T13:17:39.75Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/60/6ff831665bfe7fe484db40874571c35d3f0cede457845847b39326b53a57/platynui_cli-0.13.0.dev2-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:89c6bde8905b197a71f475df7fe1a97a74df0b3d04e388298b4c35dbba919576", size = 5927844, upload-time = "2026-07-14T13:17:42.505Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/30/0ac6cfe011bcee293ced4afd3c638b12b8a34ef4816a3f1b4b0b6d3985e8/platynui_cli-0.13.0.dev2-py3-none-manylinux_2_34_x86_64.whl", hash = "sha256:e62d8d4475e3c6e9414c96d8574fce7aaf3232b4c4f990eb38090d01b4bedbf2", size = 5874573, upload-time = "2026-07-14T13:17:45.588Z" },
+    { url = "https://files.pythonhosted.org/packages/38/df/9df852a5c4d98623800307bb9aacf6f3b59c6618be3298d8d4d69ab13e91/platynui_cli-0.13.0.dev2-py3-none-win_amd64.whl", hash = "sha256:ad6b2b8b82f1fc0e96cdfdaf6e1af7f91c6f3c6c144ffec8e6397ad2bcdee56c", size = 3080018, upload-time = "2026-07-14T13:17:47.571Z" },
+    { url = "https://files.pythonhosted.org/packages/0d/af/020aa8ce2cb61fda4c5f1219252e74207dc0660dcac8b2b66cc56adfca8f/platynui_cli-0.13.0.dev2-py3-none-win_arm64.whl", hash = "sha256:61c8a0fe057709a18c369e8ea926c2010f32739477240d4ffe6ed561f06863fc", size = 2954556, upload-time = "2026-07-14T13:17:49.71Z" },
+]
+
+[[package]]
+name = "platynui-native"
+version = "0.13.0.dev2"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cb/78/9b72490d3b507b2e3503a80a34cd5a4fede39a518cb2b523193ee3f5c5ce/platynui_native-0.13.0.dev2-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:8031d1ff3143f9e0ce5d4c67e86744f98623f16458df3ec34b7ff6defa772084", size = 2780459, upload-time = "2026-07-14T13:18:11.707Z" },
+    { url = "https://files.pythonhosted.org/packages/ee/18/afaebda8657ecb183839db80432607b160bc1619b222cfc1b95a71884fe9/platynui_native-0.13.0.dev2-cp312-abi3-manylinux_2_34_aarch64.whl", hash = "sha256:abf0e34338ca5f12f6c09c5ffc20c09f3e90f56ab4c635a0f37b88bd48b2fbcb", size = 5568134, upload-time = "2026-07-14T13:18:14.353Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/d4/9af08b0e7bc784d965b5929df110ba49c8a924952551f331b9fc34678b87/platynui_native-0.13.0.dev2-cp312-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:b2aec96491f7c032d8826f321dae25fafdbd9870622f9cd7f998fc49a3626d87", size = 5456276, upload-time = "2026-07-14T13:18:16.72Z" },
+    { url = "https://files.pythonhosted.org/packages/62/58/66923090cb4bfcef97a87ac34b65fa94c53d83e74527a196318ea535e388/platynui_native-0.13.0.dev2-cp312-abi3-win_amd64.whl", hash = "sha256:011a8015e69d579146ab6e67ee8817a9b1c61782dd41050819368fef0d812009", size = 2716710, upload-time = "2026-07-14T13:18:18.731Z" },
+    { url = "https://files.pythonhosted.org/packages/53/1f/dc8481fcc61a7fcb3a3e442df63bec7fb7a0b779c43e1885b26bc9554808/platynui_native-0.13.0.dev2-cp312-abi3-win_arm64.whl", hash = "sha256:f245b13d3140f7b8d62b6e5552a87bb9f723687ddd83e5a84e7d864ad658df99", size = 2599698, upload-time = "2026-07-14T13:18:20.652Z" },
 ]
 
 [[package]]
@@ -3169,7 +3201,7 @@ wheels = [
 
 [[package]]
 name = "rf-mcp"
-version = "0.33.0"
+version = "0.34.0.dev0"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
@@ -3200,6 +3232,10 @@ api = [
 ]
 database = [
     { name = "robotframework-databaselibrary" },
+]
+desktop = [
+    { name = "platynui-cli", marker = "python_full_version >= '3.12'" },
+    { name = "robotframework-platynui", marker = "python_full_version >= '3.12'" },
 ]
 frontend = [
     { name = "django" },
@@ -3250,6 +3286,7 @@ requires-dist = [
     { name = "lxml", specifier = ">=4.9.0" },
     { name = "model2vec", marker = "extra == 'all'", specifier = ">=0.4.0" },
     { name = "model2vec", marker = "extra == 'memory'", specifier = ">=0.4.0" },
+    { name = "platynui-cli", marker = "python_full_version >= '3.12' and extra == 'desktop'", specifier = "==0.13.0.dev2" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "pyyaml", specifier = ">=6.0.0" },
@@ -3260,6 +3297,7 @@ requires-dist = [
     { name = "robotframework-browser", marker = "extra == 'web'" },
     { name = "robotframework-databaselibrary", marker = "extra == 'all'" },
     { name = "robotframework-databaselibrary", marker = "extra == 'database'" },
+    { name = "robotframework-platynui", marker = "python_full_version >= '3.12' and extra == 'desktop'", specifier = "==0.13.0.dev2" },
     { name = "robotframework-requests", marker = "extra == 'all'" },
     { name = "robotframework-requests", marker = "extra == 'api'" },
     { name = "robotframework-seleniumlibrary", marker = "extra == 'all'" },
@@ -3274,7 +3312,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'all'", specifier = ">=0.24" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'frontend'", specifier = ">=0.24" },
 ]
-provides-extras = ["slim", "web", "frontend", "mobile", "api", "database", "memory", "tokens", "semantic", "all"]
+provides-extras = ["slim", "web", "frontend", "mobile", "api", "database", "desktop", "memory", "tokens", "semantic", "all"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3393,6 +3431,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/45/6e/4d819e45d5c8b4b01bccb66f50756a39df317d216e574ba3fe86defe6685/robotframework_databaselibrary-2.4.0.tar.gz", hash = "sha256:6aab28b9073bcf7b9a785d9f5d052900bbaef5c583f0e9e0007f1eb3aeb98420", size = 32001, upload-time = "2025-12-08T13:27:02.6Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/d9/8dde89e0ee9b6145b7e8afdb4653560ba4b9e238184f16390a8fac6a7b2f/robotframework_databaselibrary-2.4.0-py3-none-any.whl", hash = "sha256:eef6b866e533f1599c3322b020b7af9c9926eae16ff588fc112f4512b833e80e", size = 32982, upload-time = "2025-12-08T13:27:00.851Z" },
+]
+
+[[package]]
+name = "robotframework-platynui"
+version = "0.13.0.dev2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "platynui-native", marker = "python_full_version >= '3.12'" },
+    { name = "robotframework", marker = "python_full_version >= '3.12'" },
+    { name = "robotframework-assertion-engine", marker = "python_full_version >= '3.12'" },
+    { name = "robotframework-pythonlibcore", marker = "python_full_version >= '3.12'" },
+    { name = "typing-extensions", marker = "python_full_version >= '3.12'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c8/9f/27c78ff69f783c63382f4b246b558cdb7e164041d934c6c59970e120ef7d/robotframework_platynui-0.13.0.dev2-py3-none-any.whl", hash = "sha256:198d74ae20849cb17239c2e6877c3bd777f6de052e57e389a9b62368149bf36b", size = 127821, upload-time = "2026-07-14T13:18:21.814Z" },
 ]
 
 [[package]]
@@ -3634,8 +3687,10 @@ source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and sys_platform != 'win32'",
-    "python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform != 'win32'",
 ]
 dependencies = [
     { name = "joblib", marker = "python_full_version >= '3.11'" },
@@ -3744,8 +3799,10 @@ source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and sys_platform != 'win32'",
-    "python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform != 'win32'",
 ]
 dependencies = [
     { name = "numpy", version = "2.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },

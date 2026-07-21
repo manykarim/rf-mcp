@@ -41,7 +41,10 @@ class TestDesktopGuidanceBundle:
 
     def test_bundle_is_bounded(self):
         b = dg.get_desktop_guidance()
-        assert len(json.dumps(b)) <= 3072  # ~3 KB bound
+        # ~4.5 KB bound. The cheat-sheet is derived from PlatynUI.BareMetal's keyword
+        # surface, which grew with the new Rust core (0.13.x: 30 keywords, ~3.8 KB).
+        # The bound stays a guard against unbounded growth, with headroom for the core.
+        assert len(json.dumps(b)) <= 4608
 
     def test_bundle_is_process_cached(self):
         # second call returns the identical cached object (no libdoc re-parse)
