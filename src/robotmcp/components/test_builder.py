@@ -4098,6 +4098,19 @@ class TestBuilder:
         # Fix malformed evaluation namespace expressions first
         arg = self._fix_malformed_evaluation_namespace(arg)
 
+        # Platform-independent path form (change: fix-suite-path-escaping): a Windows
+        # DRIVE-LETTER path is rewritten to forward slashes — valid for Start Process/
+        # subprocess and the OperatingSystem keywords on BOTH Windows and POSIX, and
+        # RF-escape-safe. Without this, RF's escape processing corrupts a literal
+        # backslash path (C:\WINDOWS -> C:WINDOWS; C:\name -> embedded newline).
+        # Only the unambiguous drive-letter shape is touched; flags (/w), URLs
+        # (https://…), regexes (\d+), UNC paths (\\srv) and variable references do NOT
+        # match and are left unchanged. (Broader backslash round-trip escaping for
+        # regex/relative/UNC values is deferred — see change fix-suite-path-escaping
+        # design: it needs escape-aware handling to stay idempotent, not blanket doubling.)
+        if re.match(r"^[A-Za-z]:[\\/]", arg):
+            arg = arg.replace("\\", "/")
+
         # Escape literal newlines/tabs so they don't break the .robot line structure.
         # RF uses \n / \t as escape sequences, so we emit \\n / \\t in the text
         # which RF interprets back as the literal characters at runtime.
