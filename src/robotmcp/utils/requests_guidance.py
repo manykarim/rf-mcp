@@ -123,3 +123,30 @@ def build_requests_cookbook(
             payload["most_relevant"] = "SESSION setup"
 
     return payload
+
+
+def build_api_init_guidance() -> Dict[str, Any]:
+    """Compact RequestsLibrary guidance for the ``manage_session(init)`` response.
+
+    change: refactor-mcp-instructions §4 — the API analog of the ``desktop_guidance``
+    init injection. The non-obvious RequestsLibrary response-access rules are the #1
+    API turn-sink (F-API1) and are otherwise unreachable first-try. This attaches the
+    few load-bearing rules UP FRONT (reusing the single-source recipe constants) plus a
+    pointer to the full cookbook — NOT the whole cookbook, to keep the init response
+    small. Delivered in the init response the agent always reads, so it does not depend
+    on the agent choosing to call ``get_locator_guidance`` first.
+    """
+    return {
+        "rules": [
+            f"SESSION: {ON_SESSION_RULE}",
+            "RESPONSE: On-Session keywords RETURN the response — capture with ${resp}=. "
+            'Read status via ${resp.status_code}, body via ${resp.json()}, a field via '
+            '${resp.json()["id"]}.',
+            "STATUS ASSERT: use 'Status Should Be    200    ${resp}' — the native "
+            "assertion, NOT an Evaluate equality. Biggest Evaluate-call remover.",
+            f"EVALUATE: {EVALUATE_VAR_RULE}",
+            f"BODY/HEADERS: {JSON_BODY_RULE}",
+        ],
+        "more": 'Full cookbook (body construction, auth token, non-2xx): '
+                'get_locator_guidance(library="requests").',
+    }

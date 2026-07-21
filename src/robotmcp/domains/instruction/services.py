@@ -65,7 +65,8 @@ class InstructionResolver:
         elif template_name is not None:
             self._default_template = InstructionTemplate.get_by_name(template_name)
         else:
-            self._default_template = InstructionTemplate.standard()
+            # change: refactor-mcp-instructions — lean spine is the default
+            self._default_template = InstructionTemplate.lean()
         self._event_publisher = event_publisher
         self._cache: Dict[str, InstructionContent] = {}
         self._logger = logging.getLogger(__name__)

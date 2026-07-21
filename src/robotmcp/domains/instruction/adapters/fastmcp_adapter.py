@@ -29,6 +29,7 @@ class InstructionTemplateType(Enum):
     As defined in ADR-002, these templates provide different levels of
     guidance for LLMs of varying capabilities.
     """
+    LEAN = "lean"
     MINIMAL = "minimal"
     STANDARD = "standard"
     DETAILED = "detailed"
@@ -90,8 +91,9 @@ class FastMCPInstructionAdapter:
     ENV_INSTRUCTIONS_TEMPLATE = "ROBOTMCP_INSTRUCTIONS_TEMPLATE"
     ENV_INSTRUCTIONS_FILE = "ROBOTMCP_INSTRUCTIONS_FILE"
 
-    # Default template type
-    DEFAULT_TEMPLATE_TYPE = InstructionTemplateType.STANDARD
+    # Default template type (change: refactor-mcp-instructions — lean order-explicit
+    # spine replaces the ~2800-char `standard`, which measured among the worst).
+    DEFAULT_TEMPLATE_TYPE = InstructionTemplateType.LEAN
 
     def __init__(
         self,
@@ -113,7 +115,7 @@ class FastMCPInstructionAdapter:
         # Get template name from environment if not provided
         if template_name is None:
             template_name = os.environ.get(
-                self.ENV_INSTRUCTIONS_TEMPLATE, "standard"
+                self.ENV_INSTRUCTIONS_TEMPLATE, "lean"
             ).lower().strip()
 
         self._template_name = template_name
@@ -271,7 +273,7 @@ class FastMCPInstructionAdapter:
         """
         # Read environment variables
         mode_str = os.environ.get(self.ENV_INSTRUCTIONS, "default").lower().strip()
-        template_str = os.environ.get(self.ENV_INSTRUCTIONS_TEMPLATE, "standard").lower().strip()
+        template_str = os.environ.get(self.ENV_INSTRUCTIONS_TEMPLATE, "lean").lower().strip()
         custom_file = os.environ.get(self.ENV_INSTRUCTIONS_FILE, "").strip()
 
         self._logger.debug(
@@ -325,7 +327,7 @@ class FastMCPInstructionAdapter:
         if hasattr(self, "_current_template_type"):
             return self._current_template_type
 
-        template_str = os.environ.get(self.ENV_INSTRUCTIONS_TEMPLATE, "standard").lower().strip()
+        template_str = os.environ.get(self.ENV_INSTRUCTIONS_TEMPLATE, "lean").lower().strip()
         try:
             return InstructionTemplateType.from_string(template_str)
         except ValueError:

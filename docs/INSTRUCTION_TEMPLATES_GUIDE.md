@@ -34,7 +34,8 @@ MCP initialize response → LLM client receives instructions
 | Variable | Values | Default | Description |
 |----------|--------|---------|-------------|
 | `ROBOTMCP_INSTRUCTIONS` | `off`, `default`, `custom` | `default` | Master switch — controls whether instructions are active |
-| `ROBOTMCP_INSTRUCTIONS_TEMPLATE` | `minimal`, `standard`, `detailed`, `browser-focused`, `api-focused` | `standard` | Selects the built-in template (only used when mode is `default`) |
+| `ROBOTMCP_INSTRUCTIONS_TEMPLATE` | `lean` (alias `checklist`), `minimal`, `standard`, `detailed`, `browser-focused`, `api-focused`, `desktop-focused` | `lean` | Selects the built-in template (only used when mode is `default`) |
+| `ROBOTMCP_API_GUIDANCE` | `on`, `off` | `on` | When RequestsLibrary is loaded, `manage_session(init)` attaches a compact `api_guidance` bundle (RequestsLibrary response-access rules + a pointer to the full cookbook). Set `off` to suppress. Mirrors the desktop `desktop_guidance` injection. |
 | `ROBOTMCP_INSTRUCTIONS_FILE` | File path (`.txt`, `.md`, `.instruction`, `.instructions`) | *(none)* | Path to custom instructions file (only used when mode is `custom`) |
 
 ### Precedence Rules
@@ -45,6 +46,27 @@ MCP initialize response → LLM client receives instructions
 4. If `ROBOTMCP_INSTRUCTIONS` is empty or unset, mode defaults to `default`.
 
 ## Built-in Templates
+
+### `lean` (~250 tokens, ~1000 chars) — **Default**
+
+Best for: **everyone** — the default (`checklist` is an alias). A lean, order-explicit
+spine that states ONE canonical tool order and the non-discoverable gotchas, with no
+per-tool "use X to do Y" catalog echo (the tool schemas already carry that). It replaced
+the older `standard` default, which measured among the worst on tool-calling quality.
+Empirically the cleanest on a real Claude Code CLI client (n=5 Haiku sweep: 0.0 average
+session churn, 100% completion).
+
+Canonical order:
+1. `analyze_scenario` ONCE (it CREATES the session — do NOT also call `manage_session(init)`)
+2. discover if unknown (`find_keywords` / `get_keyword_info`) — never guess
+3. one keyword per `execute_step` (arguments = list of strings; `assign_to` to capture)
+4. on failure: fix via `find_keywords`, retry ONCE — never repeat the same failing call
+5. `get_locator_guidance` for locators/API; `get_session_state` for web DOM
+6. FINISH with `build_test_suite` — not done until it succeeds
+
+The single load-bearing line is the explicit unified session entry (step 1): analyze_scenario
+creates the session, so callers must not also call `manage_session(init)` — that was the
+measured churn-killer.
 
 ### `minimal` (~200 tokens, ~300 chars)
 
@@ -58,9 +80,10 @@ Verify keywords exist via discovery, never guess keyword names or arguments.
 For DOM inspection: get_session_state(sections=["page_source"], include_reduced_dom=True).
 ```
 
-### `standard` (~400 tokens, ~1200 chars) — **Default**
+### `standard` (~400 tokens, ~1200 chars) — *legacy (previous default)*
 
-Best for: **Mid-range LLMs** (Claude Sonnet, GPT-4o, Gemini Flash)
+Best for: **Mid-range LLMs** (Claude Sonnet, GPT-4o, Gemini Flash); retained for rollback
+(`ROBOTMCP_INSTRUCTIONS_TEMPLATE=standard`).
 
 A balanced template with a structured workflow guide covering discovery, locator guidance, session management, DOM inspection, error recovery, and multi-test suites.
 
@@ -102,7 +125,7 @@ Focuses on the RequestsLibrary workflow: creating sessions, making HTTP requests
 
 ### Example 1: Default Setup (Most Common)
 
-Use the standard template — works well for most LLMs.
+Use the lean default — no env needed (or set `ROBOTMCP_INSTRUCTIONS_TEMPLATE=lean` explicitly).
 
 **.mcp.json (Claude Code / VS Code):**
 ```json
@@ -113,7 +136,7 @@ Use the standard template — works well for most LLMs.
       "args": ["run", "-m", "robotmcp.server"],
       "env": {
         "ROBOTMCP_INSTRUCTIONS": "default",
-        "ROBOTMCP_INSTRUCTIONS_TEMPLATE": "standard",
+        "ROBOTMCP_INSTRUCTIONS_TEMPLATE": "lean",
         "UV_COMPILE_BYTECODE": "1"
       }
     }

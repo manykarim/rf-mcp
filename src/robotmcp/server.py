@@ -1881,7 +1881,10 @@ async def analyze_scenario(
 ) -> Dict[str, Any]:
     """Analyze a natural-language scenario into structured intent and create a session.
 
-    WORKFLOW: This should be your FIRST tool call for any test scenario.
+    WORKFLOW: This is the single front door — your FIRST tool call for any test
+    scenario. It CREATES the session, so do NOT also call manage_session(action="init")
+    for the same scenario (that causes redundant session churn). Reuse the returned
+    session_id in every later call.
 
     What this tool does:
     1. Creates a new session with unique session_id (or reuses provided one)
@@ -2087,6 +2090,32 @@ async def analyze_scenario(
     result["libraries_loaded"] = list(session.loaded_libraries)
     if attach_bridge_active:
         result["attach_bridge_active"] = True
+
+    # API upfront guidance (change: refactor-mcp-instructions §4/§7.2): the lean default
+    # steers agents through analyze_scenario (the front door) and NOT manage_session(init),
+    # so the guaranteed api_guidance bundle must ride the analyze_scenario response too —
+    # otherwise RequestsLibrary's non-obvious response-access rules (the #1 API turn-sink,
+    # F-API1) never reach the flow agents actually take. Same gate/opt-out as init.
+    try:
+        if os.environ.get("ROBOTMCP_API_GUIDANCE", "on").lower() not in (
+            "off", "0", "false", "no",
+        ):
+            # RequestsLibrary is only *recommended* at analyze time (not yet loaded),
+            # so key off the detected API signal, not loaded_libraries.
+            _suggested = (result.get("analysis") or {}).get("suggested_libraries") or []
+            _api_session = (
+                any(lib == "RequestsLibrary" for lib in session.loaded_libraries)
+                or getattr(session.session_type, "value", "") == "api_testing"
+                or "RequestsLibrary" in _suggested
+            )
+            if _api_session:
+                from robotmcp.utils.requests_guidance import build_api_init_guidance
+
+                _api_bundle = build_api_init_guidance()
+                if _api_bundle:
+                    result["api_guidance"] = _api_bundle
+    except Exception:  # pragma: no cover - defensive
+        pass
 
     logger.info(
         f"Session '{session_id}' configured: type={session.session_type.value}, preference={session.explicit_library_preference}"
@@ -3060,14 +3089,23 @@ async def manage_session(
 ) -> Dict[str, Any]:
     """Manage session lifecycle: initialize, configure libraries/variables, and organize tests.
 
+    For a NEW scenario, prefer analyze_scenario — it is the front door that CREATES
+    the session (and auto-configures libraries). Use manage_session for explicit session
+    ops on an existing session (importing extra libraries/resources/variables, multi-test
+    structure). Do NOT call action="init" right after analyze_scenario — the session
+    already exists; that only causes redundant churn.
+
     Workflows:
-        Single test:  init -> execute_step (repeat) -> build_test_suite
-        Multi-test:   init -> set_suite_setup -> start_test -> execute_step (repeat)
-                      -> end_test -> start_test -> ... -> build_test_suite
+        Single test:  analyze_scenario -> execute_step (repeat) -> build_test_suite
+        Multi-test:   analyze_scenario -> set_suite_setup -> start_test -> execute_step
+                      (repeat) -> end_test -> start_test -> ... -> build_test_suite
+        (action="init" is the explicit alternative when you are NOT starting from
+        analyze_scenario, e.g. driving a bare session directly.)
 
     Actions and parameters (session_id is always required):
 
-        init             - Create session and load libraries.
+        init             - Create session and load libraries (explicit entry; for a new
+                           scenario prefer analyze_scenario instead).
                            Params: libraries (list of library names),
                                    variables (dict or list to pre-set).
 
@@ -3272,6 +3310,26 @@ async def manage_session(
                 _bundle = get_desktop_guidance()
                 if _bundle:
                     result["desktop_guidance"] = _bundle
+        except Exception:
+            pass
+
+        # API upfront guidance (change: refactor-mcp-instructions §4): mirror the
+        # desktop injection for RequestsLibrary. The non-obvious response-access rules
+        # (${resp.json()}, On Session, native status asserts) are the #1 API turn-sink
+        # (F-API1) and are otherwise unreachable first-try. Deliver a COMPACT bundle in
+        # the init response the agent always reads. On by default when RequestsLibrary is
+        # present; opt out with ROBOTMCP_API_GUIDANCE=off. Soft-fail like desktop.
+        try:
+            if os.environ.get("ROBOTMCP_API_GUIDANCE", "on").lower() not in (
+                "off", "0", "false", "no",
+            ) and any(
+                lib == "RequestsLibrary" for lib in session.loaded_libraries
+            ):
+                from robotmcp.utils.requests_guidance import build_api_init_guidance
+
+                _api_bundle = build_api_init_guidance()
+                if _api_bundle:
+                    result["api_guidance"] = _api_bundle
         except Exception:
             pass
 
@@ -5824,7 +5882,13 @@ async def get_keyword_info(
     session_id: str | None = None,
     arguments: List[str] | None = None,
 ) -> Dict[str, Any]:
-    """Retrieve keyword or library documentation, or parse signatures.
+    """Get keyword/library docs or parse a signature. Call this before execute_step
+    when you know the keyword name but not its arguments.
+
+    Modes: "keyword" (default — document one keyword), "library" (list a library's
+    keywords), "session" (resolve against the live session namespace), "parse"
+    (parse a signature string). Pass session_id to scope the lookup to that
+    session's libraries.
 
     Args:
         mode: One of "keyword" (default), "library", "session", or "parse".

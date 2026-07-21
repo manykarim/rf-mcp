@@ -526,10 +526,36 @@ For DOM inspection: get_session_state(sections=["page_source"], include_reduced_
         )
 
     @classmethod
+    def lean(cls) -> "InstructionTemplate":
+        """Lean, order-explicit default spine (~850 chars).
+
+        This is the DEFAULT template (change: refactor-mcp-instructions). It states
+        ONE canonical tool order and the non-discoverable gotchas, and carries NO
+        per-tool "use X to do Y" catalog echo (the tool schemas already provide
+        that). Empirically the cleanest on a real Claude Code CLI client: an n=5
+        Haiku sweep gave it 0.0 average session churn (100% completion), where the
+        load-bearing line is the explicit unified-session-entry — analyze_scenario
+        creates the session, so callers must NOT also call manage_session(init).
+        """
+        return cls(
+            template_id="lean",
+            content="""rf-mcp — build Robot Framework tests. Follow in order; add no extra steps:
+1. Call analyze_scenario ONCE to start. It CREATES the session and returns session_id — reuse that session_id in EVERY later call. NEVER call manage_session(action="init") for a new scenario; the session already exists.
+2. If a keyword or library is unknown, call find_keywords (or get_keyword_info) FIRST — never guess keyword names or arguments.
+3. Run ONE keyword per execute_step(keyword, arguments=[...strings], session_id). arguments is always a list of strings; use assign_to to capture a result into a variable.
+4. If a step fails: read the error, fix the keyword name/args via find_keywords, and retry ONCE — do NOT repeat the same failing call.
+5. Need locators or library rules? get_locator_guidance(library="browser"|"requests"|...). Inspect a web page with get_session_state(sections=["page_source"], include_reduced_dom=True).
+6. FINISH by calling build_test_suite(test_name, output_path). The task is NOT done until build_test_suite succeeds.""",
+            description="Lean order-explicit default spine (unified session entry)",
+            placeholders=(),
+        )
+
+    @classmethod
     def standard(cls) -> "InstructionTemplate":
         """Standard template for general use (~1200 chars).
 
-        This is the default template providing balanced guidance.
+        Retained for rollback / env selection (ROBOTMCP_INSTRUCTIONS_TEMPLATE=standard);
+        no longer the default (change: refactor-mcp-instructions — see lean()).
         """
         return cls(
             template_id="standard",
@@ -752,6 +778,8 @@ Available tools: {available_tools}""",
             ValueError: If the template name is not recognized.
         """
         templates = {
+            "lean": cls.lean,
+            "checklist": cls.lean,  # alias — the "checklist" spine is the lean default
             "minimal": cls.minimal,
             "standard": cls.standard,
             "detailed": cls.detailed,

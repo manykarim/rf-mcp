@@ -45,10 +45,14 @@ harness must NOT hand the agent a cheat-sheet:
 - The system prompt is **neutral** (`agent_integration.NEUTRAL_SYSTEM_PROMPT`) — it does
   not restate which tools to call or how. The agent relies on the tools' real
   descriptions.
-- The server's **MCP instructions** (the WORKFLOW GUIDE, `mcp.instructions`) are injected
-  into the agent context — `FastMCPToolset` does not forward them otherwise, so without
-  this the MCP instructions would be untested. Degrading them (e.g.
-  `ROBOTMCP_INSTRUCTIONS=off`) now changes agent behaviour and the metrics.
+- The server's **MCP instructions** (the lean order-explicit default spine, `mcp.instructions`)
+  are injected into the agent context — `FastMCPToolset` does not forward them otherwise, so
+  without this the MCP instructions would be untested. The default template is `lean` (alias
+  `checklist`): `analyze_scenario` first (it creates the session — do NOT also call
+  `manage_session(init)`) → discover-if-unknown → `execute_step` → `build_test_suite`.
+  Older templates remain selectable via `ROBOTMCP_INSTRUCTIONS_TEMPLATE` (e.g. `standard`),
+  and RequestsLibrary sessions get a compact `api_guidance` bundle in the init response.
+  Degrading them (e.g. `ROBOTMCP_INSTRUCTIONS=off`) now changes agent behaviour and the metrics.
 
 ### Instruction-quality gate — "ensure no decrease"
 

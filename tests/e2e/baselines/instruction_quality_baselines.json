@@ -12,8 +12,10 @@
     "hf_revision": null,
     "quant_sha256": null,
     "chat_template_hash": null,
-    "sampling": {"temperature": 0.0},
-    "note": "GOAL: a pinnable self-hostable reference (qwen3-coder-30b, single 24GB GPU @ Q4) to kill baseline drift. FINDING (apply): OpenRouter DEFAULT routing for qwen3-coder is NOT reproducible — it intermittently returns prose with ZERO tool calls (N=3: success [0,0,1]). Realizing the self-hostable reference requires OpenRouter provider PINNING or actual self-hosting; until then MiniMax-M3 is the active reference (proven 3/3 reliable) and open-weight models run inform-only for trend."
+    "sampling": {
+      "temperature": 0.0
+    },
+    "note": "GOAL: a pinnable self-hostable reference (qwen3-coder-30b, single 24GB GPU @ Q4) to kill baseline drift. FINDING (apply): OpenRouter DEFAULT routing for qwen3-coder is NOT reproducible \u2014 it intermittently returns prose with ZERO tool calls (N=3: success [0,0,1]). Realizing the self-hostable reference requires OpenRouter provider PINNING or actual self-hosting; until then MiniMax-M3 is the active reference (proven 3/3 reliable) and open-weight models run inform-only for trend."
   },
   "reference_models": [
     "MiniMax-M3"
@@ -33,10 +35,10 @@
     "google/gemma-3-27b-it"
   ],
   "roster_notes": {
-    "z-ai/glm-4.7-flash": "#1 hard_gate promotion candidate — most reliable tool-caller of the self-hostable set (called tools on all 4 technologies, no zero-call flake, fast). Promote after an N>=5 reliable capture (ideally self-hosted).",
-    "qwen/qwen3-coder-30b-a3b-instruct": "aspirational self-hostable reference; strong on data_driven/xml/suite but a recurring API zero-call flake reproduces the [0,0,1] finding even under a Novita provider pin — inform-only until self-hosted N-run capture.",
+    "z-ai/glm-4.7-flash": "#1 hard_gate promotion candidate \u2014 most reliable tool-caller of the self-hostable set (called tools on all 4 technologies, no zero-call flake, fast). Promote after an N>=5 reliable capture (ideally self-hosted).",
+    "qwen/qwen3-coder-30b-a3b-instruct": "aspirational self-hostable reference; strong on data_driven/xml/suite but a recurring API zero-call flake reproduces the [0,0,1] finding even under a Novita provider pin \u2014 inform-only until self-hosted N-run capture.",
     "mistralai/mistral-small-3.2-24b-instruct": "functional but weak (flails: 78 calls on xml, low success); trend only.",
-    "google/gemma-3-27b-it": "EXCLUDED — zero tool calls on all 4 technologies (broken tool-calling, same class as llama-3.1-8b)."
+    "google/gemma-3-27b-it": "EXCLUDED \u2014 zero tool calls on all 4 technologies (broken tool-calling, same class as llama-3.1-8b)."
   },
   "tolerances": {
     "tool_success_rate": 0.1,
@@ -58,29 +60,47 @@
         "tool_success_rate": 1.0,
         "tool_hit_rate": 1.0,
         "task_completion_rate": 1.0,
-        "n_runs": 3,
+        "first_try_selection_rate": 1.0,
+        "artifact_execute_rate": 1.0,
+        "n_runs": 5,
         "per_run": {
-          "tool_success_rate": [1.0, 1.0, 1.0],
-          "tool_hit_rate": [1.0, 1.0, 0.6667]
+          "tool_success_rate": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tool_hit_rate": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
         },
         "iqr": {
           "tool_success_rate": 0.0,
-          "tool_hit_rate": 0.1667,
+          "tool_hit_rate": 0.0,
+          "first_try_selection_rate": 0.0,
           "task_completion_rate": 0.0
-        }
+        },
+        "captured_at": "2026-07-21T06:39:52Z",
+        "captured_pin": "MiniMax-M3",
+        "rf_mcp_git_sha": "626a95c"
       }
     },
     "desktop_discovery": {
       "_validated": false,
-      "_canary": "INVALID (2026-07-20, MiniMax-M3): degradation INVERTED the metric (hit 0.67->1.00, first 0.00->1.00) — pure-discovery task, no execution critical path, blanking descriptions removed distraction. good first_try=0.00 also indicates the expected-tool set is mis-mapped. Not recoverable as a hard-gate probe; keep inform or rebuild as an execution scenario."
+      "_canary": "INVALID (2026-07-20, MiniMax-M3): degradation INVERTED the metric (hit 0.67->1.00, first 0.00->1.00) \u2014 pure-discovery task, no execution critical path, blanking descriptions removed distraction. good first_try=0.00 also indicates the expected-tool set is mis-mapped. Not recoverable as a hard-gate probe; keep inform or rebuild as an execution scenario."
     },
     "data_driven_generic": {
       "_validated": false,
-      "_canary": "INVALID (2026-07-20, MiniMax-M3): well-calibrated (good comp=1.00, first=1.00) but INSENSITIVE — no metric dropped >=0.10 (hit rose 0.67->0.83). The reference solves it from priors; the one non-obvious instruction ([Template]+add_data_row) is off the critical path because completion=any build_test_suite call. Rework: score that the produced suite USES a [Template] over the rows, then degrade the [Template] recipe."
+      "_canary": "INVALID (2026-07-20, MiniMax-M3): well-calibrated (good comp=1.00, first=1.00) but INSENSITIVE \u2014 no metric dropped >=0.10 (hit rose 0.67->0.83). The reference solves it from priors; the one non-obvious instruction ([Template]+add_data_row) is off the critical path because completion=any build_test_suite call. Rework: score that the produced suite USES a [Template] over the rows, then degrade the [Template] recipe."
     },
     "locator_ergonomics": {
       "_validated": false,
-      "_canary": "INVALID (2026-07-20, MiniMax-M3): miscalibrated (good completion only 0.50 — one run gave up at 1 call) AND insensitive (success -0.02 only). Rework: fix completion tools to match expected (get_locator_guidance + build_test_suite), score the PRODUCED locators against the guided forms, then degrade via stubbing the guidance payload."
+      "_canary": "INVALID (2026-07-20, MiniMax-M3): miscalibrated (good completion only 0.50 \u2014 one run gave up at 1 call) AND insensitive (success -0.02 only). Rework: fix completion tools to match expected (get_locator_guidance + build_test_suite), score the PRODUCED locators against the guided forms, then degrade via stubbing the guidance payload."
     }
   }
 }
