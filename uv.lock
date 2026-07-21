@@ -3201,7 +3201,7 @@ wheels = [
 
 [[package]]
 name = "rf-mcp"
-version = "0.34.0.dev1"
+version = "0.34.0.dev2"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
