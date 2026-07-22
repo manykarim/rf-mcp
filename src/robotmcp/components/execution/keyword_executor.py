@@ -535,6 +535,22 @@ class KeywordExecutor:
             logger.debug("desktop input-effect snapshot skipped: %s", exc)
             return None
 
+    @staticmethod
+    def _is_desktop_keyboard_keyword(session, keyword) -> bool:
+        """True when this is a PlatynUI keyboard keyword on a desktop session
+        (change: fix-platynui-windows-runtime, F16). Used to release held
+        modifiers when a keyboard keyword fails or is killed mid-chord."""
+        try:
+            is_desktop = getattr(session, "is_desktop_session", None)
+            if not (callable(is_desktop) and is_desktop() is True):
+                return False
+            norm = str(keyword or "").lower().rsplit(".", 1)[-1].strip()
+            return norm in (
+                "keyboard press", "keyboard type", "keyboard release",
+            )
+        except Exception:  # pragma: no cover - defensive
+            return False
+
     def _platynui_safety_guard(self, session, keyword):
         """Active-desktop safety guard for PlatynUI interaction keywords
         (change: platynui-desktop-safety-isolation).
@@ -565,6 +581,18 @@ class KeywordExecutor:
                 "PlatynUI safety guard: refused on %s desktop",
                 outcome["classification"],
             )
+        elif outcome["classification"] == "windows":
+            # F4: one-time warning that Windows automation drives the active
+            # desktop (there is no isolated-display model on Windows).
+            if not getattr(session, "_platynui_windows_warned", False):
+                try:
+                    session._platynui_windows_warned = True
+                except Exception:
+                    pass
+                logger.warning(
+                    "PlatynUI: driving the ACTIVE Windows desktop — %s",
+                    outcome.get("reason") or "",
+                )
         return outcome
 
     def _platynui_focus_before_act(self, session, keyword, arguments):
@@ -1886,12 +1914,96 @@ class KeywordExecutor:
         # causing it to go to stderr instead of the MCP transport.
         # The lock also prevents concurrent Selenium WebDriver access.
         async with self._execution_lock:
-            return await self._execute_keyword_serialized(
-                session, keyword, arguments, browser_library_manager,
-                detail_level, library_prefix, assign_to, use_context, timeout_ms,
-                record=record,
-                pre_validate_timeout_ms=pre_validate_timeout_ms,
+            # F16 (change: fix-platynui-windows-runtime): a desktop keyboard
+            # keyword that raises or returns failure may have been killed
+            # mid-chord, leaving a modifier physically held at the OS level
+            # (the operator's keyboard wedged until reboot). Release all
+            # modifiers on failure/exception. A SUCCESSFUL Keyboard Press
+            # legitimately holds a key for a later Keyboard Release, so we do
+            # NOT release on success. release_all_modifiers() is a no-op when
+            # nothing is held.
+            _kbd = self._is_desktop_keyboard_keyword(session, keyword)
+            try:
+                result = await self._execute_keyword_serialized(
+                    session, keyword, arguments, browser_library_manager,
+                    detail_level, library_prefix, assign_to, use_context,
+                    timeout_ms,
+                    record=record,
+                    pre_validate_timeout_ms=pre_validate_timeout_ms,
+                )
+            except BaseException:
+                # An exception (incl. CancelledError from a killed run) is the
+                # canonical "killed mid-chord" case. Release SYNCHRONOUSLY here
+                # so it is guaranteed to run even while the task is being
+                # cancelled (an awaited offload could be interrupted before it
+                # dispatches). keyboard_release is a fast input dispatch, not a
+                # tree query, so the brief on-loop cost is acceptable.
+                if _kbd:
+                    self._release_desktop_modifiers()
+                raise
+            if (
+                _kbd
+                and isinstance(result, dict)
+                and not result.get("success", True)
+                # F2: a steering-confidence downgrade means the native keyword
+                # actually SUCCEEDED (the key is held as intended) — releasing
+                # would corrupt a deliberate Press/Release chord. Only release
+                # on a genuine execution failure.
+                and not self._is_steering_downgrade(result)
+            ):
+                # F4: offload the release off the event loop on the normal
+                # failure-return path (no cancellation concern here).
+                await asyncio.to_thread(self._release_desktop_modifiers)
+                # F16 steering (wording only): point the agent at the atomic
+                # Keyboard Type, which cannot leave a key held.
+                try:
+                    hints = result.setdefault("hints", [])
+                    if isinstance(hints, list):
+                        hints.append({
+                            "type": "platynui_keyboard_release_safety",
+                            "message": (
+                                "Released all keyboard modifiers after this "
+                                "keyboard keyword failed. Prefer the atomic "
+                                "'Keyboard Type <Ctrl+A>' (self-contained "
+                                "press+release) over a bare 'Keyboard Press', "
+                                "which sends key-DOWN only and must be paired "
+                                "with 'Keyboard Release'."
+                            ),
+                        })
+                except Exception:  # pragma: no cover - defensive
+                    pass
+            return result
+
+    @staticmethod
+    def _is_steering_downgrade(result: dict) -> bool:
+        """True when a desktop keyword's success was flipped to failure by the
+        steering-confidence gate rather than a genuine execution failure
+        (change: fix-platynui-windows-runtime, F16/F2).
+
+        A steering downgrade means the native keyword DID execute (its key is
+        held as intended), so F16 must not release its modifiers. The gate only
+        downgrades in the RF-success path, so this marker uniquely identifies
+        the case."""
+        try:
+            from robotmcp.components.execution.desktop_execution_signals import (
+                SC_CONTRADICTED,
             )
+        except Exception:  # pragma: no cover - defensive
+            SC_CONTRADICTED = "contradicted"
+        return bool(result.get("steering_confidence") == SC_CONTRADICTED)
+
+    @staticmethod
+    def _release_desktop_modifiers() -> None:
+        """Best-effort release of all held keyboard modifiers via the PlatynUI
+        runtime (change: fix-platynui-windows-runtime, F16). Never raises."""
+        try:
+            from robotmcp.plugins.builtin.platynui_plugin import (
+                release_all_modifiers,
+            )
+
+            release_all_modifiers()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("desktop modifier release failed: %s", exc)
 
     async def _execute_keyword_serialized(
         self,
@@ -1924,6 +2036,19 @@ class KeywordExecutor:
                     )
 
                     ensure_x11_session_env()
+                    # F3 (change: fix-platynui-windows-runtime): a caller who
+                    # passes an explicit timeout_ms wants desktop query/wait
+                    # keywords to wait that long; stash it so the query-settings
+                    # default (applied in _execute_keyword_with_context) honors
+                    # it. This is PER-CALL — reset to None when absent so a
+                    # one-off long timeout never becomes a session-sticky
+                    # default that defeats the fast-fail behaviour on later
+                    # steps (the short default is restored automatically).
+                    session._platynui_query_timeout_ms = (
+                        timeout_ms
+                        if isinstance(timeout_ms, int) and timeout_ms > 0
+                        else None
+                    )
                     # D2: if a recent desktop launch marked the tree stale,
                     # refresh the cached accessibility tree before the FIRST
                     # tree-resolving keyword so a newly-launched app resolves by
@@ -2029,8 +2154,18 @@ class KeywordExecutor:
                     # the AUT window is visible/in-scope (change:
                     # platynui-focused-execution). FocusError fails fast under
                     # opt-in policy; otherwise warnings ride along on the step.
-                    _focus_outcome = self._platynui_focus_before_act(
-                        session, keyword, arguments
+                    # F14 (change: fix-platynui-windows-runtime): the focus
+                    # manager drives raw runtime.evaluate() (find/activate/
+                    # highlight the AUT window) with NO timeout knob — a broad
+                    # or busy-tree query blocks the event loop for tens of
+                    # seconds, wedging metadata calls. Offload to a worker
+                    # thread so the loop stays free; the global _execution_lock
+                    # already serializes desktop dispatch so no native
+                    # concurrency is introduced. FocusError still propagates
+                    # out of to_thread to the except below.
+                    _focus_outcome = await asyncio.to_thread(
+                        self._platynui_focus_before_act,
+                        session, keyword, arguments,
                     )
                     # Resolve a desktop Process launch/recovery executable to an
                     # absolute path against the server PATH (maintainer-report
@@ -2052,8 +2187,10 @@ class KeywordExecutor:
                     # so a success-with-no-effect can be flagged afterward
                     # (change: desktop-input-and-runtime-diagnostics). Native /
                     # non-reentrant; best-effort.
-                    _input_effect_before = self._desktop_text_count_before(
-                        keyword, arguments
+                    # F14: native CharacterCount query — also offload off the
+                    # loop (change: fix-platynui-windows-runtime).
+                    _input_effect_before = await asyncio.to_thread(
+                        self._desktop_text_count_before, keyword, arguments
                     )
             except Exception as _focus_exc:
                 from robotmcp.components.execution.platynui_focus import FocusError
@@ -2551,7 +2688,13 @@ class KeywordExecutor:
                         # but the target's CharacterCount did not change.
                         _after = None
                         if _input_effect_before is not None:
-                            _after = self._desktop_text_count_before(keyword, arguments)
+                            # F14 (change: fix-platynui-windows-runtime): the
+                            # AFTER CharacterCount probe is the same native
+                            # runtime.evaluate() as the offloaded BEFORE probe —
+                            # offload it off the loop too for symmetry.
+                            _after = await asyncio.to_thread(
+                                self._desktop_text_count_before, keyword, arguments
+                            )
                             _eh = input_effect_hint(
                                 keyword=keyword,
                                 success=True,
@@ -3088,6 +3231,90 @@ class KeywordExecutor:
         if mapped:
             return mapped
         return None
+
+    # Short default desktop query timeout (F3). PlatynUI.BareMetal's
+    # QuerySettings default is 30s, so an honest-miss Query/wait waits the full
+    # 30s and stacks across retries (up to ~180s in the Windows eval). A short
+    # default fails fast; a caller can still request a longer wait via
+    # timeout_ms. Overridable via ROBOTMCP_PLATYNUI_QUERY_TIMEOUT_MS.
+    _DEFAULT_PLATYNUI_QUERY_TIMEOUT_MS = 1500
+
+    def _ensure_desktop_query_timeout(self, session) -> None:
+        """Give desktop PlatynUI query/wait keywords a short default timeout so
+        an honest-miss fails fast (change: fix-platynui-windows-runtime, F3).
+
+        Mirrors ``Set Query Settings scope=SUITE`` by writing a short-timeout
+        ``QuerySettings`` into ``${PLATYNUI_QUERY_SETTINGS}`` in the live RF
+        context, once per session (re-applied only if the desired value
+        changed). A caller-supplied ``timeout_ms`` (stashed on the session)
+        overrides the short default. Best-effort; never raises — on any failure
+        the library keeps its 30s default (no worse than before)."""
+        try:
+            checker = getattr(session, "is_desktop_session", None)
+            if not (callable(checker) and checker() is True):
+                return
+        except Exception:
+            return
+        try:
+            default_ms = int(
+                os.environ.get(
+                    "ROBOTMCP_PLATYNUI_QUERY_TIMEOUT_MS",
+                    str(self._DEFAULT_PLATYNUI_QUERY_TIMEOUT_MS),
+                )
+            )
+        except (ValueError, TypeError):
+            default_ms = self._DEFAULT_PLATYNUI_QUERY_TIMEOUT_MS
+        desired_ms = getattr(session, "_platynui_query_timeout_ms", None) or default_ms
+        if desired_ms <= 0:
+            return
+        if getattr(session, "_platynui_query_timeout_applied_ms", None) == desired_ms:
+            return
+        try:
+            from dataclasses import replace as _dc_replace
+
+            from robot.running.context import EXECUTION_CONTEXTS as _EC
+            from PlatynUI.BareMetal import (  # library-sanctioned mechanism
+                PLATYNUI_QUERY_SETTINGS,
+                QuerySettings,
+            )
+
+            ctx = _EC.current
+            if ctx is None:
+                return
+            variables = ctx.variables
+            name = f"${{{PLATYNUI_QUERY_SETTINGS}}}"
+            # Preserve any non-timeout query settings already in scope
+            # (retry_interval / ignore_exceptions) instead of resetting them to
+            # class defaults — only the timeout is ours to change.
+            base = None
+            try:
+                if PLATYNUI_QUERY_SETTINGS in variables:
+                    existing = variables[name]
+                    if isinstance(existing, QuerySettings):
+                        base = existing
+            except Exception:
+                base = None
+            timeout_s = desired_ms / 1000.0
+            settings = (
+                _dc_replace(base, timeout=timeout_s)
+                if base is not None
+                else QuerySettings(timeout=timeout_s)
+            )
+            # set_suite(children=True): a bare write into the SUITE store is
+            # invisible because rf-mcp already holds a live TEST scope copied
+            # from suite BEFORE the write, and PlatynUI resolves the variable
+            # via variables.current (the test scope). set_suite(children=True)
+            # both persists at SUITE (surviving per-step test-scope resets) AND
+            # propagates down to the current/test scope so the library sees it
+            # immediately (mirrors Set Query Settings scope=SUITE).
+            variables.set_suite(name, settings, children=True)
+            session._platynui_query_timeout_applied_ms = desired_ms
+            logger.debug(
+                "Applied desktop query timeout %sms via ${PLATYNUI_QUERY_SETTINGS}",
+                desired_ms,
+            )
+        except Exception as exc:  # pragma: no cover - env/internals dependent
+            logger.debug("desktop query-settings apply skipped: %s", exc)
 
     def _inject_timeout_into_arguments(
         self,
@@ -3674,6 +3901,10 @@ class KeywordExecutor:
                                     )
             except Exception:
                 pass
+
+            # F3: give desktop query/wait keywords a short fast-fail timeout
+            # now that the RF context exists (no-op for non-desktop sessions).
+            self._ensure_desktop_query_timeout(session)
 
             # Execute keyword using RF native context with session variables
             result = await asyncio.to_thread(

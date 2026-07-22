@@ -162,6 +162,17 @@ _RUNTIME_STATE = "new"
 # Last bind/connect failure text (for classification). None once open.
 _RUNTIME_LAST_ERROR: Optional[str] = None
 
+# Stuck-key safety net (change: fix-platynui-windows-runtime, F16). ``Keyboard
+# Press`` sends key-DOWN only, and runs that time out / are killed mid-chord can
+# leave a modifier physically held at the OS level — the operator's keyboard is
+# then wedged until reboot. Releasing keys that are not held is a proven no-op,
+# so a broad release sequence is always safe. Left+right variants + AltGr + Win
+# cover every modifier the native keyboard recognizes.
+_RELEASE_ALL_SEQUENCE = "<LCtrl+RCtrl+LAlt+RAlt+AltGr+LShift+RShift+LWin+RWin>"
+# atexit/SIGTERM release handlers are registered exactly once, on first runtime
+# bind (guarded under _RUNTIME_LOCK), so a killed process still releases keys.
+_RELEASE_HANDLERS_REGISTERED = False
+
 
 def runtime_unavailable_reason() -> Optional[str]:
     """Classify why the PlatynUI runtime is unavailable, or None when it is
@@ -225,6 +236,9 @@ def get_runtime():
             _RUNTIME = pn.Runtime()
             _RUNTIME_STATE = "open"
             _RUNTIME_LAST_ERROR = None
+            # First successful bind: arm the stuck-key safety net so a killed
+            # process still releases held modifiers (F16). Under _RUNTIME_LOCK.
+            _register_release_handlers_once()
         except Exception as exc:  # pragma: no cover - env dependent
             logger.debug("PlatynUI runtime broker bind failed: %s", exc)
             _RUNTIME = None
@@ -233,6 +247,72 @@ def get_runtime():
             # unavailable-then-available env can retry.
             _RUNTIME_LAST_ERROR = f"{type(exc).__name__}: {exc}"
         return _RUNTIME
+
+
+def release_all_modifiers() -> bool:
+    """Best-effort release of every keyboard modifier (change:
+    fix-platynui-windows-runtime, F16).
+
+    Releases Ctrl/Alt/AltGr/Shift/Win (left+right) against the ALREADY-OPEN
+    native runtime. Releasing a key that is not held is a no-op, so this is
+    always safe to call from teardown, keyword-failure ``finally`` paths, and
+    process-exit handlers. Never raises; never starts the runtime just to
+    release (teardown must not spin up the native broker). Returns True when a
+    release was dispatched.
+    """
+    if _RUNTIME is None or _RUNTIME_STATE != "open":
+        return False
+    try:
+        _RUNTIME.keyboard_release(_RELEASE_ALL_SEQUENCE)
+        return True
+    except Exception as exc:  # pragma: no cover - env dependent
+        logger.debug("release_all_modifiers failed: %s", exc)
+        return False
+
+
+def _register_release_handlers_once() -> None:
+    """Arm atexit + SIGTERM handlers that release held modifiers on process
+    exit (F16). Called once from ``get_runtime`` under ``_RUNTIME_LOCK`` after
+    the first successful bind — the safety net for a run killed mid-chord (e.g.
+    a ``claude -p`` process terminated before ``on_session_end`` runs). Never
+    raises."""
+    global _RELEASE_HANDLERS_REGISTERED
+    if _RELEASE_HANDLERS_REGISTERED:
+        return
+    _RELEASE_HANDLERS_REGISTERED = True
+    try:
+        import atexit
+
+        atexit.register(release_all_modifiers)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("atexit release registration failed: %s", exc)
+    try:
+        import signal
+
+        # Chain to any prior SIGTERM handler so we don't swallow shutdown.
+        _prior = signal.getsignal(signal.SIGTERM)
+
+        def _release_on_sigterm(signum, frame):  # pragma: no cover - signal path
+            release_all_modifiers()
+            if callable(_prior) and _prior not in (
+                signal.SIG_DFL,
+                signal.SIG_IGN,
+            ):
+                _prior(signum, frame)
+            elif _prior == signal.SIG_IGN:
+                # Prior handler explicitly ignored SIGTERM — preserve that.
+                return
+            else:
+                # SIG_DFL, None, or unknown: restore the default and re-raise so
+                # the process still terminates on SIGTERM (never leave it
+                # un-killable by swallowing the signal).
+                signal.signal(signal.SIGTERM, signal.SIG_DFL)
+                os.kill(os.getpid(), signum)
+
+        signal.signal(signal.SIGTERM, _release_on_sigterm)
+    except (ValueError, OSError, AttributeError) as exc:
+        # signal.signal only works on the main thread; best-effort otherwise.
+        logger.debug("SIGTERM release registration skipped: %s", exc)
 
 
 def runtime_state() -> str:
@@ -555,8 +635,32 @@ class PlatynUILibraryPlugin(StaticLibraryPlugin):
             libraries.append(preference)
             if any("platynui" in str(lib).lower() for lib in libraries):
                 ensure_x11_session_env()
+                # Arm the stuck-key release handlers HERE, on the main thread
+                # (session creation runs on the event loop). The first runtime
+                # bind often happens inside the F14 to_thread-offloaded focus
+                # call on a WORKER thread, where signal.signal() raises — so
+                # arming only at bind time would silently skip the SIGTERM net
+                # (and default SIGTERM also skips atexit), defeating the F16
+                # process-kill safety net. Registration is idempotent and the
+                # release itself no-ops until the runtime is open. F16.
+                _register_release_handlers_once()
+                # Defensively clear any modifier a PRIOR crashed run left held
+                # (no-op unless the runtime is already open) — F16.
+                release_all_modifiers()
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("PlatynUI session-start hook failed: %s", exc)
+
+    def on_session_end(self, session: "ExecutionSession") -> None:
+        """Release any held keyboard modifiers when a PlatynUI desktop session
+        closes (change: fix-platynui-windows-runtime, F16).
+
+        ``session_manager.on_session_end`` invokes this for every plugin; the
+        release is a no-op when the runtime is not open or nothing is held, so
+        it is safe for non-desktop sessions too. Never raises."""
+        try:
+            release_all_modifiers()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("PlatynUI session-end release failed: %s", exc)
 
     def before_keyword_execution(
         self,

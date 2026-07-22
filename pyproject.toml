@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rf-mcp"
-version = "0.34.0.dev3"
+version = "0.34.0.dev4"
 description = "Robot Framework MCP Server - Natural Language Test Automation Bridge"
 authors = [{ name = "Many Kasiriha" }]
 license = { text = "Apache-2.0" }

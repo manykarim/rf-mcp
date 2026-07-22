@@ -40,12 +40,39 @@ ISOLATION_MARKER_ENV = "ROBOTMCP_PLATYNUI_ISOLATED_DISPLAY"
 ISOLATION_XPID_ENV = "ROBOTMCP_PLATYNUI_ISOLATED_XPID"
 ALLOW_ACTIVE_ENV = "ROBOTMCP_PLATYNUI_ALLOW_ACTIVE_DESKTOP"
 SAFETY_GUARD_ENV = "ROBOTMCP_PLATYNUI_SAFETY_GUARD"  # "warn" => log, don't block
+# Strict opt-IN to enforce isolation on Windows (change:
+# fix-platynui-windows-runtime, F4). Windows has no headless-isolation model
+# (no Xvfb/Xephyr equivalent), so the guard is permissive by default there;
+# operators who insist on isolation set this to refuse instead.
+REQUIRE_ISOLATED_ENV = "ROBOTMCP_PLATYNUI_REQUIRE_ISOLATED"
 
 _X_SERVER_BINARIES = ("xvfb", "xephyr", "xorg", "/x ", "/x\x00", "x11")
 
 ISOLATED = "isolated"
 ACTIVE = "active"
 UNKNOWN = "unknown"
+# Windows has exactly one interactive desktop and no X11 isolated-display
+# model; the X11/EWMH/marker probes never apply (change:
+# fix-platynui-windows-runtime, F4).
+WINDOWS = "windows"
+
+# Windows-accurate isolation note — NEVER the Linux nested-X-server recipe.
+_WINDOWS_ISOLATION_NOTE = (
+    "On Windows there is no headless nested-display isolation model. Desktop "
+    "automation drives the active session's desktop. To isolate it, run rf-mcp "
+    "in a dedicated Windows user session or over RDP to a separate session."
+)
+
+
+def _is_windows() -> bool:
+    """True on Windows (patchable via ``os.name`` in tests)."""
+    return os.name == "nt"
+
+
+def require_isolated(environ: Optional[Dict[str, str]] = None) -> bool:
+    """Strict opt-in to enforce isolation on Windows (F4)."""
+    env = environ if environ is not None else os.environ
+    return env.get(REQUIRE_ISOLATED_ENV, "").strip().lower() in {"1", "true", "yes"}
 
 
 def _bound_display(environ: Dict[str, str]) -> Optional[str]:
@@ -201,6 +228,14 @@ def classify_bound_display_detailed(
     ``none`` (no display bound / probe inconclusive).
     """
     env = environ if environ is not None else os.environ
+    # Windows: no X11/EWMH/marker model applies — classify as `windows` before
+    # any probe (change: fix-platynui-windows-runtime, F4).
+    if _is_windows():
+        return {
+            "display": None,
+            "isolation": WINDOWS,
+            "isolation_source": "windows_console",
+        }
     display = _bound_display(env)
     if _has_isolation_marker(env, display):
         # Corroborate the marker against a recorded X-server PID (change:
@@ -285,6 +320,30 @@ def evaluate_safety(
         return {
             "classification": classification, "enforcing": True,
             "allowed": True, "bypassed": False, "reason": None,
+        }
+    if classification == WINDOWS:
+        # F4: Windows has no isolated-display model — refusing every keyword
+        # (with an impossible Xephyr recipe) blocks all Windows automation.
+        # Allow by default with a one-time active-desktop warning; a strict
+        # opt-in enforces isolation for operators who want it. No Xephyr recipe.
+        if require_isolated(env):
+            return {
+                "classification": classification, "enforcing": True,
+                "allowed": False, "bypassed": False,
+                "reason": (
+                    "ROBOTMCP_PLATYNUI_REQUIRE_ISOLATED is set and this is a "
+                    "Windows active desktop. " + _WINDOWS_ISOLATION_NOTE
+                ),
+                "windows_note": _WINDOWS_ISOLATION_NOTE,
+            }
+        return {
+            "classification": classification, "enforcing": True,
+            "allowed": True, "bypassed": False,
+            "reason": (
+                "PlatynUI will drive the ACTIVE Windows desktop. "
+                + _WINDOWS_ISOLATION_NOTE
+            ),
+            "windows_note": _WINDOWS_ISOLATION_NOTE,
         }
     reason = (
         f"bound display classified '{classification}': refusing desktop input "
