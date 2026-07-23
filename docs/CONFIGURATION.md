@@ -40,9 +40,10 @@ file. Handy when a model needs less hand-holding, or a lot more.
 | Variable | Values | Default | Effect |
 |----------|--------|---------|--------|
 | `ROBOTMCP_INSTRUCTIONS` | `off`, `default`, `custom` | `default` | `off` disables instructions; `default` uses the selected template; `custom` loads `ROBOTMCP_INSTRUCTIONS_FILE`. Invalid values fall back to `default`. |
-| `ROBOTMCP_INSTRUCTIONS_TEMPLATE` | `minimal`, `standard`, `detailed`, `browser-focused`, `api-focused` | `standard` | Which built-in instruction template to serve in `default` mode. Invalid values fall back to `standard`. |
+| `ROBOTMCP_INSTRUCTIONS_TEMPLATE` | `lean` (alias `checklist`), `minimal`, `standard`, `detailed`, `browser-focused`, `api-focused`, `desktop-focused`, `discovery_first`, `locator_prevention` | `lean` | Which built-in instruction template to serve in `default` mode. `lean` is a short, order-explicit checklist; set `standard` for the longer pre-0.34 text. Invalid values fall back to the default. |
 | `ROBOTMCP_INSTRUCTIONS_FILE` | path (≤256 chars) | *(unset)* | Path to a custom instructions file. Required when `ROBOTMCP_INSTRUCTIONS=custom`; validated for path safety and existence. If unset in custom mode, falls back to `default`. |
 | `ROBOTMCP_INSTRUCTION_MODE` | free-form string | `default` | Tag passed to the adaptive instruction-learning hooks at session start (labels the mode being observed). Distinct from `ROBOTMCP_INSTRUCTIONS`. |
+| `ROBOTMCP_API_GUIDANCE` | `on`, `off` | `on` | Attach a compact RequestsLibrary cheat-sheet (`api_guidance`) to the session-start response when the session uses RequestsLibrary. Mirrors the existing desktop guidance. Set `off` to suppress it. |
 
 ---
 
@@ -122,8 +123,8 @@ tuned to a model's context window. This is where you dial that in.
 | `ROBOTMCP_FETCH_ARTIFACT` | `true`/`1`/`yes`, else off | `false` | Enable the `fetch_artifact` tool so the agent can pull externalized content back. Only takes effect when output mode is not `inline`. |
 | `ROBOTMCP_TOKENIZER` | `heuristic`, `cl100k_base`, `o200k_base` | `heuristic` | Token-estimation backend. The `tiktoken` backends need `pip install "rf-mcp[tokens]"`; without it, falls back to the heuristic (chars ÷ 4). |
 | `ROBOTMCP_CATALOG_HARD_CAP` | integer | `100` | Hard cap on the number of keywords returned in a discovery catalog response. |
-| `ROBOTMCP_TOOL_PROFILE` | `browser_exec`, `api_exec`, `desktop_exec`, `discovery`, `minimal_exec`, `slim_exec`, `full` | *(auto-selected)* | Default tool profile (which tools are exposed, and how their schemas are trimmed) when `manage_session` doesn't specify one. |
-| `ROBOTMCP_MODEL_TIER` | `small_7b`, `small_context`, `medium_13b`, `standard`, `large_context`, `hosted` | *(auto)* | Model-capability tier hint used to auto-select a profile and description mode when `manage_session` doesn't pass one. |
+| `ROBOTMCP_TOOL_PROFILE` | `browser_exec`, `api_exec`, `desktop_exec`, `discovery`, `minimal_exec`, `slim_exec`, `full` | *(auto-selected)* | Default tool profile — which tools are exposed — when `manage_session` doesn't specify one. On FastMCP 3.x a profile changes the tool *set* only; per-profile description and input-schema trimming is not applied. |
+| `ROBOTMCP_MODEL_TIER` | `small_7b`, `small_context`, `medium_13b`, `standard`, `large_context`, `hosted` | *(auto)* | Model-capability tier hint used to auto-select a profile when `manage_session` doesn't pass one. |
 
 ---
 
@@ -148,14 +149,25 @@ detection is fighting you.
 ## PlatynUI desktop safety
 
 Desktop automation is powerful and, unmanaged, dangerous — it drives the real
-pointer and keyboard. rf-mcp refuses to act on an active/unknown desktop by
-default and only clicks inside a scoped target. These variables relax or tighten
-those guards. **Loosen them only when you know the run is isolated** (e.g. Xvfb).
+pointer and keyboard. These variables relax or tighten the guards, and rf-mcp
+only clicks inside a scoped target.
+
+The default depends on the platform:
+
+- **Linux** — rf-mcp refuses to act on an active/unknown display and only
+  proceeds on a provably isolated one. **Loosen this only when you know the run
+  is isolated** (e.g. Xvfb/Xephyr).
+- **Windows** — there is no nested-display isolation model, so a Windows host is
+  classified as `windows` and allowed by default, with a one-time warning that
+  it is driving the live desktop. Use `ROBOTMCP_PLATYNUI_REQUIRE_ISOLATED` to
+  refuse instead.
 
 | Variable | Values | Default | Effect |
 |----------|--------|---------|--------|
 | `ROBOTMCP_PLATYNUI_SAFETY_GUARD` | `warn` | *(enforce)* | `warn` downgrades the desktop safety guard from refuse-to-run to log-a-warning. Any other value keeps enforcement. |
-| `ROBOTMCP_PLATYNUI_ALLOW_ACTIVE_DESKTOP` | `1`/`true`/`yes`, else off | *(off)* | Allow input on the active/primary desktop instead of refusing. Off ⇒ only a proven-isolated display is allowed. |
+| `ROBOTMCP_PLATYNUI_ALLOW_ACTIVE_DESKTOP` | `1`/`true`/`yes`, else off | *(off)* | Allow input on the active/primary desktop instead of refusing. Off ⇒ only a proven-isolated display is allowed. Not needed on Windows, which is allowed by default. |
+| `ROBOTMCP_PLATYNUI_REQUIRE_ISOLATED` | `1`/`true`/`yes`, else off | *(off)* | Strict opt-in for Windows: refuse desktop interaction keywords on the active Windows desktop instead of allowing them. No effect on Linux, which already refuses non-isolated displays. |
+| `ROBOTMCP_PLATYNUI_QUERY_TIMEOUT_MS` | integer milliseconds (>0) | `1500` | Default timeout for desktop element queries/waits, on **all platforms**. Replaces PlatynUI's own ~30s (60s for broad queries) default so a wrong locator fails fast instead of stacking retries. Raise it if you rely on a long implicit wait; an explicit `timeout_ms` on a step overrides it for that call. |
 | `ROBOTMCP_PLATYNUI_ISOLATED_DISPLAY` | display string (e.g. `:99`) | *(unset)* | Marker recorded by the bootstrap: the isolated `DISPLAY` it provisioned. Corroborates that input is safe. |
 | `ROBOTMCP_PLATYNUI_ISOLATED_XPID` | PID | *(unset)* | PID of the X server (Xvfb/Xephyr/Xorg) that owns the isolated display. The guard verifies it's a live X server for that display, so a stale marker can't false-allow input. |
 | `ROBOTMCP_PLATYNUI_ALLOW_UNSCOPED` | `1`/`true`/`yes`, else off | *(off)* | Permit a deliberate desktop-wide (unscoped) element search; otherwise scoping to the app under test is enforced (one-time warning on opt-in). |

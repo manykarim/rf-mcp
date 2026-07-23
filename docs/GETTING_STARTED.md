@@ -47,7 +47,12 @@ anything, you have to do afterward:
 | `database` | DatabaseLibrary | a DB driver |
 | `frontend` | Django dashboard | — |
 | `memory` | Persistent semantic memory (sqlite-vec + model2vec) | — |
+| `desktop` | PlatynUI native desktop automation (Rust core + `platynui-cli`) | Python 3.12+; ships as a pinned prerelease |
 | `all` | all of the above (Robot Framework libraries) | as above |
+
+> **`desktop` needs Python 3.12+.** It is included in `[all]`, but on Python
+> 3.10/3.11 it resolves to nothing — `[all]` still installs fine, you just don't
+> get desktop automation there.
 
 > `[all]` deliberately leaves out the `semantic` extra — that one pulls
 > sentence-transformers and torch (~2GB) as an optional max-quality backend for
