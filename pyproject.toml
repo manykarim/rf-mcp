@@ -68,6 +68,12 @@ all = [
     "sqlite-vec>=0.1.6",
     "model2vec>=0.4.0",
     "tiktoken>=0.7.0",
+    # Desktop automation is part of [all]. Referenced as a self-extra so the
+    # PlatynUI pins stay defined in exactly one place (see `desktop` above) —
+    # bumping them there is enough. The `python_version >= "3.12"` markers ride
+    # along, so on 3.10/3.11 this contributes nothing and [all] still resolves.
+    # The exact-pinned prerelease is accepted without a global --pre.
+    "rf-mcp[desktop]",
 ]
 # NOTE: dev tooling lives in [dependency-groups].dev (PEP 735), which is what
 # `uv sync` / CI use. The former [project.optional-dependencies].dev extra was
