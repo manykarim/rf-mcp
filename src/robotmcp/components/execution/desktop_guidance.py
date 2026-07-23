@@ -30,6 +30,7 @@ _LOCATOR_CRIB: List[str] = [
     "Launch the app first (Process.Start Process), then Query for its control:Frame before acting.",
     "Read a value back with Get Attribute on the scoped node; GTK text views expose native:Text.CharacterCount (not live text content).",
     "Take Screenshot signature is (descriptor, filename, rect) — the FIRST positional is a node descriptor, not a filename; pass filename= for a path.",
+    "Prefer the atomic 'Keyboard Type' (self-contained press+release) for shortcuts, e.g. Keyboard Type  <descriptor>  <Ctrl+A>. A bare 'Keyboard Press' sends key-DOWN ONLY and MUST be paired with 'Keyboard Release' — an unpaired Press (esp. a non-modifier like a letter/F-key/Escape) leaves a key physically held on the OS.",
     "For the full locator cookbook call get_locator_guidance (topic defaults to the desktop/PlatynUI chapter).",
 ]
 

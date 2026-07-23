@@ -102,7 +102,7 @@ class TestReleaseHandlerRegistration:
         ):
             pnp._register_release_handlers_once()
             pnp._register_release_handlers_once()
-            reg.assert_called_once_with(pnp.release_all_modifiers)
+            reg.assert_called_once_with(pnp.release_tracked_keys)
 
     def test_on_session_start_arms_handlers_on_main_thread(self):
         """The F14 to_thread offload can push the first runtime bind onto a
@@ -138,13 +138,13 @@ class TestReleaseHandlerRegistration:
 class TestPluginSessionEnd:
     def test_on_session_end_releases_modifiers(self):
         plugin = pnp.PlatynUILibraryPlugin()
-        with patch.object(pnp, "release_all_modifiers") as rel:
+        with patch.object(pnp, "release_tracked_keys") as rel:
             plugin.on_session_end(_DesktopSession())
             rel.assert_called_once()
 
     def test_on_session_end_never_raises(self):
         plugin = pnp.PlatynUILibraryPlugin()
-        with patch.object(pnp, "release_all_modifiers", side_effect=RuntimeError):
+        with patch.object(pnp, "release_tracked_keys", side_effect=RuntimeError):
             plugin.on_session_end(_DesktopSession())  # must not raise
 
 
@@ -192,7 +192,7 @@ class TestKeywordFailureRelease:
 
         with patch.object(
             executor, "_execute_keyword_serialized", _serialized
-        ), patch.object(executor, "_release_desktop_modifiers") as rel:
+        ), patch.object(executor, "_release_desktop_keys") as rel:
             loop = asyncio.new_event_loop()
             try:
                 if isinstance(result_or_exc, Exception):
@@ -242,7 +242,7 @@ class TestKeywordFailureRelease:
 
         with patch.object(
             executor, "_execute_keyword_serialized", _serialized
-        ), patch.object(executor, "_release_desktop_modifiers"):
+        ), patch.object(executor, "_release_desktop_keys"):
             loop = asyncio.new_event_loop()
             try:
                 result = loop.run_until_complete(_drive())
@@ -548,3 +548,4 @@ class TestLinuxUnchanged:
             ev = dds.evaluate_safety(_GuardSession(), {})
         assert ev["allowed"] is True
         assert ev["bypassed"] is False
+

@@ -1914,15 +1914,22 @@ class KeywordExecutor:
         # causing it to go to stderr instead of the MCP transport.
         # The lock also prevents concurrent Selenium WebDriver access.
         async with self._execution_lock:
-            # F16 (change: fix-platynui-windows-runtime): a desktop keyboard
-            # keyword that raises or returns failure may have been killed
-            # mid-chord, leaving a modifier physically held at the OS level
-            # (the operator's keyboard wedged until reboot). Release all
-            # modifiers on failure/exception. A SUCCESSFUL Keyboard Press
-            # legitimately holds a key for a later Keyboard Release, so we do
-            # NOT release on success. release_all_modifiers() is a no-op when
-            # nothing is held.
+            # F16 + harden-platynui-stuck-key-release: a desktop keyboard keyword
+            # that raises or returns failure may have been killed mid-chord,
+            # leaving a key physically held at the OS level (the operator's
+            # keyboard wedged). We track the EXACT keys held (incl. non-modifiers)
+            # so teardown/failure/exit release precisely those. A SUCCESSFUL
+            # Keyboard Press legitimately holds a key for a later Keyboard
+            # Release, so we do NOT release on success — but we DO record it.
             _kbd = self._is_desktop_keyboard_keyword(session, keyword)
+            _kbd_kind, _kbd_seq = (
+                self._desktop_keyboard_op(keyword, arguments) if _kbd else (None, None)
+            )
+            # Record intended-held keys BEFORE dispatch so a kill mid-call is
+            # covered by the persisted state file (Press holds; Type holds then
+            # releases within the same call).
+            if _kbd_kind in ("press", "type") and _kbd_seq:
+                self._record_pressed_keys(_kbd_seq)
             try:
                 result = await self._execute_keyword_serialized(
                     session, keyword, arguments, browser_library_manager,
@@ -1939,8 +1946,9 @@ class KeywordExecutor:
                 # dispatches). keyboard_release is a fast input dispatch, not a
                 # tree query, so the brief on-loop cost is acceptable.
                 if _kbd:
-                    self._release_desktop_modifiers()
+                    self._release_desktop_keys()
                 raise
+            _released_here = False
             if (
                 _kbd
                 and isinstance(result, dict)
@@ -1952,27 +1960,85 @@ class KeywordExecutor:
                 and not self._is_steering_downgrade(result)
             ):
                 # F4: offload the release off the event loop on the normal
-                # failure-return path (no cancellation concern here).
-                await asyncio.to_thread(self._release_desktop_modifiers)
-                # F16 steering (wording only): point the agent at the atomic
-                # Keyboard Type, which cannot leave a key held.
+                # failure-return path (no cancellation concern here). Releases
+                # the exact tracked held set (incl. non-modifiers) + clears state.
+                await asyncio.to_thread(self._release_desktop_keys)
+                _released_here = True
+                # Steering: point the agent at the atomic Keyboard Type, which
+                # cannot leave a key held.
                 try:
                     hints = result.setdefault("hints", [])
                     if isinstance(hints, list):
                         hints.append({
                             "type": "platynui_keyboard_release_safety",
                             "message": (
-                                "Released all keyboard modifiers after this "
-                                "keyboard keyword failed. Prefer the atomic "
-                                "'Keyboard Type <Ctrl+A>' (self-contained "
+                                "Released all held keyboard keys (including any "
+                                "non-modifier such as a letter/F-key/Escape) "
+                                "after this keyboard keyword failed. Prefer the "
+                                "atomic 'Keyboard Type <Ctrl+A>' (self-contained "
                                 "press+release) over a bare 'Keyboard Press', "
-                                "which sends key-DOWN only and must be paired "
+                                "which sends key-DOWN only and MUST be paired "
                                 "with 'Keyboard Release'."
                             ),
                         })
                 except Exception:  # pragma: no cover - defensive
                     pass
+            # On a SUCCESSFUL Keyboard Type / Keyboard Release, the paired key-UP
+            # already happened — clear those keys from the registry. (Press keeps
+            # its recorded keys held until an explicit Keyboard Release.)
+            if not _released_here and _kbd_kind in ("type", "release") and _kbd_seq:
+                self._record_released_keys(_kbd_seq)
             return result
+
+    @staticmethod
+    def _desktop_keyboard_op(keyword, arguments):
+        """Return ``(kind, sequence)`` for a desktop keyboard keyword, where
+        kind is ``"press"``/``"type"``/``"release"`` and sequence is the key
+        text argument (2nd positional, or a ``text=`` named arg). Non-raising;
+        returns ``(None, None)`` when it cannot classify. change:
+        harden-platynui-stuck-key-release."""
+        try:
+            norm = str(keyword or "").lower().rsplit(".", 1)[-1].strip()
+            kind = {
+                "keyboard press": "press",
+                "keyboard type": "type",
+                "keyboard release": "release",
+            }.get(norm)
+            if kind is None:
+                return (None, None)
+            seq = None
+            args = list(arguments or [])
+            for a in args:
+                if isinstance(a, str) and a.startswith("text="):
+                    seq = a[len("text="):]
+                    break
+            if seq is None and len(args) >= 2:
+                seq = args[1]
+            return (kind, seq)
+        except Exception:  # pragma: no cover - defensive
+            return (None, None)
+
+    @staticmethod
+    def _record_pressed_keys(sequence) -> None:
+        """Record keys a desktop Press/Type is about to hold. Never raises.
+        change: harden-platynui-stuck-key-release."""
+        try:
+            from robotmcp.plugins.builtin.platynui_plugin import record_pressed_keys
+
+            record_pressed_keys(sequence)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("record_pressed_keys failed: %s", exc)
+
+    @staticmethod
+    def _record_released_keys(sequence) -> None:
+        """Remove keys released by a desktop Release/Type from the registry.
+        Never raises. change: harden-platynui-stuck-key-release."""
+        try:
+            from robotmcp.plugins.builtin.platynui_plugin import record_released_keys
+
+            record_released_keys(sequence)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("record_released_keys failed: %s", exc)
 
     @staticmethod
     def _is_steering_downgrade(result: dict) -> bool:
@@ -1993,17 +2059,19 @@ class KeywordExecutor:
         return bool(result.get("steering_confidence") == SC_CONTRADICTED)
 
     @staticmethod
-    def _release_desktop_modifiers() -> None:
-        """Best-effort release of all held keyboard modifiers via the PlatynUI
-        runtime (change: fix-platynui-windows-runtime, F16). Never raises."""
+    def _release_desktop_keys() -> None:
+        """Best-effort release of the EXACT tracked held-key set (incl.
+        non-modifiers) via the PlatynUI runtime, clearing the registry + state
+        file. Falls back to a modifier blast internally. Never raises.
+        change: harden-platynui-stuck-key-release."""
         try:
             from robotmcp.plugins.builtin.platynui_plugin import (
-                release_all_modifiers,
+                release_tracked_keys,
             )
 
-            release_all_modifiers()
+            release_tracked_keys()
         except Exception as exc:  # pragma: no cover - defensive
-            logger.debug("desktop modifier release failed: %s", exc)
+            logger.debug("desktop key release failed: %s", exc)
 
     async def _execute_keyword_serialized(
         self,

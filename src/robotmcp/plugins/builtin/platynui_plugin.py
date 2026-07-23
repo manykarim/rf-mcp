@@ -173,6 +173,21 @@ _RELEASE_ALL_SEQUENCE = "<LCtrl+RCtrl+LAlt+RAlt+AltGr+LShift+RShift+LWin+RWin>"
 # bind (guarded under _RUNTIME_LOCK), so a killed process still releases keys.
 _RELEASE_HANDLERS_REGISTERED = False
 
+# --- Held-key registry (change: harden-platynui-stuck-key-release) -----------
+#
+# The modifiers-only F16 blast (_RELEASE_ALL_SEQUENCE) cannot lift a stuck
+# NON-modifier key (a bare ``Keyboard Press A``/``<F12>``/``<Escape>`` that was
+# never released). The registry records the EXACT keys rf-mcp is holding so the
+# teardown/failure/exit paths release precisely those, and it is mirrored to a
+# per-PID state file so a HARD kill (SIGKILL/TerminateProcess — which run
+# neither atexit nor SIGTERM) is recovered by the next desktop session start.
+_HELD_KEYS: set[str] = set()
+_HELD_KEYS_LOCK = threading.RLock()
+# Subdir under the OS temp dir holding ``held_<pid>.json`` files. A live process
+# only ever replays a file owned by a DEAD pid, so a concurrent healthy session
+# is never robbed of a key it is deliberately holding.
+_HELD_KEYS_DIRNAME = "robotmcp_platynui_held_keys"
+
 
 def runtime_unavailable_reason() -> Optional[str]:
     """Classify why the PlatynUI runtime is unavailable, or None when it is
@@ -270,6 +285,259 @@ def release_all_modifiers() -> bool:
         return False
 
 
+# --- Held-key registry: normalize / record / release / recover --------------
+#
+# change: harden-platynui-stuck-key-release.
+
+
+def _normalize_key_tokens(sequence: Optional[str]) -> list[str]:
+    """Parse a PlatynUI key sequence into the individual key tokens that a
+    ``Keyboard Press`` of that sequence leaves HELD (key-DOWN, no key-UP).
+
+    Best-effort and never raises. ``<Ctrl+A>`` -> ``["Ctrl", "A"]``; ``<F12>``
+    -> ``["F12"]``; a bare ``A`` -> ``["A"]``; literal text ``hi`` ->
+    ``["h", "i"]``. Bracketed groups split on ``+``; unbracketed characters
+    each become their own token. Whitespace and empty tokens are dropped.
+    """
+    tokens: list[str] = []
+    if not sequence:
+        return tokens
+    try:
+        i = 0
+        n = len(sequence)
+        while i < n:
+            ch = sequence[i]
+            if ch == "<":
+                end = sequence.find(">", i + 1)
+                if end == -1:
+                    # Unterminated '<' — treat the rest as literal chars.
+                    for c in sequence[i + 1:]:
+                        if not c.isspace():
+                            tokens.append(c)
+                    break
+                inner = sequence[i + 1:end]
+                for part in inner.split("+"):
+                    part = part.strip()
+                    if part:
+                        tokens.append(part)
+                i = end + 1
+            else:
+                if not ch.isspace():
+                    tokens.append(ch)
+                i += 1
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("_normalize_key_tokens failed for %r: %s", sequence, exc)
+    return tokens
+
+
+def _release_sequence_for(tokens) -> str:
+    """Build a PlatynUI release sequence that lifts each token individually,
+    e.g. ``["A", "Ctrl"]`` -> ``"<A><Ctrl>"``."""
+    return "".join(f"<{t}>" for t in tokens)
+
+
+def record_pressed_keys(sequence: Optional[str]) -> None:
+    """Record the keys a ``Keyboard Press``/``Keyboard Type`` is about to hold,
+    and mirror the held set to the per-PID state file so a hard kill is
+    recoverable. Never raises. change: harden-platynui-stuck-key-release."""
+    tokens = _normalize_key_tokens(sequence)
+    if not tokens:
+        return
+    with _HELD_KEYS_LOCK:
+        _HELD_KEYS.update(tokens)
+        _write_state_locked()
+
+
+def record_released_keys(sequence: Optional[str]) -> None:
+    """Remove keys released by ``Keyboard Release`` (or the paired UP inside
+    ``Keyboard Type``) from the registry, updating the state file. Never
+    raises. change: harden-platynui-stuck-key-release."""
+    tokens = _normalize_key_tokens(sequence)
+    if not tokens:
+        return
+    with _HELD_KEYS_LOCK:
+        for t in tokens:
+            _HELD_KEYS.discard(t)
+        _write_state_locked()
+
+
+def release_tracked_keys() -> bool:
+    """Release EXACTLY the keys the registry records as held (including
+    non-modifiers), then defensively blast all modifiers, and clear the
+    registry + state file.
+
+    Best-effort and non-raising; a no-op observationally when nothing is held
+    (releasing a not-held key has no effect). Never starts the runtime solely
+    to release — acts only when the runtime is already open (mirrors
+    ``release_all_modifiers``). change: harden-platynui-stuck-key-release.
+    """
+    if _RUNTIME is None or _RUNTIME_STATE != "open":
+        return False
+    with _HELD_KEYS_LOCK:
+        held = sorted(_HELD_KEYS)
+        dispatched = False
+        try:
+            if held:
+                _RUNTIME.keyboard_release(_release_sequence_for(held))
+                dispatched = True
+            # Fallback blast: covers any modifier that slipped registry tracking.
+            _RUNTIME.keyboard_release(_RELEASE_ALL_SEQUENCE)
+            dispatched = True
+        except Exception as exc:  # pragma: no cover - env dependent
+            logger.debug("release_tracked_keys dispatch failed: %s", exc)
+        _HELD_KEYS.clear()
+        _clear_state_locked()
+        return dispatched
+
+
+# --- Per-PID state file (hard-kill recovery) --------------------------------
+
+
+def _held_keys_dir() -> Optional[str]:
+    """Return (creating if needed) the directory holding per-PID held-key state
+    files, or None on failure. Never raises."""
+    try:
+        import tempfile
+
+        d = os.path.join(tempfile.gettempdir(), _HELD_KEYS_DIRNAME)
+        os.makedirs(d, exist_ok=True)
+        return d
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("_held_keys_dir failed: %s", exc)
+        return None
+
+
+def _state_file_path(pid: Optional[int] = None) -> Optional[str]:
+    d = _held_keys_dir()
+    if d is None:
+        return None
+    return os.path.join(d, f"held_{pid if pid is not None else os.getpid()}.json")
+
+
+def _write_state_locked() -> None:
+    """Atomically write the current held set (with owning PID) to this process's
+    state file, or delete the file when the set is empty. Caller holds
+    ``_HELD_KEYS_LOCK``. Never raises."""
+    path = _state_file_path()
+    if path is None:
+        return
+    try:
+        if not _HELD_KEYS:
+            _clear_state_locked()
+            return
+        import json
+
+        payload = json.dumps({"pid": os.getpid(), "keys": sorted(_HELD_KEYS)})
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+        os.replace(tmp, path)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("_write_state_locked failed: %s", exc)
+
+
+def _clear_state_locked() -> None:
+    """Delete this process's state file. Caller holds ``_HELD_KEYS_LOCK``.
+    Never raises."""
+    path = _state_file_path()
+    if path is None:
+        return
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("_clear_state_locked failed: %s", exc)
+
+
+def _pid_alive(pid: int) -> bool:
+    """Best-effort liveness check for ``pid``. On any uncertainty returns True
+    (fail-safe: do not replay a file that might belong to a live process)."""
+    if pid <= 0:
+        return False
+    if pid == os.getpid():
+        return True
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+            )
+            if not handle:
+                return False  # cannot open -> gone (or access denied ~ rare)
+            try:
+                code = ctypes.c_ulong()
+                if kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                    return code.value == STILL_ACTIVE
+                return True
+            finally:
+                kernel32.CloseHandle(handle)
+        else:
+            try:
+                os.kill(pid, 0)
+                return True
+            except ProcessLookupError:
+                return False
+            except PermissionError:
+                return True  # exists but not ours
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("_pid_alive(%s) failed: %s", pid, exc)
+        return True
+
+
+def recover_orphaned_held_keys() -> int:
+    """Replay key-UPs for any state file owned by a DEAD pid (a prior run
+    hard-killed with keys held), then delete the file. Files owned by a live
+    pid are left untouched. Returns the number of files recovered. Best-effort;
+    never raises; never starts the runtime. change:
+    harden-platynui-stuck-key-release."""
+    if _RUNTIME is None or _RUNTIME_STATE != "open":
+        return 0
+    d = _held_keys_dir()
+    if d is None:
+        return 0
+    recovered = 0
+    try:
+        import json
+
+        for name in os.listdir(d):
+            if not (name.startswith("held_") and name.endswith(".json")):
+                continue
+            path = os.path.join(d, name)
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    data = json.loads(fh.read() or "{}")
+            except Exception:
+                # Unreadable/partial file: remove it defensively.
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+                continue
+            pid = int(data.get("pid", -1) or -1)
+            keys = data.get("keys") or []
+            if pid == os.getpid() or _pid_alive(pid):
+                continue  # ours or a live session's — do not touch
+            try:
+                if keys:
+                    _RUNTIME.keyboard_release(_release_sequence_for(keys))
+                # Defensive modifier blast for the orphaned session too.
+                _RUNTIME.keyboard_release(_RELEASE_ALL_SEQUENCE)
+                recovered += 1
+            except Exception as exc:  # pragma: no cover - env dependent
+                logger.debug("orphan replay dispatch failed: %s", exc)
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("recover_orphaned_held_keys failed: %s", exc)
+    return recovered
+
+
 def _register_release_handlers_once() -> None:
     """Arm atexit + SIGTERM handlers that release held modifiers on process
     exit (F16). Called once from ``get_runtime`` under ``_RUNTIME_LOCK`` after
@@ -283,7 +551,7 @@ def _register_release_handlers_once() -> None:
     try:
         import atexit
 
-        atexit.register(release_all_modifiers)
+        atexit.register(release_tracked_keys)
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("atexit release registration failed: %s", exc)
     try:
@@ -293,7 +561,7 @@ def _register_release_handlers_once() -> None:
         _prior = signal.getsignal(signal.SIGTERM)
 
         def _release_on_sigterm(signum, frame):  # pragma: no cover - signal path
-            release_all_modifiers()
+            release_tracked_keys()
             if callable(_prior) and _prior not in (
                 signal.SIG_DFL,
                 signal.SIG_IGN,
@@ -644,6 +912,11 @@ class PlatynUILibraryPlugin(StaticLibraryPlugin):
                 # process-kill safety net. Registration is idempotent and the
                 # release itself no-ops until the runtime is open. F16.
                 _register_release_handlers_once()
+                # Recover keys left HELD by a prior process that was hard-killed
+                # (SIGKILL/TerminateProcess ran no atexit/SIGTERM handler): replay
+                # key-UPs from any state file owned by a dead pid, then clear it.
+                # change: harden-platynui-stuck-key-release.
+                recover_orphaned_held_keys()
                 # Defensively clear any modifier a PRIOR crashed run left held
                 # (no-op unless the runtime is already open) — F16.
                 release_all_modifiers()
@@ -651,14 +924,15 @@ class PlatynUILibraryPlugin(StaticLibraryPlugin):
             logger.debug("PlatynUI session-start hook failed: %s", exc)
 
     def on_session_end(self, session: "ExecutionSession") -> None:
-        """Release any held keyboard modifiers when a PlatynUI desktop session
-        closes (change: fix-platynui-windows-runtime, F16).
+        """Release any held keyboard keys when a PlatynUI desktop session closes
+        (change: fix-platynui-windows-runtime, F16; harden-platynui-stuck-key-release).
 
         ``session_manager.on_session_end`` invokes this for every plugin; the
         release is a no-op when the runtime is not open or nothing is held, so
-        it is safe for non-desktop sessions too. Never raises."""
+        it is safe for non-desktop sessions too. Never raises. Releases the
+        exact tracked held-key set (incl. non-modifiers), not just modifiers."""
         try:
-            release_all_modifiers()
+            release_tracked_keys()
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("PlatynUI session-end release failed: %s", exc)
 

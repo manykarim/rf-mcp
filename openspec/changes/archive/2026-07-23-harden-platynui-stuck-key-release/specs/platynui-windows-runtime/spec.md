@@ -1,8 +1,5 @@
-# platynui-windows-runtime Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change fix-platynui-windows-runtime. Update Purpose after archive.
-## Requirements
 ### Requirement: Desktop automation never leaves keyboard modifiers held
 The system SHALL track every synthetic keyboard key it presses in a held-key registry and SHALL
 release the **exact set of keys still held** — including non-modifier keys (letters, digits,
@@ -57,61 +54,7 @@ holds the key intentionally) SHALL NOT trigger a premature release.
 - **WHEN** the release path runs but the native runtime is not open
 - **THEN** it returns without starting the runtime and without raising
 
-### Requirement: Desktop keyword queries fail fast and honor timeout_ms
-The system SHALL bound PlatynUI desktop keyword queries with a short default timeout (rather than
-PlatynUI's ~30s / ~60s library default) and SHALL honor a caller-supplied `timeout_ms` by mapping
-it onto the PlatynUI query override, so that a wrong or honest-miss locator fails in ~1–2 seconds
-and cannot stack into multi-minute stalls.
-
-The short default SHALL remain overridable per session so a deliberately long wait (e.g. for an
-application window to appear) can request a larger `timeout_ms`.
-
-#### Scenario: Honest-miss locator fails fast
-- **WHEN** a desktop keyword targets a locator that does not resolve
-- **THEN** the query fails within the short default (~1.5s) instead of waiting PlatynUI's ~30s/60s
-  default
-
-#### Scenario: Caller timeout is honored
-- **WHEN** a desktop keyword is executed with an explicit `timeout_ms`
-- **THEN** that value is mapped onto the PlatynUI query override for the call and governs the wait
-
-### Requirement: Desktop keyword execution never blocks the server event loop
-The system SHALL execute PlatynUI desktop/native keywords off the server event loop (via a worker
-thread) with a bounded wait, so that a slow desktop query cannot wedge the server or starve
-unrelated calls such as metadata lookups.
-
-#### Scenario: Metadata calls stay responsive during a slow desktop query
-- **WHEN** a desktop `Focus`/`Query` on a large tree is in progress
-- **THEN** the event loop remains free and concurrent metadata calls (e.g. `get_keyword_info`)
-  return promptly instead of hanging behind the query
-
-#### Scenario: Slow desktop call returns a bounded failure
-- **WHEN** an off-thread desktop keyword exceeds its bounded wait
-- **THEN** the caller receives a timeout failure without the loop having been blocked
-
-### Requirement: The desktop safety guard is platform-aware on Windows
-The system SHALL classify a Windows host as a distinct `windows` desktop state and, by default,
-SHALL allow PlatynUI interaction keywords on Windows with a one-time active-desktop warning and a
-Windows-accurate note, rather than refusing every keyword with a Linux-only Xephyr/Xvfb remediation
-that cannot be followed on Windows.
-
-The Windows branch SHALL leave the Linux isolated/active/unknown classification and its
-refuse-by-default behaviour unchanged, and SHALL keep a strict opt-in for operators who want
-isolation enforced on Windows.
-
-#### Scenario: Windows host is allowed by default
-- **WHEN** a PlatynUI interaction keyword runs on a Windows host with no explicit override
-- **THEN** the guard classifies the display as `windows`, allows the keyword (not bypassed), and
-  emits a one-time warning that it will drive the active desktop
-
-#### Scenario: No Linux remediation is shown on Windows
-- **WHEN** the safety guard evaluates a Windows host
-- **THEN** the returned reason/remediation contains no Xephyr/Xvfb recipe and instead references a
-  dedicated/RDP session for isolation
-
-#### Scenario: Linux behaviour is unchanged
-- **WHEN** the guard evaluates a Linux host with an active EWMH desktop and no isolation marker
-- **THEN** it still refuses by default exactly as before
+## ADDED Requirements
 
 ### Requirement: Held keys are recovered after a hard process termination
 The system SHALL persist the held-key registry to a durable per-runtime state file at the moment a
@@ -140,4 +83,3 @@ current process did not itself write).
 #### Scenario: Stale replay is a safe no-op
 - **WHEN** the recovery path replays a state file whose recorded keys are no longer physically held
 - **THEN** the dispatched key-UPs are harmless no-ops and no error is raised
-
