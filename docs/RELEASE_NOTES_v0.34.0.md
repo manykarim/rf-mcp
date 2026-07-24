@@ -240,6 +240,36 @@ Hand-written MCP JSON still works and is kept in a "legacy / manual config" sect
 
 ---
 
+## The installer now sees your project's libraries
+
+`robotmcp install` used to write a launch command pointing at rf-mcp's *own* environment.
+Since rf-mcp imports Robot Framework libraries in its own process, that meant the running
+server was blind to anything installed in *your* project — a project `.venv` with, say,
+`JSONLibrary` came back as `ModuleNotFoundError`. It also never launched the command it wrote, so
+a broken or blind config was happily reported as "installed".
+
+Installing globally still stays effortless — `uvx` / `uv tool install` serves every project with
+no per-project setup. What's new is that when you install *into a project that has its own
+environment*, rf-mcp is wired up to use **that** environment's libraries, keywords and resources.
+
+- **uv-first.** For a project with its own libraries, the installer writes a non-mutating uv
+  overlay so the server runs against your project's interpreter:
+  `uv run --no-project --python <your-venv>/bin/python --with rf-mcp robotmcp`. Works for uv,
+  poetry, pdm, pipenv, rye, hatch and plain venvs.
+- **Verified before it's written.** The installer launches the resolved command and confirms your
+  project's libraries are actually reachable *before* saving the config — a blind or broken command
+  is refused, not persisted (`--no-verify` to skip).
+- **Hard version conflicts** (a project pinning Robot Framework < 7) route to the **attach bridge**
+  instead of silently testing a different RF version.
+- New flags: `-C/--project-dir`, `--into-project` (opt-in: install rf-mcp into the project env),
+  `--attach`, `--command`, `--env`. And `robotmcp doctor --project` reports which of your project's
+  libraries the resolved launch can see.
+
+The global-install default is unchanged; this only kicks in for projects with their own set-up
+environment.
+
+---
+
 ## Behaviour changes worth knowing
 
 Most of this release is fixes, but a few defaults moved. In rough order of "might surprise you":
