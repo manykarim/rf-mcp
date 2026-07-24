@@ -20,6 +20,24 @@ from robotmcp.models.session_models import ExecutionSession
 KW = "Prepare Desktop Display Environment"
 
 
+@pytest.fixture(autouse=True)
+def _force_posix(monkeypatch):
+    """Windows-CI Linux-model guard.
+
+    These tests validate the Linux/X11 replay preamble. On a Windows host
+    ``desktop_display_safety.classify_bound_display_detailed`` short-circuits
+    to ``display=None`` (change: fix-platynui-windows-runtime, F4), so the
+    DISPLAY pin is dropped and the generated preamble differs. Force the
+    non-Windows classification path (inverse of the ``os.name="nt"`` idiom in
+    tests/unit/test_platynui_windows_runtime.py) so the Linux-model assertions
+    exercise the intended path on any host. Patch the narrow ``_is_windows``
+    helper rather than ``os.name`` so ``pathlib`` still uses native paths.
+    """
+    from robotmcp.components.execution import desktop_display_safety as dds
+
+    monkeypatch.setattr(dds, "_is_windows", lambda: False)
+
+
 def _desktop_session(sid, suite_setup=None):
     sess = ExecutionSession(session_id=sid)
     sess.configure_from_scenario(

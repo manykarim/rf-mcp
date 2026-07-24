@@ -468,6 +468,18 @@ class TestSuiteHygieneIntegration:
 
 
 class TestDesktopIsolationGuidance:
+    @pytest.fixture(autouse=True)
+    def _force_posix(self, monkeypatch):
+        # Windows-CI Linux-model guard: these tests validate the Linux/X11
+        # active-desktop refusal + Xephyr isolation recipe. On a Windows host,
+        # classify_bound_display short-circuits to the WINDOWS branch (F4,
+        # change fix-platynui-windows-runtime), which intentionally has no
+        # Xephyr recipe. Force the non-Windows path so the Linux-model
+        # assertions run on ANY host (Windows CI included).
+        from robotmcp.components.execution import desktop_display_safety as dds
+
+        monkeypatch.setattr(dds, "_is_windows", lambda: False)
+
     def _refuse_outcome(self):
         from robotmcp.components.execution.desktop_display_safety import evaluate_safety
 

@@ -3,6 +3,8 @@
 
 import os
 
+import pytest
+
 import robotmcp.components.execution.desktop_display_safety as ds
 from robotmcp.components.execution.desktop_display_safety import (
     ISOLATION_MARKER_ENV,
@@ -13,6 +15,16 @@ from robotmcp.components.execution.desktop_display_safety import (
     ACTIVE,
     UNKNOWN,
 )
+
+
+# Windows-CI Linux-model guard: these tests validate the X11/EWMH/marker
+# isolation model, but classify_bound_display_detailed short-circuits to the
+# "windows" classification when _is_windows() is True (change:
+# fix-platynui-windows-runtime, F4). Force the non-Windows path so the Linux
+# model runs on any host, including Windows CI.
+@pytest.fixture(autouse=True)
+def _force_posix(monkeypatch):
+    monkeypatch.setattr(ds, "_is_windows", lambda: False)
 
 
 # ── _marker_ownership_status ───────────────────────────────────────────────

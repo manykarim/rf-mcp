@@ -16,6 +16,19 @@ import robotmcp.components.execution.ui_tree_service as u
 import robotmcp.plugins.builtin.platynui_plugin as plugin
 
 
+@pytest.fixture(autouse=True)
+def _force_posix(monkeypatch):
+    # Windows-CI Linux-model guard: these tests validate the X11/marker
+    # display-scoping model. On a Windows host classify_bound_display_detailed()
+    # short-circuits to "windows_console" before any X11/marker probe (change:
+    # fix-platynui-windows-runtime, F4), so the marker-gated filtering branch
+    # never runs. Force the non-Windows path so the Linux model is exercised on
+    # any host (inverse of the _windows fixture in test_platynui_windows_runtime).
+    import robotmcp.components.execution.desktop_display_safety as _dds
+
+    monkeypatch.setattr(_dds, "_is_windows", lambda: False)
+
+
 class FakeApp:
     def __init__(self, name, pid=None, role="Application"):
         self.name = name

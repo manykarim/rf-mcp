@@ -22,6 +22,24 @@ from robotmcp.components.execution.platynui_focus import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _force_posix(monkeypatch):
+    """Windows-CI Linux-model guard.
+
+    These tests validate the Linux/X11 desktop-safety model. On a Windows host,
+    ``desktop_display_safety.classify_bound_display_detailed`` intentionally
+    short-circuits to the ``windows`` classification when ``_is_windows()``
+    (``os.name == "nt"``) is true (change: fix-platynui-windows-runtime, F4).
+    Force the non-Windows path so the Linux-model assertions exercise the
+    intended code path on ANY host, including Windows CI. Patch the narrow
+    ``_is_windows`` helper rather than ``os.name`` so ``pathlib`` still uses
+    native paths.
+    """
+    from robotmcp.components.execution import desktop_display_safety as dds
+
+    monkeypatch.setattr(dds, "_is_windows", lambda: False)
+
+
 class StubRect:
     def x(self):
         return 10.0

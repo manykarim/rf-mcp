@@ -13,6 +13,17 @@ from robotmcp.components.execution.desktop_display_safety import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _force_posix(monkeypatch):
+    # Windows-CI Linux-model guard: these tests validate the Linux/X11 desktop-
+    # safety model. On a Windows host the production code intentionally short-
+    # circuits classify_bound_display to the 'windows' classification (change:
+    # fix-platynui-windows-runtime, F4), which is covered by
+    # test_platynui_windows_runtime.py. Force the non-Windows path here so the
+    # Linux-model assertions run on ANY host, including Windows CI.
+    monkeypatch.setattr(dds, "_is_windows", lambda: False)
+
+
 class _Session:
     platynui_allow_active_desktop = False
 
