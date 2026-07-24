@@ -46,8 +46,9 @@ class TestServerDefaultInstructions:
             assert config.is_enabled is True
             assert config.mode.value == InstructionMode.DEFAULT
 
-    def test_default_instructions_contain_discovery_content(self):
-        """Default instructions include discovery-first guidance."""
+    def test_default_instructions_contain_workflow_content(self):
+        """Default (lean) instructions include the ordered workflow guidance
+        (change: refactor-mcp-instructions — default is now `lean`)."""
         adapter = FastMCPInstructionAdapter()
         config = InstructionConfig.create_default()
 
@@ -55,9 +56,9 @@ class TestServerDefaultInstructions:
 
         assert instructions is not None
         assert len(instructions) > 0
-        # Check for key discovery-first phrases
-        # Template uses "DISCOVER before EXECUTE" pattern
-        assert "DISCOVER" in instructions.upper()
+        # Lean default: ordered checklist starting at analyze_scenario, and it
+        # names find_keywords for keyword discovery.
+        assert "ANALYZE_SCENARIO" in instructions.upper()
         assert "find_keywords" in instructions or "KEYWORD" in instructions.upper()
 
     @pytest.mark.asyncio
@@ -291,8 +292,8 @@ class TestInvalidFileFallback:
         instructions = adapter.get_server_instructions(config)
 
         assert instructions is not None
-        # Should contain default content (uses "DISCOVER before EXECUTE" pattern)
-        assert "DISCOVER" in instructions.upper()
+        # Should contain the default (lean) content.
+        assert "ANALYZE_SCENARIO" in instructions.upper()
 
     def test_adapter_validates_file_path(self):
         """FastMCPInstructionAdapter validates file paths."""

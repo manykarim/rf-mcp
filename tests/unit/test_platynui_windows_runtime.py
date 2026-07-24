@@ -305,6 +305,7 @@ class TestDesktopQueryTimeout:
         return ctx.variables[name]
 
     def test_sets_short_default_via_set_suite_children(self, executor):
+        pytest.importorskip("PlatynUI.BareMetal")
         from PlatynUI.BareMetal import QuerySettings
 
         ctx = self._apply(executor, _DesktopSession())
@@ -329,6 +330,7 @@ class TestDesktopQueryTimeout:
     def test_f6_preserves_existing_non_timeout_fields(self, executor):
         # A prior QuerySettings with custom retry_interval/ignore_exceptions must
         # survive — only the timeout is ours to change.
+        pytest.importorskip("PlatynUI.BareMetal")
         from PlatynUI.BareMetal import PLATYNUI_QUERY_SETTINGS, QuerySettings
 
         ctx = _FakeCtx()

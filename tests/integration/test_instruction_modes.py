@@ -108,16 +108,17 @@ class TestEnvironmentModeDefault:
             assert config.mode.value == "default"
             assert config.mode.uses_default_template is True
 
-    def test_default_mode_uses_discovery_first_template(self):
-        """Default mode uses discovery-first template."""
+    def test_default_mode_uses_lean_template(self):
+        """Default mode uses the lean checklist template (change:
+        refactor-mcp-instructions — default moved from `standard` to `lean`)."""
         adapter = FastMCPInstructionAdapter()
         config = InstructionConfig.create_default()
 
         instructions = adapter.get_server_instructions(config)
 
         assert instructions is not None
-        # Check for discovery-first content (uses "DISCOVER before EXECUTE" pattern)
-        assert "DISCOVER" in instructions.upper()
+        # Lean default opens with the analyze_scenario-first ordered checklist.
+        assert "ANALYZE_SCENARIO" in instructions.upper()
 
     def test_no_env_vars_uses_default(self):
         """No environment variables (or empty) uses default mode."""
@@ -294,8 +295,8 @@ class TestInvalidFileFallback:
         instructions = adapter.get_server_instructions(config)
 
         assert instructions is not None
-        # Should be default content (uses "DISCOVER before EXECUTE" pattern)
-        assert "DISCOVER" in instructions.upper()
+        # Should be the default (lean) content.
+        assert "ANALYZE_SCENARIO" in instructions.upper()
 
     def test_invalid_extension_raises(self):
         """Invalid file extension raises during path creation."""
@@ -354,8 +355,8 @@ class TestInvalidFileFallback:
         async with Client(mcp) as client:
             init = client.initialize_result
             assert init.instructions is not None
-            # Verify fallback content (uses "DISCOVER before EXECUTE" pattern)
-            assert "DISCOVER" in init.instructions.upper()
+            # Verify fallback (lean default) content.
+            assert "ANALYZE_SCENARIO" in init.instructions.upper()
 
 
 class TestEnvironmentVariablePrecedence:
