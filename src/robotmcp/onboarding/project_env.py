@@ -15,7 +15,7 @@ and never raising:
 * which Robot Framework libraries the project references that rf-mcp does not bundle.
 
 Global tool installs (``uvx`` / ``uv tool``) are the easy default and need none of
-this — they resolve to ``type == "none"`` when run outside a project.
+this - they resolve to ``type == "none"`` when run outside a project.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-# Libraries rf-mcp[all] already bundles — a project needing only these is served fine
+# Libraries rf-mcp[all] already bundles - a project needing only these is served fine
 # by rf-mcp's own environment (no project-aware resolution required).
 BUNDLED_LIBRARIES = frozenset({
     "Browser", "SeleniumLibrary", "AppiumLibrary", "RequestsLibrary",
@@ -43,7 +43,7 @@ RF_STDLIB = frozenset({
 RF_MIN_MAJOR = 7          # robotframework>=7.0
 PY_MIN = (3, 10)          # requires-python >=3.10
 
-_CMD_TIMEOUT = 8          # best-effort external tool calls (poetry/pdm/…)
+_CMD_TIMEOUT = 8          # best-effort external tool calls (poetry/pdm/...)
 
 
 @dataclass
@@ -83,7 +83,7 @@ def _is_virtualenv(python: Optional[Path]) -> bool:
 
 
 def _run(cmd: List[str], cwd: Optional[Path] = None) -> Optional[str]:
-    """Best-effort external command → stripped stdout, or None. Never raises."""
+    """Best-effort external command -> stripped stdout, or None. Never raises."""
     try:
         r = subprocess.run(
             cmd, cwd=str(cwd) if cwd else None, capture_output=True, text=True,
@@ -155,7 +155,7 @@ def detect(project_dir: Optional[Path] = None) -> ProjectEnv:
                 py = Path(out)
         return _env("pdm", py, "pdm.lock")
 
-    # hatch — as an ENV MANAGER (``[tool.hatch.envs...]``), not merely hatchling as
+    # hatch - as an ENV MANAGER (``[tool.hatch.envs...]``), not merely hatchling as
     # the build backend (``[tool.hatch.build...]``), which countless projects use.
     if "[tool.hatch.envs" in pyproject:
         py = inproj_venv
@@ -187,7 +187,7 @@ def detect(project_dir: Optional[Path] = None) -> ProjectEnv:
     if inproj_venv is not None:
         return _env("venv", inproj_venv, ".venv")
 
-    # conda — only when the project declares one (environment.yml) AND a conda env is
+    # conda - only when the project declares one (environment.yml) AND a conda env is
     # active; project-anchored so an activated conda env can't hijack the global case.
     if (d / "environment.yml").exists() or (d / "environment.yaml").exists():
         conda_prefix = os.environ.get("CONDA_PREFIX")
@@ -196,7 +196,7 @@ def detect(project_dir: Optional[Path] = None) -> ProjectEnv:
             if py.exists():
                 return _env("conda", py, "environment.yml")
 
-    # Nothing project-specific in this directory → the global-tool case. We do NOT
+    # Nothing project-specific in this directory -> the global-tool case. We do NOT
     # fall back to an active VIRTUAL_ENV/CONDA_PREFIX: that is not anchored to the
     # project directory and would hijack the easy `uvx`/`uv tool` global install
     # (e.g. picking up rf-mcp's own activated venv). A properly set-up project is
@@ -215,7 +215,7 @@ def rfmcp_in_project(python: Optional[Path]) -> bool:
 
 
 def project_rf_info(python: Optional[Path]) -> dict:
-    """Return ``{robot_major, py_version}`` for the project interpreter — robot_major
+    """Return ``{robot_major, py_version}`` for the project interpreter - robot_major
     is None when robotframework is not installed there. Best-effort."""
     info = {"robot_major": None, "py_version": None}
     if python is None:
@@ -261,7 +261,7 @@ def rf_conflict(env: ProjectEnv) -> Optional[str]:
 
 _LIB_RE = re.compile(r"^\s*(Library|Resource)\s{2,}(\S+)", re.MULTILINE)
 
-# Distributions rf-mcp[all] already provides — any OTHER robotframework-* dist in the
+# Distributions rf-mcp[all] already provides - any OTHER robotframework-* dist in the
 # project env is an "extra" library rf-mcp's own environment would be blind to.
 _BUNDLED_DISTS = frozenset({
     "robotframework", "robotframework-browser", "robotframework-seleniumlibrary",
@@ -286,7 +286,7 @@ _INSTALLED_PROBE = (
 
 def _installed_extra_libraries(python: Optional[Path]) -> List[str]:
     """Non-bundled ``robotframework-*`` library MODULES installed in the project env
-    (e.g. robotframework-jsonlibrary → JSONLibrary). Best-effort."""
+    (e.g. robotframework-jsonlibrary -> JSONLibrary). Best-effort."""
     if python is None:
         return []
     out = _run([str(python), "-c", _INSTALLED_PROBE])
@@ -294,7 +294,7 @@ def _installed_extra_libraries(python: Optional[Path]) -> List[str]:
 
 
 def project_extra_libraries(env: ProjectEnv, *, max_files: int = 400) -> List[str]:
-    """RF libraries the project needs that rf-mcp does NOT bundle — the signal that the
+    """RF libraries the project needs that rf-mcp does NOT bundle - the signal that the
     project needs project-aware resolution (rf-mcp's own env would be blind to them).
     Combines non-bundled ``robotframework-*`` packages installed in the project env
     with ``Library``/``Resource`` imports scanned from the project's ``.robot`` /

@@ -4,7 +4,7 @@ coding-agent MCP config files rf-mcp registers itself into.
 Formats: ``json`` (Claude Code, Copilot, opencode, Gemini, Cursor), ``jsonc``
 (Kilo Code), ``toml`` (Codex), ``yaml`` (goose). JSON/TOML/YAML round-trip; TOML
 preserves comments/formatting via tomlkit. JSONC comments are not preserved on
-write (written back as plain JSON, which is valid JSONC) — documented behaviour.
+write (written back as plain JSON, which is valid JSONC) - documented behaviour.
 """
 from __future__ import annotations
 
@@ -43,12 +43,12 @@ def _strip_jsonc(text: str) -> str:
                 i += 1
             i += 2; continue
         out.append(ch); i += 1
-    # trailing commas are legal in JSONC but not JSON — drop them
+    # trailing commas are legal in JSONC but not JSON - drop them
     return re.sub(r",(\s*[}\]])", r"\1", "".join(out))
 
 
 def load(path: Path, fmt: str) -> Tuple[Any, bool]:
-    """Return (data, existed). Missing/empty file → (empty container, False)."""
+    """Return (data, existed). Missing/empty file -> (empty container, False)."""
     if not path.exists() or path.stat().st_size == 0:
         return ({}, False)
     text = path.read_text(encoding="utf-8")

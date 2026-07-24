@@ -243,3 +243,31 @@ class TestVerificationGate:
         r = next(x for x in results if x.agent == "claude-code")
         assert r.status == "installed"
         assert (tmp_path / ".mcp.json").exists()
+
+
+class TestWindowsConsoleSafe:
+    """Onboarding CLI output must survive the Windows default console (cp1252):
+    a stray non-ASCII glyph raises UnicodeEncodeError and crashes init/install."""
+
+    def test_onboarding_sources_are_ascii(self):
+        import glob
+        offenders = []
+        for f in glob.glob("src/robotmcp/onboarding/*.py"):
+            for i, line in enumerate(open(f, encoding="utf-8"), 1):
+                for c in line:
+                    if ord(c) > 127:
+                        offenders.append(f"{f}:{i}: {c!r}")
+        assert not offenders, "non-ASCII in onboarding output would crash cp1252 consoles:\n" + "\n".join(offenders)
+
+    def test_result_and_doctor_output_encodes_cp1252(self, capsys):
+        from robotmcp.onboarding import diagnostics
+        from robotmcp.onboarding.cli import _print_results
+        from robotmcp.onboarding.installer import Result
+        _print_results([
+            Result("claude-code", "project", "mcp", "installed", path="/x/.mcp.json",
+                   detail="[uv-overlay] runs against the project's venv - sees JSONLibrary"),
+        ])
+        diagnostics.cmd_doctor()
+        out = capsys.readouterr().out
+        out.encode("cp1252")  # must not raise UnicodeEncodeError
+        assert "->" in out or "installed" in out

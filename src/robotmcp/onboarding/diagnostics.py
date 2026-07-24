@@ -1,4 +1,4 @@
-"""`robotmcp init`, `doctor`, and `--version` — the manual onboarding surface for a
+"""`robotmcp init`, `doctor`, and `--version` - the manual onboarding surface for a
 tool-installed rf-mcp. None of these start the MCP server."""
 from __future__ import annotations
 
@@ -142,7 +142,7 @@ def cmd_init(*, browsers: bool = False) -> int:
     """Idempotent, non-destructive. Reports libraries, optionally runs browser
     init, and always prints the MCP config to paste into a coding agent."""
     libs = library_status()
-    print(f"rf-mcp {get_version()} — init")
+    print(f"rf-mcp {get_version()} - init")
     print("test libraries:")
     for mod, label, extra in TEST_LIBRARIES:
         ok = libs[mod]
@@ -156,15 +156,15 @@ def cmd_init(*, browsers: bool = False) -> int:
             print('  uv tool install "rf-mcp[web]"')
         else:
             if not node_present():
-                print("\nWARNING: Node.js not found on PATH — the Browser library "
+                print("\nWARNING: Node.js not found on PATH - the Browser library "
                       "needs it at runtime. Install Node.js, then re-run init.")
             if browser_initialized():
                 print("\nPlaywright browser already initialized.")
             else:
                 print("\nInitializing the Playwright browser (this downloads a browser, "
-                      "may take ~1 minute)…")
+                      "may take ~1 minute)...")
                 ok, out = run_browser_init()
-                print("  " + ("done." if ok else "FAILED — see output below:\n" + out[-600:]))
+                print("  " + ("done." if ok else "FAILED - see output below:\n" + out[-600:]))
 
     print("\nAdd this to your coding agent's MCP configuration:\n")
     print(MCP_CONFIG_SNIPPET)

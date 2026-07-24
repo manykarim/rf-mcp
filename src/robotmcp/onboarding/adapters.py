@@ -82,7 +82,7 @@ class AgentAdapter:
 
 
 # ---------------------------------------------------------------------------
-# Registry — one record per agent.
+# Registry - one record per agent.
 # ---------------------------------------------------------------------------
 REGISTRY: List[AgentAdapter] = [
     AgentAdapter(
@@ -129,7 +129,7 @@ REGISTRY: List[AgentAdapter] = [
         style="standard", project_path=".cursor/mcp.json", user_path=".cursor/mcp.json",
         detect_bins=["cursor"], detect_dirs=[".cursor"],
     ),
-    # Unconfirmed MCP-config convention — listed but never written.
+    # Unconfirmed MCP-config convention - listed but never written.
     AgentAdapter(
         id="pi", name="pi", fmt="json", container=["mcpServers"], style="standard",
         project_path=None, user_path=None, status="planned",

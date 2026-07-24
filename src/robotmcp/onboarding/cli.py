@@ -89,7 +89,7 @@ def _print_results(results) -> int:
         if r.detail:
             line += f"  ({r.detail})"
         if r.path and r.status in ("installed", "updated", "removed"):
-            line += f"  → {r.path}"
+            line += f"  -> {r.path}"
         print(line)
     return rc
 

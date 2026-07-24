@@ -129,26 +129,26 @@ def resolve_launch(*, scope: str, project_dir: Optional[Path] = None,
     if attach:
         e = _attach_env(attach); e.update(extra_env)
         return LaunchPlan(resolved_command(), [], e, "attach",
-                          "attach bridge (explicit --attach) — start the project's RF "
+                          "attach bridge (explicit --attach) - start the project's RF "
                           "process with the McpAttach library")
 
-    # user scope / non-project → rf-mcp's own command (the easy global default)
+    # user scope / non-project -> rf-mcp's own command (the easy global default)
     if scope != "project":
         return LaunchPlan(resolved_command(), [], extra_env, "own-shim", "user-scope own command")
 
     env = pe.detect(project_dir)
     if not env.has_env:
         return LaunchPlan(resolved_command(), [], extra_env, "own-shim",
-                          "no project environment detected — global rf-mcp")
+                          "no project environment detected - global rf-mcp")
 
     extras = pe.project_extra_libraries(env)
     vlib = extras[0] if extras else None
 
-    # ① rf-mcp already importable in the project env → run it there
+    # (1) rf-mcp already importable in the project env -> run it there
     if pe.rfmcp_in_project(env.python):
         p = _in_project_plan(env, vlib); p.env.update(extra_env); return p
 
-    # ⑥ irreconcilable version conflict → attach bridge (never a silent overlay)
+    # (6) irreconcilable version conflict -> attach bridge (never a silent overlay)
     conflict = pe.rf_conflict(env)
     if conflict:
         e = _attach_env(None); e.update(extra_env)
@@ -156,10 +156,10 @@ def resolve_launch(*, scope: str, project_dir: Optional[Path] = None,
                           f"{conflict}. Routed to the attach bridge; run the project's "
                           f"own RF process with McpAttach.")
 
-    # ③ project needs only libraries rf-mcp already bundles → own command
+    # (3) project needs only libraries rf-mcp already bundles -> own command
     if not extras:
         return LaunchPlan(resolved_command(), [], extra_env, "own-shim",
-                          "project uses only bundled libraries — global rf-mcp")
+                          "project uses only bundled libraries - global rf-mcp")
 
     # project has extra libraries and rf-mcp is not in its env
     if into_project:
@@ -181,11 +181,11 @@ def resolve_launch(*, scope: str, project_dir: Optional[Path] = None,
         return LaunchPlan("uv", args, extra_env, "uv-overlay",
                           f"uv overlay: rf-mcp layered onto the project's {env.type} env "
                           f"so it sees {', '.join(extras[:4])}"
-                          + ("…" if len(extras) > 4 else ""), vlib)
+                          + ("..." if len(extras) > 4 else ""), vlib)
 
-    # ④/⑤ non-venv (conda/global) or no uv → cannot overlay; guide to co-install.
+    # (4)/(5) non-venv (conda/global) or no uv -> cannot overlay; guide to co-install.
     # verify_lib is set so verification (below) refuses this blind config unless the
-    # user overrides — writing an own-shim that can't see the project libs is exactly
+    # user overrides - writing an own-shim that can't see the project libs is exactly
     # the "wrong environment" outcome we must not persist silently.
     return LaunchPlan(resolved_command(), [], extra_env, "fallback",
                       f"project needs {', '.join(extras[:4])} but its {env.type} env "
@@ -216,7 +216,7 @@ def _plan_interpreter(plan: LaunchPlan) -> Optional[List[str]]:
     if plan.strategy == "uv-overlay" and plan.args and plan.args[-1] == "robotmcp":
         return ["uv", *plan.args[:-1], "python"]   # swap the server for a python
     cmd = Path(plan.command)
-    if cmd.name in ("robotmcp", "robotmcp.exe"):     # abs console shim → sibling python
+    if cmd.name in ("robotmcp", "robotmcp.exe"):     # abs console shim -> sibling python
         for n in ("python", "python3", "python.exe"):
             p = cmd.parent / n
             if p.exists():
@@ -224,7 +224,7 @@ def _plan_interpreter(plan: LaunchPlan) -> Optional[List[str]]:
         return None
     if cmd.name.startswith("python"):                # in-project `<python> -m robotmcp.server`
         return [str(cmd)]
-    return None                                      # bare name (no path) → can't probe
+    return None                                      # bare name (no path) -> can't probe
 
 
 def _mcp_initialize_probe(argv: List[str], extra_env: Dict[str, str],
@@ -272,8 +272,8 @@ def _mcp_initialize_probe(argv: List[str], extra_env: Dict[str, str],
 
 
 def verify_launch(plan: LaunchPlan, timeout: float = 60.0) -> Tuple[bool, str]:
-    """Confirm the resolved command starts the server and — when the plan targets a
-    project environment with a specific library — that the library is reachable there.
+    """Confirm the resolved command starts the server and - when the plan targets a
+    project environment with a specific library - that the library is reachable there.
     Fast library-import probe where possible; MCP handshake otherwise."""
     if plan.verify_lib:
         interp = _plan_interpreter(plan)
@@ -288,7 +288,7 @@ def verify_launch(plan: LaunchPlan, timeout: float = 60.0) -> Tuple[bool, str]:
                                + (r.stderr or r.stdout)[-300:])
             except Exception as exc:
                 return False, f"library probe failed: {exc}"
-    # own-shim / attach / no specific lib → confirm the server actually starts
+    # own-shim / attach / no specific lib -> confirm the server actually starts
     ok, detail = _mcp_initialize_probe([plan.command, *plan.args], plan.env, timeout=timeout)
     if plan.strategy == "attach":
         return ok, ("server starts; attach-host reachability is verified when the "

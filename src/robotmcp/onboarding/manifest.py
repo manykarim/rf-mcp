@@ -4,7 +4,7 @@ Records every change the installer makes so ``uninstall`` can revert exactly wha
 rf-mcp wrote and nothing else: each entry stores the agent, scope, config path,
 whether rf-mcp created the whole file, and a hash of the server entry it inserted.
 On uninstall, an entry is reverted only if the current on-disk value still hashes
-to the recorded value — user-edited entries are left intact and reported.
+to the recorded value - user-edited entries are left intact and reported.
 """
 from __future__ import annotations
 
