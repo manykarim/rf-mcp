@@ -10,6 +10,7 @@ Run: uv run pytest tests/unit/test_installer_project_aware.py -q
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -271,3 +272,59 @@ class TestWindowsConsoleSafe:
         out = capsys.readouterr().out
         out.encode("cp1252")  # must not raise UnicodeEncodeError
         assert "->" in out or "installed" in out
+
+
+# =============================================================================
+# The overlay references the SAME rf-mcp cross-platform
+# (change: fix-installer-windows-file-url) - a local/unpublished source install
+# must overlay --with-editable <src> on every platform, incl. Windows drive
+# letters, never silently degrading to an unresolvable version pin.
+# =============================================================================
+
+class _FakeDist:
+    """Stand-in for importlib.metadata.distribution('rf-mcp')."""
+    def __init__(self, direct_url_json):
+        self._j = direct_url_json
+
+    def read_text(self, name):
+        return self._j if name == "direct_url.json" else None
+
+
+def _patch_direct_url(monkeypatch, direct_url_json):
+    import importlib.metadata as im
+    monkeypatch.setattr(im, "distribution", lambda name: _FakeDist(direct_url_json))
+
+
+class TestOverlayRfmcpReference:
+    def test_local_source_url_overlays_with_editable_posix(self, tmp_path, monkeypatch):
+        # 2.1 a file:// URL pointing at a real dir -> --with-editable <dir>
+        src = tmp_path / "rf-mcp-src"
+        src.mkdir()
+        _patch_direct_url(monkeypatch,
+                          json.dumps({"url": src.as_uri(), "dir_info": {"editable": True}}))
+        result = I._rfmcp_with_args()
+        assert result[0] == "--with-editable"
+        assert Path(result[1]) == src
+
+    def test_file_url_to_path_windows_drive_letter(self, monkeypatch):
+        # 2.2 the drive-letter conversion, exercised cross-platform via nturl2path
+        import urllib.request
+        import nturl2path
+        monkeypatch.setattr(urllib.request, "url2pathname", nturl2path.url2pathname)
+        assert I._file_url_to_path("file:///C:/work/rf-mcp") == r"C:\work\rf-mcp"
+        # the old naive slice produced an invalid '/C:/work/rf-mcp':
+        assert "file:///C:/work/rf-mcp"[7:] == "/C:/work/rf-mcp"
+
+    def test_no_direct_url_uses_version_pin(self, monkeypatch):
+        # 2.3 published install (no direct_url.json) -> --with rf-mcp==<ver>
+        monkeypatch.setattr(I, "_own_version", lambda: "9.9.9")
+        _patch_direct_url(monkeypatch, None)
+        assert I._rfmcp_with_args() == ["--with", "rf-mcp==9.9.9"]
+
+    def test_file_url_missing_dir_falls_back_to_pin(self, tmp_path, monkeypatch):
+        # 2.3 a file:// URL whose dir does NOT exist -> version pin (guard preserved)
+        monkeypatch.setattr(I, "_own_version", lambda: "9.9.9")
+        missing = tmp_path / "does-not-exist"
+        _patch_direct_url(monkeypatch,
+                          json.dumps({"url": missing.as_uri(), "dir_info": {}}))
+        assert I._rfmcp_with_args() == ["--with", "rf-mcp==9.9.9"]

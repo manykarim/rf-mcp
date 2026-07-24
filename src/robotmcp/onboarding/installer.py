@@ -48,6 +48,18 @@ def _own_version() -> Optional[str]:
         return None
 
 
+def _file_url_to_path(url: str) -> str:
+    """Convert a ``file://`` direct-URL to a filesystem path, cross-platform.
+
+    A naive ``url[7:]`` slice breaks on Windows: ``file:///C:/x``[7:] is
+    ``/C:/x``, not a valid Windows path. ``urlsplit`` + ``url2pathname`` is
+    platform-dispatched, so a drive-letter URL resolves to ``C:\\x`` on Windows
+    and a POSIX URL to ``/home/..`` on POSIX, and percent-encoding is decoded."""
+    from urllib.parse import urlsplit
+    from urllib.request import url2pathname
+    return url2pathname(urlsplit(url).path)
+
+
 def _rfmcp_with_args() -> List[str]:
     """uv ``--with`` args that add the SAME rf-mcp the user has installed:
     ``--with-editable <src>`` for a local/editable/dev install (its version may not
@@ -61,7 +73,7 @@ def _rfmcp_with_args() -> List[str]:
             url = info.get("url", "")
             editable = bool(info.get("dir_info", {}).get("editable"))
             if (editable or url.startswith("file:")) and url:
-                path = url[7:] if url.startswith("file://") else url[5:] if url.startswith("file:") else url
+                path = _file_url_to_path(url) if url.startswith("file:") else url
                 if path and Path(path).exists():
                     return ["--with-editable", path]
     except Exception:
