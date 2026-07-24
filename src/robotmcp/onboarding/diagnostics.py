@@ -84,7 +84,7 @@ def cmd_version() -> int:
     return 0
 
 
-def cmd_doctor() -> int:
+def cmd_doctor(*, project_dir: Optional[str] = None) -> int:
     print(f"rf-mcp {get_version()}")
     print(f"executable: {shutil.which('robotmcp') or sys.argv[0]}")
     print("test libraries:")
@@ -94,7 +94,48 @@ def cmd_doctor() -> int:
               + ("" if ok else f"   (add with rf-mcp[{extra}])"))
     print(f"Browser initialized (Playwright): {'yes' if browser_initialized() else 'no'}")
     print(f"Node.js present: {'yes' if node_present() else 'no (required by the Browser library)'}")
+    if project_dir is not None:
+        _doctor_project(project_dir)
     return 0
+
+
+def _doctor_project(project_dir: str) -> None:
+    """Read-only: report which of the project's RF libraries the resolved rf-mcp
+    launch would see (change: installer-project-aware-launch)."""
+    from robotmcp.onboarding import installer as I
+    from robotmcp.onboarding import project_env as pe
+
+    env = pe.detect(Path(project_dir).expanduser())
+    print(f"\nproject: {env.project_dir}")
+    print(f"  environment: {env.type}" + (" (virtualenv)" if env.is_venv else ""))
+    print(f"  interpreter: {env.python or '-'}")
+    print(f"  rf-mcp already in project env: "
+          f"{'yes' if pe.rfmcp_in_project(env.python) else 'no'}")
+    conflict = pe.rf_conflict(env)
+    if conflict:
+        print(f"  version conflict: {conflict}")
+    plan = I.resolve_launch(scope="project", project_dir=env.project_dir)
+    print(f"  resolved launch: [{plan.strategy}] {plan.command} "
+          f"{' '.join(plan.args)}".rstrip())
+    if plan.note:
+        print(f"    {plan.note}")
+    extras = pe.project_extra_libraries(env)
+    if not extras:
+        print("  extra project libraries: none (rf-mcp[all]'s bundle suffices)")
+        return
+    interp = I._plan_interpreter(plan)
+    print("  project libraries rf-mcp would see:")
+    for lib in extras:
+        ok = False
+        if interp is not None:
+            try:
+                r = subprocess.run([*interp, "-c", f"import {lib}"],
+                                   capture_output=True, text=True, timeout=90,
+                                   stdin=subprocess.DEVNULL)
+                ok = r.returncode == 0
+            except Exception:
+                ok = False
+        print(f"    [{'x' if ok else ' '}] {lib}")
 
 
 def cmd_init(*, browsers: bool = False) -> int:

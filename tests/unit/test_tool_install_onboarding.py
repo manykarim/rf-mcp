@@ -37,7 +37,8 @@ def test_install_inserts_and_preserves(adapter, tmp_path):
 
     mani = Manifest(tmp_path / "manifest.json")
     res = installer.install(agents=adapter.id, scope=scope, whats=["mcp"],
-                            command="/opt/robotmcp", manifest=mani, home=home, cwd=cwd)
+                            command="/opt/robotmcp", manifest=mani, home=home, cwd=cwd,
+                            no_verify=True)  # stub command: test write mechanics, not launch
     assert [r.status for r in res] == ["installed"], res
 
     data, _ = codecs.load(path, adapter.fmt)
@@ -52,7 +53,7 @@ def test_uninstall_removes_unchanged(tmp_path):
     home = tmp_path / "h"; home.mkdir()
     mani = Manifest(tmp_path / "m.json")
     installer.install(agents="claude-code", scope="user", command="/opt/robotmcp",
-                      manifest=mani, home=home)
+                      manifest=mani, home=home, no_verify=True)
     path = A.get("claude-code").resolve_path("user", home=home)
     assert "robotmcp" in json.loads(path.read_text())["mcpServers"]
 
@@ -65,7 +66,7 @@ def test_uninstall_keeps_user_modified(tmp_path):
     home = tmp_path / "h"; home.mkdir()
     mani = Manifest(tmp_path / "m.json")
     installer.install(agents="claude-code", scope="user", command="/opt/robotmcp",
-                      manifest=mani, home=home)
+                      manifest=mani, home=home, no_verify=True)
     path = A.get("claude-code").resolve_path("user", home=home)
     d = json.loads(path.read_text())
     d["mcpServers"]["robotmcp"]["command"] = "/edited/by/user"  # user edit

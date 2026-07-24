@@ -7,13 +7,25 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional
 
 from robotmcp.onboarding import diagnostics, installer
 from robotmcp.onboarding import adapters as A
 
 SUBCOMMANDS = ("init", "install", "uninstall", "list", "doctor")
 VERSION_FLAGS = ("--version", "-V")
+
+
+def _parse_env(pairs: List[str]) -> Dict[str, str]:
+    """Turn repeated ``KEY=VALUE`` --env flags into a dict (bad entries ignored)."""
+    out: Dict[str, str] = {}
+    for item in pairs or []:
+        if "=" in item:
+            k, v = item.split("=", 1)
+            if k.strip():
+                out[k.strip()] = v
+    return out
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,7 +39,9 @@ def build_parser() -> argparse.ArgumentParser:
     pi.add_argument("--browsers", action="store_true",
                     help="Initialize the Playwright browser (downloads a browser).")
 
-    sub.add_parser("doctor", help="Report installation health (read-only).")
+    pd = sub.add_parser("doctor", help="Report installation health (read-only).")
+    pd.add_argument("-C", "--project-dir", default=None,
+                    help="Report which of THIS project's RF libraries rf-mcp can see.")
     sub.add_parser("list", help="List supported agents and their status.")
 
     def add_install_flags(sp, is_install: bool):
@@ -38,12 +52,26 @@ def build_parser() -> argparse.ArgumentParser:
                         help="project (default) or user (global) config")
         sp.add_argument("--what", default="mcp" if is_install else "mcp,skills,agents,hooks",
                         help="comma list of mcp,skills,agents,hooks")
+        sp.add_argument("-C", "--project-dir", default=None,
+                        help="Project directory: where the config is written AND whose "
+                             "environment is inspected for project-aware launch (default: cwd).")
         sp.add_argument("--dry-run", action="store_true", help="Show the plan; write nothing.")
         sp.add_argument("--yes", "--no-input", dest="no_input", action="store_true",
                         help="Non-interactive; do not prompt.")
         if is_install:
             sp.add_argument("--force", action="store_true",
-                            help="Overwrite an existing robotmcp entry.")
+                            help="Overwrite an existing robotmcp entry / write despite verify failure.")
+            sp.add_argument("--into-project", action="store_true",
+                            help="Opt-in: install rf-mcp INTO the detected project env (mutating).")
+            sp.add_argument("--attach", nargs="?", const="auto", default=None,
+                            help="Use the attach bridge (optionally host[:port]); the project runs "
+                                 "its own RF process with the McpAttach library.")
+            sp.add_argument("--command", dest="command_override", default=None,
+                            help="Override the launch command entirely (advanced).")
+            sp.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
+                            help="Extra environment for the server entry (repeatable).")
+            sp.add_argument("--no-verify", action="store_true",
+                            help="Skip launching the resolved command to verify it before writing.")
 
     add_install_flags(sub.add_parser("install", help="Register rf-mcp into agents."), True)
     add_install_flags(sub.add_parser("uninstall", help="Remove rf-mcp from agents."), False)
@@ -101,18 +129,29 @@ def run(argv: Optional[List[str]] = None) -> int:
     if args.command == "init":
         return diagnostics.cmd_init(browsers=args.browsers)
     if args.command == "doctor":
-        return diagnostics.cmd_doctor()
+        return diagnostics.cmd_doctor(project_dir=args.project_dir)
     if args.command == "list":
         return _cmd_list()
 
     whats = [w.strip() for w in args.what.split(",") if w.strip()]
+    proj = Path(args.project_dir).expanduser() if args.project_dir else None
+    if proj is not None:
+        from robotmcp.onboarding import project_env as _pe
+        if not proj.exists():
+            print(f"WARNING: --project-dir {proj} does not exist.")
+        elif not _pe.looks_like_project(proj):
+            print(f"WARNING: --project-dir {proj} has no project markers "
+                  f"(pyproject/.git/.venv/*.robot); config will be written there anyway.")
     if args.command == "install":
         agents = _interactive_agents(args.agents, args.no_input)
-        results = installer.install(agents=agents, scope=args.scope, whats=whats,
-                                    dry_run=args.dry_run, force=args.force)
+        results = installer.install(
+            agents=agents, scope=args.scope, whats=whats, dry_run=args.dry_run,
+            force=args.force, command=args.command_override, env=_parse_env(args.env),
+            cwd=proj, project_dir=proj, into_project=args.into_project,
+            attach=args.attach, no_verify=args.no_verify)
         return _print_results(results)
     if args.command == "uninstall":
         results = installer.uninstall(agents=args.agents, scope=args.scope,
-                                      whats=whats, dry_run=args.dry_run)
+                                      whats=whats, dry_run=args.dry_run, cwd=proj)
         return _print_results(results)
     return 2
