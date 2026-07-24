@@ -28,8 +28,44 @@ def _platynui_available() -> bool:
         return False
 
 
+def _x_server_reachable(display: str) -> bool:
+    """True only when an X server for ``display`` actually accepts a connection.
+
+    A set-but-dangling ``DISPLAY`` (e.g. on a headless CI runner where the env
+    var is present but no X server listens) passes a bare ``DISPLAY`` check yet
+    fails at runtime with ``x11 connect: Connection refused (os error 111)``.
+    Probe the real endpoint so those hosts skip instead of failing."""
+    import re
+    import socket
+
+    m = re.match(r"^(.*):(\d+)(?:\.\d+)?$", display)
+    if not m:
+        return False
+    host, dnum = m.group(1), int(m.group(2))
+    try:
+        if host in ("", "unix"):  # local display -> X11 unix socket
+            path = f"/tmp/.X11-unix/X{dnum}"
+            if not os.path.exists(path):
+                return False
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(0.5)
+            sock.connect(path)
+            sock.close()
+            return True
+        sock = socket.create_connection((host, 6000 + dnum), timeout=0.5)  # TCP X11
+        sock.close()
+        return True
+    except OSError:
+        return False
+
+
 def _display_available() -> bool:
-    return sys.platform == "linux" and bool(os.environ.get("DISPLAY"))
+    display = os.environ.get("DISPLAY")
+    return (
+        sys.platform == "linux"
+        and bool(display)
+        and _x_server_reachable(display)
+    )
 
 
 pytestmark = [
