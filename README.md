@@ -1084,6 +1084,7 @@ We welcome contributions! Here's how to get started:
 
 ## 📝 Changelog
 
+- [**v0.34.0**](docs/RELEASE_NOTES_v0.34.0.md) – Windows hardening: desktop stuck-key release, fast-fail desktop queries, dry-run deadlock, generated-suite path/backslash fixes, cold-start hang, lean default instructions, tool profiles restored on FastMCP 3
 - [**v0.31.1**](docs/RELEASE_NOTES_v0.31.0.md) – Packaging cleanup (exclude tests/examples from sdist)
 - [**v0.31.0**](docs/RELEASE_NOTES_v0.31.0.md) – BDD/data-driven generation, namespace architecture fixes, persistent memory, 71-88% token reduction
 - [v0.30.1](docs/RELEASE_NOTES_v0.30.1.md) – FastMCP 3.x compatibility layer

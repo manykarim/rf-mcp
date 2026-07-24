@@ -4,10 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rf-mcp"
-# 0.34.0.dev5: harden-platynui-stuck-key-release — extend the platynui-windows-runtime
-# stuck-key net from modifiers-only to a tracked held-key registry (releases
-# non-modifier keys too) plus persisted-state recovery across hard process kills.
-version = "0.34.0.dev5"
+# 0.34.0: Windows-hardening release — PlatynUI desktop stuck-key release + fast-fail
+# queries + Windows-aware safety guard, the Windows dry-run stdin deadlock, generated
+# -suite path/backslash round-tripping, the cold-start banner hang, lean default agent
+# instructions, and tool profiles working again on FastMCP 3.x. See
+# docs/RELEASE_NOTES_v0.34.0.md.
+version = "0.34.0"
 description = "Robot Framework MCP Server - Natural Language Test Automation Bridge"
 authors = [{ name = "Many Kasiriha" }]
 license = { text = "Apache-2.0" }

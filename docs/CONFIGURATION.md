@@ -12,9 +12,11 @@ hidden knobs, no invented defaults — if it's here, it's in the source.
 
 Environment variables are read from the process environment, so set them wherever
 your MCP client launches the server (the `env` block of your MCP config, a shell
-export, a `.env` your launcher loads). Values are case-insensitive unless noted,
-and an unrecognised value falls back to the default rather than crashing the
-server.
+export, a `.env` your launcher loads). Most values are case-insensitive, though `ROBOTMCP_RF_CONTEXT_ONLY`, `ROBOTMCP_RF_RUNNER_REQUESTS` and `ROBOTMCP_PRE_VALIDATION` match only the exact strings `1`/`true`/`True`, and `ROBOTMCP_LAZY_INIT`/`ROBOTMCP_WARMUP` only the literal `0`,
+and an unrecognised value of an enum-style variable falls back to the default —
+but a non-numeric value for a numeric variable (e.g. `ROBOTMCP_MAX_INLINE_TOKENS`,
+`ROBOTMCP_LIBRARY_DETECTION_MIN_SCORE`, `ROBOTMCP_RERANK_CAP`) raises a `ValueError`
+instead of falling back.
 
 ---
 
@@ -59,7 +61,7 @@ locally. Everything below only matters when you're attaching.
 | `ROBOTMCP_ATTACH_HOST` | hostname / IP | *(unset)* | Host of the external RF bridge. **Setting this enables attach mode.** Unset ⇒ local execution. |
 | `ROBOTMCP_ATTACH_PORT` | integer | `7317` | Port of the external RF bridge. |
 | `ROBOTMCP_ATTACH_TOKEN` | string | `change-me` | Shared secret for the bridge handshake. Change it for anything but a throwaway local run. |
-| `ROBOTMCP_ATTACH_DEFAULT` | `auto`, `off` | `auto` | `off` ignores the bridge even when a host is configured (forces local). `auto` uses the bridge when reachable. |
+| `ROBOTMCP_ATTACH_DEFAULT` | `auto`, `force`, `off` | `auto` | `off` ignores the bridge even when a host is configured (forces local). `auto` uses the bridge when reachable. `force` always routes to the bridge: it skips the reachability probe, overrides an explicit `use_context=False`, and returns an error instead of falling back to local when a bridge call fails. |
 | `ROBOTMCP_ATTACH_STRICT` | `0`/`1`, `true`, `yes` | `0` | Strict mode: when the bridge is configured but a call fails, raise instead of silently falling back to local execution. |
 | `ROBOTMCP_STARTUP_CLEANUP` | `auto`, `always`, `off` | `auto` | Startup session cleanup. `auto` cleans local sessions only when the bridge is healthy and its context is active; `always` cleans unconditionally; `off` disables it. Invalid values fall back to `auto`. |
 | `ROBOTMCP_BRIDGE_HEARTBEAT` | `0`/`1`, `true`, `yes` | `0` | Enable the background bridge heartbeat/liveness probe. |
@@ -137,7 +139,7 @@ detection is fighting you.
 | Variable | Values | Default | Effect |
 |----------|--------|---------|--------|
 | `ROBOTMCP_LIBRARY_DETECTION_MIN_SCORE` | integer | `5` | Minimum score for a library to be considered a detection candidate. |
-| `ROBOTMCP_LIBRARY_DETECTION_CONFLICT_THRESHOLD` | integer | `8` | Score gap above which one library clearly wins (no conflict). |
+| `ROBOTMCP_LIBRARY_DETECTION_CONFLICT_THRESHOLD` | integer | `8` | Higher minimum score required for a library that belongs to a conflict group (Browser vs SeleniumLibrary) before it becomes a candidate; libraries outside a conflict group use `ROBOTMCP_LIBRARY_DETECTION_MIN_SCORE`. |
 | `ROBOTMCP_LIBRARY_DETECTION_AMBIGUITY_WINDOW` | integer | `4` | Score window within which candidates are treated as ambiguous (ties). |
 | `ROBOTMCP_SEMANTIC_KEYWORDS` | `1`/`true`/`yes`, else off | *(off)* | Enable semantic (embedding-based) keyword ranking in `find_keywords`. Off ⇒ lexical ranking. Lazy-loads a torch-free `model2vec` backend on first use. |
 | `ROBOTMCP_MATCHER_RERANK` | `1`/`true`/`yes` vs `0`/`false`/`no` | `1` (on) | Enable the keyword-matcher re-ranking pass. |
@@ -279,6 +281,6 @@ server.
 ## See also
 
 - **Optional dependencies (pip extras):** `web`, `api`, `mobile`, `database`,
-  `frontend`, `memory`, `tokens`, `semantic`, `all` — install with
+  `frontend`, `desktop` (PlatynUI, requires Python ≥3.12), `memory`, `tokens`, `semantic`, `slim`, `all` — install with
   `pip install "rf-mcp[web,api]"` etc. See the README for the full matrix.
 - **README** — install, MCP client wiring, and worked examples.

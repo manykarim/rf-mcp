@@ -45,8 +45,8 @@ anything, you have to do afterward:
 | `web` | SeleniumLibrary + Browser | Selenium: none (Selenium Manager fetches the driver); Browser: `robotmcp init --browsers` |
 | `mobile` | AppiumLibrary | Appium server (external) |
 | `database` | DatabaseLibrary | a DB driver |
-| `frontend` | Django dashboard | — |
-| `memory` | Persistent semantic memory (sqlite-vec + model2vec) | — |
+| `frontend` | Django dashboard | set `ROBOTMCP_ENABLE_FRONTEND=true` or start the server with `--with-frontend` (off by default) |
+| `memory` | Persistent semantic memory (sqlite-vec + model2vec) | set `ROBOTMCP_MEMORY_ENABLED=true` (off by default) |
 | `desktop` | PlatynUI native desktop automation (Rust core + `platynui-cli`) | Python 3.12+; ships as a pinned prerelease |
 | `all` | all of the above (Robot Framework libraries) | as above |
 
@@ -67,7 +67,7 @@ keeps rf-mcp's dependencies from tangling with your project's.
 Two commands get you set up and tell you the truth about your environment.
 
 ```bash
-robotmcp init            # reports libraries, prints the MCP config to paste
+robotmcp init            # reports libraries, prints the MCP config; also runs Playwright init when the Browser library is installed
 robotmcp init --browsers # also initializes the Playwright browser (needs Node.js)
 robotmcp doctor          # read-only health check: version, libraries, browser, Node
 robotmcp --version
@@ -102,7 +102,7 @@ format, and any other MCP servers you already have configured are left untouched
 
 **Scope.** Installs default to `--scope project` (writes into the current project,
 e.g. `./.mcp.json`) where the agent supports it. Use `--scope user` for a global,
-home-directory install. goose only supports user scope.
+home-directory install. goose only supports user scope, and GitHub Copilot only supports project scope.
 
 **Safe and reversible.** Every change is recorded in a hash-tracked manifest at
 `~/.local/state/robotmcp/install-manifest.json`. `robotmcp uninstall` removes only

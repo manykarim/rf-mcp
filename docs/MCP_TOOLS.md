@@ -49,6 +49,11 @@ step by step, inspect state when something breaks, then build and run a suite.
 | [`set_variables`](#set_variables) | Set several RF variables at once. |
 | [`set_library_search_order`](#set_library_search_order) | Set keyword-resolution precedence for a session. |
 | [`initialize_context`](#initialize_context) | Seed a session with libraries and variables. |
+| `execute_if` | Legacy single-purpose `if` flow (superseded by `execute_flow`). |
+| `execute_for_each` | Legacy single-purpose `for` flow (superseded by `execute_flow`). |
+| `execute_try_except` | Legacy single-purpose `try` flow (superseded by `execute_flow`). |
+| `import_resource` | Import a `.resource` file into the session RF namespace (attach-aware). |
+| `import_custom_library` | Import a custom library by module name or file path (attach-aware). |
 | **Discovery & Documentation** | |
 | [`find_keywords`](#find_keywords) | Discover keywords by semantic / pattern / catalog / session strategy. |
 | [`discover_keywords`](#discover_keywords) | Find keywords matching an action description. |
@@ -59,6 +64,9 @@ step by step, inspect state when something breaks, then build and run a suite.
 | [`get_available_keywords`](#get_available_keywords) | List keywords with minimal metadata. |
 | [`get_loaded_libraries`](#get_loaded_libraries) | Status of every loaded library. |
 | [`get_library_status`](#get_library_status) | Install status for one library. |
+| `list_available_keywords` | List keywords from the session's RF namespace (attach-aware). |
+| `get_session_keyword_documentation` | Docs for a keyword available in the session RF namespace. |
+| `debug_parse_keyword_arguments` | Parse an argument list against a keyword's signature. |
 | **Locators & Guidance** | |
 | [`get_locator_guidance`](#get_locator_guidance) | Consolidated locator/API/visual cookbook for the target library. |
 | [`get_browser_locator_guidance`](#get_browser_locator_guidance) | Browser Library (Playwright) selector guidance. |
@@ -73,6 +81,7 @@ step by step, inspect state when something breaks, then build and run a suite.
 | [`get_context_variables`](#get_context_variables) | All variables from a session. |
 | [`validate_test_readiness`](#validate_test_readiness) | Check whether a session is ready to build a suite. |
 | [`visual_check`](#visual_check) | Capture a screenshot for visual validation (path by default, image on opt-in). |
+| `diagnose_rf_context` | Inspect RF context state: libraries, search order, variable count. |
 | **Suite Lifecycle** | |
 | [`build_test_suite`](#build_test_suite) | Generate a `.robot` suite from executed steps. |
 | [`run_test_suite`](#run_test_suite) | Validate (dry run) or execute a suite. |
@@ -84,8 +93,10 @@ step by step, inspect state when something breaks, then build and run a suite.
 | [`manage_library_plugins`](#manage_library_plugins) | List / reload / diagnose library plugins from one endpoint. |
 | [`list_library_plugins`](#list_library_plugins) | Summary of every loaded plugin. |
 | [`diagnose_library_plugin`](#diagnose_library_plugin) | Detailed info on one plugin. |
-| [`reload_library_plugins_tool`](#reload_library_plugins_tool) | Reload plugins, optionally from manifest paths. |
+| [`reload_library_plugins`](#reload_library_plugins) | Reload plugins, optionally from manifest paths. |
 | [`manage_attach`](#manage_attach) | Inspect or control the debug attach bridge. |
+| `attach_status` | Report attach-mode configuration and bridge health. |
+| `attach_stop_bridge` | Send a stop command to the external attach bridge. |
 | **Memory** *(optional — `rf-mcp[memory]`)* | |
 | [`recall_step`](#recall_step) | Recall proven step sequences for a scenario. |
 | [`recall_fix`](#recall_fix) | Recall known fixes for an error. |
@@ -116,7 +127,7 @@ A few facts hold across the whole toolset. Learn them once.
   `detail_level="minimal"|"standard"|"full"`, `minimal` is the terse default and
   `full` is the whole story. Large payloads may be externalized — see
   [`fetch_artifact`](#fetch_artifact).
-- **Every response carries `success: bool`,** plus `error` and (usually)
+- **Most responses carry `success: bool`,** plus `error` and (usually)
   `guidance` when something goes wrong.
 
 ---
@@ -765,7 +776,7 @@ lists, attach status, and (on desktop) the accessibility UI tree.
 | `mode` | `"full" \| "delta" \| "auto" \| "none"` | `"auto"` | `delta` returns only sections changed since `since_version`; `auto` deltas automatically once a prior version exists. |
 | `since_version` | `int` | `None` | Baseline version for `delta`. |
 
-**Returns:** `sections` included and per-section `data` (variables, page
+**Returns:** `requested` (the section names asked for), `sections` — a map of section name → content (variables, page
 source/ARIA snapshots, validation, libraries, application state).
 
 **When to use:** the go-to move on any "element not found" — pull a fresh ARIA
@@ -872,9 +883,9 @@ agent with file access reads it on demand for checks the DOM can't do
 |------|------|---------|---------|
 | `session_id` | `str` | *(required)* | Session to screenshot. |
 | `return_image` | `bool` | `False` | Return an actual image content block. Honored **only** when the model can't read the saved file *and* `ROBOTMCP_SCREENSHOT_MODE` allows images (`image`/`auto`). |
-| `filename` | `str` | `None` | Optional output filename. |
+| `filename` | `str` | `None` | Optional output path. Honored **only** when it is an absolute path; otherwise ignored and the file is written to `ROBOTMCP_SCREENSHOT_DIR` (or the temp dir) as `visual_check_<session_id>.png`. |
 
-**Returns:** by default `{path, size, mode, visual_hint}` (text only); an image
+**Returns:** by default `{success, screenshot_path, size_bytes, mode, visual_hint}` (text only); an image
 block when `return_image=true` is honored. Works across
 Browser/Selenium/Appium/PlatynUI and degrades cleanly if capture fails.
 
@@ -992,7 +1003,7 @@ suite — pair it with `manage_session(action="add_data_row")`.
 
 ### `fetch_artifact`
 
-Retrieve externalized artifact content by ID. When a response would be large
+Retrieve externalized artifact content by ID. **This tool is hidden by default** — it is only registered as visible when `ROBOTMCP_FETCH_ARTIFACT=true` *and* `ROBOTMCP_OUTPUT_MODE` is not `inline`. When a response would be large
 (HTML page source, logs, stack traces), rf-mcp externalizes it and returns a
 summary with an `artifact_id`; this tool fetches the full content, paginated.
 
@@ -1053,7 +1064,7 @@ Return detailed information about one library plugin.
 **When to use:** when a plugin isn't behaving and you need its detail.
 `manage_library_plugins(action="diagnose")` is the consolidated equivalent.
 
-### `reload_library_plugins_tool`
+### `reload_library_plugins`
 
 Reload library plugins and return the resulting library list.
 
@@ -1106,7 +1117,7 @@ Recall previously successful step sequences for a scenario.
 | Name | Type | Default | Meaning |
 |------|------|---------|---------|
 | `scenario` | `str` | *(required)* | Scenario to recall step sequences for. |
-| `top_k` | `int` | `5` | Number of ranked results to return. |
+| `top_k` | `int` | `5` | Accepted for schema compatibility but currently **ignored** — the query always requests up to 10 results. |
 
 **Returns:** ranked `results`, a `count`, and a `suggestion`. When a match scores
 similarity > 0.3, prefer the recalled steps over discovering new ones.

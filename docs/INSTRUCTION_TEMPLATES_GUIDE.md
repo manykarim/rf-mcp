@@ -68,7 +68,7 @@ The single load-bearing line is the explicit unified session entry (step 1): ana
 creates the session, so callers must not also call `manage_session(init)` — that was the
 measured churn-killer.
 
-### `minimal` (~200 tokens, ~300 chars)
+### `minimal` (~30 tokens, ~250 chars)
 
 Best for: **Capable LLMs** (Claude Opus, GPT-4, Gemini Pro)
 
@@ -80,7 +80,7 @@ Verify keywords exist via discovery, never guess keyword names or arguments.
 For DOM inspection: get_session_state(sections=["page_source"], include_reduced_dom=True).
 ```
 
-### `standard` (~400 tokens, ~1200 chars) — *legacy (previous default)*
+### `standard` (~440 tokens, ~2800 chars) — *legacy (previous default)*
 
 Best for: **Mid-range LLMs** (Claude Sonnet, GPT-4o, Gemini Flash); retained for rollback
 (`ROBOTMCP_INSTRUCTIONS_TEMPLATE=standard`).
@@ -93,6 +93,7 @@ Key sections:
 3. SESSION MANAGEMENT & DOM INSPECTION
 4. ERROR RECOVERY
 5. MULTI-TEST SUITES
+6. BDD STYLE (Given/When/Then rules, `bdd_group`, `build_test_suite(bdd_style=True)`)
 
 Contains the `{available_tools}` placeholder that is automatically filled with the list of discovery tools.
 
@@ -108,6 +109,7 @@ Key sections:
 - STEP 3: INSPECT THE PAGE — with `get_session_state` ARIA snapshot usage
 - STEP 4: EXECUTE STEPS — with correct vs. incorrect locator examples
 - STEP 5: HANDLE ERRORS — recovery strategies
+- STEP 6: BDD STYLE — behavioral-keyword rules for Given/When/Then
 
 ### `browser-focused` (~350 tokens, ~1000 chars)
 
@@ -119,7 +121,13 @@ A streamlined template that focuses entirely on the Browser Library workflow: op
 
 Best for: **API testing only** scenarios
 
-Focuses on the RequestsLibrary workflow: creating sessions, making HTTP requests, and asserting responses. Omits all DOM/locator guidance since it's irrelevant for API testing.
+Focuses on the RequestsLibrary workflow: creating sessions, making HTTP requests, and asserting responses. Also carries a short SESSION STATE INSPECTION block (`get_session_state(sections=["variables"])`, `sections=["libraries"]`, plus an ARIA-snapshot pointer for hybrid API+web testing).
+
+### `desktop-focused` (~200 tokens, ~1300 chars)
+
+Best for: **Desktop automation (PlatynUI)** scenarios
+
+Inits with `libraries=["PlatynUI.BareMetal", "Process", "BuiltIn"]` and points at the `desktop_guidance` bundle returned by `manage_session(init)` instead of `find_keywords`. Carries the four non-discoverable locator rules: scope every locator under `/app:*[@Name='<app>']//control:...` (never start with `//`), Linux windows are `control:Frame` not `control:Window`, `Start Process` before `Query`, and `Take Screenshot`'s first positional is a node descriptor (use `filename=` for a path).
 
 ## Configuration Examples
 
@@ -147,7 +155,7 @@ Use the lean default — no env needed (or set `ROBOTMCP_INSTRUCTIONS_TEMPLATE=l
 **Shell:**
 ```bash
 export ROBOTMCP_INSTRUCTIONS=default
-export ROBOTMCP_INSTRUCTIONS_TEMPLATE=standard
+export ROBOTMCP_INSTRUCTIONS_TEMPLATE=lean
 uv run -m robotmcp.server
 ```
 
@@ -327,7 +335,7 @@ Custom instruction content is validated for:
 - **Recommended keywords**: Warnings (not errors) if the content doesn't mention `discovery`, `snapshot`, `element`, or `locator`.
 - **Token budget**: Error if content exceeds the configured token budget.
 
-If a custom file fails validation, the server automatically falls back to the default `standard` template and logs a warning.
+If a custom file fails validation, the server automatically falls back to the default `lean` template and logs a warning.
 
 ## Fallback Behavior
 
@@ -338,18 +346,20 @@ The instruction system is designed to never prevent server startup:
 | Custom file not found | Falls back to default template, logs warning |
 | Custom file fails validation | Falls back to default template, logs warning |
 | Invalid file extension in env var | Falls back to default template, logs error |
-| Invalid template name in env var | Falls back to `standard` template, logs warning |
+| Invalid template name in env var | Falls back to `lean` template, logs warning |
 | Any unexpected exception | Server starts without instructions, logs warning |
 
 ## Template Comparison
 
 | Template | Tokens | Best For | Key Feature |
 |----------|--------|----------|-------------|
+| `lean` (default, alias `checklist`) | ~185 | All models — the default | Order-explicit 6-step canonical spine |
 | `minimal` | ~40 | Opus, GPT-4 | 3-line reminder only |
 | `standard` | ~400 | Sonnet, GPT-4o | Structured 5-section workflow |
 | `detailed` | ~600 | Haiku, GPT-4o-mini | Step-by-step with examples |
 | `browser-focused` | ~350 | Web-only testing | Browser keywords + ARIA workflow |
-| `api-focused` | ~300 | API-only testing | RequestsLibrary + HTTP methods |
+| `api-focused` | ~150 | API-only testing | RequestsLibrary + HTTP methods |
+| `desktop-focused` | ~200 | Desktop (PlatynUI) testing | PlatynUI keyword surface + app-scoped locator rules |
 
 ## How Instructions Reach the LLM
 
@@ -368,7 +378,7 @@ When an MCP client connects and sends `initialize`, the server responds with:
   "protocolVersion": "2024-11-05",
   "capabilities": { ... },
   "serverInfo": { "name": "Robot Framework MCP Server" },
-  "instructions": "rf-mcp WORKFLOW GUIDE:\n\n1. DISCOVER before EXECUTE..."
+  "instructions": "rf-mcp — build Robot Framework tests. Follow in order; add no extra steps:\n1. Call analyze_scenario ONCE to start..."
 }
 ```
 
@@ -426,11 +436,11 @@ result = custom.render({"team": "QA", "available_tools": "find_keywords"})
 
 ## Additional Built-in Templates
 
-Beyond the five environment-selectable templates, the code also includes:
+Beyond the seven environment-selectable templates, the code also includes:
 
 | Template | ID | Purpose |
 |----------|----|---------|
-| `discovery_first` | `discovery_first` | Comprehensive 6-section discovery-focused guide (used internally by the resolver as the default when `ROBOTMCP_INSTRUCTIONS_TEMPLATE` is not set to one of the five named templates) |
+| `discovery_first` | `discovery_first` | Comprehensive 6-section discovery-focused guide (legacy comprehensive guide; no longer the resolver default — `InstructionResolver` now defaults to `lean`. Reachable only via `InstructionTemplate.get_by_name("discovery_first")`) |
 | `locator_prevention` | `locator_prevention` | Strict "MUST NOT / MUST" rules focusing exclusively on preventing keyword and locator guessing |
 
 These can be accessed programmatically via `InstructionTemplate.discovery_first()`, `InstructionTemplate.locator_prevention()`, or `InstructionTemplate.get_by_name("discovery_first")`.
@@ -448,9 +458,9 @@ These can be accessed programmatically via `InstructionTemplate.discovery_first(
 
 **Template not changing:**
 - Ensure `ROBOTMCP_INSTRUCTIONS=default` is set (template selection only applies in default mode).
-- Verify the template name exactly matches one of: `minimal`, `standard`, `detailed`, `browser-focused`, `api-focused`.
+- Verify the template name exactly matches one of: `lean` (alias `checklist`), `minimal`, `standard`, `detailed`, `browser-focused`, `api-focused`, `desktop-focused`.
 - Template names are case-insensitive and trimmed.
 
 **Token budget warning:**
 - The default token budget is 1,000 tokens. Custom instructions exceeding this will log a validation error and fall back to the default template.
-- For longer custom instructions, this is a warning only — the instructions will still be used if under the 50,000 character hard limit.
+- Exceeding the token budget is an error, not a warning: InstructionValidator appends it to `errors`, so a custom file over budget is rejected and the server falls back to the default `lean` template.

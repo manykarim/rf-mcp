@@ -271,20 +271,23 @@ agent to drive.
 
 ## Getting it
 
-0.34.0 is still baking. The work above ships today as `0.34.0.devN` prereleases:
-
 ```
-uv tool install --prerelease=allow "rf-mcp[all]"
+uv tool install "rf-mcp[all]"
+robotmcp init
+robotmcp install
 ```
 
-`[all]` now includes desktop automation on Python 3.12+ — no second command. On Python 3.10/3.11 it
-installs everything else and skips desktop.
+`[all]` now includes desktop automation on Python 3.12+ — no second command, and no `--pre` needed
+(the PlatynUI packages are exact-pinned, so resolvers accept them). On Python 3.10/3.11 it installs
+everything else and skips desktop.
 
 Want desktop on its own, without the rest:
 
 ```
-uv tool install --prerelease=allow "rf-mcp[desktop]"
+uv tool install "rf-mcp[desktop]"
 ```
+
+`pip install "rf-mcp[all]"` works too.
 
 Upgrading from 0.33.x needs no configuration changes. If a moved default bites you, the table above
 has the switch.
