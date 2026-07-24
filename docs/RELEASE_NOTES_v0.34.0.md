@@ -109,6 +109,8 @@ Prefer the old text? `ROBOTMCP_INSTRUCTIONS_TEMPLATE=standard`.
 - **Windows dry-run deadlock (critical).** `run_test_suite` in dry-run mode froze for the full 180 s
   and timed out — every time, even for a one-line suite (an inherited-stdin deadlock, not your suite).
   Now ~1 second, Linux/macOS unaffected.
+- **Windows `robotmcp init` / `install` crash.** On the Windows console (cp1252), non-ASCII output
+  raised a `UnicodeEncodeError` and both commands failed hard. The onboarding output is ASCII-safe now.
 - **Generated suites keep your paths.** Robot Framework treats `\` as an escape, so a Windows path
   written into a generated `.robot` was corrupted (`C:\WINDOWS\system32` → `C:WINDOWSsystem32`).
   Drive-letter paths now use forward slashes and other backslashes are escaped, so a suite that ran
