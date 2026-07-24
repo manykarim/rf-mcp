@@ -4,12 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rf-mcp"
-# 0.34.0: Windows-hardening release — PlatynUI desktop stuck-key release + fast-fail
-# queries + Windows-aware safety guard, the Windows dry-run stdin deadlock, generated
-# -suite path/backslash round-tripping, the cold-start banner hang, lean default agent
-# instructions, and tool profiles working again on FastMCP 3.x. See
-# docs/RELEASE_NOTES_v0.34.0.md.
-version = "0.34.0"
+# 0.35.0: Windows follow-up to 0.34.0 - a local/unpublished rf-mcp checkout on
+# Windows now overlays correctly into a project-aware install (file:// launch-path
+# parsing fix in the installer). See docs/RELEASE_NOTES_v0.35.0.md.
+version = "0.35.0"
 description = "Robot Framework MCP Server - Natural Language Test Automation Bridge"
 authors = [{ name = "Many Kasiriha" }]
 license = { text = "Apache-2.0" }
