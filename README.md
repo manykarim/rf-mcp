@@ -43,7 +43,7 @@ uv tool install "rf-mcp[api]"
 ```
 
 This puts a `robotmcp` command on your PATH. Extras decide which test libraries come
-along — see the [extras table](#-install-as-a-tool--wire-it-into-your-coding-agent).
+along — see the [extras table](#extras) under Installation.
 
 ### 2️⃣ Wire it into your coding agent
 
@@ -143,192 +143,15 @@ generation — you just describe the test.
 
 ---
 
-## 🛠️ Installation & Setup
+## 🛠️ Installation
 
-https://github.com/user-attachments/assets/8448cb70-6fb3-4f04-9742-a8a8453a9c7f
+The [Quick Start](#-quick-start) covers the recommended path (`uv tool install`). This
+section has the extras table, alternative install methods, and the full agent-registration
+details.
 
-### Prerequisites
+### Extras
 
-- Python 3.10+
-- Robot Framework 7.0+
-- FastMCP 2.8+ (compatible with both 2.x and 3.x)
-
-`rf-mcp` comes with minimal dependencies by default. To use specific libraries (e.g., Browser, Selenium, Appium), install the corresponding extras or libraries separately.
-
-### Method 1: UV Installation (Recommended)
-
-```bash
-# Install with uv pip wrapper
-uv venv   # create a virtual environment
-uv pip install rf-mcp
-
-# Feature bundles (install what you need)
-uv pip install rf-mcp[web]       # Browser Library + SeleniumLibrary
-uv pip install rf-mcp[mobile]    # AppiumLibrary
-uv pip install rf-mcp[api]       # RequestsLibrary
-uv pip install rf-mcp[database]  # DatabaseLibrary
-uv pip install --pre rf-mcp[desktop]  # PlatynUI new-core (Rust) native desktop — Python 3.12+, prerelease
-uv pip install rf-mcp[frontend]  # Django-based web frontend dashboard
-uv pip install rf-mcp[memory]    # Persistent semantic memory (sqlite-vec + model2vec)
-uv pip install rf-mcp[semantic]  # Sentence-transformers for find_keywords embedding ranking
-uv pip install rf-mcp[all]       # All optional Robot Framework libraries (includes desktop on Python 3.12+)
-
-# Alternatively, add to an existing uv project
-uv init
-# Add rf-mcp to project dependencies and sync
-uv add rf-mcp[all]
-uv sync
-
-# Browser Library still needs Playwright browsers
-uv run rfbrowser init
-```
-
-### Method 2 PyPI Installation
-
-```bash
-# Install RobotMCP core (minimal dependencies)
-pip install rf-mcp
-
-# Feature bundles (install what you need)
-pip install rf-mcp[web]       # Browser Library + SeleniumLibrary
-pip install rf-mcp[mobile]    # AppiumLibrary
-pip install rf-mcp[api]       # RequestsLibrary
-pip install rf-mcp[database]  # DatabaseLibrary
-pip install rf-mcp[frontend]  # Django-based web frontend dashboard
-pip install rf-mcp[memory]    # Persistent semantic memory (sqlite-vec + model2vec)
-pip install rf-mcp[semantic]  # Sentence-transformers for find_keywords embedding ranking
-pip install rf-mcp[all]       # All optional Robot Framework libraries
-
-# Browser Library still needs Playwright browsers
-rfbrowser init
-# or
-python -m Browser.entry install
-```
-
-Prefer installing individual Robot Framework libraries instead?
-Just install `rf-mcp` and add your desired libraries manually.
-
-### Method 3: Development Installation
-
-```bash
-# Clone repository
-git clone https://github.com/manykarim/rf-mcp.git
-cd rf-mcp
-
-# Install with uv (recommended)
-uv sync
-# Include optional extras & dev tooling
-uv sync --all-extras --dev
-
-# Or with pip
-pip install -e .
-```
-
-### Method 4: Docker Installation
-
-RobotMCP provides pre-built Docker images for both headless and VNC-enabled environments.
-
-#### Headless Image (Recommended for CI/CD)
-
-```bash
-# Pull from GitHub Container Registry
-docker pull ghcr.io/manykarim/rf-mcp:latest
-
-# Run with HTTP transport and frontend
-docker run -p 8000:8000 -p 8001:8001 ghcr.io/manykarim/rf-mcp:latest
-
-# Or run interactively with STDIO
-docker run -it --rm ghcr.io/manykarim/rf-mcp:latest uv run robotmcp
-```
-
-**Included browsers:** Chromium, Firefox ESR, Playwright browsers (Chromium, Firefox, WebKit)
-
-#### VNC Image (For Visual Debugging)
-
-The VNC image includes a full X11 desktop accessible via VNC or noVNC web interface:
-
-```bash
-# Pull VNC image
-docker pull ghcr.io/manykarim/rf-mcp-vnc:latest
-
-# Run with all ports exposed
-docker run -p 8000:8000 -p 8001:8001 -p 5900:5900 -p 6080:6080 ghcr.io/manykarim/rf-mcp-vnc:latest
-```
-
-**Access points:**
-| Port | Service |
-|------|---------|
-| 8000 | MCP HTTP transport |
-| 8001 | Frontend dashboard |
-| 5900 | VNC (use any VNC client) |
-| 6080 | noVNC web interface (http://localhost:6080/vnc.html) |
-
-#### Building Docker Images Locally
-
-```bash
-# Build headless image
-docker build -f docker/Dockerfile -t robotmcp .
-
-# Build VNC image
-docker build -f docker/Dockerfile.vnc -t robotmcp-vnc .
-```
-
-#### Using Docker with VS Code MCP
-
-**STDIO mode:**
-```json
-{
-  "servers": {
-    "robotmcp": {
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "ghcr.io/manykarim/rf-mcp:latest", "uv", "run", "robotmcp"]
-    }
-  }
-}
-```
-
-**HTTP mode (start container first, then connect):**
-```json
-{
-  "servers": {
-    "robotmcp": {
-      "type": "http",
-      "url": "http://localhost:8000/mcp"
-    }
-  }
-}
-```
-
-### Playwright/Browsers for UI Tests
-
-- Browser Library: run `rfbrowser init` (downloads Playwright and browsers)
-
-### Hint: When using a venv
-
-If you are using a virtual environment (venv) for your project, I recommend to install the `rf-mcp` package within the same venv. When starting the MCP server, make sure to use the Python interpreter from that venv.
-
----
-
-## 📦 Install as a tool & wire it into your coding agent
-
-The fastest way to use rf-mcp from a coding agent is to install it as a standalone
-CLI tool and let it register itself into the agents you use.
-
-### 1. Install
-
-```bash
-# API testing only (pure Python, nothing else to do)
-uv tool install "rf-mcp[api]"
-
-# Web + API (Selenium works with a system browser; Browser/Playwright adds one step)
-uv tool install "rf-mcp[web,api]"
-
-# Everything (Browser, Selenium, Appium, Requests, Database, …)
-uv tool install "rf-mcp[all]"
-```
-
-This puts a `robotmcp` command (aliased `rf-mcp`) on your PATH. Extras control which
-test libraries are available:
+Extras decide which Robot Framework libraries come along:
 
 | Extra | Adds | Post-install |
 | --- | --- | --- |
@@ -336,22 +159,42 @@ test libraries are available:
 | `web` | SeleniumLibrary + Browser | Selenium: none (Selenium Manager fetches the driver); Browser: `robotmcp init --browsers` |
 | `mobile` | AppiumLibrary | Appium server (external) |
 | `database` | DatabaseLibrary | a DB driver |
-| `all` | all of the above | as above |
+| `desktop` | PlatynUI native desktop (Windows/Linux) | Python 3.12+ |
+| `frontend` | Django dashboard | — |
+| `memory` | Persistent semantic memory (sqlite-vec + model2vec) | `ROBOTMCP_MEMORY_ENABLED=true` |
+| `all` | all Robot Framework libraries above (includes `desktop` on Python 3.12+) | as above |
 
-### 2. Prepare & diagnose
+Browser Library also needs Playwright browsers — run `robotmcp init --browsers` (or
+`rfbrowser init`) once, inside rf-mcp's own environment. Node.js is only needed for Browser.
+
+### Other install methods
 
 ```bash
-robotmcp init            # reports libraries, prints the MCP config to paste
-robotmcp init --browsers # also initializes the Playwright browser (needs Node.js)
-robotmcp doctor          # read-only health: version, libraries, browser, Node
-robotmcp --version
+pip install "rf-mcp[all]"                 # pip instead of uv
+uv add "rf-mcp[all]" && uv sync           # into an existing uv project
+
+# From source (development)
+git clone https://github.com/manykarim/rf-mcp.git && cd rf-mcp
+uv sync --all-extras --dev
 ```
 
-`robotmcp init` runs the bundled `rfbrowser init` inside rf-mcp's own environment,
-so Playwright lands where the installed Browser library looks for it. It advises
-(rather than fails) if the `web` extra or Node.js is missing.
+### Docker
 
-### 3. Register into coding agents
+Pre-built images (headless for CI, plus a VNC image for visual debugging):
+
+```bash
+docker pull ghcr.io/manykarim/rf-mcp:latest          # headless
+docker run -p 8000:8000 -p 8001:8001 ghcr.io/manykarim/rf-mcp:latest    # HTTP + frontend
+docker run -it --rm ghcr.io/manykarim/rf-mcp:latest uv run robotmcp     # STDIO
+
+docker pull ghcr.io/manykarim/rf-mcp-vnc:latest      # X11 desktop over VNC/noVNC
+docker run -p 8000:8000 -p 8001:8001 -p 5900:5900 -p 6080:6080 ghcr.io/manykarim/rf-mcp-vnc:latest
+```
+
+Headless bundles Chromium, Firefox ESR and the Playwright browsers. VNC ports: 8000 (MCP
+HTTP), 8001 (frontend), 5900 (VNC), 6080 (noVNC — http://localhost:6080/vnc.html).
+
+### Register into coding agents
 
 ```bash
 robotmcp list                              # supported agents + what's detected/registered
@@ -366,23 +209,24 @@ Supported agents (each written in its own file/format, other MCP servers preserv
 **Claude Code, OpenAI Codex, GitHub Copilot, opencode, Gemini CLI, Kilo Code, goose,
 Cursor** (plus `pi`, listed as *planned* until its config convention is confirmed).
 
-**Scope.** Installs default to `--scope project` (writes into the current project,
-e.g. `./.mcp.json`) where the agent supports it; use `--scope user` for a global
-(home-directory) install. goose only supports user scope.
+**Uses your project's environment.** Install into a project that has its own set-up
+environment (uv, poetry, pdm, pipenv, rye, hatch, or a plain `.venv`) and rf-mcp is wired to
+run against *that* environment — so it sees your project's libraries, keywords and resources,
+not just its bundled ones. It launches the resolved command and verifies your libraries are
+reachable **before** writing the config; a blind or broken command is refused. A global
+`uvx` / `uv tool` install still serves every project with no per-project setup. Point it with
+`-C <dir>`, opt into installing rf-mcp into the project env with `--into-project`, and run
+`robotmcp doctor --project-dir <dir>` to see which of your libraries the launch reaches.
+
+**Scope.** Installs default to `--scope project` (writes into the current project, e.g.
+`./.mcp.json`) where the agent supports it; use `--scope user` for a global (home-directory)
+install. goose only supports user scope; GitHub Copilot only supports project scope.
 
 **Safe & reversible.** Every change is recorded in a hash-tracked manifest
-(`~/.local/state/robotmcp/install-manifest.json`). `robotmcp uninstall` removes only
-entries that are unchanged since install — if you edited an rf-mcp entry by hand it
-is left in place and reported, and unrelated servers are never touched. Use
-`--dry-run` on either command to preview.
-
-**Manual fallback.** If you prefer to edit config yourself, add:
-
-```json
-{ "mcpServers": { "robotmcp": { "command": "robotmcp" } } }
-```
-
----
+(`~/.local/state/robotmcp/install-manifest.json`). `robotmcp uninstall` removes only entries
+unchanged since install — a hand-edited entry is left in place and reported, and unrelated
+servers are never touched. Prefer to edit config yourself? Add
+`{ "mcpServers": { "robotmcp": { "command": "robotmcp" } } }`.
 
 ## 🔌 Library Plugins
 
@@ -671,94 +515,16 @@ Execute the test suite stepwise and build the final version afterwards.
 
 ---
 
-## 🔍 MCP Tools Overview
+## 🔍 MCP Tools
 
-RobotMCP provides a comprehensive toolset organized by function. Highlights:
+rf-mcp exposes its capabilities to the agent as MCP tools, grouped by purpose:
+planning & orchestration, session & execution, discovery & documentation,
+observability & diagnostics, suite lifecycle, locator guidance, visual validation,
+and optional persistent memory.
 
-### Planning & Orchestration
-
-- `analyze_scenario` – Convert natural language to structured test intent and spawn sessions.
-- `recommend_libraries` – Suggest libraries (`mode="direct"`, `"sampling_prompt"`, or `"merge_samples"`). Includes confidence filtering, negation support ("not using Selenium"), and conflict prevention (Browser and SeleniumLibrary are never recommended together).
-- `manage_library_plugins` – List, reload, or diagnose library plugins from a single endpoint.
-
-### Session & Execution
-
-- `manage_session` – Initialize sessions, import resources/libraries, set variables, manage multi-test suites, or switch tool profiles via `action`. Key actions include `init`, `import_library`, `set_variable`, `start_test`, `end_test`, `list_tests`, `set_suite_setup`, `set_suite_teardown`, `set_tool_profile`.
-- `execute_step` – Execute keywords or `mode="evaluate"` expressions with optional `assign_to` and `timeout_ms`. Includes automatic timeout tuning by keyword type and element pre-validation for faster error feedback.
-- `execute_flow` – Build `if`/`for_each`/`try` control structures using RF context-first execution.
-- `execute_batch` – Execute multiple keywords in a single MCP call with variable chaining (`${STEP_N}` references), automatic recovery on failure, and configurable failure policies (`stop`, `retry`, `recover`). Reduces N tool round-trips to 1.
-- `resume_batch` – Resume a failed batch from its failure point, optionally inserting fix steps before retrying.
-- `intent_action` – Library-agnostic intent execution (e.g. `intent="click"`, `target="text=Login"`). Resolves to the correct keyword/locator for the session's active library. Supports 8 intents: `navigate`, `click`, `fill`, `hover`, `select`, `assert_visible`, `extract_text`, `wait_for`.
-
-### Discovery & Documentation
-
-- `find_keywords` – Unified keyword discovery (`strategy="semantic"`, `"pattern"`, `"catalog"`, or `"session"`).
-- `get_keyword_info` – Retrieve keyword/library documentation or parse argument signatures (`mode="keyword"|"library"|"session"|"parse"`).
-
-### Observability & Diagnostics
-
-- `get_session_state` – Aggregate session insight (`summary`, `variables`, `page_source`, `application_state`, `validation`, `libraries`, `rf_context`). Supports `detail_level="minimal"|"standard"|"full"` for controlling response verbosity.
-- `check_library_availability` – Verify availability/install guidance for specific libraries (always includes `success`).
-- `set_library_search_order` – Control keyword resolution precedence.
-- `manage_attach` – Inspect or stop the attach bridge.
-
-### Suite Lifecycle
-
-- `build_test_suite` – Generate Robot Framework test files from validated steps. Supports multi-test suites with per-test tags, setup, and teardown. Use `bdd_style=True` for Given/When/Then output.
-- `run_test_suite` – Validate (`mode="dry"`) or execute (`mode="full"`) suites.
-
-### Locator Guidance
-
-- `get_locator_guidance` – Consolidated Browser/Selenium/Appium selector guidance with structured output. Also serves non-locator topics: `library="requests"` (API request/response cookbook) and `library="visual"` (visual-validation cookbook — see below).
-- `visual_check` – Capture the current screen/page to disk and, on explicit opt-in, return the image for multimodal inspection (see [Visual validation](#-visual-validation-multimodal)).
-
-### Visual validation (multimodal)
-
-Some checks are impossible from the DOM / ARIA tree alone — text baked into a
-`<canvas>` or an image, layout/overlap, an element visually obscured by an
-overlay, color/state, charts, or transient UI states. When the coding agent's
-model is multimodal, a screenshot closes that gap. RobotMCP exposes this
-**pull-not-push** so it stays token-cheap by default:
-
-- **Default (cheap, ~no extra tokens):** every successful screenshot step
-  advertises an absolute `screenshot_path` plus a one-line `visual_hint` in its
-  response. No image bytes are sent. A multimodal agent that can read files
-  opens the path on demand; a text-only agent simply ignores it. The run never
-  depends on the model being multimodal.
-- **Guidance topic:** `get_locator_guidance(library="visual")` (aliases:
-  `screenshot`, `vision`, `image`) returns a cookbook — the vision-only case
-  categories, the **dual read-back** pattern (prefer `Get Text` when a node
-  exposes the value; use a screenshot to *confirm*; go screenshot-primary only
-  when no node exposes it), and the caveats.
-- **Opt-in image escape hatch:** the `visual_check` tool. By default it returns
-  `{screenshot_path, size, mode, visual_hint}` — **text only**. It returns an
-  actual image content block **only** when called with `return_image=true`
-  *and* `ROBOTMCP_SCREENSHOT_MODE` is `image` or `auto`. A missing/failed
-  capture degrades to the evidence-missing hint and never raises.
-
-**`ROBOTMCP_SCREENSHOT_MODE`** (default `file`):
-
-| Value   | Behavior |
-| ------- | -------- |
-| `file`  | Always path-only; `return_image=true` is ignored. Safe default for text-only deployments. |
-| `image` | Honor `return_image=true` and return the image block. |
-| `auto`  | Same as `image` where supported, else falls back to path-only. |
-
-**Caveats:** each attached image costs roughly 800 tokens, so keep it on-demand;
-prefer `Get Text` for exact text/number assertions that live in the DOM;
-screenshots may capture PII; and pixel comparisons are not deterministic across
-renderers — use vision for *gestalt* validation, not byte-exact diffs.
-
-### Memory (optional, requires `rf-mcp[memory]`)
-
-- `recall_step` – Recall previously successful step sequences for a test scenario.
-- `recall_fix` – Recall known fixes for an error message from past sessions.
-- `recall_locator` – Recall working locator strategies for a UI element.
-- `store_knowledge` – Store domain knowledge for future recall.
-- `get_memory_status` – Check memory availability and collection statistics.
-
----
-
+**Full reference:** [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md) — every tool with its
+parameters, returns, and when to reach for it. Your agent reads these descriptions
+directly; you rarely need to call them by hand.
 ## 🧪 BDD & Data-Driven Test Generation
 
 ### BDD Style (Given/When/Then)
@@ -1024,52 +790,15 @@ Memory benefits are strongest for **complex, multi-step scenarios** where past l
 
 ---
 
-## ⚙️ Environment Variables Reference
+## ⚙️ Configuration
 
-### Core Configuration
+rf-mcp runs with sensible defaults; when you need to tune it, everything is an
+environment variable away — instruction templates, the attach bridge, output/token
+economy, memory, the frontend dashboard, PlatynUI desktop safety, and more.
 
-| Variable | Values | Default | Description |
-|----------|--------|---------|-------------|
-| `ROBOTMCP_INSTRUCTIONS` | `off` / `default` / `custom` | `default` | Instruction mode |
-| `ROBOTMCP_INSTRUCTIONS_TEMPLATE` | `minimal` / `standard` / `detailed` / `browser-focused` / `api-focused` | `standard` | Template selection (default mode only) |
-| `ROBOTMCP_INSTRUCTIONS_FILE` | File path | *(none)* | Custom instructions file (custom mode only) |
-| `ROBOTMCP_TOOL_PROFILE` | `browser_exec` / `api_exec` / `discovery` / `minimal_exec` / `full` | *(auto)* | Default tool profile |
-| `ROBOTMCP_OUTPUT_VERBOSITY` | `compact` / `standard` / `verbose` | `standard` | Response detail level |
-| `ROBOTMCP_USE_SAMPLING` | `true` / `1` / `yes` | *(disabled)* | Enable LLM-powered scenario analysis |
-| `ROBOTMCP_OUTPUT_MODE` | `auto` / `full` / `delta` | `auto` | Default `get_session_state` response mode |
-| `ROBOTMCP_PRE_VALIDATION` | `0` / `1` | `1` | Enable element pre-validation before actions |
-| `ROBOTMCP_STARTUP_CLEANUP` | `auto` / `on` / `off` | `auto` | Session cleanup on server start |
-
-### Persistent Memory
-
-| Variable | Values | Default | Description |
-|----------|--------|---------|-------------|
-| `ROBOTMCP_MEMORY_ENABLED` | `true` / `1` / `yes` | *(disabled)* | Enable persistent semantic memory |
-| `ROBOTMCP_MEMORY_DB_PATH` | file path | `./robotmcp_memory.db` | SQLite database path for memory storage |
-| `ROBOTMCP_MEMORY_MODEL` | model name | `potion-base-8M` | Embedding model for similarity search |
-
-### Debug Attach Bridge
-
-| Variable | Values | Default | Description |
-|----------|--------|---------|-------------|
-| `ROBOTMCP_ATTACH_HOST` | hostname/IP | *(none)* | Attach bridge host (enables attach mode) |
-| `ROBOTMCP_ATTACH_PORT` | integer | `7317` | Attach bridge port |
-| `ROBOTMCP_ATTACH_TOKEN` | string | `change-me` | Shared auth token |
-| `ROBOTMCP_ATTACH_DEFAULT` | `auto` / `force` / `off` | `auto` | Attach routing mode |
-| `ROBOTMCP_ATTACH_STRICT` | `0` / `1` | `0` | Fail if bridge unreachable |
-
-### Frontend Dashboard
-
-| Variable | Values | Default | Description |
-|----------|--------|---------|-------------|
-| `ROBOTMCP_ENABLE_FRONTEND` | `0` / `1` | `0` | Enable dashboard |
-| `ROBOTMCP_FRONTEND_HOST` | hostname/IP | `localhost` | Dashboard host |
-| `ROBOTMCP_FRONTEND_PORT` | integer | `8001` | Dashboard port |
-| `ROBOTMCP_FRONTEND_BASE_PATH` | URL path | `/` | URL base path prefix |
-| `ROBOTMCP_FRONTEND_DEBUG` | `0` / `1` | `1` | Django debug mode |
-
----
-
+**Full reference:** [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — every
+`ROBOTMCP_*` variable with its accepted values and default, plus the `robotmcp`
+CLI flags and subcommands.
 ## 🤝 Contributing
 
 We welcome contributions! Here's how to get started:
@@ -1084,7 +813,7 @@ We welcome contributions! Here's how to get started:
 
 ## 📝 Changelog
 
-- [**v0.34.0**](docs/RELEASE_NOTES_v0.34.0.md) – Windows hardening: desktop stuck-key release, fast-fail desktop queries, dry-run deadlock, generated-suite path/backslash fixes, cold-start hang, lean default instructions, tool profiles restored on FastMCP 3
+- [**v0.34.0**](docs/RELEASE_NOTES_v0.34.0.md) – Native desktop automation (`rf-mcp[desktop]`, PlatynUI, Windows-ready); project-aware installer that uses your project's own libraries; leaner agent instructions; cold-start hang, Windows dry-run deadlock and generated-suite path fixes; tool profiles restored on FastMCP 3
 - [**v0.31.1**](docs/RELEASE_NOTES_v0.31.0.md) – Packaging cleanup (exclude tests/examples from sdist)
 - [**v0.31.0**](docs/RELEASE_NOTES_v0.31.0.md) – BDD/data-driven generation, namespace architecture fixes, persistent memory, 71-88% token reduction
 - [v0.30.1](docs/RELEASE_NOTES_v0.30.1.md) – FastMCP 3.x compatibility layer
