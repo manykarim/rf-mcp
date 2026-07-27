@@ -1,0 +1,10 @@
+# Isolated, pinned harness dependency (change: adopt-agenteval-harness).
+#
+# Installed into an EPHEMERAL environment by run.sh
+#   uv run --no-project --with-requirements tests/agenteval/requirements.txt robot ...
+# so it NEVER enters rf-mcp's own runtime or dev environment. rf-mcp is spawned as a
+# subprocess by the suites (.venv/bin/robotmcp) and runs from its own venv.
+#
+# agenteval's keyword libraries are labelled `provisional` (v0.3.x) — pin an EXACT
+# version and upgrade deliberately, checking its CHANGELOG for breaking changes.
+robotframework-agenteval[all]==0.3.0

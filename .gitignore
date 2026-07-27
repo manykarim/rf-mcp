@@ -252,3 +252,4 @@ docs/issues/saucelabs.robot
 docs/issues/saucelabs.txt
 docs/issues/sauce*credentials*
 docs/issues/*credentials*
+tests/agenteval/results/

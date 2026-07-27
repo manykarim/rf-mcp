@@ -450,3 +450,41 @@ jobs:
           name: E2E Instruction Smoke
           path: results/e2e-instruction-smoke.xml
           reporter: java-junit
+
+  agenteval-harness:
+    name: AgentEval Harness (MCP-surface + agentic)
+    runs-on: ubuntu-latest
+    env:
+      # Agentic (Tier-3) suite runs only when a model credential is configured;
+      # it self-skips otherwise (deterministic Tier-1 is always-on, keyless).
+      AGENTEVAL_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      AGENTEVAL_BASE_URL: https://api.minimax.io/v1
+      AGENTEVAL_MODEL: MiniMax-M3
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: 'latest'
+
+      - name: Setup Python 3.12 (via uv)
+        run: uv python install 3.12
+
+      # rf-mcp is spawned as a subprocess by the suites (.venv/bin/robotmcp),
+      # so it must exist in its OWN env. agenteval installs into a SEPARATE
+      # ephemeral env inside run.sh (uv run --no-project --with-requirements).
+      - name: Build rf-mcp's own env
+        run: uv sync --all-extras --group dev
+
+      - name: Run the agenteval harness (deterministic always-on; agentic gated by the key)
+        run: bash tests/agenteval/run.sh --xunit results.xml
+
+      - name: Test Report
+        uses: dorny/test-reporter@main
+        if: success() || failure()
+        with:
+          name: AgentEval Harness
+          path: tests/agenteval/results/results.xml
+          reporter: java-junit

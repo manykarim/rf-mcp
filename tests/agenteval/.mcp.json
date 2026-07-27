@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "robotmcp": {
+      "command": ".venv/bin/robotmcp",
+      "args": [],
+      "transport": "stdio"
+    }
+  }
+}
