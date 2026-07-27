@@ -70,8 +70,10 @@ constraints worth knowing before leaning on the harness:
    `agent.run(prompt)` with pydantic-ai's default `request_limit=50` and exposes **no override**.
    Short scenarios pass (demoshop: 22 tool calls, hit-rate 0.75); a long one hits it —
    restful-booker's read+create+auth+delete workflow raises `UsageLimitExceeded` past 50 requests.
-   The suite treats that as a **documented skip**, not a failure. Real fix: an upstream usage-limit
-   knob, or drive long scenarios through a coding-agent **CLI adapter** (no pydantic-ai default cap).
+   Because *running* it burns ~50 live requests only to fail on the cap, the restful-booker test is
+   **skipped by default** and opted in with `AGENTEVAL_ALLOW_LONG=1` (a `UsageLimitExceeded` at
+   runtime is still caught and downgraded to a skip). Real fix: an upstream usage-limit knob, or
+   drive long scenarios through a coding-agent **CLI adapter** (no pydantic-ai default cap).
 2. **Tier-3 measures tool usage, not automation success.** The hit-rate gate (like the bespoke
    quality gate) asserts the agent *selected and called* the right tools — it is robust to page
    state. It does **not** assert the web automation succeeded. The demoshop prompt uses
