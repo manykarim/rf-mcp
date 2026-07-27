@@ -7,4 +7,4 @@
 #
 # agenteval's keyword libraries are labelled `provisional` (v0.3.x) — pin an EXACT
 # version and upgrade deliberately, checking its CHANGELOG for breaking changes.
-robotframework-agenteval[all]==0.3.0
+robotframework-agenteval[all]==0.4.0

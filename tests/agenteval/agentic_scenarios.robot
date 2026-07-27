@@ -22,13 +22,12 @@ ${RFMCP}         ${CURDIR}${/}..${/}..${/}.venv${/}bin${/}robotmcp
 *** Test Cases ***
 Restful Booker API Scenario Reaches Its Tool Surface
     [Tags]    agentic    api
-    # Skipped by DEFAULT: this scenario exceeds agenteval 0.3.0's in-process
-    # request_limit=50, which the adapter does not let us raise. Running it burns
-    # ~50 live model requests only to fail on the cap, so it is off unless opted in.
-    # Set AGENTEVAL_ALLOW_LONG=1 to run it (e.g. once an upstream usage-limit knob or
-    # a CLI adapter is wired). See README - Findings.
+    # A long scenario (~50-100 live model requests): read + create + authenticate +
+    # delete + build. With agenteval >=0.4.0 it COMPLETES (instructions injected +
+    # request_limit raised); it is off by default only to keep per-push CI cheap.
+    # Opt in with AGENTEVAL_ALLOW_LONG=1.
     Skip If    '%{AGENTEVAL_ALLOW_LONG=}' != '1'
-    ...    restful-booker exceeds agenteval 0.3.0 in-process request_limit=50 - opt in with AGENTEVAL_ALLOW_LONG=1
+    ...    restful-booker is a long/costly scenario - opt in with AGENTEVAL_ALLOW_LONG=1
     ${scn}=    Load Agentic Scenario    ${CURDIR}${/}scenarios${/}restful_booker_api.yaml
     Drive Scenario And Assert Tool Parity    ${scn}
 
@@ -44,17 +43,19 @@ Drive Scenario And Assert Tool Parity
     [Arguments]    ${scn}
     Skip If    '%{AGENTEVAL_API_KEY=}' == ''    No model credential set - agentic tier skipped
     ${handle}=    MCP.Start Server    robotmcp    stdio    command=${RFMCP}    args=${{ [] }}
-    MCP.Connect To Server    ${handle}
+    ${session}=    MCP.Connect To Server    ${handle}
+    ${guide}=    MCP.Get Server Instructions    ${session}
     ${toolset}=    MCP.As Agent Toolset    ${handle}
-    ${adapter}=    Evaluate    AgentEval._core.adapter.get_adapter('in-process', toolsets=[$toolset])
-    # agenteval 0.3.0's in-process adapter runs agent.run(prompt) with pydantic-ai's
-    # DEFAULT usage limit (request_limit=50) and exposes NO override. Long scenarios
-    # (many tool calls + reasoning) hit it - a documented upstream gap, not a port
-    # defect, so surface it as a skip rather than a hard fail. See README.
+    # agenteval >=0.4.0: inject rf-mcp's own MCP `instructions` (the WORKFLOW GUIDE) so
+    # the agent is steered like a compliant MCP client, and raise the request limit so
+    # long-but-legitimate scenarios complete (pydantic-ai defaults to 50; rf-mcp's own
+    # bespoke harness uses 100). Both were unavailable in 0.3.0 - see README - Findings.
+    ${adapter}=    Evaluate
+    ...    AgentEval._core.adapter.get_adapter('in-process', toolsets=[$toolset], instructions=$guide, request_limit=120)
     ${status}    ${result}=    Run Keyword And Ignore Error    Evaluate    $adapter.run($scn['prompt'])
     IF    '${status}' == 'FAIL'
         Skip If    'UsageLimitExceeded' in '''${result}'''
-        ...    ${scn}[id]: exceeds agenteval 0.3.0 in-process request_limit=50 (no override in this release) - needs an upstream usage-limit knob, or drive it through a coding-agent CLI adapter
+        ...    ${scn}[id]: exceeded request_limit=120 - raise it further if the scenario is legitimately longer
         Fail    ${scn}[id] agent run failed: ${result}
     END
     ${count}=    MCP.Get Tool Call Count    ${result}

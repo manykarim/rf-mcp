@@ -5,8 +5,9 @@ Black-box tests for the **rf-mcp MCP server**, authored with
 The suites spawn `robotmcp` as a subprocess and speak the real MCP protocol to it —
 so rf-mcp is exercised exactly as an agent uses it.
 
-Change: `adopt-agenteval-harness` (Phase 1). This is the harness foundation; scenario
-porting from the bespoke `tests/e2e/` machinery is a follow-up (see that change's tasks).
+Change: `adopt-agenteval-harness` (Phase 1) — the harness foundation plus the first two
+scenario ports (demoshop web + restful-booker API), whose data is preserved from the
+bespoke `tests/e2e/` machinery. Requires `robotframework-agenteval>=0.4.0` (see Findings).
 
 ## Scope — what this harness owns, and what it does NOT
 
@@ -41,21 +42,32 @@ runs from its own `.venv`. That is why agenteval's exact pins can't conflict wit
 | Suite | Tier | Needs a model key? |
 |---|---|---|
 | `deterministic_mcp_surface.robot` | 1 — deterministic | no — always-on gate |
-| `agentic_e2e.robot` | 3 — real in-process agent | yes; skips cleanly without one |
+| `agentic_e2e.robot` | 3 — real in-process agent (smoke) | yes; skips cleanly without one |
+| `agentic_scenarios.robot` | 3 — ported demoshop + restful-booker | yes; each scenario also opt-in (below) |
+
+The agentic suites inject rf-mcp's own MCP `instructions` (the WORKFLOW GUIDE, via
+`MCP.Get Server Instructions`) into the agent and raise the in-process `request_limit`, so the
+agent is steered like a compliant MCP client and long scenarios complete — both require
+agenteval **>= 0.4.0**.
 
 ## Running
 
 ```bash
 # Deterministic tier — no key needed:
-tests/agenteval/run.sh deterministic_mcp_surface.robot
+tests/agenteval/run.sh --suite 'Deterministic Mcp Surface'
 
 # Agentic tier — set a model credential (read from the env, never a RF variable):
 export AGENTEVAL_API_KEY=...                      # e.g. your MiniMax key
 export AGENTEVAL_BASE_URL=https://api.minimax.io/v1
 export AGENTEVAL_MODEL=MiniMax-M3
-tests/agenteval/run.sh agentic_e2e.robot
+tests/agenteval/run.sh --suite 'Agentic E2E'
 
-# Whole harness (agentic self-skips without a key):
+# Ported scenarios — long/costly, so off by default:
+export AGENTEVAL_ALLOW_LONG=1                      # enable the restful-booker API scenario
+export AGENTEVAL_WEB=1                             # enable the demoshop web scenario (needs a browser)
+tests/agenteval/run.sh --suite 'Agentic Scenarios'
+
+# Whole harness (agentic self-skips without a key; scenarios skip without their opt-ins):
 tests/agenteval/run.sh
 ```
 
@@ -63,17 +75,21 @@ Results land in `tests/agenteval/results/` (git-ignored).
 
 ## Findings from the Phase-1 port (evaluation notes)
 
-Porting the two scenarios (`scenarios/*.yaml`, driven by MiniMax-M3) surfaced two concrete
-constraints worth knowing before leaning on the harness:
+Porting the two scenarios (`scenarios/*.yaml`, driven by MiniMax-M3) surfaced two things worth
+knowing before leaning on the harness:
 
-1. **In-process request cap (agenteval 0.3.0).** The `in-process` adapter runs
-   `agent.run(prompt)` with pydantic-ai's default `request_limit=50` and exposes **no override**.
-   Short scenarios pass (demoshop: 22 tool calls, hit-rate 0.75); a long one hits it —
-   restful-booker's read+create+auth+delete workflow raises `UsageLimitExceeded` past 50 requests.
-   Because *running* it burns ~50 live requests only to fail on the cap, the restful-booker test is
-   **skipped by default** and opted in with `AGENTEVAL_ALLOW_LONG=1` (a `UsageLimitExceeded` at
-   runtime is still caught and downgraded to a skip). Real fix: an upstream usage-limit knob, or
-   drive long scenarios through a coding-agent **CLI adapter** (no pydantic-ai default cap).
+1. **In-process steering + request limit — a v0.3.0 gap, fixed in v0.4.0.** In 0.3.0 the in-process
+   adapter ran `agent.run(prompt)` with pydantic-ai's default `request_limit=50` and **no override**,
+   and never surfaced the MCP server's own `instructions`. So the agent flew blind and long scenarios
+   died on the cap: restful-booker (read + create + auth + delete + build, ~50–100 model requests)
+   raised `UsageLimitExceeded`. Injecting the instructions alone did **not** bring it under 50 — the
+   scenario is genuinely long — so the *binding* cause was the un-raisable limit, with the dropped
+   instructions a separate real fidelity gap (the agent never saw *"call `get_locator_guidance`
+   before you interact"*, the exact steering rf-mcp relies on). **agenteval v0.4.0** adds
+   `request_limit`/`usage_limits` overrides, an `instructions` argument, and the
+   `MCP.Get Server Instructions` reader. The harness now injects rf-mcp's WORKFLOW GUIDE and sets
+   `request_limit=120`, so the agent is steered and long scenarios complete. restful-booker stays
+   off by default (`AGENTEVAL_ALLOW_LONG=1` to run) purely to keep per-push CI cheap.
 2. **Tier-3 measures tool usage, not automation success.** The hit-rate gate (like the bespoke
    quality gate) asserts the agent *selected and called* the right tools — it is robust to page
    state. It does **not** assert the web automation succeeded. The demoshop prompt uses
@@ -83,5 +99,7 @@ constraints worth knowing before leaning on the harness:
 
 ## Upgrading agenteval
 
-The pin lives in `requirements.txt`. agenteval's libraries are `provisional` (v0.3.x) —
-bumping the version is a deliberate change; check its CHANGELOG for breaking changes first.
+The pin lives in `requirements.txt` (currently `==0.4.0`). agenteval's libraries are `provisional`
+(0.x) — bumping is a deliberate change; check its CHANGELOG for breaking changes first. The agentic
+suites need the in-process overrides added in **0.4.0** (`request_limit` + `instructions`), so do not
+pin below it.

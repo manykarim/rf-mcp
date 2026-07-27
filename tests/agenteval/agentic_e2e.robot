@@ -22,10 +22,12 @@ An LLM Agent Discovers And Calls Rf-mcp Tools Over MCP
     Skip If    '%{AGENTEVAL_API_KEY=}' == ''
     ...    No model credential set (AGENTEVAL_API_KEY/BASE_URL/MODEL) - agentic tier skipped
     ${handle}=    MCP.Start Server    robotmcp    stdio    command=${RFMCP}    args=${{ [] }}
-    MCP.Connect To Server    ${handle}
+    ${session}=    MCP.Connect To Server    ${handle}
+    ${guide}=    MCP.Get Server Instructions    ${session}
     ${toolset}=    MCP.As Agent Toolset    ${handle}
+    # v0.4.0: steer the agent with rf-mcp's own MCP `instructions` (the WORKFLOW GUIDE).
     ${adapter}=    Evaluate
-    ...    AgentEval._core.adapter.get_adapter('in-process', toolsets=[$toolset])
+    ...    AgentEval._core.adapter.get_adapter('in-process', toolsets=[$toolset], instructions=$guide)
     ${result}=    Evaluate
     ...    $adapter.run("You are testing a web app with Robot Framework MCP tools. Begin by calling analyze_scenario with scenario 'Open https://www.saucedemo.com and verify the page title' to set up the session.")
     ${count}=    MCP.Get Tool Call Count    ${result}
