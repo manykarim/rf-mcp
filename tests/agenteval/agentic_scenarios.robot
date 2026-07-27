@@ -56,6 +56,12 @@ Drive Scenario And Assert Tool Parity
     IF    '${status}' == 'FAIL'
         Skip If    'UsageLimitExceeded' in '''${result}'''
         ...    ${scn}[id]: exceeded request_limit=120 - raise it further if the scenario is legitimately longer
+        # A malformed/failed PROVIDER response (e.g. MiniMax returning an invalid
+        # ChatCompletion, a 5xx, a rate-limit, or a dropped connection) is neither a
+        # harness nor an rf-mcp fault - downgrade to a skip so a flaky model does not
+        # red an opt-in scenario. Re-run to get a clean measurement.
+        Skip If    any(m in '''${result}''' for m in ('UnexpectedModelBehavior', 'Invalid response from', 'ModelHTTPError', 'RateLimit', 'Connection error', 'ReadTimeout', 'APITimeoutError', 'ServiceUnavailable'))
+        ...    ${scn}[id]: transient model/provider error - re-run (not a harness/rf-mcp fault)
         Fail    ${scn}[id] agent run failed: ${result}
     END
     ${count}=    MCP.Get Tool Call Count    ${result}
