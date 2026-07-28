@@ -1,5 +1,7 @@
 # 🤖 RobotMCP - AI-Powered Test Automation Bridge
 
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2Fmanykarim%2Frf-mcp.svg)](https://mcptoplist.com/server/glama%2Fmanykarim%2Frf-mcp)
+
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://python.org)
 [![Robot Framework](https://img.shields.io/badge/robot%20framework-7.0+-green.svg)](https://robotframework.org)
 [![FastMCP](https://img.shields.io/badge/fastmcp-3.0+-orange.svg)](https://github.com/jlowin/fastmcp)
