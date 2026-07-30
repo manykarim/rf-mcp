@@ -478,6 +478,13 @@ jobs:
       - name: Build rf-mcp's own env
         run: uv sync --all-extras --group dev
 
+      # The ported real-browser prevalidation suite (integration/test_real_browser_prevalidation.robot)
+      # drives headless Chromium in the spawned rf-mcp subprocess, so its browser lives in rf-mcp's OWN
+      # env. Without this it skips cleanly; with it, it runs for real. (The selenium port uses the
+      # runner's preinstalled Chrome via Selenium Manager.)
+      - name: Initialize Browser Library (rfbrowser)
+        run: uv run rfbrowser init
+
       - name: Run the agenteval harness (deterministic always-on; agentic gated by the key)
         run: bash tests/agenteval/run.sh --xunit results.xml
 

@@ -8,11 +8,22 @@ this loads fine inside the isolated harness env with no rf-mcp import.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Dict, List
 
 import yaml
 from robot.api.deco import keyword, library
+
+
+def _headless_override(prompt: str) -> str:
+    """When AGENTEVAL_BROWSER_HEADLESS is truthy, rewrite a scenario's authored
+    ``headless=False`` to ``headless=True`` so the agent launches a display-less
+    browser (change: agenteval-web-headless-ci). Opt-in only; the YAML keeps a
+    visible browser as the local default."""
+    if os.environ.get("AGENTEVAL_BROWSER_HEADLESS", "").strip().lower() in ("1", "true", "yes", "on"):
+        return prompt.replace("headless=False", "headless=True")
+    return prompt
 
 
 @library(scope="GLOBAL")
@@ -29,7 +40,7 @@ class scenario_lib:
             "id": data.get("id", ""),
             "name": data.get("name", ""),
             "context": data.get("context", "generic"),
-            "prompt": data.get("prompt", ""),
+            "prompt": _headless_override(data.get("prompt", "")),
             "expected_tool_names": expected,
             # Default matches the bespoke Scenario model's default gate.
             "min_tool_hit_rate": float(data.get("min_tool_hit_rate", 0.70)),

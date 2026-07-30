@@ -97,6 +97,52 @@ knowing before leaning on the harness:
    still met the tool gate. For real browser automation the web scenario needs a display (Xvfb) or
    a headless variant. That is why the web suite is opt-in (`AGENTEVAL_WEB=1`).
 
+## Desktop scenarios (gated)
+
+Desktop suites (`integration/test_platynui_gnome_apps_e2e.robot`, and future `platynui_*` ports) drive
+real GTK apps via PlatynUI/AT-SPI. They are **gated behind `AGENTEVAL_DESKTOP=1`** and **skip cleanly on
+the stock headless CI runner** — hosted GitHub runners have no `systemd --user` session, which those
+suites need to launch the apps, so they can't run there (change: `agenteval-desktop-ci-gating`).
+
+Running desktop coverage in CI is a separate, **deferred** effort: a dedicated Docker-based job using
+`docker/Dockerfile.desktop` (Xvfb + fluxbox EWMH WM + `at-spi2-core` + `GTK_A11Y=atspi` + gnome apps). One
+blocker to resolve first — that image uses **supervisord, not systemd**, so the suites' `systemd-run
+--user` app-launch must be rewritten to a direct launch under the container's display/WM. Until that's
+built and validated on a real desktop run, no desktop CI job is shipped; verify desktop locally or via the
+Docker harness.
+
+## Phase-2b split (partial integration files)
+
+Some `tests/integration/` files mix MCP-observable tests (drive a tool, assert on the result/trace)
+with internal-state tests (reach into `ExecutionSession`/executor/components). Those are **split**: the
+MCP-observable subset ports to an `integration/*.robot` suite here; the internal-state tests stay in a
+trimmed pytest file. Coverage is preserved on both sides — no assertion is dropped or weakened
+(change: `agenteval-port-partial-integration`).
+
+**Split so far:**
+
+| pytest file | ported here | kept in pytest |
+|---|---|---|
+| `test_adr009_schema_validation.py` | `integration/test_adr009_schema_validation.robot` (26 — all, original deleted) | — |
+| `test_real_browser_prevalidation.py` | `integration/test_real_browser_prevalidation.robot` (13: keyword-exec, page-source, `intent_action(extract)`, drag-drop pre-scroll) | 11: `_pre_validate_element` (internal) + OBS-01 verdict-equivalence (drives a tool **then** asserts internal verdicts — straddles) |
+| `test_real_selenium_prevalidation.py` | `integration/test_real_selenium_prevalidation.robot` (6: keyword-exec incl. no-timeout-injection, page-source) | 4: `_pre_validate_element` (internal) |
+
+The browser/selenium ports are keyless but **browser-gated**: each spawns its own rf-mcp subprocess and
+skips cleanly if the browser can't launch (mirroring the pytest `skipif`). CI provisions Chromium
+(`rfbrowser init`) so they run for real; the selenium port uses the runner's preinstalled Chrome.
+
+**Left whole in pytest (MCP-observable slice too small to justify a split):**
+`test_architecture_improvements`, `test_nlp_improvements`, `test_library_loading_improvements`,
+`test_sampling_feature_flag`, `test_real_page_source_routing`.
+
+**Deferred (desktop-verification-blocked):** `test_platynui_focus_e2e`, `test_platynui_newcore_e2e`.
+Their MCP-observable subsets are real but need a live GNOME desktop (`Xvfb` + `systemd-run`, overlapping
+windows, live-app `ui_tree`) that no headless environment provides — so a port can't be verified green
+here, and even the one seemingly-static test (`test_locator_guidance_dispatch`) returns a
+desktop-dependent shape headless. Rather than ship an unverifiable desktop suite (which risks a silent
+no-op), they stay whole in pytest until a desktop-verified follow-up can port + verify them together with
+the gnome-apps desktop suite.
+
 ## Upgrading agenteval
 
 The pin lives in `requirements.txt` (currently `==0.4.0`). agenteval's libraries are `provisional`

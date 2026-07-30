@@ -26,7 +26,7 @@
 
 ## 4. CI wiring
 
-- [ ] 4.1 The keyless ports join the deterministic always-on tier of the `agenteval-harness` CI job; confirm green.
+- [x] 4.1 The keyless ports join the deterministic always-on tier of the `agenteval-harness` CI job; confirm green.
 - [x] 4.2 Confirm the desktop-gated port (3.1) skips cleanly on the headless runner.
 
 ## 5. Verify + wrap-up

@@ -25,5 +25,5 @@
 ## 5. Wrap-up
 
 - [x] 5.1 `openspec validate adopt-agenteval-harness --strict` passes.
-- [ ] 5.2 Full pytest suite still green (nothing removed that a pytest test depended on); the agenteval deterministic tier green in CI.
+- [x] 5.2 Full pytest suite still green (nothing removed that a pytest test depended on); the agenteval deterministic tier green in CI.
 - [x] 5.3 Record the outcome (lines of bespoke harness removed, scenarios ported) and note Phase 2 (black-box MCP-surface integration migration) as a follow-up change — NOT implemented here.

@@ -308,3 +308,60 @@ jobs:
           name: E2E MiniMax Matrix
           path: results/minimax-*.xml
           reporter: java-junit
+
+  agenteval-web-headless:
+    name: AgentEval Web Scenario (headless)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Gated (scheduled/dispatch only): the demoshop web scenario is a live,
+      # model-driven browser run. Playwright runs headless (no display) via
+      # AGENTEVAL_BROWSER_HEADLESS; self-skips without the MiniMax key.
+      AGENTEVAL_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      AGENTEVAL_BASE_URL: https://api.minimax.io/v1
+      AGENTEVAL_MODEL: MiniMax-M3
+      AGENTEVAL_WEB: '1'
+      AGENTEVAL_BROWSER_HEADLESS: 'true'
+    steps:
+      - name: Check MiniMax key
+        run: |
+          if [ -z "$AGENTEVAL_API_KEY" ]; then
+            echo "::warning::MINIMAX_API_KEY secret not set — skipping the web scenario"
+            echo "SKIP_WEB=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout repository
+        if: env.SKIP_WEB != 'true'
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        if: env.SKIP_WEB != 'true'
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: 'latest'
+
+      - name: Setup Python 3.12 (via uv)
+        if: env.SKIP_WEB != 'true'
+        run: uv python install 3.12
+
+      # rf-mcp is spawned as a subprocess (.venv/bin/robotmcp); the harness itself
+      # installs from tests/agenteval/requirements.txt inside run.sh.
+      - name: Build rf-mcp env
+        if: env.SKIP_WEB != 'true'
+        run: uv sync --all-extras --group dev
+
+      - name: Initialize Browser Library (rfbrowser)
+        if: env.SKIP_WEB != 'true'
+        run: uv run rfbrowser init
+
+      - name: Run the demoshop web scenario (headless)
+        if: env.SKIP_WEB != 'true'
+        run: bash tests/agenteval/run.sh --test 'DemoShop*' --xunit web.xml
+
+      - name: Test Report
+        uses: dorny/test-reporter@main
+        if: env.SKIP_WEB != 'true' && (success() || failure())
+        with:
+          name: AgentEval Web (headless)
+          path: tests/agenteval/results/web.xml
+          reporter: java-junit
