@@ -104,12 +104,17 @@ real GTK apps via PlatynUI/AT-SPI. They are **gated behind `AGENTEVAL_DESKTOP=1`
 the stock headless CI runner** — hosted GitHub runners have no `systemd --user` session, which those
 suites need to launch the apps, so they can't run there (change: `agenteval-desktop-ci-gating`).
 
-Running desktop coverage in CI is a separate, **deferred** effort: a dedicated Docker-based job using
-`docker/Dockerfile.desktop` (Xvfb + fluxbox EWMH WM + `at-spi2-core` + `GTK_A11Y=atspi` + gnome apps). One
-blocker to resolve first — that image uses **supervisord, not systemd**, so the suites' `systemd-run
---user` app-launch must be rewritten to a direct launch under the container's display/WM. Until that's
-built and validated on a real desktop run, no desktop CI job is shipped; verify desktop locally or via the
-Docker harness.
+The first slice of desktop CI coverage **is** shipped: the gated, keyless **`desktop-smoke`** workflow
+(`.github/workflows/desktop-smoke.yml`, change `desktop-smoke-ci`) builds `docker/Dockerfile.desktop`
+(Xvfb + fluxbox EWMH WM + `at-spi2-core` + `GTK_A11Y=atspi` + gnome apps) and runs the deterministic
+smoke inside it (headful, systemd-free — the container launches apps via a direct `Popen`, so no
+`systemd-run` is involved). See `docs/desktop_docker_harness.md`.
+
+Running the *agenteval desktop `.robot` ports* (and the platynui pytest tests) in that image is a
+sequenced follow-on: the `test_platynui_newcore_e2e` workflow needs only an app-launch fixture (proven
+to pass in-image), while `test_platynui_focus_e2e`'s overlapping-window scenario needs the
+`systemd-run`→direct-launch seam. Until those land, the `AGENTEVAL_DESKTOP` suites still skip on the
+stock runner; verify them locally or via the Docker harness.
 
 ## Phase-2b split (partial integration files)
 

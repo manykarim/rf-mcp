@@ -45,11 +45,14 @@ shape headless" read was an args artifact (missing `error_message`), not a real 
 and building from source each run keeps the job self-contained and free of registry/auth/GHCR
 plumbing. Optional GHA layer caching can be added later if the cadence tightens.
 
-**D2 — Gated (schedule + `workflow_dispatch`), not per-push.** Mirror the web-headless precedent.
-*Why:* ~1.17 GB image + a few minutes to build is too heavy for the per-push gate, and PlatynUI is
-pinned to a **dev** wheel (`0.12.0.dev330`) — a yank would red the job, which is acceptable on a
-schedule but not on every PR. Prefer adding the job to the existing `e2e-weekly.yml` for cadence
-consistency (a dedicated `desktop-smoke.yml` is an equally valid placement).
+**D2 — Gated (schedule + `workflow_dispatch`), not per-push, in its OWN workflow.** *Why gated:*
+~1.17 GB image + a few minutes to build is too heavy for the per-push gate, and PlatynUI is pinned to a
+**dev** wheel (`0.12.0.dev330`) — a yank would red the job, acceptable on a schedule but not on every
+PR. *Why a dedicated `.github/workflows/desktop-smoke.yml` rather than a job in `e2e-weekly.yml`
+(resolved during apply):* a dedicated workflow can be `workflow_dispatch`-triggered in isolation to
+verify the desktop job alone, whereas dispatching `e2e-weekly.yml` runs its heavier model-driven jobs
+(model-comparison, opencode-e2e, web-headless) that spend MiniMax credits. Since task 3.1 (verify on a
+real runner) is an ad-hoc dispatch, isolation wins. Same cadence (weekly, offset to Sun 03:00 UTC).
 
 **D3 — Keyless, exit-status gate.** The job asserts `docker run … robotmcp-desktop` exits 0 — the
 smoke's own gate (provider up → resolve → drive → read-back `42` → screenshot). No model credential,

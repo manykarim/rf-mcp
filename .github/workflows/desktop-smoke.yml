@@ -1,0 +1,47 @@
+# Gated desktop-stack smoke (change: desktop-smoke-ci).
+#
+# Builds the isolated-X11 desktop image (docker/Dockerfile.desktop: Xvfb + fluxbox
+# EWMH WM + AT-SPI + PlatynUI + gnome-calculator) and runs the deterministic
+# smoke (docker/desktop_smoke_driver.py) inside it — headful, systemd-free, with
+# no host display. The smoke launches the AUT via a plain subprocess, drives it
+# via PlatynUI/rf-mcp, reads a control value back (= 42), and writes a screenshot;
+# the job gates on its exit status. Keyless — no model credential.
+#
+# Gated (schedule + manual dispatch), never per-push: the image is large to build
+# and PlatynUI is pinned to a pre-release wheel, so a break surfaces on a cadence
+# instead of red-ing every push. It lives in its own workflow (not e2e-weekly) so
+# it can be dispatched in isolation to verify, without triggering the heavier
+# model-driven jobs.
+name: Desktop Smoke
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'   # Sundays 03:00 UTC (offset from e2e-weekly's 00:00)
+  workflow_dispatch:
+
+jobs:
+  desktop-smoke:
+    name: Desktop Smoke (headful, gated)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build the desktop image
+        run: docker build -f docker/Dockerfile.desktop -t robotmcp-desktop .
+
+      - name: Run the deterministic desktop smoke (read-back gate)
+        run: |
+          mkdir -p artifacts
+          docker run --rm -v "$PWD/artifacts:/artifacts" robotmcp-desktop
+
+      - name: Upload smoke artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-smoke-artifacts
+          path: |
+            artifacts/*.png
+            artifacts/smoke_result.json
+          if-no-files-found: ignore

@@ -1,0 +1,57 @@
+# Docker build-context hygiene (change: desktop-smoke-ci).
+#
+# Every Dockerfile in this repo COPYs only pyproject.toml, uv.lock, README.md,
+# src/, and docker/ — so everything else is pure build-context bloat. The local
+# virtualenv alone is ~2 GB. This deny-list keeps the context to a few MB (fast
+# to send to the daemon locally, and a small transfer on a CI runner). It is a
+# deny-list, not an allow-list, so adding a new Dockerfile that needs another
+# top-level path won't be silently starved of it — only these explicit paths
+# are withheld.
+
+# Python virtualenv + build/test caches (the dominant cost)
+.venv/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# VCS, CI, editor, tooling metadata
+.git/
+.github/
+.vscode/
+.idea/
+.kilo/
+
+# Generated artifacts, results, logs, data not needed by any image build
+artifacts/
+node_modules/
+tests/agenteval/results/
+test_data/
+*.log
+STDOUT
+dist/
+results/
+runs/
+sys/
+
+# Runtime / tooling output dirs (claude-flow, swarm, robotmcp artifacts) — none COPYed
+.claude-flow/
+.claude/
+.swarm/
+.robotmcp_artifacts/
+.robotmcp_artifacts_e2e/
+
+# Tests, docs, specs, experiments, scratch — no Dockerfile COPYs these
+tests/
+docs/
+experiments/
+openspec/
+lab/
+
+# Root-level markdown/scratch (keep README.md — the Dockerfiles COPY it)
+*.md
+!README.md
