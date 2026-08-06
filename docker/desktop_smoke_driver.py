@@ -34,9 +34,15 @@ def _try(fn):
 
 
 def finish(code: int) -> None:
-    os.makedirs(ARTIFACTS, exist_ok=True)
-    with open(RECORD, "w") as f:
-        json.dump(result, f, indent=2, default=str)
+    # The result ALWAYS prints to stdout (captured by CI) so a non-writable
+    # artifacts mount can never mask the real pass/fail — the JSON record is a
+    # best-effort side artifact, not the gate.
+    try:
+        os.makedirs(ARTIFACTS, exist_ok=True)
+        with open(RECORD, "w") as f:
+            json.dump(result, f, indent=2, default=str)
+    except OSError as e:
+        result["record_write_error"] = repr(e)
     print(json.dumps(result, indent=2, default=str))
     sys.exit(code)
 

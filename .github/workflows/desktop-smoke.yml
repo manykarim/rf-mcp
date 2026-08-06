@@ -34,6 +34,10 @@ jobs:
       - name: Run the deterministic desktop smoke (read-back gate)
         run: |
           mkdir -p artifacts
+          # The container runs as appuser (uid 1000); the runner owns the host
+          # dir with a different uid, so make the bind-mounted /artifacts
+          # world-writable or the smoke can't write its screenshot / JSON record.
+          chmod 777 artifacts
           docker run --rm -v "$PWD/artifacts:/artifacts" robotmcp-desktop
 
       - name: Upload smoke artifacts on failure
