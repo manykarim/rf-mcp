@@ -1,0 +1,86 @@
+# Desktop automation harness (change: desktop-docker-agent-harness).
+#
+# An isolated in-container X11 desktop (Xvfb + fluxbox EWMH WM + AT-SPI) with
+# PlatynUI (prebuilt dev330 wheels), robotmcp, and a desktop app under test.
+# This is the "clean room" that dissolves the host Wayland / shared-AT-SPI-bus
+# / no-WM blockers found across the LibreOffice validation rounds.
+#
+# Build:  docker build -f docker/Dockerfile.desktop -t robotmcp-desktop .
+# Smoke:  docker run --rm -v "$PWD/artifacts:/artifacts" robotmcp-desktop
+# Agent:  docker run --rm -e MINIMAX_API_KEY=... robotmcp-desktop /app/docker/run_agent.sh
+# Watch:  docker run -p 6080:6080 ... robotmcp-desktop sleep infinity   # noVNC on :6080
+
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    UV_PYTHON_DOWNLOADS=never \
+    # --- isolated X11 desktop ---
+    DISPLAY=:99 \
+    DISPLAY_WIDTH=1280 \
+    DISPLAY_HEIGHT=1024 \
+    DISPLAY_DEPTH=24 \
+    # --- rf-mcp desktop safety: mark :99 isolated so the guard ALLOWS input ---
+    ROBOTMCP_PLATYNUI_ISOLATED_DISPLAY=:99 \
+    ROBOTMCP_SCREENSHOT_DIR=/artifacts \
+    # --- force the X11 backend + AT-SPI accessibility bridge ---
+    XDG_SESSION_TYPE=x11 \
+    GDK_BACKEND=x11 \
+    GSK_RENDERER=cairo \
+    SAL_USE_VCLPLUGIN=gtk3 \
+    # GTK_A11Y MUST be the backend NAME ("atspi"), NOT "1" — modern GTK rejects
+    # "1" with "Unrecognized accessibility backend" and the app then exposes NO
+    # AT-SPI tree (harness finding, 2026-07). "1" only ever appeared to work on
+    # hosts where the GNOME session had already enabled accessibility.
+    GTK_A11Y=atspi \
+    GNOME_ACCESSIBILITY=1 \
+    QT_ACCESSIBILITY=1 \
+    NO_AT_BRIDGE=0 \
+    # --- pinned PlatynUI dev release (prebuilt manylinux_2_34 wheels) ---
+    PLATYNUI_VERSION=0.12.0.dev330
+
+# Desktop stack: X server, EWMH WM, AT-SPI accessibility, VNC observation,
+# a session bus, X diagnostics, and desktop apps under test.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl \
+        xvfb fluxbox x11-utils x11-xserver-utils xdotool \
+        dbus-x11 at-spi2-core \
+        x11vnc novnc websockify \
+        fonts-liberation fonts-dejavu-core \
+        libgtk-3-0 libglib2.0-0 libcairo2 libpango-1.0-0 libpangocairo-1.0-0 \
+        gnome-calculator \
+        mousepad \
+        nodejs npm \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir uv
+
+RUN groupadd -r appuser && useradd -r -g appuser -u 1000 -m -s /bin/bash appuser \
+    && mkdir -p /artifacts && chown -R appuser:appuser /artifacts
+
+WORKDIR /app
+COPY --chown=appuser:appuser pyproject.toml uv.lock README.md /app/
+COPY --chown=appuser:appuser src /app/src
+COPY --chown=appuser:appuser docker/entrypoint.sh docker/desktop_smoke.sh \
+     docker/desktop_smoke_driver.py docker/run_agent.sh docker/opencode.minimax.json /app/docker/
+RUN chmod +x /app/docker/entrypoint.sh /app/docker/desktop_smoke.sh /app/docker/run_agent.sh \
+    && chown -R appuser:appuser /app
+
+USER appuser
+ENV PATH="/home/appuser/.local/bin:/app/.venv/bin:$PATH"
+
+# rf-mcp deps, then PlatynUI (RF lib + native runtime + cli) pinned to one dev
+# release from prebuilt wheels — no in-image Rust build, no version skew.
+RUN uv sync --no-dev \
+    && uv pip install --no-cache-dir \
+        "platynui-native==${PLATYNUI_VERSION}" \
+        "robotframework-PlatynUI==${PLATYNUI_VERSION}" \
+        "platynui-cli==${PLATYNUI_VERSION}"
+
+EXPOSE 5900 6080 8000 8001
+
+# entrypoint brings up dbus + Xvfb + fluxbox + AT-SPI + VNC, then exec's "$@".
+ENTRYPOINT ["/app/docker/entrypoint.sh"]
+# Default: run the deterministic steering + read-back smoke (no LLM).
+CMD ["/app/docker/desktop_smoke.sh"]

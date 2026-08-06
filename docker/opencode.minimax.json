@@ -1,0 +1,36 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "minimax": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "MiniMax",
+      "options": {
+        "baseURL": "https://api.minimax.io/v1",
+        "apiKey": "{env:MINIMAX_API_KEY}"
+      },
+      "models": {
+        "MiniMax-M3": {
+          "name": "MiniMax M2.7",
+          "tool_call": true,
+          "attachment": true
+        }
+      }
+    }
+  },
+  "model": "minimax/MiniMax-M3",
+  "mcp": {
+    "robotmcp": {
+      "type": "local",
+      "command": ["uv", "run", "--no-sync", "-m", "robotmcp.server"],
+      "enabled": true,
+      "environment": {
+        "DISPLAY": ":99",
+        "ROBOTMCP_PLATYNUI_ISOLATED_DISPLAY": ":99",
+        "XDG_SESSION_TYPE": "x11",
+        "GDK_BACKEND": "x11",
+        "GTK_A11Y": "atspi",
+        "ROBOTMCP_SCREENSHOT_DIR": "/artifacts"
+      }
+    }
+  }
+}
