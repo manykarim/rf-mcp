@@ -20,13 +20,16 @@
 
 ## 3. Verify on a real runner
 
-- [ ] 3.1 Dispatch the job on an actual GitHub `ubuntu-latest` runner (`workflow_dispatch`) and confirm
-  it is green end-to-end: image builds, smoke exits 0 (provider up, read-back `42`, screenshot). Do NOT
-  assume the local (snap-docker) experiment transfers — iterate on the real run if the desktop/AT-SPI
-  bring-up differs.
-- [ ] 3.2 If the run flakes on GUI timing, add a single retry on the `docker run` step (only if
-  observed). Record the actual build+run wall-clock so the weekly-vs-tighter-cadence trade-off is
-  informed by data.
+- [x] 3.1 Verified GREEN on a real GitHub `ubuntu-latest` runner (dispatched run 31128840398): image
+  builds, desktop stack comes up (dbus + Xvfb + fluxbox + AT-SPI2 provider active + gnome-calculator),
+  smoke exits 0 with `provider_ok=true`, `read_back="42"`, screenshot written. It took THREE real-runner
+  iterations — the "don't assume local transfers" guardrail earned its keep: (1) build failed because the
+  desktop harness (`docker/Dockerfile.desktop` + scripts) was git-excluded as experiment-only and never
+  committed → committed it (4b20d4b); (2) build ✓ but the smoke crashed on `/artifacts` perms (container
+  `appuser` uid 1000 ≠ the GHA runner's dir owner) → `chmod 777` the mount + hardened `finish()` (def5579);
+  (3) fully green.
+- [x] 3.2 No GUI-timing flake observed — no retry added. Wall-clock: **~1m51s** total (build + smoke),
+  22:12:54→22:14:45Z. Comfortably cheap; the weekly cadence has ample headroom.
 
 ## 4. Docs + wrap-up
 
@@ -36,8 +39,12 @@
   **locally excluded** (`.git/info/exclude`), so its edit is on-disk only, not in the commit; force-tracking
   a deliberate local exclude was declined. If the runbook should be tracked, `git add -f` it separately.
 - [x] 4.2 `openspec validate desktop-smoke-ci --strict` passes.
-- [ ] 4.3 Record the outcome (build+run time, green on GHA) and cross-link the deferred follow-ons, now
-  scoped by the Tier-B probe: (a) `test_platynui_newcore_e2e` needs only an app-launch fixture to run in
-  this image (proven — its full MCP workflow passed inline with one app launched); (b) `test_platynui_focus_e2e`
-  needs the `systemd-run`→`Popen` seam (two overlapping windows); (c) the agenteval desktop `.robot` ports
-  build on top of those. This smoke job is the foundation all three sit on.
+- [x] 4.3 Outcome recorded. **Green on GHA `ubuntu-latest`, ~1m51s** (run 31128840398), read-back 42.
+  A material scope addition surfaced during verification: the change assumed `docker/Dockerfile.desktop`
+  was in the repo, but the whole desktop harness was git-excluded (`.git/info/exclude`, "experiment harness
+  — NOT part of delivered rf-mcp"). Per an explicit decision, the six harness files + runbook are now
+  committed (4b20d4b); the broader `docker/lab`/`experiments/` scaffolding stays excluded. Deferred
+  follow-ons, scoped by the Tier-B probe: (a) `test_platynui_newcore_e2e` needs only an app-launch fixture
+  to run in this image (proven — its MCP workflow passed inline with one app launched); (b)
+  `test_platynui_focus_e2e` needs the `systemd-run`→`Popen` seam (two overlapping windows); (c) the
+  agenteval desktop `.robot` ports build on those. This smoke job is the foundation all three sit on.
