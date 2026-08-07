@@ -6,20 +6,18 @@
     <title>RobotMCP Frontend</title>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/npm/prismjs@1/themes/prism-tomorrow.min.css"
+      href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css"
+      integrity="sha384-wFjoQjtV1y5jVHbt0p35Ui8aV8GVpEZkyF99OXWqP/eNJDU93D3Ugxkoyh6Y2I4A"
+      crossorigin="anonymous"
     />
     <link rel="stylesheet" href="{{ base_path }}static/frontend/base.css" />
-    <script>
-      window.ROBOTMCP_FRONTEND = {
-        basePath: "{{ base_path }}",
-      };
-    </script>
   </head>
   <body data-base-path="{{ base_path }}">
     <div class="app-shell">
       <header class="app-topbar">
         <h1 class="app-title"><i data-feather="layers"></i>RobotMCP Command Center</h1>
         <nav class="app-actions">
+          <span class="conn-pill" id="connection-status" data-state="connecting" title="Live connection status" aria-live="polite">Connecting…</span>
           <a href="{{ base_path }}" class="action-link"><i data-feather="home"></i>Dashboard</a>
           <button type="button" class="action-button" id="header-refresh">
             <i data-feather="refresh-cw"></i>
@@ -31,10 +29,10 @@
         {% block content %}{% endblock %}
       </main>
     </div>
-    <script src="https://unpkg.com/feather-icons"></script>
-    <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-core.min.js" defer></script>
-    <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-clike.min.js" defer></script>
-    <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-robotframework.min.js" defer></script>
+    <script src="https://unpkg.com/feather-icons@4.29.2/dist/feather.min.js" integrity="sha384-qEqAs1VsN9WH2myXDbiP2wGGIttL9bMRZBKCl54ZnzpDlVqbYANP9vMaoT/wvQcf" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" integrity="sha384-MXybTpajaBV0AkcBaCPT4KIvo0FzoCiWXgcihYsw4FUkEz0Pv3JGV6tk2G8vJtDc" crossorigin="anonymous" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-clike.min.js" integrity="sha384-7LHwxHIDSHTBleLmgDWZbC/IMJsfYfFVOihKhvsrxYW4j47YQcRwZja4ToFE3bA8" crossorigin="anonymous" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-robotframework.min.js" integrity="sha384-q8akp/qNheQBv7lGL+qToTwcilFwZW2YgIL7odwtuD631A0s7Y0Px7nl42G3J5+y" crossorigin="anonymous" defer></script>
     <script src="{{ base_path }}static/frontend/app.js" defer></script>
   </body>
 </html>

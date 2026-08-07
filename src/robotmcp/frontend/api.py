@@ -122,53 +122,55 @@ def execute_keyword(request: HttpRequest, session_id: str) -> HttpResponse:
     return _json_response(result, status=status_code)
 
 
-@require_http_methods(["GET"])
-def events_stream(request: HttpRequest) -> StreamingHttpResponse:
-    import queue
-    import threading
+async def events_stream(request: HttpRequest) -> StreamingHttpResponse:
+    """Stream events as SSE over an ASYNC generator on the ASGI loop.
 
-    event_queue: queue.Queue[str | None] = queue.Queue()
-    stop_flag = threading.Event()
+    NOTE: no ``@require_http_methods`` decorator — it is a sync wrapper that would
+    make Django treat this async view as sync (returning an un-awaited coroutine →
+    500). The method is checked inline instead.
 
-    async def consume_events() -> None:
+    Iterating ``event_bus.subscribe()`` directly (no worker thread / bridging
+    queue) means the subscriber queue lives on the ASGI loop, so cross-loop
+    ``call_soon_threadsafe`` delivery from the MCP loop actually wakes it, and a
+    client disconnect propagates ``GeneratorExit`` so ``subscribe()``'s finally
+    discards the queue — no leaked threads.
+    """
+    from django.http import HttpResponseNotAllowed
+
+    if request.method != "GET":
+        return HttpResponseNotAllowed(["GET"])
+
+    async def stream():
+        agen = event_bus.subscribe()
+        get_task = None
         try:
-            # Send connection-open event
-            import logging
-
-            logging.getLogger(__name__).debug("events_stream: connection opened")
-            event_queue.put_nowait("event: ping\ndata: {}\n\n")
-            async for event in event_bus.subscribe():
-                if stop_flag.is_set():
-                    break
-                payload = {
-                    "event_type": event.event_type,
-                    "session_id": event.session_id,
-                    "step_id": event.step_id,
-                    "payload": event.payload,
-                    "timestamp": event.timestamp.isoformat(),
-                }
-                event_queue.put_nowait(f"data: {json.dumps(payload)}\n\n")
-        finally:
-            event_queue.put_nowait(None)
-
-    def worker() -> None:
-        try:
-            asyncio.run(consume_events())
-        except Exception:
-            logging.getLogger(__name__).exception("events_stream worker crashed")
-            event_queue.put_nowait(None)
-
-    threading.Thread(target=worker, daemon=True).start()
-
-    def stream():
-        try:
+            yield "event: ping\ndata: {}\n\n"
             while True:
-                chunk = event_queue.get()
-                if chunk is None:
-                    break
-                yield chunk
+                if get_task is None:
+                    get_task = asyncio.ensure_future(agen.__anext__())
+                # Keepalive WITHOUT cancelling the pending get (a timeout must not
+                # tear down the subscription): reuse get_task on the next loop.
+                done, _ = await asyncio.wait({get_task}, timeout=15)
+                if get_task in done:
+                    try:
+                        event = get_task.result()
+                    except StopAsyncIteration:
+                        break
+                    get_task = None
+                    payload = {
+                        "event_type": event.event_type,
+                        "session_id": event.session_id,
+                        "step_id": event.step_id,
+                        "payload": event.payload,
+                        "timestamp": event.timestamp.isoformat(),
+                    }
+                    yield f"data: {json.dumps(payload)}\n\n"
+                else:
+                    yield ": keepalive\n\n"
         finally:
-            stop_flag.set()
+            if get_task is not None and not get_task.done():
+                get_task.cancel()
+            await agen.aclose()
 
     response = StreamingHttpResponse(stream(), content_type="text/event-stream")
     response["Cache-Control"] = "no-cache"

@@ -500,6 +500,27 @@ def _install_frontend_lifespan(config: "FrontendConfig") -> None:
     )
 
 
+def _start_frontend_eager(config: "FrontendConfig") -> None:
+    """Start the frontend controller for the whole process lifetime (non-stdio).
+
+    Unlike the per-session lifespan, this binds the dashboard at server startup and
+    keeps it up across MCP client connect/disconnect. It is stopped in main()'s
+    finally via the shared ``_frontend_controller`` reference.
+    """
+    from robotmcp.frontend.controller import FrontendServerController
+
+    global _frontend_controller
+    controller = FrontendServerController(config)
+    asyncio.run(controller.start())
+    _frontend_controller = controller
+    logger.info(
+        "Frontend started eagerly at http://%s:%s%s (transport is not stdio)",
+        config.host,
+        config.port,
+        config.base_path,
+    )
+
+
 def _install_health_monitor_lifespan(
     interval_seconds: int = 60,
     failure_threshold: int = 3,
@@ -8474,7 +8495,14 @@ def main(argv: List[str] | None = None) -> None:
                 base_path=args.frontend_base_path,
                 debug=args.frontend_debug,
             )
-            _install_frontend_lifespan(frontend_config)
+            # stdio has a single session, so the per-session FastMCP lifespan is
+            # fine; but for http/sse a per-session lifespan never binds the frontend
+            # at startup and tears it down when a client session ends (C4), so start
+            # the controller eagerly for the whole process lifetime instead.
+            if (args.transport or "stdio") == "stdio":
+                _install_frontend_lifespan(frontend_config)
+            else:
+                _start_frontend_eager(frontend_config)
 
     if enable_frontend:
         logger.info("Starting RobotMCP with frontend at %s", frontend_config.url)

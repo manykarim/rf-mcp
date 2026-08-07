@@ -21,10 +21,18 @@ def _build_default_settings(config: FrontendConfig) -> Dict[str, Any]:
 
     static_url = (config.base_path or "/").rstrip("/") + "/static/"
 
+    # Scope host validation to the configured host + loopback (+ explicit env override).
+    # Never "*" (which disables validation and enables DNS-rebinding). A 0.0.0.0 bind must
+    # name its real host via ROBOTMCP_FRONTEND_ALLOWED_HOSTS.
+    allowed_hosts = [config.host, "localhost", "127.0.0.1", "[::1]", "::1"]
+    _env_hosts = os.environ.get("ROBOTMCP_FRONTEND_ALLOWED_HOSTS", "")
+    allowed_hosts += [h.strip() for h in _env_hosts.split(",") if h.strip()]
+    allowed_hosts = [h for h in dict.fromkeys(allowed_hosts) if h and h != "0.0.0.0"]
+
     return {
         "DEBUG": config.debug,
         "SECRET_KEY": secret_key,
-        "ALLOWED_HOSTS": ["*"],
+        "ALLOWED_HOSTS": allowed_hosts,
         "INSTALLED_APPS": [
             "django.contrib.admin",
             "django.contrib.auth",
@@ -36,6 +44,7 @@ def _build_default_settings(config: FrontendConfig) -> Dict[str, Any]:
         ],
         "MIDDLEWARE": [
             "django.middleware.security.SecurityMiddleware",
+            "robotmcp.frontend.security.ContentSecurityPolicyMiddleware",
             "django.contrib.sessions.middleware.SessionMiddleware",
             "django.middleware.common.CommonMiddleware",
             "django.middleware.csrf.CsrfViewMiddleware",

@@ -1,7 +1,28 @@
 (() => {
   const basePath = normalizeBasePath(
-    (window.ROBOTMCP_FRONTEND && window.ROBOTMCP_FRONTEND.basePath) || "/"
+    (window.ROBOTMCP_FRONTEND && window.ROBOTMCP_FRONTEND.basePath) ||
+      (document.body && document.body.dataset && document.body.dataset.basePath) ||
+      "/"
   );
+
+  // Safe icon+text builder — never interpolate dynamic (session/variable/step/event) data
+  // into innerHTML. The icon name is developer-authored; the label is a text node.
+  function setIconLabel(el, iconName, text) {
+    if (!el) return;
+    el.replaceChildren();
+    const icon = document.createElement("i");
+    icon.setAttribute("data-feather", String(iconName));
+    el.append(icon, document.createTextNode(text == null ? "" : String(text)));
+  }
+
+  // Human-readable id: show it in full up to n chars, else middle-truncate with an
+  // ellipsis. NEVER a blind slice(0,N) (mangles readable ids like "frontend-demo").
+  function shortId(id, n = 24) {
+    id = String(id == null ? "" : id);
+    if (id.length <= n) return id;
+    const head = Math.ceil((n - 1) / 2), tail = Math.floor((n - 1) / 2);
+    return id.slice(0, head) + "\u2026" + id.slice(id.length - tail);
+  }
 
   const state = {
     sessions: [],
@@ -27,7 +48,7 @@
     sessionsList: document.getElementById("sessions-list"),
     refreshSessions: document.getElementById("refresh-sessions"),
     headerRefresh: document.getElementById("header-refresh"),
-    headerBuildSuite: document.getElementById("header-build-suite"),
+    connectionStatus: document.getElementById("connection-status"),
     sessionPanel: document.getElementById("session-detail"),
     sessionTitle: document.getElementById("session-title"),
     sessionSubtitle: document.getElementById("session-subtitle"),
@@ -163,9 +184,6 @@
           filtered[key] = value;
           continue;
         }
-        if (/^[A-Z_]+$/.test(key)) {
-          continue;
-        }
       }
       filtered[key] = value;
     }
@@ -268,7 +286,7 @@
     if (!state.sessions.length) {
       const empty = document.createElement("div");
       empty.className = "muted";
-      empty.textContent = "No active sessions yet.";
+      empty.textContent = "No active sessions yet. Start one from an MCP client (e.g. manage_session init) and it will appear here live.";
       container.appendChild(empty);
       refreshIcons();
       return;
@@ -284,25 +302,35 @@
         card.classList.add("active");
       }
       card.dataset.sessionId = session.session_id;
+      card.tabIndex = 0;
+      card.setAttribute("role", "button");
+      card.setAttribute("aria-pressed", session.session_id === state.selectedSessionId ? "true" : "false");
+      card.setAttribute("aria-label", `Session ${session.session_id}`);
 
       const title = document.createElement("h3");
       const icon = PLATFORM_ICON[session.platform_type] || "cpu";
-      title.innerHTML = `<i data-feather="${icon}"></i>${session.session_id.slice(0, 8)}`;
+      setIconLabel(title, icon, shortId(session.session_id));
 
       const footer = document.createElement("footer");
       const platformSpan = document.createElement("span");
-      platformSpan.innerHTML = `<i data-feather="globe"></i>${humanizePlatform(session.platform_type)}`;
+      setIconLabel(platformSpan, "globe", humanizePlatform(session.platform_type));
 
       const stepsSpan = document.createElement("span");
-      stepsSpan.innerHTML = `<i data-feather="list"></i>${session.step_count || 0} steps`;
+      setIconLabel(stepsSpan, "list", `${session.step_count || 0} steps`);
 
       const timeSpan = document.createElement("span");
-      timeSpan.innerHTML = `<i data-feather="clock"></i>${formatRelativeTime(session.last_activity)}`;
+      setIconLabel(timeSpan, "clock", formatRelativeTime(session.last_activity));
 
       footer.append(platformSpan, stepsSpan, timeSpan);
 
       card.append(title, footer);
       card.addEventListener("click", () => selectSession(session.session_id));
+      card.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          selectSession(session.session_id);
+        }
+      });
       fragment.appendChild(card);
     });
     container.appendChild(fragment);
@@ -488,7 +516,7 @@
       summary.current_url
     );
 
-    const inferredLibraries = inferLibrariesFromSteps();
+    const inferredLibraries = new Set(); // H8: do not fabricate libraries from step heuristics
 
     const libraryCandidates = [
       ...(Array.isArray(detail.imported_libraries) ? detail.imported_libraries : []),
@@ -575,7 +603,7 @@
       const chip = document.createElement("div");
       chip.className = "meta-chip";
       const labelEl = document.createElement("span");
-      labelEl.innerHTML = `<i data-feather="${icon}"></i>${label}`;
+      setIconLabel(labelEl, icon, label);
       const valueEl = document.createElement("strong");
       valueEl.textContent = value;
       chip.append(labelEl, valueEl);
@@ -689,7 +717,7 @@
     entries.forEach(([name, value]) => {
       const chip = document.createElement("span");
       chip.className = "chip";
-      chip.innerHTML = `<i data-feather="sliders"></i>${name}: ${formatValueForDisplay(value)}`;
+      setIconLabel(chip, "sliders", `${name}: ${formatValueForDisplay(value)}`);
       fragment.appendChild(chip);
     });
     container.appendChild(fragment);
@@ -752,7 +780,7 @@
     const { icon, stack } = STATUS_ICON[normalized] || { icon: "minus", stack: "" };
     const stackEl = document.createElement("div");
     stackEl.className = stack ? `icon-stack ${stack}` : "icon-stack";
-    stackEl.innerHTML = `<i data-feather="${icon}"></i>`;
+    setIconLabel(stackEl, icon, "");
     return stackEl;
   }
 
@@ -1025,7 +1053,7 @@
 
       const position = document.createElement("span");
       position.className = "step-id";
-      position.innerHTML = `<i data-feather="hash"></i>${step.step_id.slice(0, 6)}`;
+      setIconLabel(position, "hash", shortId(step.step_id, 14));
       row.appendChild(position);
 
       card.appendChild(row);
@@ -1038,7 +1066,7 @@
           const chip = document.createElement("span");
           chip.className = "chip";
           const value = getAssignedVariableValue(step, name);
-          chip.innerHTML = `<i data-feather="clipboard"></i>${name}: ${formatValueForDisplay(value)}`;
+          setIconLabel(chip, "clipboard", `${name}: ${formatValueForDisplay(value)}`);
           chips.appendChild(chip);
         });
         card.appendChild(chips);
@@ -1238,10 +1266,10 @@
 
       const body = document.createElement("div");
       const title = document.createElement("strong");
-      title.innerHTML = `<i data-feather="hash"></i>${formatEventTitle(event)}`;
+      setIconLabel(title, "hash", formatEventTitle(event));
 
       const timestamp = document.createElement("small");
-      timestamp.innerHTML = `<i data-feather="clock"></i>${new Date(event.timestamp).toLocaleTimeString()}`;
+      setIconLabel(timestamp, "clock", new Date(event.timestamp).toLocaleTimeString());
 
       const detailsText = formatEventDetails(event);
       if (detailsText) {
@@ -1260,7 +1288,7 @@
 
   function formatEventTitle(event) {
     const type = event.event_type || "event";
-    const session = event.session_id ? `Session ${event.session_id.slice(0, 8)}` : null;
+    const session = event.session_id ? `Session ${shortId(event.session_id)}` : null;
     const readableType = type.replace(/_/g, " ");
     return session ? `${session} • ${readableType}` : readableType;
   }
@@ -1345,8 +1373,8 @@
 
       if (!state.sessions.length) {
         state.selectedSessionId = null;
-        state.sessionPanel.dataset.empty = "true";
-        state.sessionActions.hidden = true;
+        elements.sessionPanel.dataset.empty = "true";
+        elements.sessionActions.hidden = true;
         renderSessionsEmptyState();
         return;
       }
@@ -1396,12 +1424,17 @@
       if (includeSuite) {
         requests.push(fetchJSON(`api/sessions/${sessionId}/suite/`));
       }
-      const results = await Promise.all(requests);
-      const detail = results[0];
-      const steps = results[1];
-      const variables = results[2];
-      const sessionState = results[3];
-      const preview = includeSuite ? results[4] : null;
+      const settled = await Promise.allSettled(requests);
+      const pick = (i, fallback) => (settled[i] && settled[i].status === "fulfilled" ? settled[i].value : fallback);
+      const detail = pick(0, {});
+      const steps = pick(1, { steps: [] });
+      const variables = pick(2, { variables: {} });
+      const sessionState = pick(3, null);
+      const preview = includeSuite ? pick(4, null) : null;
+      const failed = settled.filter((r) => r && r.status === "rejected");
+      if (failed.length) {
+        console.error("Some session data failed to load", failed.map((f) => String(f.reason)));
+      }
 
       state.sessionDetails = detail;
       const baseVariables = {
@@ -1415,7 +1448,7 @@
         : state.sessionDetails;
       state.sessionDetails = enrichedDetail;
 
-      elements.sessionTitle.textContent = `Session ${sessionId.slice(0, 8)}`;
+      elements.sessionTitle.textContent = `Session ${sessionId}`;
       elements.sessionSubtitle.textContent = `Last activity: ${enrichedDetail.last_activity || "—"}`;
       renderSessionMeta(enrichedDetail, sessionState);
       renderVariables(state.sessionVariables);
@@ -1556,9 +1589,33 @@
     }, 400);
   }
 
+  function updateConnectionState(stateName) {
+    if (!elements.connectionStatus) return;
+    const labels = { live: "Live", reconnecting: "Reconnecting\u2026", offline: "Offline" };
+    elements.connectionStatus.dataset.state = stateName;
+    elements.connectionStatus.textContent = labels[stateName] || stateName;
+  }
+
   function startEventStream() {
+    let pollTimer = null;
+    const startPolling = () => {
+      if (pollTimer) return;
+      loadRecentEvents();
+      pollTimer = setInterval(loadRecentEvents, 5000);
+    };
+    const stopPolling = () => {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    };
     try {
       const source = new EventSource(buildUrl("api/events/"));
+      source.onopen = () => {
+        state.streamConnected = true;
+        updateConnectionState("live");
+        stopPolling();
+      };
       source.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
@@ -1572,8 +1629,17 @@
           console.error("Failed to parse event payload", error);
         }
       };
+      source.onerror = () => {
+        // The stream dropped (EventSource auto-retries). Poll recent events so the
+        // feed degrades to stale-but-updating instead of a permanently frozen view.
+        state.streamConnected = false;
+        updateConnectionState("reconnecting");
+        startPolling();
+      };
     } catch (error) {
       console.error("Event stream unavailable", error);
+      updateConnectionState("offline");
+      startPolling();
     }
   }
 
@@ -1597,9 +1663,6 @@
     }
     if (elements.headerRefresh) {
       elements.headerRefresh.addEventListener("click", () => loadSessions());
-    }
-    if (elements.headerBuildSuite) {
-      elements.headerBuildSuite.addEventListener("click", () => previewSuiteWithOverrides());
     }
     if (elements.reloadSession) {
       elements.reloadSession.addEventListener("click", () => {

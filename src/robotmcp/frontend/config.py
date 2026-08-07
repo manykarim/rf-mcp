@@ -32,7 +32,7 @@ class FrontendConfig:
     host: str = "127.0.0.1"
     port: int = 8001
     base_path: str = "/"
-    debug: bool = True
+    debug: bool = False
 
     @property
     def url(self) -> str:
@@ -77,7 +77,14 @@ def build_frontend_config(
 
     resolved_debug = debug
     if resolved_debug is None:
-        resolved_debug = _env_bool("ROBOTMCP_FRONTEND_DEBUG", default=True)
+        resolved_debug = _env_bool("ROBOTMCP_FRONTEND_DEBUG", default=False)
+
+    if resolved_debug and resolved_host not in {"127.0.0.1", "localhost", "::1", "[::1]"}:
+        raise ValueError(
+            f"Refusing to start the frontend with debug enabled on non-loopback host "
+            f"{resolved_host!r}. Bind to loopback (127.0.0.1) or disable debug "
+            f"(--frontend-no-debug / ROBOTMCP_FRONTEND_DEBUG=0)."
+        )
 
     return FrontendConfig(
         enabled=enabled,

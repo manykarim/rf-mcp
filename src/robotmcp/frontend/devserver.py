@@ -24,14 +24,8 @@ def _create_sample_session(session_id: str = "frontend-demo") -> None:
     if session_manager.get_session(session_id):
         return
 
+    # create_session already publishes a "session_created" event; do not double-publish.
     session = session_manager.create_session(session_id)
-    event_bus.publish_sync(
-        FrontendEvent(
-            event_type="session_created",
-            session_id=session_id,
-            payload={"session_id": session_id},
-        )
-    )
     session.imported_libraries.extend(["BuiltIn", "Collections", "Browser"])
     session.loaded_libraries.update(["BuiltIn", "Collections", "Browser"])
     session.search_order = ["Browser", "BuiltIn", "Collections", "String"]

@@ -202,7 +202,7 @@ class McpFrontendBridge:
             "last_activity": session.last_activity.isoformat(),
             "duration": session.duration,
             "step_count": session.step_count,
-            "imported_libraries": list(session.imported_libraries),
+            "imported_libraries": list(dict.fromkeys(session.imported_libraries)),
             "loaded_libraries": list(getattr(session, "loaded_libraries", [])),
             "search_order": list(getattr(session, "search_order", [])),
             "platform_type": session.platform_type.value,

@@ -26,11 +26,6 @@ urlpatterns = [
         api.suite_preview,
         name="api-suite-preview",
     ),
-    path(
-        "api/sessions/<str:session_id>/execute/",
-        api.execute_keyword,
-        name="api-execute-keyword",
-    ),
     path("api/events/", api.events_stream, name="api-events-stream"),
     path("api/events/recent/", api.recent_events, name="api-events-recent"),
 ]
