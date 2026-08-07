@@ -144,14 +144,20 @@ class McpFrontendBridge:
         base_summary.update({k: v for k, v in summary.items() if v})
         summary = base_summary
 
-        try:
-            state = await state_manager.get_state(
-                state_type="dom",
-                session_id=session_id,
-                execution_engine=execution_engine,
-            )
-        except Exception:
-            state = None
+        # Only fetch/merge DOM+browser state for sessions that actually have a
+        # browser — otherwise the state manager fabricates a chromium/about:blank
+        # browser identity (and crashes->launders on url=None) for pure BuiltIn/
+        # Requests sessions. is_browser_session() is the reality gate.
+        state = None
+        if session and session.is_browser_session():
+            try:
+                state = await state_manager.get_state(
+                    state_type="dom",
+                    session_id=session_id,
+                    execution_engine=execution_engine,
+                )
+            except Exception:
+                state = None
 
         if state and state.get("success", True):
             dom_state = state.get("dom") or {}
@@ -177,6 +183,7 @@ class McpFrontendBridge:
                     break
 
         detail["summary"] = summary
+        detail["platform_type"] = self._derive_platform(session, summary)
 
         if summary.get("current_url"):
             detail["current_url"] = summary["current_url"]
@@ -193,6 +200,27 @@ class McpFrontendBridge:
 
         return detail
 
+    @staticmethod
+    def _derive_platform(session: ExecutionSession | None, summary: Dict[str, Any] | None = None) -> str:
+        """Derive a display platform from the session's real technology, rather than
+        the unconditional PlatformType.WEB fall-through."""
+        libs = set((summary or {}).get("libraries", []) or [])
+        if session is not None:
+            libs |= set(session.imported_libraries)
+            if session.is_browser_session():
+                return "web"
+            if getattr(session, "is_mobile_session", None) and session.is_mobile_session():
+                return "mobile"
+        if libs & {"Browser", "SeleniumLibrary"}:
+            return "web"
+        if libs & {"RequestsLibrary", "REST", "RESTinstance"}:
+            return "api"
+        if libs & {"PlatynUI"}:
+            return "desktop"
+        if libs & {"AppiumLibrary"}:
+            return "mobile"
+        return "generic"
+
     # Serialization -------------------------------------------------------------------
     @staticmethod
     def _serialize_session(session: ExecutionSession) -> Dict[str, Any]:
@@ -205,7 +233,7 @@ class McpFrontendBridge:
             "imported_libraries": list(dict.fromkeys(session.imported_libraries)),
             "loaded_libraries": list(getattr(session, "loaded_libraries", [])),
             "search_order": list(getattr(session, "search_order", [])),
-            "platform_type": session.platform_type.value,
+            "platform_type": McpFrontendBridge._derive_platform(session),
             "is_mobile": session.is_mobile_session(),
             "browser_state": {
                 "current_url": session.browser_state.current_url,

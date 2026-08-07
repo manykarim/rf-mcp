@@ -582,8 +582,16 @@
       { label: "Session", icon: "hash", value: detail.session_id },
       { label: "Platform", icon: PLATFORM_ICON[detail.platform_type] || "cpu", value: humanizePlatform(detail.platform_type) },
       { label: "Active Library", icon: "aperture", value: activeLibrary },
-      { label: "Browser", icon: "navigation", value: browserDisplay },
-      { label: "Current URL", icon: "link", value: currentUrl },
+    ];
+    // Only show Browser / Current URL for sessions that actually have a browser —
+    // never fabricate them for BuiltIn/Requests/desktop sessions.
+    if (browserDisplay && browserDisplay !== "—") {
+      items.push({ label: "Browser", icon: "navigation", value: browserDisplay });
+    }
+    if (currentUrl && currentUrl !== "—") {
+      items.push({ label: "Current URL", icon: "link", value: currentUrl });
+    }
+    items.push(
       { label: "Libraries", icon: "package", value: librariesDisplay },
       { label: "Steps", icon: "list", value: detail.step_count || 0 },
       {
@@ -596,7 +604,7 @@
         icon: "clock",
         value: detail.last_activity ? new Date(detail.last_activity).toLocaleString() : "—",
       },
-    ];
+    );
 
     const fragment = document.createDocumentFragment();
     items.forEach(({ label, icon, value }) => {
@@ -1434,6 +1442,13 @@
       const failed = settled.filter((r) => r && r.status === "rejected");
       if (failed.length) {
         console.error("Some session data failed to load", failed.map((f) => String(f.reason)));
+      }
+
+      // Stale-response guard: the user may have selected a different session while
+      // these requests were in flight (a slow Browser-session detail load is the
+      // common case). Do not overwrite the now-current session's view.
+      if (state.selectedSessionId !== sessionId) {
+        return;
       }
 
       state.sessionDetails = detail;

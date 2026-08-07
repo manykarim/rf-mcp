@@ -755,9 +755,10 @@ class StateManager:
                 ))
             
             # Simulate page-specific elements based on URL
-            if "login" in url.lower():
+            _url_l = (url or "").lower()
+            if "login" in _url_l:
                 elements.extend(self._create_login_elements())
-            elif "dashboard" in url.lower():
+            elif "dashboard" in _url_l:
                 elements.extend(self._create_dashboard_elements())
             else:
                 elements.extend(self._create_generic_elements(url))
