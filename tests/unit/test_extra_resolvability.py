@@ -16,19 +16,25 @@ someone adds to `[all]` is caught too.
 """
 from __future__ import annotations
 
-import tomllib
 from pathlib import Path
 
 import pytest
 from packaging.requirements import Requirement
 from packaging.version import Version
 
+# `tomllib` is stdlib only from 3.11, and rf-mcp supports 3.10 (requires-python
+# >=3.10). tomlkit is a hard rf-mcp dependency, so it is always available.
+try:  # Python 3.11+
+    from tomllib import loads as _toml_loads
+except ModuleNotFoundError:  # Python 3.10
+    from tomlkit import parse as _toml_loads
+
 REPO = Path(__file__).resolve().parents[2]
 PYPROJECT = REPO / "pyproject.toml"
 
 
 def _extras() -> dict[str, list[str]]:
-    data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    data = _toml_loads(PYPROJECT.read_text(encoding="utf-8"))
     return data["project"]["optional-dependencies"]
 
 

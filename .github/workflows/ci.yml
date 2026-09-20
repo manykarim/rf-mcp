@@ -529,7 +529,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "rf-mcp[all]==$(uv run --no-project python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")" > req.txt
+          echo "rf-mcp[all]==$(uv run --no-project --python 3.12 python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")" > req.txt
           cat req.txt
           uv pip compile req.txt --find-links dist --python-version 3.12 -o resolved.txt
           echo "--- resolved ---" && cat resolved.txt
@@ -561,7 +561,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "rf-mcp[desktop]==$(uv run --no-project python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")" > req-desktop.txt
+          echo "rf-mcp[desktop]==$(uv run --no-project --python 3.12 python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")" > req-desktop.txt
           uv pip compile req-desktop.txt --find-links dist --python-version 3.12 \
             --prerelease=allow -o resolved-desktop.txt
           grep -i platynui-native resolved-desktop.txt
