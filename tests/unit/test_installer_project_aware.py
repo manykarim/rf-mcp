@@ -302,9 +302,10 @@ class TestOverlayRfmcpReference:
         src.mkdir()
         _patch_direct_url(monkeypatch,
                           json.dumps({"url": src.as_uri(), "dir_info": {"editable": True}}))
-        result = I._rfmcp_with_args()
-        assert result[0] == "--with-editable"
-        assert Path(result[1]) == src
+        args, known = I._rfmcp_with_args()
+        assert args[0] == "--with-editable"
+        assert Path(args[1]) == src
+        assert known is True
 
     def test_file_url_to_path_windows_drive_letter(self, monkeypatch):
         # 2.2 the drive-letter conversion, exercised cross-platform via nturl2path
@@ -316,15 +317,26 @@ class TestOverlayRfmcpReference:
         assert "file:///C:/work/rf-mcp"[7:] == "/C:/work/rf-mcp"
 
     def test_no_direct_url_uses_version_pin(self, monkeypatch):
-        # 2.3 published install (no direct_url.json) -> --with rf-mcp==<ver>
+        # 2.3 published install (no direct_url.json) -> --with rf-mcp[extras]==<ver>
+        # The spec now CARRIES the installation's extras (change:
+        # launch-env-fidelity sec 1); extras are pinned here for determinism.
         monkeypatch.setattr(I, "_own_version", lambda: "9.9.9")
+        monkeypatch.setattr(I, "installed_extras", lambda: ["api", "web"])
         _patch_direct_url(monkeypatch, None)
-        assert I._rfmcp_with_args() == ["--with", "rf-mcp==9.9.9"]
+        assert I._rfmcp_with_args() == (["--with", "rf-mcp[api,web]==9.9.9"], True)
+
+    def test_version_pin_without_extras_has_no_bracket_suffix(self, monkeypatch):
+        # A bare rf-mcp install must not produce `rf-mcp[]==<ver>`.
+        monkeypatch.setattr(I, "_own_version", lambda: "9.9.9")
+        monkeypatch.setattr(I, "installed_extras", lambda: [])
+        _patch_direct_url(monkeypatch, None)
+        assert I._rfmcp_with_args() == (["--with", "rf-mcp==9.9.9"], True)
 
     def test_file_url_missing_dir_falls_back_to_pin(self, tmp_path, monkeypatch):
         # 2.3 a file:// URL whose dir does NOT exist -> version pin (guard preserved)
         monkeypatch.setattr(I, "_own_version", lambda: "9.9.9")
+        monkeypatch.setattr(I, "installed_extras", lambda: [])
         missing = tmp_path / "does-not-exist"
         _patch_direct_url(monkeypatch,
                           json.dumps({"url": missing.as_uri(), "dir_info": {}}))
-        assert I._rfmcp_with_args() == ["--with", "rf-mcp==9.9.9"]
+        assert I._rfmcp_with_args() == (["--with", "rf-mcp==9.9.9"], True)

@@ -50,6 +50,16 @@ class Manifest:
                 return e
         return None
 
+    def was_created(self, *, agent: str, scope: str, what: str, path: str) -> bool:
+        """Did a PREVIOUS install create this whole file?
+
+        A forced re-install re-reads an existing file, so `created_file` would be
+        recomputed as False and the file survived the later uninstall as an empty
+        `{}` (change: installer-cli-safety sec 5).
+        """
+        e = self.find(agent, scope, what, path)
+        return bool(e and e.get("created_file"))
+
     def record(self, *, agent: str, scope: str, what: str, path: str,
                value: Any, created_file: bool) -> None:
         e = self.find(agent, scope, what, path)

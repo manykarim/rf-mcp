@@ -4,10 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rf-mcp"
-# 0.35.0: Windows follow-up to 0.34.0 - a local/unpublished rf-mcp checkout on
-# Windows now overlays correctly into a project-aware install (file:// launch-path
-# parsing fix in the installer). See docs/RELEASE_NOTES_v0.35.0.md.
-version = "0.35.0"
+# 0.35.1: install-blocker fix - `desktop` removed from the `[all]` extra, which
+# was making `uv tool install "rf-mcp[all]"` (and pipx, uvx, uv add) fail for every
+# user on every OS. See docs/RELEASE_NOTES_v0.35.1.md.
+version = "0.35.1"
 description = "Robot Framework MCP Server - Natural Language Test Automation Bridge"
 authors = [{ name = "Many Kasiriha" }]
 license = { text = "Apache-2.0" }
@@ -41,7 +41,28 @@ database = ["robotframework-databaselibrary"]
 # separately (that risks a lockstep conflict on the next bump). platynui-cli is the
 # optional diagnostic CLI (window/snapshot/highlight, used by the display-safety
 # probes). Exact-pinned for reproducibility; bump both together to a newer dev.
-# The version references a prerelease, so resolvers accept it WITHOUT a global --pre.
+#
+# !! uv-BACKED RESOLVERS REQUIRE A FLAG FOR THIS EXTRA !!
+# uv's default pre-release policy is `if-necessary-or-explicit`, and "explicit"
+# only applies to FIRST-PARTY requirements. For anyone installing rf-mcp FROM
+# PyPI these pins are TRANSITIVE, so uv refuses them:
+#     uv tool install "rf-mcp[desktop]"   ->  "no solution found ... there is no
+#                                             version of robotframework-platynui"
+# The documented command is therefore:
+#     uv tool install --prerelease=allow "rf-mcp[desktop]"   (or UV_PRERELEASE=allow)
+# This applies to uv, uvx AND pipx (modern pipx delegates to uv). pip, poetry and
+# pdm honour a pinned pre-release transitively and need no flag. Loosening the pin
+# to `>=0.13.0.dev0` does NOT help — measured; only the flag changes the outcome.
+# Inside THIS repo the pins are first-party, so `uv sync` / `uv lock` /
+# `uv pip install -e .[desktop]` all resolve — which is exactly why CI cannot see
+# the consumer-side failure. See openspec/changes/install-extra-resolvability.
+#
+# PLATFORM LIMIT: platynui-cli / platynui-native publish ONLY
+#   manylinux_2_34_{x86_64,aarch64}, macosx_11_0_arm64, win_{amd64,arm64}
+# and NO sdist (identical from dev1 through dev117). So there is no desktop
+# support on macOS x86_64 (Intel), musl/Alpine, or glibc < 2.34 (Ubuntu 20.04,
+# Debian 11, RHEL/Rocky 8, Amazon Linux 2). A PEP 508 marker cannot express glibc
+# or musl, which is why `desktop` is NOT part of `[all]` — see `all` below.
 desktop = [
     "robotframework-PlatynUI==0.13.0.dev2; python_version >= '3.12'",
     "platynui-cli==0.13.0.dev2; python_version >= '3.12'",
@@ -68,12 +89,22 @@ all = [
     "sqlite-vec>=0.1.6",
     "model2vec>=0.4.0",
     "tiktoken>=0.7.0",
-    # Desktop automation is part of [all]. Referenced as a self-extra so the
-    # PlatynUI pins stay defined in exactly one place (see `desktop` above) —
-    # bumping them there is enough. The `python_version >= "3.12"` markers ride
-    # along, so on 3.10/3.11 this contributes nothing and [all] still resolves.
-    # The exact-pinned prerelease is accepted without a global --pre.
-    "rf-mcp[desktop]",
+    # Desktop automation is deliberately NOT part of [all].
+    #
+    # It used to be, via a `rf-mcp[desktop]` self-extra, and that made
+    # `uv tool install "rf-mcp[all]"` — the first command in the README Quick
+    # Start — fail for EVERY user on EVERY OS: uv refuses the transitive PlatynUI
+    # pre-release pin without `--prerelease=allow` (see the `desktop` comment
+    # above). It also hard-blocked everyone on macOS x86_64, musl/Alpine or
+    # glibc < 2.34 from installing [all] at all, because PlatynUI ships no wheel
+    # for them — even when all they wanted was web/API.
+    #
+    # [all] therefore means "every extra that resolves everywhere with default
+    # resolver settings". Desktop stays fully supported as an explicit opt-in:
+    #     uv tool install --prerelease=allow "rf-mcp[desktop]"
+    #     pip install "rf-mcp[desktop]"
+    # Revisit only when PlatynUI publishes a STABLE 0.13.x with broader wheels;
+    # the CI installability guard is what proves it is safe to fold back in.
 ]
 # NOTE: dev tooling lives in [dependency-groups].dev (PEP 735), which is what
 # `uv sync` / CI use. The former [project.optional-dependencies].dev extra was

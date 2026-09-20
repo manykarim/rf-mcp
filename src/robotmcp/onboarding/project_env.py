@@ -215,9 +215,14 @@ def rfmcp_in_project(python: Optional[Path]) -> bool:
 
 
 def project_rf_info(python: Optional[Path]) -> dict:
-    """Return ``{robot_major, py_version}`` for the project interpreter - robot_major
-    is None when robotframework is not installed there. Best-effort."""
-    info = {"robot_major": None, "py_version": None}
+    """Return ``{robot_major, robot_version, py_version}`` for the project interpreter.
+
+    ``robot_version`` is the FULL version string (e.g. ``"7.2.1"``), added so callers
+    can report a minor/patch difference between the project's Robot Framework and the
+    one that will actually execute the tests. ``robot_major`` keeps its meaning and
+    remains what `rf_conflict` routes on (change: launch-env-fidelity sec 3).
+    """
+    info = {"robot_major": None, "robot_version": None, "py_version": None}
     if python is None:
         return info
     out = _run([str(python), "-c",
@@ -229,6 +234,7 @@ def project_rf_info(python: Optional[Path]) -> dict:
         return info
     rv, pv = out.split("|", 1)
     if rv:
+        info["robot_version"] = rv.strip()
         m = re.match(r"(\d+)", rv)
         if m:
             info["robot_major"] = int(m.group(1))
@@ -259,6 +265,36 @@ def rf_conflict(env: ProjectEnv) -> Optional[str]:
     return None
 
 
+def rf_version_note(env: ProjectEnv) -> Optional[str]:
+    """Report which Robot Framework will actually execute the tests, when it differs
+    from the project's own.
+
+    This is REPORTING, not refusal. `rf_conflict` deliberately routes only MAJOR
+    mismatches to the attach bridge, because that is where an overlay is genuinely
+    unsafe; a minor difference is usually harmless and refusing it would block
+    working setups. But the user is told the overlay lets rf-mcp "see" their
+    libraries - they are not told it also replaces their Robot Framework
+    (change: launch-env-fidelity sec 3).
+
+    Comparison basis is stated explicitly rather than implied: the project's
+    installed RF versus the RF THIS rf-mcp has, which is what an overlay layers on.
+    """
+    if not env.has_env:
+        return None
+    project_rf = project_rf_info(env.python).get("robot_version")
+    if not project_rf:
+        return None
+    try:
+        import robot
+        own_rf = robot.version.VERSION
+    except Exception:
+        return None
+    if project_rf == own_rf:
+        return None
+    return (f"project's Robot Framework is {project_rf}, but an overlay would execute "
+            f"tests with rf-mcp's {own_rf}")
+
+
 _LIB_RE = re.compile(r"^\s*(Library|Resource)\s{2,}(\S+)", re.MULTILINE)
 
 # Distributions rf-mcp[all] already provides - any OTHER robotframework-* dist in the
@@ -269,9 +305,35 @@ _BUNDLED_DISTS = frozenset({
     "robotframework-databaselibrary", "robotframework-platynui",
 })
 
-_INSTALLED_PROBE = (
+
+def available_bundled_dists() -> frozenset:
+    """The subset of `_BUNDLED_DISTS` THIS rf-mcp installation actually provides.
+
+    `_BUNDLED_DISTS` is a catalogue of what `rf-mcp[all]` *would* ship. Using it
+    directly made `doctor` contradict itself: it could report
+    `[ ] API (RequestsLibrary)` and, twelve lines later, "extra project libraries:
+    none (rf-mcp[all]'s bundle suffices)" for a project whose only dependency was
+    RequestsLibrary. A user who installed `rf-mcp[api]` - or, since
+    install-extra-resolvability, anyone at all for `robotframework-platynui`, which
+    `[all]` no longer includes - does not have the whole catalogue
+    (change: installer-cli-safety sec 9).
+    """
+    import importlib.metadata as _m
+
+    present = set()
+    for dist in _BUNDLED_DISTS:
+        try:
+            _m.version(dist)
+            present.add(dist)
+        except Exception:
+            continue
+    return frozenset(present)
+
+
+def _installed_probe(bundled: frozenset) -> str:
+    return (
     "import importlib.metadata as m\n"
-    "B=" + repr(set(_BUNDLED_DISTS)) + "\n"
+    "B=" + repr(set(bundled)) + "\n"
     "out=[]\n"
     "for d in m.distributions():\n"
     "    n=(d.metadata.get('Name') or '').lower()\n"
@@ -281,15 +343,23 @@ _INSTALLED_PROBE = (
     "        except Exception: tl=[]\n"
     "        out.append(tl[0] if tl else n.replace('robotframework-',''))\n"
     "print('\\n'.join(out))\n"
-)
+    )
+
+
+# Back-compat for callers/tests that referenced the module-level probe string.
+_INSTALLED_PROBE = _installed_probe(_BUNDLED_DISTS)
 
 
 def _installed_extra_libraries(python: Optional[Path]) -> List[str]:
     """Non-bundled ``robotframework-*`` library MODULES installed in the project env
-    (e.g. robotframework-jsonlibrary -> JSONLibrary). Best-effort."""
+    (e.g. robotframework-jsonlibrary -> JSONLibrary). Best-effort.
+
+    "Non-bundled" is judged against what this rf-mcp ACTUALLY has, not against the
+    full `[all]` catalogue - see `available_bundled_dists`.
+    """
     if python is None:
         return []
-    out = _run([str(python), "-c", _INSTALLED_PROBE])
+    out = _run([str(python), "-c", _installed_probe(available_bundled_dists())])
     return [ln.strip() for ln in (out or "").splitlines() if ln.strip()] if out else []
 
 

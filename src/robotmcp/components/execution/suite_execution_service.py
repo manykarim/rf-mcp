@@ -640,9 +640,26 @@ class SuiteExecutionService:
                     }
                     warnings.append(warning)
         
-        # Determine validation status
-        if return_code == 0:
-            validation_status = "passed"
+        # Determine validation status.
+        #
+        # ERROR-FIRST. This used to short-circuit on `return_code == 0`, which won
+        # unconditionally and discarded error-severity issues: a dry run whose library
+        # imports had FAILED reported `validation_status: "passed"`, `success: true`,
+        # `return_code: 0` alongside two error issues, and an agent reading that
+        # proceeded to a full run before discovering the environment was wrong
+        # (change: launch-env-fidelity sec 4).
+        #
+        # All 8 patterns feeding `issues` were audited before tightening this: each is
+        # an unambiguous failure (missing keyword, failed library/resource import,
+        # missing resource file, bad argument count, empty keyword name, unknown
+        # variable, bad variable syntax). Verified that a Robot Framework dry run of a
+        # suite using RUNTIME-ASSIGNED variables emits none of them, so the stricter
+        # gate does not turn dry-run variable handling into false failures.
+        error_issues = [i for i in issues if i.get("severity") == "error"]
+        if error_issues:
+            validation_status = "failed"
+        elif return_code != 0:
+            validation_status = "failed"
         elif issues:
             validation_status = "failed"
         else:
@@ -652,7 +669,10 @@ class SuiteExecutionService:
         suite_info = self._extract_suite_info(stdout, stderr)
         
         result = {
-            "success": return_code == 0,
+            # `success` FOLLOWS `validation_status`. These were computed independently,
+            # which is how `success: true` coexisted with two error-severity import
+            # failures (change: launch-env-fidelity sec 4).
+            "success": validation_status != "failed",
             "validation_status": validation_status,
             "suite_info": suite_info,
             "validation_results": {

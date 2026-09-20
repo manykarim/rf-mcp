@@ -70,13 +70,17 @@ class AgentAdapter:
             if env:
                 e["envs"] = dict(env)
             return e
-        # standard / kilo
+        # standard / vscode
         e = {"command": command}
         if args:
             e["args"] = list(args)
         if env:
             e["env"] = dict(env)
-        if self.style == "kilo":
+        if self.style == "vscode":
+            # VS Code's mcp.json tags the transport explicitly; this repo's own
+            # working `.vscode/mcp.json` carries it (change: installer-cli-safety
+            # sec 4). ("kilo" was the former name of this style; Kilo actually uses
+            # the opencode shape - see the kilo adapter.)
             e = {"type": "stdio", **e}
         return e
 
@@ -98,7 +102,7 @@ REGISTRY: List[AgentAdapter] = [
     ),
     AgentAdapter(
         id="copilot", name="GitHub Copilot (VS Code)", fmt="json", container=["servers"],
-        style="standard", project_path=".vscode/mcp.json", user_path=None,
+        style="vscode", project_path=".vscode/mcp.json", user_path=None,
         detect_bins=["code"], detect_dirs=[".vscode"],
     ),
     AgentAdapter(
@@ -114,10 +118,19 @@ REGISTRY: List[AgentAdapter] = [
         detect_bins=["gemini"], detect_dirs=[".gemini"],
     ),
     AgentAdapter(
+        # Filename AND entry shape corrected against a REAL working Kilo config
+        # (this repo's own `.kilo/kilo.json`, alongside a `.kilo/` install), which
+        # is `mcp.robotmcp = {type: "local", command: [argv...], enabled: true}` -
+        # i.e. the opencode shape. The adapter previously wrote `.kilo/kilo.jsonc`
+        # with `{type: "stdio", command: "<string>"}`: wrong name, wrong type, and
+        # a string where an argv list is expected, so Kilo never read it while the
+        # install reported success (change: installer-cli-safety sec 4).
+        # `fmt="jsonc"` is kept deliberately: it parses plain JSON first and falls
+        # back to comment-stripping, so a hand-commented file still loads.
         id="kilo", name="Kilo Code", fmt="jsonc", container=["mcp"],
-        style="kilo", project_path=".kilo/kilo.jsonc",
-        user_path=".config/kilo/kilo.jsonc",
-        detect_bins=["kilo"], detect_dirs=[".config/kilo"],
+        style="opencode", project_path=".kilo/kilo.json",
+        user_path=".config/kilo/kilo.json",
+        detect_bins=["kilo"], detect_dirs=[".config/kilo", ".kilo"],
     ),
     AgentAdapter(
         id="goose", name="goose", fmt="yaml", container=["extensions"],
@@ -144,18 +157,62 @@ def get(agent_id: str) -> Optional[AgentAdapter]:
     return BY_ID.get(agent_id)
 
 
-def resolve_selection(spec: str, *, home: Optional[Path] = None) -> List[AgentAdapter]:
+class UnknownAgentError(ValueError):
+    """Raised for an --agents value naming ids that do not exist."""
+
+    def __init__(self, unknown: List[str]):
+        self.unknown = unknown
+        super().__init__(
+            f"unknown agent id(s): {', '.join(unknown)}. "
+            f"Valid ids: {', '.join(SUPPORTED_IDS)} (or 'all' / 'detected'). "
+            f"Run `robotmcp list` to see them with detection status."
+        )
+
+
+class EmptySelectionError(ValueError):
+    """Raised for an empty --agents value.
+
+    Previously an empty spec silently became ``detected`` - so a declined
+    confirmation prompt, or ``--agents "$UNSET_VAR"``, installed into EVERY
+    detected agent (change: installer-cli-safety sec 3b).
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "empty agent selection. Pass 'all', 'detected', or a comma-separated "
+            "list of ids (see `robotmcp list`)."
+        )
+
+
+def resolve_selection(spec: str, *, home: Optional[Path] = None,
+                      strict: bool = True) -> List[AgentAdapter]:
     """Turn an --agents value (``all`` | ``detected`` | csv) into adapters.
+
     ``planned`` adapters are excluded from all/detected but selectable explicitly
-    so callers can surface their status."""
-    spec = (spec or "detected").strip()
+    so callers can surface their status.
+
+    An empty spec is an EmptySelectionError, never a silent alias for ``detected``.
+    Unknown ids raise UnknownAgentError instead of being dropped, so a typo cannot
+    masquerade as "nothing to do" (change: installer-cli-safety sec 3/sec 3b). Pass
+    ``strict=False`` for read-only callers that want best-effort resolution.
+    """
+    spec = (spec or "").strip()
+    if not spec:
+        if strict:
+            raise EmptySelectionError()
+        return []
     if spec == "all":
         return [a for a in REGISTRY if a.status == "supported"]
     if spec == "detected":
         return [a for a in REGISTRY if a.status == "supported" and a.detect(home=home)]
     out: List[AgentAdapter] = []
+    unknown: List[str] = []
     for token in (t.strip() for t in spec.split(",") if t.strip()):
         a = BY_ID.get(token)
         if a:
             out.append(a)
+        else:
+            unknown.append(token)
+    if unknown and strict:
+        raise UnknownAgentError(unknown)
     return out

@@ -47,12 +47,23 @@ anything, you have to do afterward:
 | `database` | DatabaseLibrary | a DB driver |
 | `frontend` | Django dashboard | set `ROBOTMCP_ENABLE_FRONTEND=true` or start the server with `--with-frontend` (off by default) |
 | `memory` | Persistent semantic memory (sqlite-vec + model2vec) | set `ROBOTMCP_MEMORY_ENABLED=true` (off by default) |
-| `desktop` | PlatynUI native desktop automation (Rust core + `platynui-cli`) | Python 3.12+; ships as a pinned prerelease |
-| `all` | all of the above (Robot Framework libraries) | as above |
+| `desktop` | PlatynUI native desktop automation (Rust core + `platynui-cli`) | Python 3.12+; pre-release — **not in `[all]`**, install separately |
+| `all` | all of the above **except** `desktop` | as above |
 
-> **`desktop` needs Python 3.12+.** It is included in `[all]`, but on Python
-> 3.10/3.11 it resolves to nothing — `[all]` still installs fine, you just don't
-> get desktop automation there.
+> **`desktop` is a separate opt-in.** PlatynUI's native core is still a
+> pre-release, and uv-backed installers (`uv`, `uvx`, `pipx`) refuse a transitive
+> pre-release pin without a flag. So `[all]` does not include it — otherwise
+> `uv tool install "rf-mcp[all]"` would fail for everyone. Install it directly:
+>
+> ```bash
+> uv tool install --prerelease=allow "rf-mcp[desktop]"   # uv / uvx / pipx
+> pip install "rf-mcp[desktop]"                          # pip / poetry / pdm — no flag
+> ```
+>
+> It needs **Python 3.12+**, and PlatynUI publishes wheels only for Linux
+> x86_64/aarch64 with **glibc ≥ 2.34**, macOS **arm64**, and Windows x86_64/arm64.
+> There is no sdist, so macOS Intel, musl/Alpine and older-glibc Linux cannot
+> install it. `[all]` installs fine everywhere — you just don't get desktop there.
 
 > `[all]` deliberately leaves out the `semantic` extra — that one pulls
 > sentence-transformers and torch (~2GB) as an optional max-quality backend for

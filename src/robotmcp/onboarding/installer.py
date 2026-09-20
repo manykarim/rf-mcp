@@ -60,11 +60,82 @@ def _file_url_to_path(url: str) -> str:
     return url2pathname(urlsplit(url).path)
 
 
-def _rfmcp_with_args() -> List[str]:
-    """uv ``--with`` args that add the SAME rf-mcp the user has installed:
-    ``--with-editable <src>`` for a local/editable/dev install (its version may not
-    be on PyPI), otherwise a version-pinned ``--with rf-mcp==<ver>`` for a published
-    install, falling back to an unpinned ``--with rf-mcp``."""
+# Module -> extra, for deriving which extras THIS installation provides. Installed
+# metadata cannot answer this: `Provides-Extra` lists what the package OFFERS, and
+# nothing records which extras were selected. So probe what is importable instead -
+# which is also the property that actually matters (change: launch-env-fidelity sec 1).
+#
+# `desktop` is DELIBERATELY ABSENT. Requesting it in an overlay spec would make uv
+# refuse the whole command: the PlatynUI pins are pre-releases, and a `--with
+# rf-mcp[desktop]` is transitive, which uv rejects without `--prerelease=allow`
+# (change: install-extra-resolvability). Desktop is therefore never overlaid; a
+# desktop session uses rf-mcp's own environment.
+_MODULE_TO_EXTRA = {
+    "RequestsLibrary": "api",
+    "SeleniumLibrary": "web",
+    "Browser": "web",
+    "AppiumLibrary": "mobile",
+    "DatabaseLibrary": "database",
+    "sqlite_vec": "memory",
+    "model2vec": "memory",
+    "tiktoken": "tokens",
+}
+
+
+def installed_extras() -> List[str]:
+    """Extras this rf-mcp installation actually provides, by import probe.
+
+    Sorted for a stable, testable spec string. Empty when nothing optional is
+    installed (a bare `rf-mcp`), in which case callers must emit NO bracket suffix
+    rather than an empty `rf-mcp[]`.
+    """
+    import importlib.util
+
+    found = set()
+    for module, extra in _MODULE_TO_EXTRA.items():
+        try:
+            if importlib.util.find_spec(module) is not None:
+                found.add(extra)
+        except Exception:
+            # A broken/partial install must not break launch resolution.
+            continue
+    return sorted(found)
+
+
+def _desktop_available() -> bool:
+    """Is PlatynUI importable here? Desktop is never overlaid (see _MODULE_TO_EXTRA),
+    so its presence is worth stating rather than silently dropping."""
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec("PlatynUI") is not None
+    except Exception:
+        return False
+
+
+def _extras_suffix(extras: Optional[List[str]] = None) -> str:
+    """``[web,api]`` for a non-empty extras list, else ``""``."""
+    extras = installed_extras() if extras is None else extras
+    return f"[{','.join(extras)}]" if extras else ""
+
+
+def _rfmcp_with_args() -> Tuple[List[str], bool]:
+    """uv ``--with`` args that add the SAME rf-mcp the user has installed.
+
+    Returns (args, extras_known). ``extras_known`` is False when the spec could not
+    carry the installation's extras, so the caller can say so instead of presenting
+    an incomplete overlay as complete.
+
+    Two corrections (change: launch-env-fidelity sec 1/sec 2):
+
+    - The spec now carries the installation's EXTRAS. It used to be a bare
+      ``rf-mcp==<ver>``, so a user who installed ``rf-mcp[all]`` got an overlay with
+      no Browser and no SeleniumLibrary - their web tests could not run.
+    - ``--with-editable`` is used only for a real DIRECTORY. A ``file:`` URL pointing
+      at a wheel produced a command uv refuses outright:
+      "Editable must refer to a local directory, not an archive".
+    """
+    suffix = _extras_suffix()
     try:
         from importlib.metadata import distribution
         raw = distribution("rf-mcp").read_text("direct_url.json")
@@ -75,11 +146,18 @@ def _rfmcp_with_args() -> List[str]:
             if (editable or url.startswith("file:")) and url:
                 path = _file_url_to_path(url) if url.startswith("file:") else url
                 if path and Path(path).exists():
-                    return ["--with-editable", path]
+                    if Path(path).is_dir():
+                        # An editable reference takes no extras suffix; a source
+                        # checkout provides whatever is installed alongside it.
+                        return (["--with-editable", path], True)
+                    # An archive (wheel/sdist): a normal requirement, extras and all.
+                    return (["--with", f"{path}{suffix}"], True)
     except Exception:
         pass
     ver = _own_version()
-    return ["--with", f"rf-mcp=={ver}"] if ver else ["--with", "rf-mcp"]
+    if ver:
+        return (["--with", f"rf-mcp{suffix}=={ver}"], True)
+    return (["--with", f"rf-mcp{suffix}"], True)
 
 
 def _venv_shim(python: Path) -> Optional[Path]:
@@ -126,10 +204,16 @@ def _in_project_plan(env, verify_lib=None, *, strategy: str = "in-project") -> L
 def resolve_launch(*, scope: str, project_dir: Optional[Path] = None,
                    into_project: bool = False, attach: Optional[str] = None,
                    command_override: Optional[str] = None,
-                   env_override: Optional[Dict[str, str]] = None) -> LaunchPlan:
+                   env_override: Optional[Dict[str, str]] = None,
+                   dry_run: bool = False) -> LaunchPlan:
     """Resolve command+args+env so the running rf-mcp can see the target project's
     Robot Framework libraries (change: installer-project-aware-launch). Preferring
     uv; the global ``uvx``/``uv tool`` case (no project env) keeps the plain own-shim.
+
+    ``dry_run`` MUST be threaded in by every caller: this function is not pure -
+    the ``--into-project`` branch installs packages into the project environment
+    (change: installer-cli-safety sec 1). Under dry-run that install is planned, never
+    performed.
     """
     from robotmcp.onboarding import project_env as pe
 
@@ -175,6 +259,14 @@ def resolve_launch(*, scope: str, project_dir: Optional[Path] = None,
 
     # project has extra libraries and rf-mcp is not in its env
     if into_project:
+        if dry_run:
+            # NEVER install under --dry-run. Report the plan and describe the launch
+            # that WOULD result, without touching the project environment.
+            p = _in_project_plan(env, vlib, strategy="into-project")
+            p.env.update(extra_env)
+            p.note = ("would install rf-mcp into the project env (--into-project); "
+                      + p.note)
+            return p
         ok, _detail = _install_into_project(env)
         if ok:
             p = _in_project_plan(env, vlib, strategy="into-project")
@@ -188,12 +280,25 @@ def resolve_launch(*, scope: str, project_dir: Optional[Path] = None,
         # declared deps and would miss undeclared libraries. rf-mcp is added by an
         # editable-aware spec so the overlay matches the installed rf-mcp even when
         # its version is not on PyPI.
+        with_args, extras_known = _rfmcp_with_args()
         args = (["run", "--no-project", "--python", str(env.python)]
-                + _rfmcp_with_args() + ["robotmcp"])
-        return LaunchPlan("uv", args, extra_env, "uv-overlay",
-                          f"uv overlay: rf-mcp layered onto the project's {env.type} env "
-                          f"so it sees {', '.join(extras[:4])}"
-                          + ("..." if len(extras) > 4 else ""), vlib)
+                + with_args + ["robotmcp"])
+        own = installed_extras()
+        note = (f"uv overlay: rf-mcp layered onto the project's {env.type} env "
+                f"so it sees {', '.join(extras[:4])}"
+                + ("..." if len(extras) > 4 else ""))
+        if own:
+            note += f"; overlay carries rf-mcp[{','.join(own)}]"
+        if not extras_known:
+            note += ("; WARNING: could not determine this install's extras - the "
+                     "overlay may not provide them")
+        if _desktop_available():
+            note += ("; NOTE: desktop (PlatynUI) is NOT overlaid - it is a pre-release "
+                     "uv will not resolve transitively; use rf-mcp's own env for desktop")
+        vnote = pe.rf_version_note(env)
+        if vnote:
+            note += f"; {vnote}"
+        return LaunchPlan("uv", args, extra_env, "uv-overlay", note, vlib)
 
     # (4)/(5) non-venv (conda/global) or no uv -> cannot overlay; guide to co-install.
     # verify_lib is set so verification (below) refuses this blind config unless the
@@ -205,8 +310,15 @@ def resolve_launch(*, scope: str, project_dir: Optional[Path] = None,
                       f"(re-run with --into-project) or use --attach", vlib)
 
 
-def _install_into_project(env) -> Tuple[bool, str]:
-    """Opt-in: install rf-mcp into the detected project env (mutating). Best-effort."""
+def _install_into_project(env, *, dry_run: bool = False) -> Tuple[bool, str]:
+    """Opt-in: install rf-mcp into the detected project env (mutating). Best-effort.
+
+    Defence in depth for change installer-cli-safety sec 1: callers must not reach here
+    under --dry-run, but if one ever does, refuse rather than mutate. This is the only
+    package-installing call in the onboarding path.
+    """
+    if dry_run:
+        return (False, "dry-run: refused to install into the project env")
     ver = _own_version()
     spec = f"rf-mcp=={ver}" if ver else "rf-mcp"
     if shutil.which("uv") and env.python:
@@ -338,7 +450,8 @@ def install(*, agents: str = "detected", scope: str = "project",
     # writing it to every targeted agent (change: installer-project-aware-launch).
     plan = resolve_launch(scope=scope, project_dir=project_dir or cwd,
                           into_project=into_project, attach=attach,
-                          command_override=command, env_override=env)
+                          command_override=command, env_override=env,
+                          dry_run=dry_run)
     verified, verify_detail = True, "skipped"
     if not (no_verify or dry_run):
         verified, verify_detail = verify_launch(plan)
@@ -366,7 +479,23 @@ def install(*, agents: str = "detected", scope: str = "project",
                                              f"(use --into-project/--attach, or --no-verify/--force)"))
                 continue
             path = ad.resolve_path(scope, cwd=cwd, home=home)
-            data, existed = codecs.load(path, ad.fmt)
+            if path is not None and path.exists() and not path.is_file():
+                results.append(Result(ad.id, scope, what, "error", path=str(path),
+                                      detail="target config path is not a regular file"))
+                continue
+            hazard = codecs.rewrite_hazard(path, ad.fmt) if path else None
+            if hazard:
+                results.append(Result(ad.id, scope, what, "error", path=str(path),
+                                      detail=hazard))
+                continue
+            try:
+                data, existed = codecs.load(path, ad.fmt)
+            except codecs.ConfigParseError as exc:
+                # A malformed existing config used to escape as a raw traceback that
+                # never named the file (change: installer-cli-safety sec 6).
+                results.append(Result(ad.id, scope, what, "error", path=str(path),
+                                      detail=f"{exc}. Fix or move the file, then retry."))
+                continue
             container = codecs.ensure_container(data, ad.container)
             entry = ad.build_entry(plan.command, plan.args, plan.env)
             present = A.SERVER_NAME in container
@@ -375,15 +504,22 @@ def install(*, agents: str = "detected", scope: str = "project",
                                       path=str(path), detail="use --force to overwrite"))
                 continue
             if dry_run:
+                # Distinct from "installed"/"updated": a dry run must never report a
+                # status that claims the action happened (installer-cli-safety sec 1).
                 results.append(Result(ad.id, scope, what,
-                                      "updated" if present else "installed",
+                                      "would-update" if present else "would-install",
                                       path=str(path),
                                       detail=f"dry-run [{plan.strategy}] {plan_note}"))
                 continue
             container[A.SERVER_NAME] = entry
             codecs.dump(path, ad.fmt, data)
+            # Preserve an earlier `created_file=True`: a re-install with --force used
+            # to flip it to False, so the later uninstall left an orphaned `{}` file
+            # behind (change: installer-cli-safety sec 5).
+            created = (not existed) or manifest.was_created(
+                agent=ad.id, scope=scope, what=what, path=str(path))
             manifest.record(agent=ad.id, scope=scope, what=what, path=str(path),
-                            value=entry, created_file=not existed)
+                            value=entry, created_file=created)
             results.append(Result(ad.id, scope, what,
                                   "updated" if present else "installed", path=str(path),
                                   detail=f"[{plan.strategy}] {plan_note}"))
@@ -395,19 +531,49 @@ def install(*, agents: str = "detected", scope: str = "project",
 def uninstall(*, agents: str = "detected", scope: Optional[str] = None,
               whats: Optional[List[str]] = None, dry_run: bool = False,
               manifest: Optional[Manifest] = None,
-              home: Optional[Path] = None, cwd: Optional[Path] = None) -> List[Result]:
+              home: Optional[Path] = None, cwd: Optional[Path] = None,
+              project_dir: Optional[Path] = None, force: bool = False) -> List[Result]:
+    """Remove rf-mcp entries recorded in the manifest.
+
+    Three corrections (change: installer-cli-safety sec 5):
+    - ``project_dir`` now FILTERS: `uninstall -C dirA` could remove dirB's entry,
+      because the path was only ever used for a warning.
+    - removal is no longer gated on detection: the default `detected` selection
+      meant an entry written for an agent that is no longer installed could never
+      be removed (`Nothing to do.`).
+    - a single unparseable config no longer aborts the whole run.
+    """
     whats = whats or WHAT_ALL
     manifest = manifest or Manifest()
     results: List[Result] = []
-    # Selection by id; 'all'/'detected' still resolve to concrete adapters.
-    wanted_ids = [a.id for a in _targets(agents, home)] if agents not in ("", None) else A.SUPPORTED_IDS
-    if agents == "all":
+    # Selection by id. Removal is driven by the MANIFEST, so the default covers
+    # every supported agent rather than only currently-detected ones.
+    if agents in ("", None, "detected"):
         wanted_ids = A.SUPPORTED_IDS
+    elif agents == "all":
+        wanted_ids = A.SUPPORTED_IDS
+    else:
+        wanted_ids = [a.id for a in A.resolve_selection(agents, home=home)]
+
+    target_dir = Path(project_dir or cwd).expanduser().resolve() if (project_dir or cwd) else None
 
     for e in list(manifest.entries_for(wanted_ids, scope, whats)):
+        if target_dir is not None and (e.get("scope") or "") == "project":
+            try:
+                if Path(e["path"]).expanduser().resolve().parent != target_dir and \
+                        target_dir not in Path(e["path"]).expanduser().resolve().parents:
+                    continue
+            except OSError:
+                continue
         ad = A.get(e["agent"])
         path = Path(e["path"])
-        data, existed = codecs.load(path, ad.fmt) if ad else ({}, False)
+        try:
+            data, existed = codecs.load(path, ad.fmt) if ad else ({}, False)
+        except codecs.ConfigParseError as exc:
+            # One broken file must not block cleanup of the healthy ones.
+            results.append(Result(e["agent"], e["scope"], e["what"], "error",
+                                  path=str(path), detail=str(exc)))
+            continue
         container = codecs.get_container(data, ad.container) if ad else None
         if not container or A.SERVER_NAME not in container:
             if not dry_run:
@@ -415,18 +581,28 @@ def uninstall(*, agents: str = "detected", scope: Optional[str] = None,
             results.append(Result(e["agent"], e["scope"], e["what"], "absent", path=str(path)))
             continue
         current_hash = value_hash(container[A.SERVER_NAME])
-        if current_hash != e["value_hash"]:
+        if current_hash != e["value_hash"] and not force:
             results.append(Result(e["agent"], e["scope"], e["what"], "kept-user-modified",
-                                  path=str(path), detail="entry changed since install; left intact"))
+                                  path=str(path),
+                                  detail="entry changed since install; left intact "
+                                         "(use --force to remove it anyway)"))
             continue
         if dry_run:
-            results.append(Result(e["agent"], e["scope"], e["what"], "removed",
+            results.append(Result(e["agent"], e["scope"], e["what"], "would-remove",
                                   path=str(path), detail="dry-run"))
             continue
         del container[A.SERVER_NAME]
         codecs.prune_empty(data, ad.container)
         if e.get("created_file") and not data:
             path.unlink(missing_ok=True)
+            # Also drop a directory the installer created for this file (e.g.
+            # `.cursor/`), but only when it is now empty (sec 5.6).
+            try:
+                parent = path.parent
+                if parent.is_dir() and not any(parent.iterdir()):
+                    parent.rmdir()
+            except OSError:
+                pass
         else:
             codecs.dump(path, ad.fmt, data)
         manifest.drop(e)
@@ -434,6 +610,30 @@ def uninstall(*, agents: str = "detected", scope: Optional[str] = None,
     if not dry_run:
         manifest.save()
     return results
+
+
+def _config_has_entry(ad, *, home: Optional[Path] = None,
+                      cwd: Optional[Path] = None) -> bool:
+    """True when the agent's own config already carries an rf-mcp server entry.
+
+    REGISTERED used to be read from rf-mcp's manifest alone, so it was wrong in
+    both directions: a user who pasted `init`'s snippet by hand showed `no`, and a
+    hand-deleted config still showed `yes` (change: installer-cli-safety sec 9).
+    """
+    for scope in ("project", "user"):
+        if not ad.supports_scope(scope):
+            continue
+        path = ad.resolve_path(scope, cwd=cwd, home=home)
+        if not path or not path.exists():
+            continue
+        try:
+            data, _ = codecs.load(path, ad.fmt)
+        except Exception:
+            continue          # unparseable -> can't claim it is registered
+        container = codecs.get_container(data, ad.container)
+        if container and A.SERVER_NAME in container:
+            return True
+    return False
 
 
 def list_agents(*, home: Optional[Path] = None, cwd: Optional[Path] = None,
@@ -445,7 +645,8 @@ def list_agents(*, home: Optional[Path] = None, cwd: Optional[Path] = None,
         rows.append({
             "id": ad.id, "name": ad.name, "status": ad.status,
             "detected": "yes" if ad.detect(home=home) else "no",
-            "registered": "yes" if any(a == ad.id for a, _ in installed) else "no",
+            "registered": "yes" if (any(a == ad.id for a, _ in installed)
+                                    or _config_has_entry(ad, home=home, cwd=cwd)) else "no",
             "format": ad.fmt,
         })
     return rows
