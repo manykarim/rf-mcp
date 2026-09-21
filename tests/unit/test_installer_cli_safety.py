@@ -109,20 +109,40 @@ class TestAgentSelection:
 
 
 class TestDeclineAndAbort:
+    @staticmethod
+    def _force_detection(monkeypatch, detected: bool = True):
+        """Pin agent detection.
+
+        `_interactive_agents` short-circuits to NO_AGENTS_DETECTED when nothing is
+        detected, so these tests must NOT depend on what happens to be installed on
+        the host: they passed locally (5 agents detected) and failed on CI (none).
+        """
+        monkeypatch.setattr(A.AgentAdapter, "detect",
+                            lambda self, **kw: detected, raising=False)
+
     def test_declined_prompt_returns_a_sentinel_not_empty_string(self, monkeypatch):
         """An empty string was coerced back to "detected" downstream, so answering
         `n` installed into every detected agent."""
+        self._force_detection(monkeypatch)
         monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
         monkeypatch.setattr("builtins.input", lambda *_: "n")
-        monkeypatch.setattr(A, "REGISTRY", A.REGISTRY)
         assert cli._interactive_agents("detected", no_input=False) == cli.DECLINED
 
     def test_accepted_prompt_returns_detected(self, monkeypatch):
+        self._force_detection(monkeypatch)
         monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
         monkeypatch.setattr("builtins.input", lambda *_: "")
         assert cli._interactive_agents("detected", no_input=False) == "detected"
 
+    def test_no_agents_detected_is_its_own_sentinel(self, monkeypatch):
+        """Nothing to confirm is distinct from a refusal - both stop the run, but
+        only one of them is the user saying no."""
+        self._force_detection(monkeypatch, detected=False)
+        monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+        assert cli._interactive_agents("detected", no_input=False) == cli.NO_AGENTS_DETECTED
+
     def test_declined_install_writes_nothing_and_exits_nonzero(self, tmp_path, monkeypatch):
+        self._force_detection(monkeypatch)
         monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
         monkeypatch.setattr("builtins.input", lambda *_: "n")
         called = []
