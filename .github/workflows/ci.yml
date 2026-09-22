@@ -649,13 +649,28 @@ jobs:
           /tmp/osv-scanner scan source --lockfile uv.lock --format sarif > reports/deps.sarif || true
           test -s reports/deps.sarif || { echo "::error::osv-scanner produced no SARIF - analyzer failed to run"; exit 1; }
           uv run python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
+          import json, re
           runs = json.load(open("reports/deps.sarif")).get("runs", [])
-          res = runs[0].get("results", []) if runs else []
           rules = runs[0]["tool"]["driver"].get("rules", []) if runs else []
-          pkgs = {r.get("id","").split("/")[0] for r in rules}
-          print(f"count={len(rules) or len(res)}")
-          print(f"packages={len([p for p in pkgs if p])}")
+          # One SARIF rule per advisory. The affected PACKAGE is only in the rule's
+          # help-text markdown table ("| transformers | 4.57.6 |") - rule ids are bare
+          # CVE identifiers, and every result's location is just uv.lock, so neither
+          # yields a package name. Require a letter-initial first column so version
+          # numbers in other table rows are not mistaken for packages.
+          pkgs, high = set(), 0
+          for r in rules:
+              txt = (r.get("help") or {}).get("text", "") or ""
+              m = re.search(r"\|\s*([A-Za-z][A-Za-z0-9._-]+)\s*\|\s*[0-9][^|]*\|", txt)
+              if m:
+                  pkgs.add(m.group(1).lower())
+              try:
+                  if float((r.get("properties") or {}).get("security-severity") or 0) >= 7.0:
+                      high += 1
+              except ValueError:
+                  pass
+          print(f"count={len(rules)}")
+          print(f"packages={len(pkgs)}")
+          print(f"high={high}")
           PY
 
       - name: 'radon: maintainability'
@@ -684,7 +699,7 @@ jobs:
             echo "| --- | --- |"
             echo "| quality | ${{ steps.ruff_quality.outputs.count }} findings |"
             echo "| security | ${{ steps.ruff_security.outputs.count }} findings · ${{ steps.ruff_security.outputs.high }} high |"
-            echo "| dependencies | ${{ steps.osv.outputs.count }} advisories · ${{ steps.osv.outputs.packages }} packages |"
+            echo "| dependencies | ${{ steps.osv.outputs.count }} advisories · ${{ steps.osv.outputs.high }} high · ${{ steps.osv.outputs.packages }} packages |"
             echo "| maintainability | ${{ steps.radon.outputs.floor }} files at floor |"
             echo ""
             echo "Full reports: artifact \`quality-reports\`. Findings: repository **Security** tab (code scanning)."
