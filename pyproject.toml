@@ -144,6 +144,36 @@ exclude = [
 line-length = 88
 target-version = ['py38']
 
+# Static analysis rule set (change: ci-quality-scanning sec 2).
+#
+# PINNED DELIBERATELY - do NOT fall back to ruff's bare default. Measured on src/
+# (90,210 LOC) the selection swings the finding volume 26x:
+#
+#     E4,E7,E9,F        ->    217 findings   (ruff's documented classic default)
+#     E4,E7,E9,F,S      ->    439 findings   (this selection)
+#     ruff 0.16.8 bare  ->  5,763 findings
+#     ALL               -> 11,263 auto-fixable alone
+#
+# 439 is a set someone can drive to zero and it already contains what matters: weak
+# hashing (S324), hardcoded SQL (S608), unguarded subprocess (S603), hardcoded passwords
+# (S105/S107). 5,763 would meet the fate of the SonarCloud check this replaces - red
+# forever, read by nobody. Widen the selection once this is at zero; do not start wide.
+#
+# `S` is flake8-bandit: it finds the same 6 HIGH issues bandit does (6x S324 == 6x B324)
+# and emits SARIF natively, so bandit is not a separate dependency.
+[tool.ruff]
+target-version = "py310"          # matches requires-python >=3.10
+line-length = 88                  # matches [tool.black]
+extend-exclude = ["examples", "test_data"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests legitimately use asserts, subprocesses and hardcoded fixture credentials;
+# flagging those is noise, not signal.
+"tests/**" = ["S"]
+
 [tool.mypy]
 python_version = "3.10"
 warn_return_any = true
@@ -169,6 +199,12 @@ dev = [
     "python-dotenv>=1.0.1",
     "coverage[toml]>=7.6.0",
     "invoke>=2.2.0",
+    # Static analysis (change: ci-quality-scanning). ruff is PINNED, not floored: its
+    # bare-default rule set produced 5,763 findings here versus 439 for the selection in
+    # [tool.ruff.lint], so an unpinned minor bump could multiply the reported volume
+    # without any code changing. Bump deliberately, and re-measure when you do.
+    "ruff==0.16.8",
+    "radon>=6.0.1",
 ]
 
 [tool.coverage.run]

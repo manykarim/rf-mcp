@@ -566,3 +566,159 @@ jobs:
             --prerelease=allow -o resolved-desktop.txt
           grep -i platynui-native resolved-desktop.txt
           echo "ok: documented desktop command resolves"
+
+  quality:
+    # Code quality, code security, dependency advisories and maintainability.
+    #
+    # THIS JOB MUST NOT FAIL ON FINDINGS (change: ci-quality-scanning).
+    # "Show the status, don't break the build" has no clean primitive in GitHub Actions:
+    #   - step-level continue-on-error  -> job is green, failure invisible
+    #   - job-level  continue-on-error  -> red X + "Some checks were not successful"
+    # Both are wrong. So the analyzers are allowed to report findings and the job still
+    # succeeds; the signal travels via the digest (log + run summary), the uploaded
+    # reports, and code-scanning annotations.
+    #
+    # It DOES fail when an analyzer could not RUN. An analyzer that fails to install
+    # reports zero findings, which is indistinguishable from a clean result unless the
+    # two cases are kept apart. Do not "simplify" that away.
+    name: Quality
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write      # required to publish SARIF to code scanning
+    # Analysis is platform- and interpreter-independent; a matrix would triple the cost
+    # for identical results.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: 'latest'
+
+      - name: Setup Python 3.12 (via uv)
+        run: uv python install 3.12
+
+      - name: Install analyzers
+        run: uv sync --group dev
+
+      - name: Prepare reports directory
+        run: mkdir -p reports
+
+      # --- analysis -------------------------------------------------------------
+      # Each analyzer writes its report and records its own exit status. `|| true`
+      # keeps a findings-exit from ending the step; the RAN_* flags below separate
+      # "found issues" from "could not run".
+
+      - name: 'ruff: code quality (SARIF)'
+        id: ruff_quality
+        run: |
+          uv run ruff check src/ --output-format=sarif > reports/quality.sarif || true
+          test -s reports/quality.sarif || { echo "::error::ruff produced no SARIF - analyzer failed to run"; exit 1; }
+          COUNT=$(uv run python -c "import json;print(len(json.load(open('reports/quality.sarif'))['runs'][0].get('results',[])))")
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: 'ruff: code security (SARIF)'
+        id: ruff_security
+        run: |
+          uv run ruff check src/ --select S --output-format=sarif > reports/security.sarif || true
+          test -s reports/security.sarif || { echo "::error::ruff -S produced no SARIF - analyzer failed to run"; exit 1; }
+          uv run python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          # Ruff's SARIF marks EVERY finding level="error", so SARIF level cannot supply a
+          # severity tier - using it would report 222 "high" instead of the 6 that are.
+          # Derive the tier from an explicit rule set instead, mirroring the rules bandit
+          # rates HIGH. Validated: this yields 6, exactly bandit's 6 HIGH (all S324/B324).
+          HIGH = {"S102", "S301", "S302", "S306", "S307", "S324",
+                  "S602", "S604", "S605", "S606"}
+          res = json.load(open("reports/security.sarif"))["runs"][0].get("results", [])
+          high = sum(1 for r in res if (r.get("ruleId") or "") in HIGH)
+          print(f"count={len(res)}")
+          print(f"high={high}")
+          PY
+
+      - name: 'osv-scanner: dependency advisories (SARIF)'
+        id: osv
+        run: |
+          OSV_VERSION=v2.6.0
+          curl -sSfL -o /tmp/osv-scanner \
+            "https://github.com/google/osv-scanner/releases/download/${OSV_VERSION}/osv-scanner_linux_amd64" \
+            || { echo "::error::could not download osv-scanner - analyzer failed to run"; exit 1; }
+          chmod +x /tmp/osv-scanner
+          /tmp/osv-scanner scan source --lockfile uv.lock --format sarif > reports/deps.sarif || true
+          test -s reports/deps.sarif || { echo "::error::osv-scanner produced no SARIF - analyzer failed to run"; exit 1; }
+          uv run python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          runs = json.load(open("reports/deps.sarif")).get("runs", [])
+          res = runs[0].get("results", []) if runs else []
+          rules = runs[0]["tool"]["driver"].get("rules", []) if runs else []
+          pkgs = {r.get("id","").split("/")[0] for r in rules}
+          print(f"count={len(rules) or len(res)}")
+          print(f"packages={len([p for p in pkgs if p])}")
+          PY
+
+      - name: 'radon: maintainability'
+        id: radon
+        run: |
+          uv run radon mi src/ -j > reports/maintainability.json || true
+          uv run radon cc src/ -j > reports/complexity.json || true
+          test -s reports/maintainability.json || { echo "::error::radon produced no report - analyzer failed to run"; exit 1; }
+          uv run python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          mi = json.load(open("reports/maintainability.json"))
+          floor = [f for f, v in mi.items()
+                   if isinstance(v, dict) and v.get("rank") == "C"]
+          print(f"floor={len(floor)}")
+          PY
+
+      # --- reporting ------------------------------------------------------------
+
+      - name: Digest
+        if: always()
+        run: |
+          {
+            echo "### Code quality"
+            echo ""
+            echo "| area | result |"
+            echo "| --- | --- |"
+            echo "| quality | ${{ steps.ruff_quality.outputs.count }} findings |"
+            echo "| security | ${{ steps.ruff_security.outputs.count }} findings · ${{ steps.ruff_security.outputs.high }} high |"
+            echo "| dependencies | ${{ steps.osv.outputs.count }} advisories · ${{ steps.osv.outputs.packages }} packages |"
+            echo "| maintainability | ${{ steps.radon.outputs.floor }} files at floor |"
+            echo ""
+            echo "Full reports: artifact \`quality-reports\`. Findings: repository **Security** tab (code scanning)."
+            echo ""
+            echo "_This check never fails on findings. It fails only if an analyzer could not run._"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-reports
+          path: reports/
+          if-no-files-found: error
+
+      # Distinct `category` per upload - without it, each SARIF REPLACES the previous
+      # one in code scanning and only the last analyzer's findings remain visible.
+      - name: 'Publish: code quality'
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: reports/quality.sarif
+          category: ruff-quality
+
+      - name: 'Publish: code security'
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: reports/security.sarif
+          category: ruff-security
+
+      - name: 'Publish: dependencies'
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: reports/deps.sarif
+          category: osv-dependencies
