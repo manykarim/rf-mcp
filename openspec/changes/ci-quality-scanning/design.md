@@ -116,9 +116,28 @@ a window with no analysis at all.
 
 ## Risks
 
-- **`pyjwt` has 7 advisories and no published fix.** Whatever is adopted will report them
-  on every run indefinitely. A suppression or acknowledgement policy needs deciding, or
-  the dependency line becomes noise of exactly the kind this change is trying to avoid.
+- **Stale pins inflate the dependency baseline.** The 71-advisory figure reflects
+  dependencies that have simply not been upgraded, not a set of unfixable problems.
+  `pyjwt` is the worked example: 6 of its 7 advisories are fixed in 2.12.x/2.13.0 and
+  `uv lock --upgrade-package pyjwt` resolves cleanly to 2.14.0. Expect the baseline to
+  fall substantially once dependencies are refreshed - do not read it as 71 outstanding
+  defects.
+
+  (An earlier draft of this design asserted `pyjwt` had "no published fix". That was
+  wrong: the aggregation used to produce it printed the FIRST advisory's `fix_versions`,
+  which happened to be the single empty one, and generalised it to all seven.)
+
+- **Disputed advisories need a written decision, not silence.** The policy is: upgrade
+  when a fix exists, suppress only with a recorded reason, and re-review suppressions
+  when the dependency moves. Suppressing without a reason is how a dependency line
+  becomes noise.
+
+  Worth noting how little the escape hatch was needed in practice. `PYSEC-2025-183`
+  (`CVE-2025-45768`) looked like the case for it - disputed by the maintainer, no fix
+  version listed. But it is bounded `last_affected: 2.10.1`, so upgrading past it clears
+  it like the rest: after the bump to 2.14.0, pip-audit reports NO remaining pyjwt
+  advisories. "No fix version" is not the same as "cannot be resolved", and checking the
+  affected RANGE is the difference.
 - **439 findings are reported but not fixed by this change.** The job is honest about a
   number nobody has acted on yet. That is intended - visibility first - but it means the
   first weeks show a non-zero count that must not be mistaken for a regression.

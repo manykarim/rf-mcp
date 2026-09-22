@@ -6,8 +6,10 @@ SonarCloud retirement last (only once the replacement has proven itself on a rea
 ## 1. Dependency alerting - do this first, it needs no CI
 - [x] 1.1 Enable Dependabot security updates on the repository (currently `disabled`; `GET /vulnerability-alerts` returns 404)
 - [x] 1.2 Add `.github/dependabot.yml` for the `uv` / pip ecosystem, scoped to security updates initially
-- [ ] 1.3 Confirm alerts appear for the known-affected packages (`cryptography`, `pyjwt`, `urllib3`, `requests`, `lxml`, `idna`, `click`, `anyio`, `soupsieve`, `python-dotenv`)
-- [ ] 1.4 Decide and record the policy for `pyjwt`'s 7 advisories, which currently have NO published fix - acknowledge, suppress, or accept recurring noise
+- [x] 1.3 Confirm alerts appear for the known-affected packages (`cryptography`, `pyjwt`, `urllib3`, `requests`, `lxml`, `idna`, `click`, `anyio`, `soupsieve`, `python-dotenv`)
+- [x] 1.4 Record the advisory policy (DECIDED): upgrade when a fix exists; suppress only with a written reason; re-review on dependency movement
+- [x] 1.5 Applied to `pyjwt`: `uv lock --upgrade-package pyjwt` 2.10.1 -> 2.14.0 - clears ALL 7 (pip-audit: none remaining)
+- [x] 1.6 NOT NEEDED - `PYSEC-2025-183` is bounded `last_affected: 2.10.1`, so the upgrade clears it. No suppression file created; the policy in design.md stands for future cases.
 
 ## 2. Pin the rule set in the repository
 - [x] 2.1 Add `[tool.ruff]` to `pyproject.toml` with `select = ["E4","E7","E9","F","S"]` - the measured 439-finding set
@@ -33,15 +35,15 @@ SonarCloud retirement last (only once the replacement has proven itself on a rea
 - [x] 4.7 Job exits 0 whenever the analyzers ran, and non-zero only when one could not run
 
 ## 5. Verify the behaviour the spec actually requires
-- [ ] 5.1 On a PR with findings: the check is green and the PR shows no failed check
-- [ ] 5.2 Findings appear as code scanning results, and all three SARIF categories remain separately visible
-- [ ] 5.3 The artifact downloads and contains all four reports
-- [ ] 5.4 Simulate a broken analyzer (e.g. an unresolvable pin) and confirm the job FAILS - the absence of analysis must not read as a clean result
+- [x] 5.1 On a PR with findings: the check is green and the PR shows no failed check
+- [x] 5.2 Findings appear as code scanning results, and all three SARIF categories remain separately visible
+- [x] 5.3 The artifact downloads and contains all four reports
+- [x] 5.4 Simulate a broken analyzer (e.g. an unresolvable pin) and confirm the job FAILS - the absence of analysis must not read as a clean result
 - [x] 5.5 Confirm `continue-on-error` is used nowhere in the job
-- [ ] 5.6 Record the baseline counts in the PR description so later movement is interpretable
+- [x] 5.6 Record the baseline counts in the PR description so later movement is interpretable
 
 ## 6. Retire SonarCloud - only after section 5 passes
-- [ ] 6.1 Confirm the new job has produced output on at least one real pull request
+- [x] 6.1 Confirm the new job has produced output on at least one real pull request
 - [ ] 6.2 Remove the SonarCloud integration / GitHub App from the repository
 - [ ] 6.3 Remove any Sonar configuration or secrets left in the repository
 - [ ] 6.4 Confirm pull requests no longer show a SonarCloud check

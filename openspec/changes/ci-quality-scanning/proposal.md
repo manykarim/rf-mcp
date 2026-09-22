@@ -29,7 +29,7 @@ GET /repos/manykarim/rf-mcp/vulnerability-alerts   : 404
 
 Nothing scans dependencies. `pip-audit` against the current `uv.lock` finds
 **30 unique advisories across 13 of 79 packages**, including `cryptography` (7),
-`pyjwt` (7, with no published fix), `urllib3` (3), plus `requests`, `lxml`, `idna`,
+`pyjwt` (7), `urllib3` (3), plus `requests`, `lxml`, `idna`,
 `click`, `anyio`, `soupsieve` and the direct dependency `python-dotenv`.
 
 ### Code-quality signal exists and is small enough to act on
