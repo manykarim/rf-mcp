@@ -1030,6 +1030,7 @@ class ExecutionCoordinator:
         keyword_name: str,
         library_name: str = None,
         allowed_libraries: Optional[List[str]] = None,
+        session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Get keyword documentation using RF libdoc with strict library filtering.
 
@@ -1130,8 +1131,46 @@ class ExecutionCoordinator:
                             m.library for m in excluded_in_other_libs
                         ],
                     }
-                # No matches anywhere
-                return {"success": False, "error": f"Keyword '{keyword_name}' not found in any loaded library"}
+                # Before giving up: this session's own project sources (custom
+                # libraries and imported resource files). They are executable but
+                # were invisible here, so an agent was told a keyword it could
+                # successfully run did not exist
+                # (change: project-keyword-discovery).
+                project = self.rf_doc_storage.project_keyword_matches(
+                    keyword_name, session_id
+                )
+                if project:
+                    return {
+                        "success": True,
+                        "matches": [
+                            {
+                                "name": m.name,
+                                "library": m.library,
+                                "args": m.args,
+                                "arg_types": m.arg_types,
+                                "doc": m.doc,
+                                "short_doc": m.short_doc,
+                                "tags": m.tags,
+                                "is_deprecated": m.is_deprecated,
+                                "source": m.source,
+                                "lineno": m.lineno,
+                            }
+                            for m in project
+                        ],
+                    }
+                # No matches anywhere. Distinguish "no such keyword" from "its
+                # library/resource is not imported in this session" so the message
+                # says what to do (sec 6).
+                return {
+                    "success": False,
+                    "error": (
+                        f"Keyword '{keyword_name}' not found in any loaded library. "
+                        f"If it is defined by one of your project's own libraries or "
+                        f"resource files, import it into this session first: "
+                        f"manage_session(action='import_library', library_name=...) or "
+                        f"manage_session(action='import_resource', resource_path=...)."
+                    ),
+                }
 
         # Inspection-based fallback (no LibDoc available)
         keyword_discovery = self.keyword_executor.keyword_discovery

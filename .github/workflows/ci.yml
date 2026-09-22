@@ -495,3 +495,74 @@ jobs:
           name: AgentEval Harness
           path: tests/agenteval/results/results.xml
           reporter: java-junit
+
+  installability:
+    # Guard for the class of bug fixed in 0.35.1 (change: install-extra-resolvability):
+    # `rf-mcp[all]` was unresolvable for every uv/pipx user because a transitive
+    # pre-release pin is not "explicit" to uv. Every OTHER job installs rf-mcp as a
+    # local path (`-e .`) or from uv.lock, which keeps rf-mcp's own pins FIRST-PARTY
+    # and therefore cannot see the defect. This job must install the built wheel as a
+    # THIRD-PARTY dependency, with DEFAULT resolver settings. Do not "simplify" it to
+    # `uv pip install -e .` — that would silently make it useless.
+    name: Installability (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: 'latest'
+
+      - name: Setup Python 3.12 (via uv)
+        run: uv python install 3.12
+
+      - name: Build the wheel
+        run: uv build --wheel --out-dir dist
+
+      - name: '[all] resolves with DEFAULT settings (no --prerelease)'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "rf-mcp[all]==$(uv run --no-project --python 3.12 python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")" > req.txt
+          cat req.txt
+          uv pip compile req.txt --find-links dist --python-version 3.12 -o resolved.txt
+          echo "--- resolved ---" && cat resolved.txt
+
+      - name: '[all] pulls NO platynui distribution'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -i platynui resolved.txt; then
+            echo "::error::rf-mcp[all] pulled a PlatynUI distribution. Desktop must stay an opt-in extra."
+            exit 1
+          fi
+          echo "ok: no platynui in [all]"
+
+      - name: 'uv tool install "rf-mcp[all]" works with no flag'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export UV_TOOL_DIR="$PWD/.uvtools" UV_TOOL_BIN_DIR="$PWD/.uvbin"
+          mkdir -p "$UV_TOOL_BIN_DIR"
+          WHEEL=$(ls dist/rf_mcp-*.whl)
+          uv tool install "${WHEEL}[all]"
+          "$UV_TOOL_BIN_DIR/robotmcp" --version
+
+      - name: 'documented desktop command resolves (Linux/Windows only)'
+        # PlatynUI publishes no macOS x86_64 wheel and GitHub's macos-latest is arm64,
+        # so this step is meaningful on Linux and Windows; see README extras table.
+        if: matrix.os != 'macos-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "rf-mcp[desktop]==$(uv run --no-project --python 3.12 python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")" > req-desktop.txt
+          uv pip compile req-desktop.txt --find-links dist --python-version 3.12 \
+            --prerelease=allow -o resolved-desktop.txt
+          grep -i platynui-native resolved-desktop.txt
+          echo "ok: documented desktop command resolves"

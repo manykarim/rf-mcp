@@ -36,7 +36,14 @@ def _has(lib: str) -> bool:
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
 
-@pytest_asyncio.fixture
+# The fixture's loop scope MUST match the tests' (`loop_scope="module"` above).
+# Left at the default, the fixture runs in a FUNCTION-scoped loop while the test body
+# runs in the module-scoped one, so the Client's internal futures are awaited from a
+# loop they do not belong to:
+#     ValueError: The future belongs to a different loop than the one specified
+# It surfaced on Python 3.10 in CI while passing elsewhere, which is what a loop-scope
+# mismatch looks like — it depends on which loop happens to still be current.
+@pytest_asyncio.fixture(loop_scope="module")
 async def mcp_client():
     async with Client(mcp) as client:
         yield client

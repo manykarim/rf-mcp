@@ -4,6 +4,7 @@ import importlib.util
 import logging
 import os
 import threading
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 
@@ -612,6 +613,109 @@ class RobotFrameworkDocStorage:
         if library_name in self.libraries:
             return True
         return self._load_library_documentation(library_name)
+
+    # ---- session-scoped project sources (change: project-keyword-discovery) ------
+    #
+    # rf-mcp could EXECUTE a project's custom-library and resource-file keywords but
+    # not find or describe them: execution goes through RF's namespace, while
+    # discovery reads this LibDoc-backed store, which only ever held rf-mcp's OWN
+    # libraries. Measured: `find_keywords(query="Acme Add")` returned 336 results
+    # topped by `Close Window`, and `get_keyword_info` said "not found in any loaded
+    # library", while `execute_step` ran the keyword fine.
+    #
+    # Registration is SESSION-SCOPED on purpose. This storage is a process-global
+    # singleton; registering project keywords globally would let a user driving
+    # project B see project A's domain keywords, and `execute_step` would then fail on
+    # a keyword discovery had just advertised - the same discovery/execution
+    # disagreement, in the opposite direction.
+
+    def _project_sources(self) -> Dict[str, Dict[str, RFLibraryInfo]]:
+        if not hasattr(self, "_session_sources"):
+            self._session_sources: Dict[str, Dict[str, RFLibraryInfo]] = {}
+        return self._session_sources
+
+    def _source_cache(self) -> Dict[tuple, RFLibraryInfo]:
+        """LibDoc results keyed by (resolved source, mtime) so a re-import is cheap
+        and an edited resource is re-read."""
+        if not hasattr(self, "_libdoc_cache"):
+            self._libdoc_cache: Dict[tuple, RFLibraryInfo] = {}
+        return self._libdoc_cache
+
+    def register_project_source(self, session_id: str, source: str) -> Dict[str, Any]:
+        """Register a session-imported library or resource file for DISCOVERY.
+
+        ``source`` is a library name (``AcmeLibrary``) or a path to a resource file.
+        Returns ``{"success", "name", "type", "keywords"}``. A source that cannot be
+        parsed NEVER raises and never fails the caller's import - execution would
+        still work, so a parse failure degrades discovery for that source only.
+        """
+        if not HAS_LIBDOC or not session_id or not source:
+            return {"success": False, "error": "libdoc unavailable or missing source"}
+
+        key = None
+        try:
+            p = Path(source)
+            if p.exists():
+                key = (str(p.resolve()), p.stat().st_mtime)
+        except Exception:
+            key = None
+        if key is None:
+            key = (source, None)
+
+        cached = self._source_cache().get(key)
+        if cached is None:
+            try:
+                lib_doc = LibraryDocumentation(source)
+            except Exception as exc:
+                logger.debug(f"LibDoc failed for project source '{source}': {exc}")
+                return {"success": False, "error": str(exc), "source": source}
+            src = lib_doc.source or ""
+            if src and hasattr(src, "__fspath__"):
+                src = str(src)
+            info = RFLibraryInfo(name=lib_doc.name, doc=lib_doc.doc,
+                                 version=getattr(lib_doc, "version", "") or "",
+                                 type=lib_doc.type, scope=getattr(lib_doc, "scope", "") or "",
+                                 source=src)
+            for kw_doc in lib_doc.keywords:
+                ki = self._extract_keyword_from_libdoc(lib_doc.name, kw_doc)
+                info.keywords[ki.name] = ki
+            self._source_cache()[key] = info
+            cached = info
+
+        self._project_sources().setdefault(session_id, {})[cached.name] = cached
+        return {"success": True, "name": cached.name, "type": cached.type,
+                "keywords": len(cached.keywords)}
+
+    def project_libraries(self, session_id: Optional[str]) -> Dict[str, RFLibraryInfo]:
+        """Sources registered by THIS session ({} for None/unknown sessions)."""
+        if not session_id:
+            return {}
+        return dict(self._project_sources().get(session_id, {}))
+
+    def project_keyword_matches(self, keyword_name: str,
+                                session_id: Optional[str]) -> List[RFKeywordInfo]:
+        """Exact (normalized) matches for ``keyword_name`` among this session's sources."""
+        target = self._normalize_name(keyword_name)
+        out: List[RFKeywordInfo] = []
+        for info in self.project_libraries(session_id).values():
+            for name, ki in info.keywords.items():
+                if self._normalize_name(name) == target:
+                    out.append(ki)
+        return out
+
+    def project_keywords(self, session_id: Optional[str],
+                         library_name: Optional[str] = None) -> List[RFKeywordInfo]:
+        """All keywords from this session's sources, optionally one source only."""
+        out: List[RFKeywordInfo] = []
+        for name, info in self.project_libraries(session_id).items():
+            if library_name and self._normalize_name(name) != self._normalize_name(library_name):
+                continue
+            out.extend(info.keywords.values())
+        return out
+
+    def forget_session_sources(self, session_id: str) -> None:
+        """Drop a session's registrations (session close)."""
+        self._project_sources().pop(session_id, None)
     
     def get_library_status(self) -> Dict[str, Any]:
         """Get status of all libraries."""

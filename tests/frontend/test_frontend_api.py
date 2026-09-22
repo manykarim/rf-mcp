@@ -22,7 +22,18 @@ def configure_django():
 def client():
     from django.test import Client
 
-    return Client()
+    # Django's test Client sends `Host: testserver`, which the frontend's
+    # ALLOWED_HOSTS deliberately does NOT contain — it is scoped to the configured
+    # host plus loopback and explicitly refuses "*" to avoid DNS-rebinding
+    # (django_app.py:26). Django only appends "testserver" from
+    # `setup_test_environment()`, which is never called here: this project does not
+    # use pytest-django or Django's own test runner. Every request therefore came
+    # back 400 DisallowedHost.
+    #
+    # Point the client at a host the production configuration genuinely allows,
+    # rather than widening ALLOWED_HOSTS for tests — that keeps these tests
+    # exercising the real host validation instead of bypassing it.
+    return Client(SERVER_NAME="localhost")
 
 
 @pytest.fixture(autouse=True)
@@ -278,3 +289,19 @@ def test_session_variables_endpoint_exposes_values(client, sample_session):
     assert response.status_code == 200
     variables = response.json()["variables"]
     assert variables["${TOTAL}"] == 42
+
+
+def test_allowed_hosts_still_rejects_an_unknown_host():
+    """Host validation must stay active.
+
+    The `client` fixture uses SERVER_NAME="localhost" because ALLOWED_HOSTS does not
+    contain "testserver". That is a deliberate security posture (django_app.py:26
+    refuses "*" to avoid DNS-rebinding), so this pins it: the fix must not have been
+    "widen ALLOWED_HOSTS until the tests pass".
+    """
+    from django.test import Client
+
+    response = Client(SERVER_NAME="evil.example.com").get("/api/sessions/")
+    assert response.status_code == 400, (
+        "an unlisted Host must still be refused; ALLOWED_HOSTS has been widened"
+    )

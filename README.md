@@ -61,6 +61,39 @@ accepts:
 { "mcpServers": { "robotmcp": { "command": "robotmcp" } } }
 ```
 
+> **If you have an existing Robot Framework project, run `robotmcp install` from that
+> project's directory instead of pasting the snippet.** The snippet launches rf-mcp in
+> its own environment; `robotmcp install` inspects your project and writes a launch that
+> can also see *your* libraries. See [Which environment runs your tests](#which-environment-runs-your-tests).
+
+### Which environment runs your tests
+
+rf-mcp imports Robot Framework libraries into **its own Python process**, and runs your
+suites in that same interpreter. So whichever environment rf-mcp launches in is the
+environment your tests execute in.
+
+- **No existing RF project** (you're exploring a site or API and authoring tests from
+  scratch): a plain `uv tool install` is exactly right. rf-mcp's own environment has the
+  bundled libraries, and there is nothing to configure.
+- **An existing RF project** (your own keyword libraries, a pinned Robot Framework, pip
+  libraries rf-mcp doesn't bundle): rf-mcp's own environment cannot see any of it. Run
+  `robotmcp install` **from the project directory** — it detects the project's environment
+  and writes a launch that layers rf-mcp onto it, so your libraries are importable. Check
+  what it resolved with:
+
+  ```bash
+  robotmcp doctor -C .
+  ```
+
+  That reports the resolved launch, which of your project's libraries rf-mcp would see,
+  and whether your project's Robot Framework version differs from the one that would
+  execute the tests. If your project pins Robot Framework 6.x, rf-mcp routes to the
+  attach bridge instead of silently testing on a different RF.
+
+  Note that desktop automation (PlatynUI) is never layered onto a project environment —
+  it is a pre-release that uv will not resolve as a transitive dependency. Desktop
+  sessions use rf-mcp's own environment.
+
 <details>
 <summary>Legacy / manual config (running from a checkout, HTTP transport)</summary>
 
@@ -159,19 +192,49 @@ Extras decide which Robot Framework libraries come along:
 | `web` | SeleniumLibrary + Browser | Selenium: none (Selenium Manager fetches the driver); Browser: `robotmcp init --browsers` |
 | `mobile` | AppiumLibrary | Appium server (external) |
 | `database` | DatabaseLibrary | a DB driver |
-| `desktop` | PlatynUI native desktop (Windows/Linux) | Python 3.12+ |
+| `desktop` | PlatynUI native desktop (Windows/Linux) | Python 3.12+; **not in `[all]`** — see below |
 | `frontend` | Django dashboard | — |
 | `memory` | Persistent semantic memory (sqlite-vec + model2vec) | `ROBOTMCP_MEMORY_ENABLED=true` |
-| `all` | all Robot Framework libraries above (includes `desktop` on Python 3.12+) | as above |
+| `all` | every extra above **except** `desktop` (and `semantic`) | as above |
 
 Browser Library also needs Playwright browsers — run `robotmcp init --browsers` (or
 `rfbrowser init`) once, inside rf-mcp's own environment. Node.js is only needed for Browser.
+
+#### Desktop (`desktop`) — an explicit opt-in
+
+PlatynUI's native core is still published as a **pre-release**, so `desktop` is not part
+of `[all]`: including it would make `uv tool install "rf-mcp[all]"` fail for everyone.
+Install it on its own:
+
+```bash
+uv tool install --prerelease=allow "rf-mcp[desktop]"   # uv, uvx and pipx need the flag
+pip install "rf-mcp[desktop]"                          # pip, poetry and pdm do not
+```
+
+`uv`, `uvx` and `pipx` (which is uv-backed) refuse a transitive pre-release pin unless you
+pass `--prerelease=allow` (or set `UV_PRERELEASE=allow`).
+
+**Supported desktop platforms** — PlatynUI publishes wheels only for:
+
+| Supported | Not supported |
+| --- | --- |
+| Linux x86_64 / aarch64 with **glibc ≥ 2.34** (Ubuntu 22.04+, Debian 12+, RHEL 9+) | Linux with glibc < 2.34 (Ubuntu 20.04, Debian 11, RHEL/Rocky 8, Amazon Linux 2) |
+| macOS **Apple Silicon** (arm64) | macOS **Intel** (x86_64) |
+| Windows x86_64 / arm64 | musl / Alpine |
+
+There is no source distribution, so unsupported platforms cannot build it either. `[all]`
+installs fine on all of them — you just don't get desktop automation.
 
 ### Other install methods
 
 ```bash
 pip install "rf-mcp[all]"                 # pip instead of uv
+pipx install "rf-mcp[all]"                # pipx
 uv add "rf-mcp[all]" && uv sync           # into an existing uv project
+
+# Desktop automation is a separate opt-in (pre-release; uv/uvx/pipx need the flag):
+uv tool install --prerelease=allow "rf-mcp[desktop]"
+uv add --prerelease=allow "rf-mcp[desktop]" && uv sync
 
 # From source (development)
 git clone https://github.com/manykarim/rf-mcp.git && cd rf-mcp

@@ -415,6 +415,140 @@ def _get_external_client_if_configured() -> ExternalRFClient | None:
         return None
 
 
+def _project_keyword_matches_for_query(
+    query: str, session_id: Optional[str], library_name: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Session-imported project keywords scored against ``query``.
+
+    find_keywords ranks over rf-mcp's OWN catalogue, so a project's custom-library
+    and resource keywords never appeared - a session declaring
+    ``libraries=["BuiltIn","AcmeLibrary"]`` returned matches exclusively from
+    Browser and SeleniumLibrary (change: project-keyword-discovery).
+
+    Scoring is deliberately simple: this merges project keywords INTO the existing
+    results, it does not re-tune the semantic ranker. The one guarantee the spec
+    makes is that an EXACT name wins - today `query="Acme Add"` returned 336 results
+    topped by `Close Window`.
+    """
+    if not session_id:
+        return []
+    try:
+        from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
+
+        keywords = get_rf_doc_storage().project_keywords(session_id, library_name)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("Project keyword lookup failed: %s", exc)
+        return []
+    if not keywords:
+        return []
+
+    def _norm(text: str) -> str:
+        return " ".join((text or "").lower().replace("_", " ").split())
+
+    q = _norm(query)
+    # WORD-based, not substring: a substring test matched "a" (from "navigate to a
+    # web page") inside "acme add" and scored an unrelated keyword 0.75. Short tokens
+    # are dropped so stopwords cannot carry a match on their own.
+    q_words = {w for w in q.split() if len(w) > 2}
+    out: List[Dict[str, Any]] = []
+    for ki in keywords:
+        name_n = _norm(ki.name)
+        name_words = set(name_n.split())
+        if name_n == q:
+            confidence = 1.0
+        elif q and (q in name_n or name_n in q):
+            confidence = 0.9
+        elif q_words and q_words <= name_words:
+            confidence = 0.85
+        elif q_words and len(q_words & name_words) / len(q_words) >= 0.5:
+            confidence = 0.7
+        elif q and len(q) > 2 and q in _norm(ki.doc):
+            confidence = 0.6
+        else:
+            continue
+        out.append({
+            "keyword_name": ki.name,
+            "library": ki.library,
+            "confidence": confidence,
+            "arguments": list(ki.args or []),
+            "argument_types": list(ki.arg_types or []),
+            "documentation": ki.doc or "",
+            "usage_example": ki.name,
+            "tags": list(ki.tags or []),
+            "source": ki.source or "",
+            "from_project": True,
+        })
+    out.sort(key=lambda m: -m["confidence"])
+    return out
+
+
+def _merge_project_keywords(discovery: Dict[str, Any], query: str,
+                            session_id: Optional[str],
+                            library_name: Optional[str] = None,
+                            strict_library: bool = False) -> None:
+    """Merge this session's project keywords into a discovery payload, in place."""
+    project = _project_keyword_matches_for_query(query, session_id, library_name)
+    if not project:
+        return
+    existing = discovery.get("matches") or []
+    if strict_library and library_name:
+        # Scoped strictly to the named source: project keywords are the answer.
+        merged = project
+    else:
+        seen = {(m.get("keyword_name"), m.get("library")) for m in project}
+        merged = project + [
+            m for m in existing
+            if (m.get("keyword_name"), m.get("library")) not in seen
+        ]
+        merged.sort(key=lambda m: -(m.get("confidence") or 0))
+    discovery["matches"] = merged
+    discovery["project_keyword_count"] = len(project)
+    discovery["success"] = True
+
+
+def _register_session_project_libraries(session_id: str, libraries) -> Dict[str, Any]:
+    """Register a session's NON-bundled libraries for discovery.
+
+    rf-mcp's own libraries are already in the LibDoc store; only a project's custom
+    ones need registering (change: project-keyword-discovery).
+    """
+    out: Dict[str, Any] = {}
+    try:
+        from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
+
+        storage = get_rf_doc_storage()
+        own = set(storage.libraries.keys())
+        for lib in list(libraries or []):
+            if lib in own:
+                continue
+            res = storage.register_project_source(session_id, lib)
+            if res.get("success"):
+                out[lib] = {"type": res.get("type"), "keywords": res.get("keywords")}
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("Init-time discovery registration failed: %s", exc)
+    return out
+
+
+def _register_project_source(session_id: str, source: str) -> Dict[str, Any]:
+    """Make a session-imported library or resource file DISCOVERABLE.
+
+    rf-mcp could execute a project's custom-library and resource keywords but not
+    find or describe them: execution goes through RF's namespace, while
+    find_keywords/get_keyword_info read a LibDoc-backed store holding only rf-mcp's
+    own libraries (change: project-keyword-discovery).
+
+    Best-effort by design: a source that will not parse degrades discovery for that
+    source alone and never fails the import, because execution still works.
+    """
+    try:
+        from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
+
+        return get_rf_doc_storage().register_project_source(session_id, source)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("Discovery registration failed for %r: %s", source, exc)
+        return {"success": False, "error": str(exc)}
+
+
 def _call_attach_tool_with_fallback(
     tool_name: str,
     external_call: Callable[[ExternalRFClient], Dict[str, Any]],
@@ -2109,6 +2243,7 @@ async def analyze_scenario(
     # Compact session info — verbose guidance removed to reduce token cost
     result["session_type"] = session.session_type.value
     result["libraries_loaded"] = list(session.loaded_libraries)
+
     if attach_bridge_active:
         result["attach_bridge_active"] = True
 
@@ -2697,6 +2832,14 @@ async def find_keywords(
                         discovery["matches"]
                     )
                 )
+
+        # Make the session's OWN project keywords discoverable alongside rf-mcp's
+        # catalogue (change: project-keyword-discovery).
+        _merge_project_keywords(
+            discovery, query, session_id,
+            library_name=effective_library_preference or library_name,
+            strict_library=strict_library,
+        )
 
         result = {
             "success": bool(discovery.get("success", True)),
@@ -3302,6 +3445,14 @@ async def manage_session(
                 # Track for *** Variables *** section in generated test suite
                 session.suite_level_variables.add(name)
 
+        # Register any library that is NOT one of rf-mcp's own for DISCOVERY. A
+        # project's custom library declared at init reached the RF namespace - so
+        # execute_step worked - but never the store find_keywords reads
+        # (change: project-keyword-discovery).
+        _registered = _register_session_project_libraries(
+            session_id, session.loaded_libraries
+        )
+
         result = {
             "success": True,
             "action": "init",
@@ -3309,6 +3460,7 @@ async def manage_session(
             "libraries_loaded": list(session.loaded_libraries),
             "variables_set": set_vars,
             "import_issues": problems,
+            **({"discovery": _registered} if _registered else {}),
             "note": "Context mode is managed via session namespace; use execute_step(use_context=True) when needed.",
             # ADR-010 I6: Prominent session_id guidance for small LLMs
             "next_step": f"Use session_id='{session_id}' in all subsequent tool calls.",
@@ -3454,6 +3606,13 @@ async def manage_session(
             # Best-effort sync; do not fail the import if syncing fails
             pass
 
+        # Register the resource's user keywords for DISCOVERY. Execution already
+        # worked (RF's namespace resolves them); find_keywords/get_keyword_info read
+        # a LibDoc-backed store that had no representation of resources at all
+        # (change: project-keyword-discovery).
+        if result.get("success"):
+            result["discovery"] = _register_project_source(session_id, resource_path)
+
         result.update({"action": "import_resource", "session_id": session_id})
         return result
 
@@ -3481,6 +3640,10 @@ async def manage_session(
         # will reject the library because the session model doesn't know
         # about it (P16 fix).
         if result.get("success"):
+            # Register for DISCOVERY too (change: project-keyword-discovery). A
+            # library imported into a session reached the RF namespace - so
+            # execute_step worked - but never the store find_keywords reads.
+            result["discovery"] = _register_project_source(session_id, library_name)
             try:
                 session.import_library(library_name, force=True)
                 session.loaded_libraries.add(library_name)
@@ -6071,6 +6234,7 @@ async def _get_keyword_documentation_payload(
 
     result = execution_engine.get_keyword_documentation(
         keyword_name, library_name, allowed_libraries=allowed_libraries,
+        session_id=session_id or None,
     )
 
     # OBS-19 — if the lookup failed because the keyword exists only

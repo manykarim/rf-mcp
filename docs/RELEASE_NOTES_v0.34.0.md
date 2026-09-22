@@ -32,6 +32,13 @@ Two things in 0.34.0 make it practical:
 uv pip install "rf-mcp[desktop]"     # Python 3.12+; also included in rf-mcp[all]
 ```
 
+> **Erratum (added later).** Both claims above are wrong. `uv pip install "rf-mcp[desktop]"`
+> fails: uv refuses the transitive PlatynUI pre-release pin unless you pass
+> `--prerelease=allow`. And `desktop` is no longer part of `[all]` — it was removed
+> because including it made `rf-mcp[all]` uninstallable under every uv-backed installer.
+> The working commands are `uv pip install --prerelease=allow "rf-mcp[desktop]"` or
+> `pip install "rf-mcp[desktop]"`. See the README extras section.
+
 Before, the PlatynUI packages were declared nowhere, so a routine `uv sync` would silently uninstall
 your desktop stack — yesterday's working session would fail to load the library today. Now it's declared and version-matched.
 
@@ -159,3 +166,10 @@ robotmcp install
 
 `[all]` includes desktop automation on Python 3.12+ (no `--pre` needed). `pip install "rf-mcp[all]"`
 works too. Upgrading from 0.33.x needs no configuration changes.
+
+> **Erratum (added later).** "no `--pre` needed" was true only for `pip`. Under `uv`, `uvx`
+> and `pipx` the sentence was false and `uv tool install "rf-mcp[all]"` failed outright,
+> because uv only grants its pre-release allowance to *first-party* requirements — and for
+> anyone installing rf-mcp from PyPI the PlatynUI pin is transitive. `desktop` has since
+> been removed from `[all]` so the command above works as written; desktop is now installed
+> explicitly with `uv tool install --prerelease=allow "rf-mcp[desktop]"`.
