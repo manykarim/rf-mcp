@@ -44,9 +44,9 @@ SonarCloud retirement last (only once the replacement has proven itself on a rea
 
 ## 6. Retire SonarCloud - only after section 5 passes
 - [x] 6.1 Confirm the new job has produced output on at least one real pull request
-- [ ] 6.2 Remove the SonarCloud integration / GitHub App from the repository
-- [ ] 6.3 Remove any Sonar configuration or secrets left in the repository
-- [ ] 6.4 Confirm pull requests no longer show a SonarCloud check
+- [x] 6.2 SonarCloud integration removed from the repository (done by the maintainer; it is a GitHub App, so there is nothing to delete in-tree)
+- [x] 6.3 Verified nothing left in-tree: no sonar-project.properties, no workflow reference, no repository secret
+- [ ] 6.4 Confirm pull requests no longer show a SonarCloud check - needs a NEW head commit; check runs already posted stay on their commit immutably
 
 ## 7. Documentation
 - [x] 7.1 Document the quality job in the contributor docs: what runs, where findings appear, and that it never blocks a merge
