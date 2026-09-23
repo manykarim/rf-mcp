@@ -27,7 +27,7 @@ dependencies = [
 [project.optional-dependencies]
 slim = []
 web = ["robotframework-browser", "robotframework-seleniumlibrary"]
-frontend = ["django>=4.2,<5.0", "uvicorn[standard]>=0.24"]
+frontend = ["django>=4.2,<6.0", "uvicorn[standard]>=0.24"]
 mobile = ["robotframework-appiumlibrary"]
 api = ["robotframework-requests"]
 database = ["robotframework-databaselibrary"]
@@ -84,7 +84,7 @@ all = [
     "robotframework-appiumlibrary",
     "robotframework-requests",
     "robotframework-databaselibrary",
-    "django>=4.2,<5.0",
+    "django>=4.2,<6.0",
     "uvicorn[standard]>=0.24",
     "sqlite-vec>=0.1.6",
     "model2vec>=0.4.0",
