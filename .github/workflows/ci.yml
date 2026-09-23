@@ -719,21 +719,21 @@ jobs:
       # one in code scanning and only the last analyzer's findings remain visible.
       - name: 'Publish: code quality'
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: reports/quality.sarif
           category: ruff-quality
 
       - name: 'Publish: code security'
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: reports/security.sarif
           category: ruff-security
 
       - name: 'Publish: dependencies'
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: reports/deps.sarif
           category: osv-dependencies
