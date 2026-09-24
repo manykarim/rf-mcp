@@ -181,20 +181,38 @@ class TestSessionRoutingBenchmark:
         # that 1µs of noise produces at most 3% ratio error.
         legacy_floor_seconds = 1e-4
 
-        # Legacy
-        sess_legacy = ExecutionSession(session_id="cmp-legacy")
-        start = time.perf_counter()
-        for i in range(n):
-            sess_legacy.add_step(_make_step(f"s-{i}"))
-        legacy_elapsed = time.perf_counter() - start
+        # Repeat count for best-of-N (change: ci-signal-fidelity).
+        #
+        # The floor above was an earlier flake fix and is NOT sufficient on its own:
+        # it guards the DENOMINATOR only. A GC pause or scheduler slice landing inside
+        # the multi-test measurement inflates the ratio no matter how well-resolved
+        # legacy_elapsed is, which is how CI still produced 65.76x with the floor in
+        # place. Taking the MINIMUM of N repeats fixes the numerator too: noise can only
+        # ever ADD work to a sample, never remove it, so the minimum is the sample least
+        # contaminated by interference and the most faithful estimate of the true cost.
+        repeats = 5
 
-        # Multi-test
-        sess_mt = ExecutionSession(session_id="cmp-mt")
-        sess_mt.test_registry.start_test("T1")
-        start = time.perf_counter()
-        for i in range(n):
-            sess_mt.add_step(_make_step(f"s-{i}"))
-        mt_elapsed = time.perf_counter() - start
+        def _time_adds(make_session) -> float:
+            """Minimum wall time over `repeats` runs of n add_step calls."""
+            best = float("inf")
+            for _ in range(repeats):
+                sess = make_session()
+                start = time.perf_counter()
+                for i in range(n):
+                    sess.add_step(_make_step(f"s-{i}"))
+                best = min(best, time.perf_counter() - start)
+            return best
+
+        def _legacy():
+            return ExecutionSession(session_id="cmp-legacy")
+
+        def _multi_test():
+            sess = ExecutionSession(session_id="cmp-mt")
+            sess.test_registry.start_test("T1")
+            return sess
+
+        legacy_elapsed = _time_adds(_legacy)
+        mt_elapsed = _time_adds(_multi_test)
 
         if legacy_elapsed < legacy_floor_seconds:
             pytest.skip(
@@ -204,7 +222,11 @@ class TestSessionRoutingBenchmark:
                 f"Absolute budget pinned separately at 0.1ms/step."
             )
         overhead = mt_elapsed / legacy_elapsed
-        assert overhead < 3.0, f"Multi-test overhead: {overhead:.2f}x (limit: 3x)"
+        assert overhead < 3.0, (
+            f"Multi-test overhead: {overhead:.2f}x (limit: 3x) "
+            f"[best of {repeats}: legacy={legacy_elapsed*1e6:.1f}µs, "
+            f"multi-test={mt_elapsed*1e6:.1f}µs]"
+        )
 
 
 # ---------------------------------------------------------------------------
