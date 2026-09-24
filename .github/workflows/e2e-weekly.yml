@@ -29,7 +29,7 @@ jobs:
 
       - name: Setup uv
         if: env.SKIP_COPILOT != 'true'
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 
@@ -104,7 +104,7 @@ jobs:
 
       - name: Setup uv
         if: env.SKIP_COPILOT != 'true'
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 
@@ -181,7 +181,7 @@ jobs:
         run: opencode --version
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 
@@ -253,7 +253,7 @@ jobs:
 
       - name: Setup uv
         if: env.SKIP_MINIMAX != 'true'
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 
@@ -336,7 +336,7 @@ jobs:
 
       - name: Setup uv
         if: env.SKIP_WEB != 'true'
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 

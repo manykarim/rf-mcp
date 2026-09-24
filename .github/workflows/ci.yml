@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 
@@ -132,7 +132,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 
@@ -180,7 +180,7 @@ jobs:
 
       - name: Setup uv
         if: env.SKIP_COPILOT != 'true'
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 
@@ -284,7 +284,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 
@@ -343,7 +343,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 
@@ -408,7 +408,7 @@ jobs:
 
       - name: Setup uv
         if: env.SKIP_SMOKE != 'true'
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 
@@ -465,7 +465,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 
@@ -515,7 +515,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 
@@ -593,7 +593,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 
