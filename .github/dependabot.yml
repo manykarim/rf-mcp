@@ -1,0 +1,39 @@
+# Dependabot configuration (change: ci-quality-scanning sec 1).
+#
+# Security alerting itself is a repository setting and is enabled separately; this file
+# controls the update PRs Dependabot opens. It is deliberately scoped to SECURITY updates
+# only: rf-mcp resolves ~79 runtime packages through uv.lock, and version-update PRs for
+# all of them would bury the security ones - the exact failure mode this change exists to
+# avoid.
+#
+# Dependabot is the half of dependency security that actually FIXES things: the CI scan
+# reports advisories, Dependabot opens the PR that resolves them.
+version: 2
+
+updates:
+  # Python runtime + dev dependencies (uv.lock / pyproject.toml).
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Only open PRs for advisories, not for routine version bumps.
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "security"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+
+  # Keep the Actions used by CI patched - a compromised action is a supply-chain risk
+  # that no Python-side scanner covers.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "ci"
