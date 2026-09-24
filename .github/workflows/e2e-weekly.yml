@@ -25,11 +25,11 @@ jobs:
 
       - name: Checkout repository
         if: env.SKIP_COPILOT != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup uv
         if: env.SKIP_COPILOT != 'true'
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 
@@ -43,7 +43,7 @@ jobs:
 
       - name: Setup Node.js
         if: env.SKIP_COPILOT != 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
 
@@ -100,11 +100,11 @@ jobs:
 
       - name: Checkout repository
         if: env.SKIP_COPILOT != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup uv
         if: env.SKIP_COPILOT != 'true'
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 
@@ -118,7 +118,7 @@ jobs:
 
       - name: Setup Node.js
         if: env.SKIP_COPILOT != 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
 
@@ -167,10 +167,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
 
@@ -181,7 +181,7 @@ jobs:
         run: opencode --version
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 
@@ -249,11 +249,11 @@ jobs:
 
       - name: Checkout repository
         if: env.SKIP_MINIMAX != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup uv
         if: env.SKIP_MINIMAX != 'true'
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 
@@ -332,11 +332,11 @@ jobs:
 
       - name: Checkout repository
         if: env.SKIP_WEB != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup uv
         if: env.SKIP_WEB != 'true'
-        uses: astral-sh/setup-uv@v2
+        uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 

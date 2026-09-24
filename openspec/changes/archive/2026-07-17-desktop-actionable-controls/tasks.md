@@ -18,10 +18,10 @@
 
 ## 4. Discoverability
 - [x] 4.1 ui_tree hint points to actionable_controls for enumerating interactive controls with ready descriptors
-- [ ] 4.2 PlatynUI locator guidance cross-reference — DEFERRED (follow-up)
+- [x] 4.2 PlatynUI locator guidance cross-reference — get_platynui_locator_guidance docstring + discover_controls key point to get_session_state(sections=["actionable_controls"]) (2026-07-17)
 
 ## 5. Tests + validation
 - [x] 5.1 `tests/unit/test_desktop_actionable_controls.py` (fake node tree): depth-5 flat; descriptor shape + index disambiguation + nameless; role filter + default set; anchor precedence + multi-app refusal; node/element budget truncation; per-node error skipped; non-desktop rejection; only-walks-anchor
 - [x] 5.2 Hint text assertion (4.1)
 - [x] 5.3 Full unit suite green (6924 passed + 1 skipped); openspec validate --strict passes
-- [ ] 5.4 (OPTIONAL) Docker lab e2e — DEFERRED
+- [x] 5.4 Docker lab e2e — docker/gate_drivers.py `actionable` gate drives walk_actionable_controls vs real gnome-calculator: 34 controls, app-anchored digit-button descriptors, PASS (2026-07-17)
