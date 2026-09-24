@@ -25,7 +25,7 @@ jobs:
 
       - name: Checkout repository
         if: env.SKIP_COPILOT != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup uv
         if: env.SKIP_COPILOT != 'true'
@@ -100,7 +100,7 @@ jobs:
 
       - name: Checkout repository
         if: env.SKIP_COPILOT != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup uv
         if: env.SKIP_COPILOT != 'true'
@@ -167,7 +167,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -249,7 +249,7 @@ jobs:
 
       - name: Checkout repository
         if: env.SKIP_MINIMAX != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup uv
         if: env.SKIP_MINIMAX != 'true'
@@ -332,7 +332,7 @@ jobs:
 
       - name: Checkout repository
         if: env.SKIP_WEB != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup uv
         if: env.SKIP_WEB != 'true'

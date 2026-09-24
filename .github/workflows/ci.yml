@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v2
@@ -129,7 +129,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v2
@@ -176,7 +176,7 @@ jobs:
 
       - name: Checkout repository
         if: env.SKIP_COPILOT != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup uv
         if: env.SKIP_COPILOT != 'true'
@@ -281,7 +281,7 @@ jobs:
             test-command: 'uv run pytest -m optional_all -q'
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v2
@@ -340,7 +340,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v2
@@ -404,7 +404,7 @@ jobs:
 
       - name: Checkout repository
         if: env.SKIP_SMOKE != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup uv
         if: env.SKIP_SMOKE != 'true'
@@ -462,7 +462,7 @@ jobs:
       AGENTEVAL_MODEL: MiniMax-M3
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v2
@@ -512,7 +512,7 @@ jobs:
         os: [ ubuntu-latest, macos-latest, windows-latest ]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v2
@@ -590,7 +590,7 @@ jobs:
     # for identical results.
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v2
