@@ -4,7 +4,7 @@ import os
 import re
 import tempfile
 import logging
-from typing import Any, Dict, List, Optional, Union, Tuple
+from typing import Any, Dict, List, Tuple
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -350,7 +350,7 @@ class VariableResolver:
             except CircularReferenceError:
                 # Let circular reference errors pass through unchanged
                 raise
-            except VariableResolutionError as e:
+            except VariableResolutionError:
                 # Re-raise with better context
                 raise VariableResolutionError(
                     full_var_expr, 

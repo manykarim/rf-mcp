@@ -11,9 +11,15 @@ The dual timeout strategy uses:
 - 10 seconds for wait/assertion operations
 """
 
-from typing import Dict, Set
+from typing import TYPE_CHECKING, Dict, Set
 
 from .entities import ActionType
+
+if TYPE_CHECKING:
+    # Only referenced in a string annotation below. `.aggregates` does not import this
+    # module, so a runtime import would not cycle - it is simply unnecessary
+    # (change: quality-baseline-cleanup).
+    from .aggregates import TimeoutPolicy
 
 
 # Keywords mapped to CLICK action type (element interaction - 5s default)

@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from .delta_aggregates import VersionedStateCache
 from .delta_value_objects import StateDelta, StateVersion

@@ -40,7 +40,6 @@ from robotmcp.domains.shared.kernel import (
     AutomationContext,
     CoercedStringList,
     CoercedVariables,
-    DEPRECATED_KEYWORD_ALIASES,
     DetailLevel,
     ExecutionMode,
     ExtractMode,
@@ -219,6 +218,11 @@ def _externalize_response(
 
 if TYPE_CHECKING:
     from robotmcp.frontend.controller import FrontendServerController
+    # Both are used only inside string annotations; importing them at runtime would
+    # pull the Django frontend config and the session models into every server import
+    # for no benefit (change: quality-baseline-cleanup).
+    from robotmcp.frontend.config import FrontendConfig
+    from robotmcp.models.session_models import ExecutionSession
 
 
 # ── ADR-006/007/008 initialization ─────────────────────────────────
@@ -5596,8 +5600,6 @@ async def resume_batch(
         from robotmcp.domains.batch_execution.value_objects import (
             BatchTimeout,
             StepTimeout,
-            OnFailurePolicy,
-            RecoveryAttemptLimit,
         )
         from robotmcp.container import get_container
 

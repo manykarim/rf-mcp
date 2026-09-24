@@ -1353,7 +1353,7 @@ def generate_hints(ctx: HintContext) -> List[Dict[str, Any]]:
                 ),
                 examples=[
                     {
-                        "comment": f"Option 1: Use full keyword name",
+                        "comment": "Option 1: Use full keyword name",
                         "tool": "execute_step",
                         "keyword": f"{lib_options[0]}.{kw_name.title().replace(' ', ' ')}" if lib_options else f"Browser.{kw_name.title()}",
                         "arguments": list(args),

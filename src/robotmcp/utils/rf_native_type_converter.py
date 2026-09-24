@@ -283,7 +283,7 @@ class RobotFrameworkNativeConverter:
                         logger.debug(f"Closure extraction for {keyword_name}: {signature_args}")
                         return signature_args
                         
-                except Exception as cell_error:
+                except Exception:
                     continue
                     
         except Exception as e:
@@ -900,7 +900,7 @@ class RobotFrameworkNativeConverter:
                 return {
                     'violation': True,
                     'message': f"Positional argument '{arg}' found after named argument at position {found_named_at}",
-                    'rf_error': f"Keyword got positional argument after named arguments",
+                    'rf_error': "Keyword got positional argument after named arguments",
                     'suggestion': "Robot Framework requires all arguments after a named argument to also be named",
                     'user_pattern': args,
                     'fix_examples': self._generate_fix_examples(args, signature_args)
@@ -2071,7 +2071,6 @@ Handle WebView
             from robotmcp.core.dynamic_keyword_orchestrator import (
                 get_keyword_discovery,
             )
-            import inspect
 
             orch = get_keyword_discovery()
             if library_name not in orch.library_manager.libraries:

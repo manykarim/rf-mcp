@@ -27,7 +27,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from .instruction_learner import InstructionEffectivenessLearner, SessionTracker
 from .pattern_store import PatternStore

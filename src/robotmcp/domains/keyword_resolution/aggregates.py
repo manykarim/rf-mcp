@@ -9,7 +9,7 @@ import logging
 from typing import Callable, Optional, Tuple
 
 from robotmcp.models.library_models import KeywordInfo
-from .services import BddPrefixService, EmbeddedMatcherService
+from .services import BddPrefixService
 from .value_objects import BddPrefix, EmbeddedMatch
 
 logger = logging.getLogger(__name__)

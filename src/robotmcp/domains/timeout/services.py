@@ -5,11 +5,11 @@ Domain services contain business logic that doesn't naturally fit
 within an entity or value object.
 """
 
-from typing import Dict, List, Optional, Callable
+from typing import Dict, Optional, Callable
 from datetime import datetime
 import logging
 
-from .value_objects import PolicyId, Milliseconds, DefaultTimeouts
+from .value_objects import Milliseconds, DefaultTimeouts
 from .entities import ActionType, TimeoutCategory
 from .aggregates import TimeoutPolicy
 from .events import (

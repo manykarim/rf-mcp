@@ -12,7 +12,7 @@ import os
 from enum import Enum
 from typing import Callable, Dict, Optional, TYPE_CHECKING
 
-from ..value_objects import InstructionPath, InstructionTemplate
+from ..value_objects import InstructionPath
 from ..aggregates import InstructionConfig
 from ..services import InstructionResolver, InstructionValidator, InstructionRenderer
 from ..events import InstructionApplied, InstructionOverridden

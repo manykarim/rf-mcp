@@ -5,7 +5,6 @@ Wraps the existing LocatorConverter for the Intent domain.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from ..value_objects import IntentTarget, LocatorStrategy, NormalizedLocator
 

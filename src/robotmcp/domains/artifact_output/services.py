@@ -10,11 +10,8 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from .aggregates import ArtifactStore
-from .entities import Artifact, ArtifactSlice
-from .events import LargeFieldExternalized
 from .value_objects import (
     FETCH_ARTIFACT_SUMMARY_TEMPLATE,
-    ArtifactPolicy,
     ExternalizationResult,
     ExternalizationRule,
     OutputMode,

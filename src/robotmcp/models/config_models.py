@@ -1,7 +1,7 @@
 """Configuration data models."""
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, TYPE_CHECKING
+from dataclasses import dataclass
+from typing import Dict, List, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from robotmcp.domains.timeout import TimeoutPolicy

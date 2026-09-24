@@ -4,7 +4,7 @@ import importlib
 import subprocess
 import sys
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 

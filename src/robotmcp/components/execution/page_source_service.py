@@ -5,7 +5,7 @@ import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional, Union
 
 from robotmcp.config import library_registry
-from robotmcp.models.session_models import ExecutionSession, PlatformType
+from robotmcp.models.session_models import ExecutionSession
 from robotmcp.models.config_models import ExecutionConfig
 from robotmcp.plugins import get_library_plugin_manager
 

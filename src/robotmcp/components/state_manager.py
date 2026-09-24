@@ -1,12 +1,9 @@
 """State Manager for tracking and capturing application state during test execution."""
 
-import json
 import logging
 from typing import Any, Dict, List, Optional, Union
 from dataclasses import dataclass, field
 from datetime import datetime
-import asyncio
-import re
 
 try:
     from bs4 import BeautifulSoup
@@ -173,7 +170,7 @@ class StateManager:
                 # Use actual browser state if available
                 page_state = await self._convert_browser_state_to_page_state(browser_state, execution_engine, session_id)
             else:
-                logger.debug(f"No browser state available, falling back to simulation")
+                logger.debug("No browser state available, falling back to simulation")
                 # Fall back to simulation
                 page_state = await self._simulate_page_state(session_id)
             

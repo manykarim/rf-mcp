@@ -7,7 +7,6 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-from ..aggregates import IntentRegistry
 from ..services import IntentResolver, IntentResolutionError
 from ..value_objects import IntentTarget, IntentVerb
 

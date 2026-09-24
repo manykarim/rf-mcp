@@ -6,15 +6,25 @@ import os
 import re
 import tempfile
 import uuid
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
-import json
 import io
 import subprocess
 import sys
 import signal
 from contextlib import redirect_stdout, redirect_stderr
+
+# Hoisted above the `logger` assignment and the import guard below: once `logger = ...`
+# moved up (see next comment), any module-level import after it counted as
+# "import after code" (E402). `config_models` pulls in stdlib only, so there is no
+# cycle and no cost to importing it first (change: quality-baseline-cleanup).
+from robotmcp.models.config_models import ExecutionConfig
+
+# Defined BEFORE the try/except below, which uses it. It used to be assigned after,
+# so a missing Robot Framework made the handler raise
+# `NameError: name 'logger' is not defined` instead of logging its warning - turning a
+# degraded-mode notice into an import-time crash (change: quality-baseline-cleanup).
+logger = logging.getLogger(__name__)
 
 try:
     from robot import run_cli, rebot_cli
@@ -26,10 +36,6 @@ try:
 except ImportError:
     ROBOT_AVAILABLE = False
     logger.warning("Robot Framework not available - suite execution will be limited")
-
-from robotmcp.models.config_models import ExecutionConfig
-
-logger = logging.getLogger(__name__)
 
 
 def _kill_process_tree(proc: "subprocess.Popen") -> None:
@@ -1030,8 +1036,8 @@ class SuiteExecutionService:
             "missing_keyword": f"Keyword '{context}' not found in available libraries",
             "import_error": f"Failed to import library '{context}'",
             "resource_error": f"Failed to import resource '{context}'",
-            "argument_error": f"Invalid arguments provided to keyword",
-            "syntax_error": f"Invalid Robot Framework syntax",
+            "argument_error": "Invalid arguments provided to keyword",
+            "syntax_error": "Invalid Robot Framework syntax",
             "variable_error": f"Variable '{context}' is not defined",
             "unused_variable": f"Variable '{context}' is defined but not used",
             "deprecated_keyword": f"Keyword '{context}' is deprecated"

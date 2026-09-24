@@ -7,7 +7,7 @@ The PageSnapshot is the aggregate root for this bounded context.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .entities import AriaNode, AriaTree
 from .value_objects import (
@@ -130,8 +130,12 @@ class PageSnapshot:
         """
         folded_root, stats = self._fold_node_lists(self.aria_tree.root, threshold)
 
+        # `AriaTree.node_count` / `.interactive_count` are computed properties and
+        # `__post_init__` rebuilds the ref index, so there is nothing to recalculate.
+        # `_recalculate_counts()` does not exist on AriaTree - the two calls in
+        # services.py are `hasattr`-guarded, this one was not, so it raised
+        # AttributeError (change: quality-baseline-cleanup).
         new_tree = AriaTree(root=folded_root)
-        new_tree._recalculate_counts()
 
         # Calculate token estimates
         token_before = self.estimate_tokens()
@@ -147,7 +151,13 @@ class PageSnapshot:
                 compressed_nodes=new_tree.node_count,
                 folded_lists=stats["lists_folded"],
                 token_estimate_before=token_before,
-                token_estimate_after=new_snapshot._estimate_tokens_for_tree(new_tree)
+                # `self`, not `new_snapshot`: the old code referenced the name being
+                # bound by this very statement, so the compression path raised
+                # NameError. `_estimate_tokens_for_tree` takes the tree as a parameter
+                # and reads no instance state, so `self` yields the identical value -
+                # the estimate is preserved, not dropped to silence the linter
+                # (change: quality-baseline-cleanup).
+                token_estimate_after=self._estimate_tokens_for_tree(new_tree)
             )
         )
         return new_snapshot
@@ -235,7 +245,13 @@ class PageSnapshot:
 
         # Create summary node
         refs = [child.ref for child in children[1:]]
-        ref_range = f"e{refs[0].index}-e{refs[-1].index}" if refs else ""
+        # `ElementRef` exposes `.value` ("e3") and `to_index()` -> 3; there is no
+        # `.index` attribute, so the old `f"e{refs[0].index}-..."` raised
+        # AttributeError on this path AND would have double-prefixed the "e".
+        # Found by the regression test for the fold_lists NameError directly above,
+        # which is the first thing ever to execute this branch
+        # (change: quality-baseline-cleanup).
+        ref_range = f"{refs[0].value}-{refs[-1].value}" if refs else ""
 
         summary_node = AriaNode(
             ref=refs[0] if refs else first_child.ref,
@@ -323,7 +339,12 @@ class PageSnapshot:
     def _estimate_tokens_for_tree(self, tree: AriaTree) -> int:
         """Estimate tokens for a given tree."""
         total = 0
-        for node in tree.traverse():
+        # `traverse()` is defined on AriaNode, not on the AriaTree this module imports
+        # from `.entities` (the OTHER AriaTree, in models.py, does have it - hence the
+        # look-alike calls elsewhere). Walking from the root is the entities-side
+        # idiom, matching entities.py's own `self.root.traverse()`
+        # (change: quality-baseline-cleanup).
+        for node in tree.root.traverse():
             # Base tokens per node
             total += TOKENS_PER_NODE_BASE
 
@@ -347,7 +368,7 @@ class PageSnapshot:
 
         Useful for finding interactive elements to act upon.
         """
-        for node in self.aria_tree.traverse():
+        for node in self.aria_tree.root.traverse():  # see _estimate_tokens_for_tree
             if node.role.value == role:
                 if name is None or node.name == name:
                     return node.ref

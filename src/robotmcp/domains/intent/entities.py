@@ -5,8 +5,8 @@ identified by its (intent_verb, library) composite key.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Protocol, Tuple
 
 from .value_objects import IntentTarget, IntentVerb, NormalizedLocator
 

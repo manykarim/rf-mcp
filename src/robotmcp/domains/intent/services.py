@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol
 
 from .aggregates import IntentRegistry
-from .entities import IntentMapping
 from .events import (
     IntentFallbackUsed,
     IntentResolved,

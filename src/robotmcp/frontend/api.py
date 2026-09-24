@@ -7,7 +7,6 @@ from typing import Any, Dict
 
 from asgiref.sync import async_to_sync
 import asyncio
-import logging
 
 from django.http import (
     Http404,
@@ -19,7 +18,7 @@ from django.http import (
 from django.views.decorators.http import require_http_methods
 
 from .bridge import bridge
-from robotmcp.core.event_bus import event_bus, FrontendEvent
+from robotmcp.core.event_bus import event_bus
 
 
 def _json_response(data: Dict[str, Any], status: int = 200) -> JsonResponse:

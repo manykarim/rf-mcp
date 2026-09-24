@@ -1,15 +1,13 @@
 """Response Optimization Domain Service."""
 from __future__ import annotations
 
-import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
 
 from .aggregates import ResponseOptimizationConfig
-from .events import ResponseCompressed, SnapshotFolded
+from .events import ResponseCompressed
 from .value_objects import (
-    SnapshotCompressionMode,
     TokenEstimate,
     Verbosity,
 )

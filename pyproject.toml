@@ -159,6 +159,14 @@ target-version = ['py38']
 # (S105/S107). 5,763 would meet the fate of the SonarCloud check this replaces - red
 # forever, read by nobody. Widen the selection once this is at zero; do not start wide.
 #
+# CURRENT BASELINE: 295 (change: quality-baseline-cleanup drove 439 -> 295).
+#   F821 17 -> 0    three of them were REAL NameErrors on error/degraded paths, not
+#                   annotation noise; regression-tested in
+#                   tests/unit/test_quality_baseline_nameerrors.py
+#   F401 132 -> 23  |  F541 13 -> 0  |  F841 25 -> 21  |  F811 2 -> 1
+# The 295 remainder is dominated by S110 try-except-pass (160) and is NOT auto-fixable;
+# each needs a judgement call. Re-measure and update this number when it moves.
+#
 # `S` is flake8-bandit: it finds the same 6 HIGH issues bandit does (6x S324 == 6x B324)
 # and emits SARIF natively, so bandit is not a separate dependency.
 [tool.ruff]

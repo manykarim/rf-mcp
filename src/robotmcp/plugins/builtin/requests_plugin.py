@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, Optional, List, Any
+from typing import Dict, List, Any
 
 from robotmcp.plugins.base import StaticLibraryPlugin
 from robotmcp.plugins.contracts import LibraryCapabilities, LibraryMetadata

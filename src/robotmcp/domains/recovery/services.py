@@ -11,9 +11,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 from .value_objects import (
-    ErrorClassification, RecoveryAction, RecoveryStrategy, RecoveryTier,
+    ErrorClassification, RecoveryAction, RecoveryStrategy,
 )
-from .entities import RecoveryPlan, RecoveryPlanPhase
+from .entities import RecoveryPlan
 from .aggregates import RecoveryEngine
 
 logger = logging.getLogger(__name__)
