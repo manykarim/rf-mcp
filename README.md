@@ -874,6 +874,43 @@ We welcome contributions! Here's how to get started:
 6. **Run** tests: `uv run pytest tests/`
 7. **Submit** a pull request
 
+### Code quality and security analysis
+
+Every push runs a **Quality** job covering four areas:
+
+| area | tool | where findings appear |
+| --- | --- | --- |
+| code quality | `ruff` | Security tab (code scanning) + `quality-reports` artifact |
+| code security | `ruff --select S` (flake8-bandit) | as above |
+| dependency advisories | `osv-scanner` against `uv.lock` | as above |
+| maintainability | `radon` | run summary + artifact |
+
+**The Quality check never fails on findings.** It reports them and stays green, so a
+finding never blocks a merge. It fails only when an analyzer could not *run* — an
+analyzer that fails to install would otherwise report zero findings, which is
+indistinguishable from a clean result.
+
+Every run prints a short digest to the job log and the run summary. For the full detail,
+download the `quality-reports` artifact or open the repository's **Security** tab.
+
+Run the same checks locally:
+
+```bash
+uv run ruff check src/          # quality + security, same rules as CI
+uv run radon mi src/ -s         # maintainability per file
+```
+
+**On the rule set:** `[tool.ruff.lint].select` in `pyproject.toml` is pinned
+deliberately, and `ruff` is pinned to an exact version. Measured on this codebase the
+selection swings the finding count **26×** — 439 for the current selection versus 5,763
+for ruff's bare default. If you widen it, widen it on purpose and re-measure; don't
+delete the selection to "use the defaults". A signal nobody can act on gets ignored, which
+is what happened to the SonarCloud check this replaced.
+
+There is deliberately **no "new code" quality gate** (fail only on newly-introduced
+issues). No open-source artifact-based stack provides one for free. If the finding count
+is driven down and starts creeping back up, that's the point to reconsider.
+
 ## 📝 Changelog
 
 - [**v0.34.0**](docs/RELEASE_NOTES_v0.34.0.md) – Native desktop automation (`rf-mcp[desktop]`, PlatynUI, Windows-ready); project-aware installer that uses your project's own libraries; leaner agent instructions; cold-start hang, Windows dry-run deadlock and generated-suite path fixes; tool profiles restored on FastMCP 3

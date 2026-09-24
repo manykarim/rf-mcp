@@ -30,7 +30,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Docker Setup QEMU
         uses: docker/setup-qemu-action@v3.7.0
@@ -73,7 +73,7 @@ jobs:
 
       - name: Build and push Docker image
         id: docker_build
-        uses: docker/build-push-action@v6.18.0
+        uses: docker/build-push-action@v7.4.0
         with:
           context: .
           file: docker/Dockerfile
@@ -96,7 +96,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Docker Setup QEMU
         uses: docker/setup-qemu-action@v3.7.0
@@ -139,7 +139,7 @@ jobs:
 
       - name: Build and push Docker image
         id: docker_build
-        uses: docker/build-push-action@v6.18.0
+        uses: docker/build-push-action@v7.4.0
         with:
           context: .
           file: docker/Dockerfile.vnc
