@@ -53,5 +53,5 @@ that test file). Past the NameError sat three AttributeErrors that ruff cannot s
 
 The 295 remainder is dominated by S110 try-except-pass (160). None of it is safely
 auto-fixable: `--fix` now reports 1 fixable, 21 unsafe-only.
-- [ ] 5.2 Confirm the `Quality` job still passes and its digest reflects the lower number
-- [ ] 5.3 Update the baseline recorded in the PR description
+- [x] 5.2 Confirm the `Quality` job still passes and its digest reflects the lower number
+- [x] 5.3 Update the baseline recorded in the PR description
