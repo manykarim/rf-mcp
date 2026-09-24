@@ -9,13 +9,12 @@ when the memory subsystem is available.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from robotmcp.compat.fastmcp_compat import DISABLED_TOOL_KWARGS
 
 from ..aggregates import MemoryStore
 from ..services import EmbeddingService, MemoryHookService, MemoryQueryService
-from ..value_objects import MemoryQuery, MemoryType
 
 logger = logging.getLogger(__name__)
 

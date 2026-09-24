@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from robotmcp.core.event_bus import FrontendEvent, event_bus
 from robotmcp.models.execution_models import ExecutionStep

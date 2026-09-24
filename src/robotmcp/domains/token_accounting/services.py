@@ -8,7 +8,6 @@ from typing import Any, Callable, Dict, Optional, Protocol
 
 from .value_objects import (
     ProfileTokenSummary,
-    TokenBudget,
     TokenCount,
     TokenizerBackend,
     TokenRegressionResult,

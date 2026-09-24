@@ -9,13 +9,12 @@ import contextlib
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
 from .value_objects import (
-    BatchStatus, StepStatus, OnFailurePolicy, StepReference,
+    BatchStatus, OnFailurePolicy, StepReference,
 )
-from .entities import BatchStep, StepResult, RecoveryAttempt, FailureDetail
+from .entities import BatchStep, RecoveryAttempt, FailureDetail
 from .aggregates import BatchExecution, BatchState
 
 logger = logging.getLogger(__name__)

@@ -3310,8 +3310,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.11.0" },
-    { name = "django", marker = "extra == 'all'", specifier = ">=4.2,<5.0" },
-    { name = "django", marker = "extra == 'frontend'", specifier = ">=4.2,<5.0" },
+    { name = "django", marker = "extra == 'all'", specifier = ">=4.2,<6.0" },
+    { name = "django", marker = "extra == 'frontend'", specifier = ">=4.2,<6.0" },
     { name = "fastmcp", specifier = ">=3.0" },
     { name = "lxml", specifier = ">=4.9.0" },
     { name = "model2vec", marker = "extra == 'all'", specifier = ">=0.4.0" },

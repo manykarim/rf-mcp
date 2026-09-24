@@ -3,8 +3,6 @@
 import asyncio
 import logging
 import os
-import re
-import sys
 import threading
 import time
 import uuid
@@ -29,7 +27,6 @@ from robotmcp.utils.rf_native_type_converter import RobotFrameworkNativeConverte
 from robotmcp.plugins import get_library_plugin_manager
 
 # Import timeout domain components for proper timeout handling
-from robotmcp.domains.timeout import ActionType, TimeoutPolicy, DefaultTimeouts
 from robotmcp.domains.timeout.keyword_classifier import classify_keyword
 from robotmcp.container import get_container
 
@@ -1197,8 +1194,8 @@ class KeywordExecutor:
                     "not match dynamically loaded or lazily-rendered images"
                 ),
                 "suggestion": (
-                    f"Try a css or xpath locator targeting the image's src or "
-                    f"alt attribute directly"
+                    "Try a css or xpath locator targeting the image's src or "
+                    "alt attribute directly"
                 ),
                 "alternatives": [
                     f"css:img[alt='{locator}']",
@@ -1537,7 +1534,7 @@ class KeywordExecutor:
                 # Get Element States doesn't take timeout - uses global browser timeout
                 result = builtin.run_keyword("Browser.Get Element States", loc)
                 return result, None
-            except Exception as e1:
+            except Exception:
                 try:
                     result = builtin.run_keyword("Get Element States", loc)
                     return result, None
@@ -2463,10 +2460,10 @@ class KeywordExecutor:
                                     "AND the keyword timeout."
                                 ),
                                 "example_extend": (
-                                    f"execute_step(..., pre_validate_timeout_ms=2000)"
+                                    "execute_step(..., pre_validate_timeout_ms=2000)"
                                 ),
                                 "example_skip": (
-                                    f"execute_step(..., timeout_ms=0)"
+                                    "execute_step(..., timeout_ms=0)"
                                 ),
                             })
 

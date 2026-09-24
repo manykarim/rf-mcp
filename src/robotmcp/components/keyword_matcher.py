@@ -6,7 +6,6 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 import dataclasses
 from dataclasses import dataclass, field
-import asyncio
 from difflib import SequenceMatcher
 
 # Semantic keyword ranking uses a torch-free embedder resolved LAZILY via the

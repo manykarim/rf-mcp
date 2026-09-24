@@ -5,7 +5,6 @@ using only Python standard library (json, pathlib). No external dependencies.
 """
 
 import json
-import os
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -116,7 +115,7 @@ class PatternStore:
             self._cache_timestamps[cache_key] = time.time()
 
             return True
-        except (OSError, IOError, TypeError, ValueError) as e:
+        except (OSError, IOError, TypeError, ValueError):
             # Log error in production; silently fail for now
             return False
 

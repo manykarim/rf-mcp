@@ -23,7 +23,6 @@ from .value_objects import (
     MemoryQuery,
     MemoryType,
     RecallResult,
-    SimilarityScore,
     StorageConfig,
 )
 
@@ -856,7 +855,6 @@ def create_memory_services(
 
     # Use the detected backend's dimension
     if backend.dimension and backend.dimension != config.dimension:
-        import os
 
         config = StorageConfig(
             db_path=config.db_path,

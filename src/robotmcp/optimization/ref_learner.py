@@ -6,7 +6,7 @@ preloading and sequence prediction for frequently accessed elements.
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Set
+from typing import Dict, List, Optional, Any
 import time
 
 from .pattern_store import PatternStore

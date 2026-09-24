@@ -1,14 +1,43 @@
 """Robot Framework native execution context manager for MCP keywords."""
 
 import logging
-import os as _os
-import sys as _sys
-import threading as _threading
-import uuid
+
+# Deliberately unused BY THIS MODULE - do not let a `ruff --fix` sweep remove it.
+# This alias is the seam two stdio-safety tests patch to assert an ABSENCE:
+#   tests/unit/test_mcp_stdio_log_safety.py::test_suppress_stdout_does_not_touch_fd1
+#   tests/unit/test_p1_failfast_and_p2_threadsafe.py::...::test_does_not_dup2_fd1
+# both replace `_os.dup2` and assert it is never called, guarding the fix for the
+# fd-1 `dup2` hang that misrouted JSON-RPC on stdio transports. Any future fd work in
+# this module must go through `_os` so that guard keeps biting. (The sibling `_sys` /
+# `_threading` aliases had no such use and were correctly swept.)
+import os as _os  # noqa: F401
 from typing import Any, Dict, List, Optional, Union, Tuple
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_arg(a: Any) -> Any:
+    """Normalize Windows absolute paths using RF's ``${/}`` variable.
+
+    RF de-escapes sequences like ``\\t``, ``\\r`` and ``\\b`` inside argument strings, so
+    a raw ``C:\\temp`` would be corrupted. ``${/}`` is resolved to ``os.sep`` at keyword
+    execution time, giving native separators on every OS without double-escaping.
+
+    Promoted to MODULE scope (change: quality-baseline-cleanup). It was defined as a
+    nested function inside one method and also called from the BuiltIn fallback in
+    another, where it was not in scope - so the fallback raised NameError, on the path
+    taken only when the primary execution path had already failed.
+    """
+    import re as _re_norm
+
+    try:
+        if isinstance(a, str):
+            if _re_norm.match(r"^[A-Za-z]:\\", a):
+                return a.replace("\\", "${/}")
+    except Exception:
+        pass
+    return a
 
 # Import Robot Framework native components
 try:
@@ -95,8 +124,6 @@ class RobotFrameworkNativeContextManager:
             logger.info(f"Creating minimal RF context for session {session_id}")
 
             # Simple approach: Create minimal context that enables BuiltIn keywords
-            from robot.libraries.BuiltIn import BuiltIn
-            from robot.running.testlibraries import TestLibrary
 
             # ADR-020: Track the initial MCP test for auto-end in start_test_in_context
             _initial_run_test = None
@@ -258,18 +285,18 @@ class RobotFrameworkNativeContextManager:
 
                         # For Browser Library specifically, try to avoid the problematic import
                         if lib_name == "Browser" and ("list index out of range" in str(e) or "index out of range" in str(e)):
-                            logger.warning(f"Skipping Browser Library import due to index error — keywords from Browser will not resolve until a prefixed call (e.g., Browser.New Browser) triggers late import")
+                            logger.warning("Skipping Browser Library import due to index error — keywords from Browser will not resolve until a prefixed call (e.g., Browser.New Browser) triggers late import")
                             failed_imports[lib_name] = f"index error during import: {e}"
                             continue
 
                         # For SeleniumLibrary, try with proper arguments for RF context
                         if lib_name == "SeleniumLibrary":
-                            logger.info(f"Retrying SeleniumLibrary import with proper RF context configuration")
+                            logger.info("Retrying SeleniumLibrary import with proper RF context configuration")
                             try:
                                 # Import with empty arguments - RF context will handle initialization
                                 namespace.import_library("SeleniumLibrary", args=())
                                 imported_libraries.append(lib_name)
-                                logger.info(f"Successfully imported SeleniumLibrary into RF context on retry")
+                                logger.info("Successfully imported SeleniumLibrary into RF context on retry")
                                 continue
                             except Exception as retry_error:
                                 logger.warning(f"SeleniumLibrary retry also failed: {retry_error}")
@@ -592,15 +619,9 @@ class RobotFrameworkNativeContextManager:
         # de-escaping of sequences like \t, \r, \b in file paths.
         # RF resolves ${/} to os.sep at keyword execution time, producing
         # native separators on every OS without double-escaping.
-        import re as _re_norm
-        def _normalize_arg(a: Any) -> Any:
-            try:
-                if isinstance(a, str):
-                    if _re_norm.match(r'^[A-Za-z]:\\', a):
-                        return a.replace('\\', '${/}')
-            except Exception:
-                pass
-            return a
+        # Uses the module-level `_normalize_arg`; the nested copy that used to live here
+        # was identical, and having two definitions is what let the other call site
+        # (the BuiltIn fallback) silently reference a name that was out of scope.
         arguments = [_normalize_arg(arg) for arg in arguments]
 
         try:

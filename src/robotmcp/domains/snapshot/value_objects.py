@@ -5,7 +5,7 @@ Value objects are immutable and defined by their attributes rather than identity
 They represent concepts in the domain that have no conceptual identity.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal, Optional
 import uuid
 

@@ -22,7 +22,7 @@ Usage:
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 

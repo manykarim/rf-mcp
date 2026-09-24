@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Optional
 
 from robotmcp.plugins.base import StaticLibraryPlugin
 from robotmcp.plugins.contracts import (
-    KeywordOverrideHandler,
     LibraryCapabilities,
     LibraryMetadata,
     LibraryStateProvider,

@@ -6,12 +6,10 @@ and section-level change detection for token-efficient state updates.
 """
 from __future__ import annotations
 
-import hashlib
-import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, ClassVar, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 
 class StateRetrievalMode(Enum):

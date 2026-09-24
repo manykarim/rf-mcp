@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import enum
 import re
-from dataclasses import dataclass, field
-from typing import ClassVar, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Tuple
 
 
 class RecoveryTier(int, enum.Enum):

@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from robotmcp.config.library_registry import get_library_install_hint
 from robotmcp.models.session_models import ExecutionSession
 from robotmcp.models.config_models import ExecutionConfig
-from robotmcp.models.browser_models import BrowserState
 
 logger = logging.getLogger(__name__)
 

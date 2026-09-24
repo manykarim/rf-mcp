@@ -358,7 +358,7 @@ class BrowserLibraryPlugin(StaticLibraryPlugin):
                     "example": alternative_info.get("example"),
                     "hints": [{
                         "title": "Library Mismatch",
-                        "message": f"Use Browser Library keywords instead of SeleniumLibrary"
+                        "message": "Use Browser Library keywords instead of SeleniumLibrary"
                     }]
                 }
 

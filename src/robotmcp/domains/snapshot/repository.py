@@ -6,8 +6,6 @@ The interface is defined as a Protocol to allow for different implementations
 (in-memory, database, etc.) without coupling the domain to infrastructure.
 """
 
-from abc import ABC, abstractmethod
-from datetime import datetime
 from typing import Dict, List, Optional, Protocol, runtime_checkable
 
 from .aggregates import PageSnapshot

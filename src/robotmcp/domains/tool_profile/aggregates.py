@@ -12,7 +12,6 @@ from typing import Dict, FrozenSet, List, Optional
 
 from .value_objects import (
     ModelTier,
-    ProfileTransition,
     SchemaMode,
     TokenBudget,
     ToolDescriptionMode,

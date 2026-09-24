@@ -1,8 +1,7 @@
 """LibDoc-based argument parser for Robot Framework keywords."""
 
 import logging
-import re
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional
 
 from robotmcp.models.library_models import ParsedArguments
 from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
