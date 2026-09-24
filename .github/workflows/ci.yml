@@ -624,19 +624,12 @@ jobs:
         run: |
           uv run ruff check src/ --select S --output-format=sarif > reports/security.sarif || true
           test -s reports/security.sarif || { echo "::error::ruff -S produced no SARIF - analyzer failed to run"; exit 1; }
-          uv run python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
-          # Ruff's SARIF marks EVERY finding level="error", so SARIF level cannot supply a
-          # severity tier - using it would report 222 "high" instead of the 6 that are.
-          # Derive the tier from an explicit rule set instead, mirroring the rules bandit
-          # rates HIGH. Validated: this yields 6, exactly bandit's 6 HIGH (all S324/B324).
-          HIGH = {"S102", "S301", "S302", "S306", "S307", "S324",
-                  "S602", "S604", "S605", "S606"}
-          res = json.load(open("reports/security.sarif"))["runs"][0].get("results", [])
-          high = sum(1 for r in res if (r.get("ruleId") or "") in HIGH)
-          print(f"count={len(res)}")
-          print(f"high={high}")
-          PY
+          # Ruff's SARIF marks EVERY finding level="error", so the SARIF level cannot
+          # supply a severity tier - using it would report 222 "high" instead of the 6
+          # that are. The tier comes from the declared rule set in
+          # scripts/ci_sarif_severity.py, which is the SINGLE source for it: the
+          # re-levelling step below reads the same set (change: ci-signal-fidelity).
+          uv run python scripts/ci_sarif_severity.py count reports/security.sarif >> "$GITHUB_OUTPUT"
 
       - name: 'osv-scanner: dependency advisories (SARIF)'
         id: osv
@@ -714,6 +707,24 @@ jobs:
           name: quality-reports
           path: reports/
           if-no-files-found: error
+
+      # Assign the severity we PUBLISH from the declared rule set, before upload.
+      #
+      # Ruff emits level="error" for every finding, so code scanning raises every one as
+      # an error-level alert and fails a check named `ruff` whenever a pull request
+      # touches a line near an existing finding - even when the contributor introduced
+      # nothing. That violates this capability's own requirement that findings never
+      # produce a failed check (PR #93 went red for two findings it only RELOCATED).
+      #
+      # Nothing is filtered: every finding is still uploaded, still in the artifact and
+      # still counted in the digest. Only the level changes. The step fails if the
+      # finding count changes, so this can never quietly become suppression.
+      # (change: ci-signal-fidelity)
+      - name: 'Map published severity (ruff SARIF)'
+        if: always()
+        run: |
+          uv run python scripts/ci_sarif_severity.py relevel reports/quality.sarif
+          uv run python scripts/ci_sarif_severity.py relevel reports/security.sarif
 
       # Distinct `category` per upload - without it, each SARIF REPLACES the previous
       # one in code scanning and only the last analyzer's findings remain visible.

@@ -155,6 +155,34 @@ async def _ensure_browser_session(client):
     _browser_session_ready = True
 
 
+# Signatures of "the browser process did not start", as distinct from "the product
+# returned the wrong answer". Kept explicit rather than matching on any error, so a
+# genuine product failure is never relabelled as an environment problem.
+_BROWSER_STARTUP_SIGNATURES = (
+    "sessionnotcreatedexception",
+    "devtoolsactiveport",
+    "unable to discover open pages",
+    "chrome failed to start",
+    "cannot find chrome binary",
+    "webdriverexception: message: unknown error: cannot connect",
+    "no such execution context",
+)
+
+
+def _fail_browser_startup(error) -> None:
+    """Fail naming the environment when the browser itself could not start."""
+    text = str(error)
+    lowered = text.lower()
+    if any(sig in lowered for sig in _BROWSER_STARTUP_SIGNATURES):
+        pytest.fail(
+            "ENVIRONMENT: the browser failed to start, so this test never reached the "
+            "product behaviour it asserts. This is a CI/runner problem, not a "
+            f"page-source routing defect.\nUnderlying error: {text[:400]}",
+            pytrace=False,
+        )
+    pytest.fail(f"Open Browser failed before the assertions could run: {text[:400]}")
+
+
 async def _ensure_selenium_session(client):
     """Ensure SeleniumLibrary session exists (idempotent)."""
     global _selenium_session_ready
@@ -169,7 +197,7 @@ async def _ensure_selenium_session(client):
         },
     )
     assert init_res.data.get("success") is True
-    await client.call_tool(
+    open_res = await client.call_tool(
         "execute_step",
         {
             "keyword": "Open Browser",
@@ -177,6 +205,19 @@ async def _ensure_selenium_session(client):
             "session_id": SELENIUM_SESSION_ID,
         },
     )
+    # Check the launch instead of assuming it (change: ci-signal-fidelity).
+    #
+    # This result used to be discarded and the session marked ready regardless, so a
+    # browser that never started surfaced later as `AssertionError: Expected HTML,
+    # got: ` - which reads like a product defect in page-source routing. It is not; on
+    # CI it was `SessionNotCreatedException: DevToolsActivePort file doesn't exist`,
+    # i.e. Chrome failed to launch. Marking the session ready after a failed launch also
+    # meant every subsequent test in the class inherited the broken session.
+    #
+    # The outcome is still a failure - browser tests that silently skip stop running at
+    # all - but the reported cause now names the environment.
+    if not open_res.data.get("success"):
+        _fail_browser_startup(open_res.data.get("error") or open_res.data)
     _selenium_session_ready = True
 
 
