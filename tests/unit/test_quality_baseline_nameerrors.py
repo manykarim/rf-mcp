@@ -72,7 +72,32 @@ def test_import_failure_handler_warns_instead_of_raising(monkeypatch):
         monkeypatch.undo()
         # Restore the real module so the degraded copy (ROBOT_AVAILABLE=False) cannot
         # leak into any later test in the session.
+        #
+        # Restoring sys.modules alone is NOT enough, and getting this wrong is silent:
+        # `importlib.import_module` ALSO rebinds the attribute on the parent package, and
+        # `from robotmcp.components.execution import suite_execution_service` resolves
+        # through that attribute, while `from ...suite_execution_service import X`
+        # resolves through sys.modules. Leave the two disagreeing and a later test
+        # patches one module object while the code under test reads the other - which is
+        # exactly what happened to test_subprocess_stdin_isolation.py's
+        # test_dry_run_timeout_reaps_process_tree: it patched `_kill_process_tree` on the
+        # degraded copy, the real one ran unpatched, and the reap assertion failed on
+        # three CI matrix cells while every file passed in isolation.
         sys.modules[mod_name] = saved
+        parent_name, _, child_name = mod_name.rpartition(".")
+        setattr(sys.modules[parent_name], child_name, saved)
+
+    # Guard the restore itself. Without this the leak is invisible here and only shows up
+    # as an unrelated test failing somewhere later in the session.
+    from robotmcp.components.execution import suite_execution_service as via_parent
+
+    assert via_parent is sys.modules[mod_name], (
+        "the parent-package attribute and sys.modules must point at the SAME module "
+        "object, or a later test will patch one and exercise the other"
+    )
+    assert via_parent.ROBOT_AVAILABLE is True, (
+        "the degraded ROBOT_AVAILABLE=False copy must not survive this test"
+    )
 
 
 # =============================================================================
