@@ -227,6 +227,10 @@ tests/e2e/**/*.json
 # ...but the instruction-quality baselines are source (the "no decrease" ratchet), not
 # generated metrics — keep them under version control.
 !tests/e2e/baselines/*.json
+# ...and so is the opencode provider config the weekly E2E installs: the workflow copies
+# it to ~/.config/opencode/opencode.json, so if it is not committed the job fails on a
+# missing file rather than running.
+!tests/e2e/opencode.minimax.ci.json
 
 /*.robot
 

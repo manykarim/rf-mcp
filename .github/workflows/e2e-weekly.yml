@@ -157,47 +157,77 @@ jobs:
           reporter: java-junit
 
   opencode-e2e:
-    name: OpenCode E2E (Small LLMs via OpenRouter)
+    name: OpenCode E2E (MiniMax models)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      OPENCODE_MODELS: 'openrouter/qwen/qwen3-coder,openrouter/z-ai/glm-4.5-air'
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      OPENCODE_MODELS: 'minimax/MiniMax-M3,minimax/MiniMax-M2.7,minimax/MiniMax-M2.5'
       RUN_INTENT_E2E: 'true'
 
     steps:
+      # Guard the key like the Copilot job above. Without this a missing secret does not
+      # skip - opencode runs, every model aborts with zero tool calls, and the job reports
+      # a quality failure for what is actually an access problem. That is precisely how
+      # the OpenRouter roster kept this workflow red for 8+ consecutive scheduled runs.
+      - name: Check MiniMax key
+        run: |
+          if [ -z "$MINIMAX_API_KEY" ]; then
+            echo "::warning::MINIMAX_API_KEY secret not set — skipping OpenCode MiniMax E2E"
+            echo "SKIP_MINIMAX=true" >> "$GITHUB_ENV"
+          fi
+
       - name: Checkout repository
+        if: env.SKIP_MINIMAX != 'true'
         uses: actions/checkout@v7
 
       - name: Setup Node.js
+        if: env.SKIP_MINIMAX != 'true'
         uses: actions/setup-node@v7
         with:
           node-version: '20'
 
       - name: Install opencode CLI
+        if: env.SKIP_MINIMAX != 'true'
         run: npm install -g opencode-ai
 
       - name: Verify opencode
+        if: env.SKIP_MINIMAX != 'true'
         run: opencode --version
 
+      # Same mechanism as docker/run_agent.sh, with a CI-appropriate config: declares the
+      # MiniMax provider (MINIMAX_API_KEY) and the three model tiers under test.
+      - name: Install opencode MiniMax provider config
+        if: env.SKIP_MINIMAX != 'true'
+        run: |
+          mkdir -p "${HOME}/.config/opencode"
+          cp tests/e2e/opencode.minimax.ci.json "${HOME}/.config/opencode/opencode.json"
+          echo "Models configured:"
+          python3 -c "import json;print('  ' + '\n  '.join(json.load(open('tests/e2e/opencode.minimax.ci.json'))['provider']['minimax']['models']))"
+
       - name: Setup uv
+        if: env.SKIP_MINIMAX != 'true'
         uses: astral-sh/setup-uv@v7
         with:
           version: 'latest'
 
       - name: Setup Python 3.12 (via uv)
+        if: env.SKIP_MINIMAX != 'true'
         run: uv python install 3.12
 
       - name: Install dependencies (dev)
+        if: env.SKIP_MINIMAX != 'true'
         run: uv sync --all-extras --group dev
 
       - name: Create metrics directories
+        if: env.SKIP_MINIMAX != 'true'
         run: |
           mkdir -p tests/e2e/metrics/intent_action
           mkdir -p tests/e2e/metrics/realistic_e2e
           mkdir -p results
 
       - name: Run Intent Action E2E Tests (pytest)
+        if: env.SKIP_MINIMAX != 'true'
         run: |
           uv run pytest tests/e2e/test_intent_action_models.py -v \
             --junitxml=results/e2e-intent-action.xml
@@ -205,12 +235,13 @@ jobs:
         continue-on-error: true
 
       - name: Run Realistic E2E Tests (standalone)
+        if: env.SKIP_MINIMAX != 'true'
         run: uv run python tests/e2e/run_realistic_e2e.py
         timeout-minutes: 50
         continue-on-error: true
 
       - name: Upload opencode E2E metrics
-        if: always()
+        if: env.SKIP_MINIMAX != 'true' && always()
         uses: actions/upload-artifact@v4
         with:
           name: opencode-e2e-metrics
@@ -220,23 +251,28 @@ jobs:
 
       - name: Test Report
         uses: dorny/test-reporter@main
-        if: success() || failure()
+        if: env.SKIP_MINIMAX != 'true' && (success() || failure())
         with:
           name: OpenCode Intent Action E2E
           path: results/e2e-intent-action.xml
           reporter: java-junit
 
   instruction-quality-matrix:
-    name: E2E Instruction-Quality Matrix (full roster)
+    name: E2E Instruction-Quality Matrix (MiniMax M3/M2.7/M2.5)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      # Full roster from the baseline file (reference + inform: MiniMax tiers + open-weight
-      # candidates via OpenRouter), minus excluded models. E2E_MODELS unset => roster.
-      # M3 (reference) hard-gates on baseline regression + floors; the rest are inform
-      # (warn on regression) until stabilized/captured. N=5 for stable medians.
+      # Roster comes from the baseline file (reference + inform, minus excluded);
+      # E2E_MODELS unset => roster. It is now MiniMax-only: M3 (reference, hard-gates on
+      # baseline regression + floors) plus M2.7 and M2.5 (inform, warn only). N=5 for
+      # stable medians.
+      #
+      # OPENROUTER_API_KEY was removed with the OpenRouter models. Those four could not
+      # execute here at all - n_valid=0/5, every run aborted with total_calls=0 - which
+      # the gate scores 'inconclusive' and treats as failure, keeping this workflow red on
+      # every scheduled run from at least 2026-08-02 to 2026-09-20. Re-add the key with
+      # the models, not before.
       E2E_RUNS: '5'
 
     steps:
