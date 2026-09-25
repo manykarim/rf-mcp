@@ -249,6 +249,12 @@ jobs:
             tests/e2e/metrics/intent_action/**/*.json
             tests/e2e/metrics/realistic_e2e/**/*.json
 
+      # fail-on-error: false to match the `continue-on-error: true` on the run steps
+      # above. This job compares how well DIFFERENT model tiers drive the tools; a weaker
+      # tier handling a tool badly is the FINDING, not a broken build. Without this the
+      # reporter overrides that intent and the job goes red whenever any model in the
+      # roster underperforms - which is how M2.7 omitting `target`/`session_id` failed the
+      # job on run 36120985462 even though M3 drove the tools correctly.
       - name: Test Report
         uses: dorny/test-reporter@main
         if: env.SKIP_MINIMAX != 'true' && (success() || failure())
@@ -256,6 +262,7 @@ jobs:
           name: OpenCode Intent Action E2E
           path: results/e2e-intent-action.xml
           reporter: java-junit
+          fail-on-error: false
 
   instruction-quality-matrix:
     name: E2E Instruction-Quality Matrix (MiniMax M3/M2.7/M2.5)
@@ -337,13 +344,28 @@ jobs:
             tests/e2e/metrics/minimax/**/*.json
             tests/e2e/metrics/autonomous/**/*.json
 
-      - name: Test Report
+      # Two reporters, deliberately. The glob `minimax-*.xml` used to cover BOTH the
+      # authoritative gate and the informational suite below it, and dorny/test-reporter
+      # defaults to fail-on-error: true - so a failure in a step explicitly marked
+      # `continue-on-error: true` still turned the whole job red, defeating the point of
+      # that marker. Observed on run 36120985462: the gate reported "3 passed"
+      # (M3 pass, M2.7/M2.5 warn) and the job failed anyway.
+      - name: Test Report (instruction-quality gate — authoritative)
         uses: dorny/test-reporter@main
         if: env.SKIP_MINIMAX != 'true' && (success() || failure())
         with:
           name: E2E MiniMax Matrix
-          path: results/minimax-*.xml
+          path: results/minimax-autonomous.xml
           reporter: java-junit
+
+      - name: Test Report (shared autonomous suite — informational)
+        uses: dorny/test-reporter@main
+        if: env.SKIP_MINIMAX != 'true' && (success() || failure())
+        with:
+          name: E2E MiniMax Shared Autonomous (informational)
+          path: results/minimax-shared-autonomous.xml
+          reporter: java-junit
+          fail-on-error: false
 
   agenteval-web-headless:
     name: AgentEval Web Scenario (headless)
