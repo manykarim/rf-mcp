@@ -23,22 +23,24 @@
   "hard_gate_models": [],
   "inform_models": [
     "MiniMax-M2.7",
-    "MiniMax-M2.5",
-    "MiniMax-M2",
-    "qwen/qwen3-coder-30b-a3b-instruct",
-    "mistralai/mistral-small-3.2-24b-instruct",
-    "z-ai/glm-4.7-flash",
-    "qwen/qwen-2.5-7b-instruct"
+    "MiniMax-M2.5"
   ],
   "excluded_models": [
+    "MiniMax-M2",
+    "google/gemma-3-27b-it",
     "meta-llama/llama-3.1-8b-instruct",
-    "google/gemma-3-27b-it"
+    "mistralai/mistral-small-3.2-24b-instruct",
+    "qwen/qwen-2.5-7b-instruct",
+    "qwen/qwen3-coder-30b-a3b-instruct",
+    "z-ai/glm-4.7-flash"
   ],
   "roster_notes": {
-    "z-ai/glm-4.7-flash": "#1 hard_gate promotion candidate \u2014 most reliable tool-caller of the self-hostable set (called tools on all 4 technologies, no zero-call flake, fast). Promote after an N>=5 reliable capture (ideally self-hosted).",
-    "qwen/qwen3-coder-30b-a3b-instruct": "aspirational self-hostable reference; strong on data_driven/xml/suite but a recurring API zero-call flake reproduces the [0,0,1] finding even under a Novita provider pin \u2014 inform-only until self-hosted N-run capture.",
-    "mistralai/mistral-small-3.2-24b-instruct": "functional but weak (flails: 78 calls on xml, low success); trend only.",
-    "google/gemma-3-27b-it": "EXCLUDED \u2014 zero tool calls on all 4 technologies (broken tool-calling, same class as llama-3.1-8b)."
+    "z-ai/glm-4.7-flash": "EXCLUDED 2026-09-25 - OpenRouter leg is non-functional in CI: n_valid=0/5, every run aborted with total_calls=0, which the gate scores 'inconclusive' and treats as a failure. That turned the weekly E2E red on every scheduled run from at least 2026-08-02 to 2026-09-20 (8+ consecutive) for an access reason, not a quality one. The roster is MiniMax-only until OpenRouter access is re-established and a model actually completes a run; re-add by moving back to inform_models.",
+    "qwen/qwen3-coder-30b-a3b-instruct": "EXCLUDED 2026-09-25 - OpenRouter leg is non-functional in CI: n_valid=0/5, every run aborted with total_calls=0, which the gate scores 'inconclusive' and treats as a failure. That turned the weekly E2E red on every scheduled run from at least 2026-08-02 to 2026-09-20 (8+ consecutive) for an access reason, not a quality one. The roster is MiniMax-only until OpenRouter access is re-established and a model actually completes a run; re-add by moving back to inform_models.",
+    "mistralai/mistral-small-3.2-24b-instruct": "EXCLUDED 2026-09-25 - OpenRouter leg is non-functional in CI: n_valid=0/5, every run aborted with total_calls=0, which the gate scores 'inconclusive' and treats as a failure. That turned the weekly E2E red on every scheduled run from at least 2026-08-02 to 2026-09-20 (8+ consecutive) for an access reason, not a quality one. The roster is MiniMax-only until OpenRouter access is re-established and a model actually completes a run; re-add by moving back to inform_models.",
+    "google/gemma-3-27b-it": "EXCLUDED \u2014 zero tool calls on all 4 technologies (broken tool-calling, same class as llama-3.1-8b).",
+    "MiniMax-M2": "EXCLUDED 2026-09-25 - dropped from the roster to keep the weekly matrix to the three MiniMax tiers under test (M3 reference, M2.7/M2.5 inform). Not a quality judgement: M2 was completing runs. Re-add to inform_models if the older tier needs tracking again.",
+    "qwen/qwen-2.5-7b-instruct": "EXCLUDED 2026-09-25 - OpenRouter leg is non-functional in CI: n_valid=0/5, every run aborted with total_calls=0, which the gate scores 'inconclusive' and treats as a failure. That turned the weekly E2E red on every scheduled run from at least 2026-08-02 to 2026-09-20 (8+ consecutive) for an access reason, not a quality one. The roster is MiniMax-only until OpenRouter access is re-established and a model actually completes a run; re-add by moving back to inform_models."
   },
   "tolerances": {
     "tool_success_rate": 0.1,

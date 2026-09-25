@@ -8,7 +8,7 @@ Runs the same demoshop test scenario with two different prompts:
 Compares total MCP tool calls, round-trips, tokens, cost, and timing.
 
 Usage:
-    OPENCODE_MODELS="openrouter/qwen/qwen3-coder" uv run python tests/e2e/run_batch_vs_step_e2e.py
+    OPENCODE_MODELS="minimax/MiniMax-M3" uv run python tests/e2e/run_batch_vs_step_e2e.py
     uv run python tests/e2e/run_batch_vs_step_e2e.py  # runs all default models
 """
 
@@ -34,8 +34,10 @@ from tests.e2e.test_intent_action_models import (
 # ── Models ────────────────────────────────────────────────────────────
 
 _DEFAULT_MODELS = [
-    "openrouter/qwen/qwen3-coder",
-    "openrouter/z-ai/glm-4.7-flash",
+    # MiniMax-only (2026-09-25): the OpenRouter models this used to default to could not
+    # execute - zero tool calls on every run. See tests/e2e/opencode.minimax.ci.json.
+    "minimax/MiniMax-M3",
+    "minimax/MiniMax-M2.7",
 ]
 
 _env_models = os.getenv("OPENCODE_MODELS", "").strip()

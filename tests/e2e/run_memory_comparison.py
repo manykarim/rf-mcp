@@ -8,7 +8,7 @@ tokens, cost, duration, and success rate.
 Usage:
     uv run python tests/e2e/run_memory_comparison.py
     uv run python tests/e2e/run_memory_comparison.py --scenario D
-    OPENCODE_MODELS="openrouter/z-ai/glm-4.7-flash" uv run python tests/e2e/run_memory_comparison.py
+    OPENCODE_MODELS="minimax/MiniMax-M3" uv run python tests/e2e/run_memory_comparison.py
 """
 
 from __future__ import annotations
@@ -38,7 +38,9 @@ from tests.e2e.test_intent_action_models import (
 
 # ── Configuration ─────────────────────────────────────────────────
 
-_DEFAULT_MODELS = ["openrouter/qwen/qwen3-coder"]
+# MiniMax-only (2026-09-25); the OpenRouter default could not execute - zero tool
+# calls on every run. See tests/e2e/opencode.minimax.ci.json.
+_DEFAULT_MODELS = ["minimax/MiniMax-M3"]
 _env_models = os.getenv("OPENCODE_MODELS", "").strip()
 MODELS = (
     [m.strip() for m in _env_models.split(",") if m.strip()]

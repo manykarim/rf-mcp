@@ -27,8 +27,12 @@ from tests.e2e.test_intent_action_models import (
     _print_result,
 )
 
-# Models that work better with shorter prompts (need more time for tool execution)
-_SLOW_MODELS = {"openrouter/meta-llama/llama-4-scout"}
+# Models that work better with shorter prompts. Per-model tuning hook, currently empty:
+# its only member was `openrouter/meta-llama/llama-4-scout`, dropped with the OpenRouter
+# roster on 2026-09-25. Kept rather than deleted so a MiniMax tier that needs the shorter
+# prompt can be added here. (Both branches use the same 300s timeout - this selects the
+# PROMPT, not the timeout, whatever the old comment implied.)
+_SLOW_MODELS: set[str] = set()
 
 
 def main():

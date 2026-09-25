@@ -17,16 +17,19 @@ from typing import Any
 
 import pytest
 
-# Models to test (openrouter provider format)
-# Override via OPENCODE_MODELS env var (comma-separated), e.g.:
-#   OPENCODE_MODELS="openrouter/qwen/qwen3-coder,openrouter/z-ai/glm-4.5-air"
+# Models to test, in opencode's `provider/model` form. Requires the MiniMax provider to
+# be configured for opencode - CI installs tests/e2e/opencode.minimax.ci.json to
+# ~/.config/opencode/opencode.json; locally, docker/run_agent.sh does the equivalent.
+#
+# MiniMax-only since 2026-09-25. The previous OpenRouter defaults could not execute:
+# n_valid=0/5 with total_calls=0 on every model, which kept the weekly E2E workflow red
+# for 8+ consecutive scheduled runs. Leaving them as the default meant a local run hit
+# the same wall. Override via OPENCODE_MODELS (comma-separated), e.g.:
+#   OPENCODE_MODELS="minimax/MiniMax-M3"
 _DEFAULT_MODELS = [
-    "openrouter/z-ai/glm-4.7",
-    "openrouter/z-ai/glm-4.5-air",
-    "openrouter/openai/gpt-oss-20b",
-    "openrouter/qwen/qwen3-coder",
-    "openrouter/meta-llama/llama-4-scout",
-    "openrouter/z-ai/glm-4.7-flash",
+    "minimax/MiniMax-M3",
+    "minimax/MiniMax-M2.7",
+    "minimax/MiniMax-M2.5",
 ]
 
 _env_models = os.getenv("OPENCODE_MODELS", "").strip()
