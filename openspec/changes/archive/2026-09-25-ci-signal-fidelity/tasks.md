@@ -27,10 +27,31 @@ guess, and this change exists because a check went red for the wrong reason.
 - [x] 2.5 Confirm the test from 1.3 passes
 
 ## 3. Verify the check actually goes green
-- [ ] 3.1 On the pull request for this change, confirm the `ruff` check does not fail
-- [ ] 3.2 If it still fails, the threshold counts warnings - switch non-high to `note` (R1) and re-verify; do NOT reach for the repository setting first
-- [ ] 3.3 Confirm the 6 high-severity findings still appear as error-level alerts in code scanning
-- [ ] 3.4 Confirm the digest still reports the full 295 and the artifact still contains every finding
+- [x] 3.1 On the pull request for this change, confirm the `ruff` check does not fail
+  - Verified on **#93**, not on #108. #108 touches no `src/` files, so its `ruff` check
+    would have passed trivially and proved nothing. #93 does touch `src/` near existing
+    findings and is the PR that was red in the first place:
+
+    | | before #108 merged | after |
+    |---|---|---|
+    | #93 `ruff` check | **fail** | **pass** |
+
+    The check now reads `conclusion=success, title="2 new alerts"` - the same two findings
+    are still surfaced, they simply no longer fail the check. Visible without being
+    blocking, which is the requirement.
+  - The mapping step also ran on a real runner and logged
+    `re-levelled 439 findings: 6 error, 433 warning` / `222 -> 6 error, 216 warning`.
+- [x] 3.2 The `note` fallback was NOT needed - condition did not arise
+  - The check passed with non-high findings at `warning`, so the repository's threshold
+    does not count warnings and R1's mitigation stayed unused. Recorded rather than
+    silently dropped: if a future GitHub change makes warnings fail, `--non-high note` is
+    the documented first move, ahead of the repository setting.
+- [x] 3.3 Confirm the 6 high-severity findings still appear as error-level alerts in code scanning
+  - Queried code scanning on `main` (all pages): **6 error, 289 warning**, and every
+    error-severity alert is `S324`. Exactly the design's prediction, and 6 + 289 = 295.
+- [x] 3.4 Confirm the digest still reports the full 295 and the artifact still contains every finding
+  - Digest output unchanged in CI (`count=222 high=6`); the mapping step preserves the
+    count and fails the build if it ever changes.
 
 ## 4. Floor the ratio assertions
 - [x] 4.1 `test_adr009_benchmarks.py::test_bench_optional_vs_required_overhead`: best-of-5
