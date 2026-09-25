@@ -7754,9 +7754,20 @@ async def intent_action(
 
     Args:
         intent: Action verb (e.g. "click", "navigate", "fill", "extract")
-        target: Locator or URL (e.g. "#submit", "text=Login", "https://example.com"). Optional for extract mode="url"/mode="title".
+        target: Locator or URL (e.g. "#submit", "text=Login", "https://example.com").
+            REQUIRED for navigate/click/fill/hover/select/assert_visible/wait_for.
+            Only optional for extract with mode="url" or mode="title".
+            Do not pass the string "null"/"None" — that counts as no target and the
+            call is rejected with the parameter named.
         value: Value for fill/select intents
-        session_id: Session to execute against (uses default if not provided)
+        session_id: Session to execute against. Pass the session_id returned by
+            analyze_scenario or manage_session(action="init") — the session that has
+            your libraries loaded. If omitted, it is inferred ONLY when exactly one
+            session has libraries (the response then carries a "session_note" saying
+            which was used); with several loaded sessions the call is rejected rather
+            than guessed at, and "default" is used only when it is genuinely the
+            loaded one. Omitting it does NOT silently target the session you just
+            created.
         options: Additional options (e.g. {"timeout": "10s"})
         assign_to: Variable name to capture result (esp. useful for extract:
                    the extracted text/count/attribute is assigned to this var).
@@ -7851,7 +7862,38 @@ async def intent_action(
             ),
         }
 
-    effective_session_id = session_id or "default"
+    # --- weak-model input guards (change: intent-action-weak-model-ergonomics) ------
+    # Run BEFORE resolution so the first error names the parameter that is actually
+    # wrong. Previously a missing target could only surface AFTER library resolution,
+    # so a caller with both problems got "Cannot determine target library ... ensure a
+    # library is imported" - misleading when they HAD imported one, into another
+    # session. See weak_model_guards for the observed traces.
+    from robotmcp.domains.intent import weak_model_guards as _guards
+
+    target = _guards.coerce_absent(target)
+    value = _guards.coerce_absent(value)
+    assign_to = _guards.coerce_absent(assign_to)
+    attribute_name = _guards.coerce_absent(attribute_name)
+    session_id = _guards.coerce_absent(session_id)
+
+    if _guards.requires_target(intent, mode) and target is None:
+        return {
+            "success": False,
+            "error": _guards.missing_target_error(intent, mode),
+            "intent": intent,
+        }
+
+    try:
+        _sessions = execution_engine.session_manager.sessions
+    except Exception:  # pragma: no cover - session manager always present in practice
+        _sessions = {}
+    effective_session_id, _session_note, _session_error = _guards.resolve_session_id(
+        session_id, _sessions
+    )
+    if _session_error:
+        return {"success": False, "error": _session_error, "intent": intent}
+    # -------------------------------------------------------------------------------
+
     resolution = None  # Hoisted for fallback access in except block
 
     try:
@@ -7918,10 +7960,18 @@ async def intent_action(
                     session_id=effective_session_id,
                 )
 
+            # Tell the caller when the session was inferred rather than given, so a
+            # model that omitted session_id can correct itself on the next call
+            # instead of repeating the omission (observed: 23 consecutive calls with
+            # session_id=None). change: intent-action-weak-model-ergonomics.
+            if _session_note:
+                result["session_note"] = _session_note
+
             result["intent_resolved"] = {
                 "intent": resolution["intent"],
                 "keyword": dispatched_keyword,
                 "library": resolution["library"],
+                "session_id": effective_session_id,
                 "locator_normalized": resolution.get("locator_normalized", False),
                 "force_applied": bool(force and resolution.get("force_keyword")),
                 "commit_applied": commit_applied,
@@ -7955,6 +8005,11 @@ async def intent_action(
         error_result = {
             "success": False,
             "error": str(e),
+            # Carried on the failure path too: this is precisely the call the caller
+            # has to correct, so telling them which session was actually used is more
+            # valuable here than on success (change: intent-action-weak-model-ergonomics).
+            **({"session_note": _session_note} if _session_note else {}),
+            "session_id": effective_session_id,
             "hint": (
                 "Use execute_step for direct keyword access, or check "
                 "valid intents: navigate, click, fill, hover, select, "
@@ -8032,6 +8087,12 @@ async def intent_action(
         error_result = {
             "success": False,
             "error": f"Intent execution failed: {error_msg}",
+            # Which session this actually ran against, and whether that was inferred.
+            # Without it a caller who omitted session_id cannot tell an execution
+            # failure from having targeted the wrong session
+            # (change: intent-action-weak-model-ergonomics).
+            "session_id": effective_session_id,
+            **({"session_note": _session_note} if _session_note else {}),
         }
         _track_tool_result(
             effective_session_id,
