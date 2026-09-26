@@ -4,10 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rf-mcp"
-# 0.35.1: install-blocker fix - `desktop` removed from the `[all]` extra, which
+# 0.36.0 ships the (never-published) 0.35.1 install-blocker fix - `desktop` removed from
+# the `[all]` extra, which
 # was making `uv tool install "rf-mcp[all]"` (and pipx, uvx, uv add) fail for every
 # user on every OS. See docs/RELEASE_NOTES_v0.35.1.md.
-version = "0.35.1"
+version = "0.36.0"
 description = "Robot Framework MCP Server - Natural Language Test Automation Bridge"
 authors = [{ name = "Many Kasiriha" }]
 license = { text = "Apache-2.0" }

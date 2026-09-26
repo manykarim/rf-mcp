@@ -1,0 +1,1660 @@
+{
+  "name": "rf-mcp",
+  "version": "0.36.0",
+  "total_tools": 57,
+  "enabled_tools": 19,
+  "tools": [
+    {
+      "name": "analyze_scenario",
+      "description": "Analyze a natural-language scenario into structured intent and create a session.\n\nWORKFLOW: This is the single front door \u2014 your FIRST tool call for any test\nscenario. It CREATES the session, so do NOT also call manage_session(action=\"init\")\nfor the same scenario (that causes redundant session churn). Reuse the returned\nsession_id in every later call.\n\nWhat this tool does:\n1. Creates a new session with unique session_id (or reuses provided one)\n2. Analyzes scenario to detect context (web/api/mobile/desktop)\n3. Auto-configures libraries based on scenario text\n4. Returns session_id for use in ALL subsequent tool calls\n\nCRITICAL: Save the session_id from the response and use it in all other tool calls.",
+      "enabled_by_default": true,
+      "parameters": {
+        "scenario": {
+          "type": "string",
+          "required": true
+        },
+        "context": {
+          "type": "string",
+          "required": false,
+          "default": "web",
+          "enum": [
+            "web",
+            "mobile",
+            "api",
+            "desktop",
+            "generic",
+            "database"
+          ]
+        },
+        "session_id": {
+          "type": "string",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "attach_status",
+      "description": "Report attach-mode configuration and bridge health. Indicates whether execute_step(use_context=true) will route externally.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "attach_stop_bridge",
+      "description": "Send a stop command to the external attach bridge (McpAttach) to exit MCP Serve in the debugged suite.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "build_test_suite",
+      "description": "Generate a Robot Framework test suite from previously executed steps.",
+      "enabled_by_default": true,
+      "parameters": {
+        "test_name": {
+          "type": "string",
+          "required": true
+        },
+        "session_id": {
+          "type": "string",
+          "required": false,
+          "default": ""
+        },
+        "tags": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "documentation": {
+          "type": "string",
+          "required": false,
+          "default": ""
+        },
+        "remove_library_prefixes": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        },
+        "bdd_style": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        },
+        "data_driven_mode": {
+          "type": "string",
+          "required": false,
+          "default": "auto"
+        },
+        "include_pre_start": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        },
+        "output_path": {
+          "type": "string",
+          "required": false,
+          "default": ""
+        }
+      }
+    },
+    {
+      "name": "check_library_availability",
+      "description": "Verify that specified Robot Framework libraries can be imported/installed.\n\nRecommended as step 3 after analyze_scenario and recommend_libraries; use the recommended\nnames to avoid unnecessary checks.",
+      "enabled_by_default": true,
+      "parameters": {
+        "libraries": {
+          "type": "array",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "debug_parse_keyword_arguments",
+      "description": "",
+      "enabled_by_default": false,
+      "parameters": {
+        "keyword_name": {
+          "type": "string",
+          "required": true
+        },
+        "arguments": {
+          "type": "array",
+          "required": true
+        },
+        "library_name": {
+          "type": "string",
+          "required": false,
+          "default": null
+        },
+        "session_id": {
+          "type": "string",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "diagnose_library_plugin",
+      "description": "Inspect metadata, capabilities, and hooks for a specific library plugin.",
+      "enabled_by_default": false,
+      "parameters": {
+        "plugin_name": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "diagnose_rf_context",
+      "description": "Inspect RF context state for a session: libraries, search order, and variables count.",
+      "enabled_by_default": false,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "discover_keywords",
+      "description": "Find matching Robot Framework keywords for an action.",
+      "enabled_by_default": false,
+      "parameters": {
+        "action_description": {
+          "type": "string",
+          "required": true
+        },
+        "context": {
+          "type": "string",
+          "required": false,
+          "default": "web"
+        },
+        "current_state": {
+          "type": "object",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "evaluate_expression",
+      "description": "Evaluate a Python expression in RF context (BuiltIn.Evaluate).\n\n- Uses the current RF session variables; supports ${var} inside the expression.\n- Optionally assigns the result to a variable name (test scope).",
+      "enabled_by_default": false,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": true
+        },
+        "expression": {
+          "type": "string",
+          "required": true
+        },
+        "assign_to": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "execute_batch",
+      "description": "Execute multiple RF keywords in one call with recovery and variable chaining.\n\nReduces N MCP round-trips to 1. Steps run sequentially; each step's return\nvalue is available to later steps via ${STEP_N} references in arguments.\nBoth 0-based (${STEP_0} = first step) and 1-based (${STEP_1} = first step)\nindexing are accepted. When ambiguous, 1-based is preferred.",
+      "enabled_by_default": true,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": true
+        },
+        "steps": {
+          "type": "array",
+          "required": true
+        },
+        "on_failure": {
+          "type": "string",
+          "required": false,
+          "default": "recover"
+        },
+        "max_recovery_attempts": {
+          "type": "integer",
+          "required": false,
+          "default": 2
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "required": false,
+          "default": 120000
+        }
+      }
+    },
+    {
+      "name": "execute_flow",
+      "description": "Execute structured flow (if/for/try) within a session.",
+      "enabled_by_default": true,
+      "parameters": {
+        "structure": {
+          "type": "string",
+          "required": true,
+          "enum": [
+            "if",
+            "for",
+            "try"
+          ]
+        },
+        "session_id": {
+          "type": "string",
+          "required": true
+        },
+        "condition": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "then_steps": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "else_steps": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "items": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "item_var": {
+          "type": "string",
+          "required": false,
+          "default": "item"
+        },
+        "stop_on_failure": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        },
+        "max_iterations": {
+          "type": "integer",
+          "required": false,
+          "default": 1000
+        },
+        "try_steps": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "except_patterns": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "except_steps": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "finally_steps": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "rethrow": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        }
+      }
+    },
+    {
+      "name": "execute_for_each",
+      "description": "",
+      "enabled_by_default": false,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": true
+        },
+        "items": {
+          "type": "array | null",
+          "required": true
+        },
+        "steps": {
+          "type": "array",
+          "required": true
+        },
+        "item_var": {
+          "type": "string",
+          "required": false,
+          "default": "item"
+        },
+        "stop_on_failure": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        },
+        "max_iterations": {
+          "type": "integer",
+          "required": false,
+          "default": 1000
+        }
+      }
+    },
+    {
+      "name": "execute_if",
+      "description": "",
+      "enabled_by_default": false,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": true
+        },
+        "condition": {
+          "type": "string",
+          "required": true
+        },
+        "then_steps": {
+          "type": "array",
+          "required": true
+        },
+        "else_steps": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "stop_on_failure": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        }
+      }
+    },
+    {
+      "name": "execute_step",
+      "description": "Execute a single Robot Framework keyword (or Evaluate) within a session.",
+      "enabled_by_default": true,
+      "parameters": {
+        "keyword": {
+          "type": "string",
+          "required": true
+        },
+        "arguments": {
+          "type": "array",
+          "required": false,
+          "default": null
+        },
+        "session_id": {
+          "type": "string",
+          "required": false,
+          "default": "default"
+        },
+        "raise_on_failure": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        },
+        "detail_level": {
+          "type": "string",
+          "required": false,
+          "default": "minimal",
+          "enum": [
+            "minimal",
+            "standard",
+            "full"
+          ]
+        },
+        "scenario_hint": {
+          "type": "string",
+          "required": false,
+          "default": null
+        },
+        "assign_to": {
+          "type": "string | array | null",
+          "required": false,
+          "default": null
+        },
+        "use_context": {
+          "type": "boolean | null",
+          "required": false,
+          "default": null
+        },
+        "mode": {
+          "type": "string",
+          "required": false,
+          "default": "keyword",
+          "enum": [
+            "keyword",
+            "evaluate"
+          ]
+        },
+        "expression": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "timeout_ms": {
+          "type": "integer | null",
+          "required": false,
+          "default": null
+        },
+        "bdd_group": {
+          "type": "string",
+          "required": false,
+          "default": ""
+        },
+        "bdd_intent": {
+          "type": "string",
+          "required": false,
+          "default": ""
+        },
+        "record": {
+          "type": "boolean | null",
+          "required": false,
+          "default": null
+        },
+        "pre_validate_timeout_ms": {
+          "type": "integer | null",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "execute_try_except",
+      "description": "",
+      "enabled_by_default": false,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": true
+        },
+        "try_steps": {
+          "type": "array",
+          "required": true
+        },
+        "except_patterns": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "except_steps": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "finally_steps": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "rethrow": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        }
+      }
+    },
+    {
+      "name": "fetch_artifact",
+      "description": "Retrieve externalized artifact content by ID.\n\nWhen tool responses are large, rf-mcp externalizes them to artifacts and returns\na summary with an artifact_id. Use this tool to retrieve the full content.",
+      "enabled_by_default": false,
+      "parameters": {
+        "artifact_id": {
+          "type": "string",
+          "required": true
+        },
+        "offset": {
+          "type": "integer",
+          "required": false,
+          "default": 0
+        },
+        "limit": {
+          "type": "integer",
+          "required": false,
+          "default": 4000
+        }
+      }
+    },
+    {
+      "name": "find_keywords",
+      "description": "Discover Robot Framework keywords using multiple strategies.\n\nWHEN TO USE THIS TOOL:\n- ALWAYS before calling execute_step with an unfamiliar keyword\n- When you're unsure of exact keyword name or spelling\n- To discover what keywords are available in imported libraries\n- When error says \"No keyword with name 'X' found\"",
+      "enabled_by_default": true,
+      "parameters": {
+        "query": {
+          "type": "string",
+          "required": true
+        },
+        "strategy": {
+          "type": "string",
+          "required": false,
+          "default": "semantic",
+          "enum": [
+            "semantic",
+            "pattern",
+            "catalog",
+            "session"
+          ]
+        },
+        "context": {
+          "type": "string",
+          "required": false,
+          "default": "web",
+          "enum": [
+            "web",
+            "mobile",
+            "api",
+            "desktop",
+            "generic",
+            "database"
+          ]
+        },
+        "session_id": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "library_name": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "current_state": {
+          "type": "object | null",
+          "required": false,
+          "default": null
+        },
+        "limit": {
+          "type": "integer | null",
+          "required": false,
+          "default": null
+        },
+        "strict_library": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        }
+      }
+    },
+    {
+      "name": "get_appium_locator_guidance",
+      "description": "Get comprehensive AppiumLibrary locator strategy guidance for AI agents.\n\nThis tool helps AI agents understand AppiumLibrary's locator strategies and\nprovides context-aware suggestions for mobile element location and error resolution.\n\nAppiumLibrary supports these locator strategies:\n\n**Basic Locators:**\n- id: Element ID (e.g., 'id=my_element' or just 'my_element')\n- xpath: XPath expression (e.g., '//*[@type=\"android.widget.EditText\"]')\n- identifier: Matches by @id attribute (e.g., 'identifier=my_element')\n- accessibility_id: Accessibility options utilize (e.g., 'accessibility_id=button3')\n- class: Matches by class (e.g., 'class=UIAPickerWheel')\n- name: Matches by @name attribute (e.g., 'name=my_element') - Only valid for Selendroid\n\n**Platform-Specific Locators:**\n- android: Android UI Automator (e.g., 'android=UiSelector().description(\"Apps\")')\n- ios: iOS UI Automation (e.g., 'ios=.buttons().withName(\"Apps\")')\n- predicate: iOS Predicate (e.g., 'predicate=name==\"login\"')\n- chain: iOS Class Chain (e.g., 'chain=XCUIElementTypeWindow[1]/*')\n\n**WebView Locators:**\n- css: CSS selector in webview (e.g., 'css=.green_button')\n\n**Default Behavior:**\n- By default, locators match against key attributes (id for all elements)\n- Plain text (e.g., 'my_element') is treated as ID lookup\n- XPath should start with // or use explicit 'xpath=' prefix\n\n**WebElement Support:**\nStarting with AppiumLibrary v1.4, you can pass WebElement objects:\n- Get elements with: Get WebElements or Get WebElement\n- Use directly: Click Element ${element}",
+      "enabled_by_default": false,
+      "parameters": {
+        "error_message": {
+          "type": "string",
+          "required": false,
+          "default": null
+        },
+        "keyword_name": {
+          "type": "string",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "get_application_state",
+      "description": "Retrieve current application state.",
+      "enabled_by_default": false,
+      "parameters": {
+        "state_type": {
+          "type": "string",
+          "required": false,
+          "default": "all"
+        },
+        "elements_of_interest": {
+          "type": "array",
+          "required": false,
+          "default": null
+        },
+        "session_id": {
+          "type": "string",
+          "required": false,
+          "default": "default"
+        }
+      }
+    },
+    {
+      "name": "get_available_keywords",
+      "description": "List available RF keywords with minimal metadata.\n\nReturns one entry per keyword with fields:\n- name: keyword name\n- library: library name\n- args: list of argument names\n- arg_types: list of argument types if available (empty when unknown)\n- short_doc: short documentation summary (no full docstrings)\n\nIf `library_name` is provided, results are filtered to that library, loading it on demand if needed.",
+      "enabled_by_default": false,
+      "parameters": {
+        "library_name": {
+          "type": "string",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "get_browser_locator_guidance",
+      "description": "Get comprehensive Browser Library (Playwright) locator strategy guidance for AI agents.\n\nThis tool helps AI agents understand Browser Library's selector strategies and\nprovides context-aware suggestions for element location and error resolution.\n\nBrowser Library uses Playwright's locator strategies with these key features:\n\n**Selector Strategies:**\n- css: CSS selector (default) - e.g., '.button' or 'css=.button'\n- xpath: XPath expression - e.g., '//button' or 'xpath=//button'\n- text: Text content matching - e.g., '\"Login\"' or 'text=Login'\n- id: Element ID - e.g., 'id=submit-btn'\n- data-testid: Test ID attribute - e.g., 'data-testid=login-button'\n\n**Advanced Features:**\n- Cascaded selectors: 'text=Hello >> ../.. >> .select_button'\n- iFrame piercing: 'id=myframe >>> .inner-button'\n- Shadow DOM: Automatic piercing with CSS and text engines\n- Strict mode: Controls behavior with multiple element matches\n- Element references: '${ref} >> .child' for chained operations\n\n**Implicit Detection Rules:**\n- Plain selectors \u2192 CSS (default): '.button' becomes 'css=.button'\n- Starting with // or .. \u2192 XPath: '//button' becomes 'xpath=//button'\n- Quoted text \u2192 Text selector: '\"Login\"' becomes 'text=Login'\n- Explicit format: 'strategy=value' for any strategy",
+      "enabled_by_default": false,
+      "parameters": {
+        "error_message": {
+          "type": "string",
+          "required": false,
+          "default": null
+        },
+        "keyword_name": {
+          "type": "string",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "get_context_variables",
+      "description": "Get all variables from a session.",
+      "enabled_by_default": false,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "get_keyword_documentation",
+      "description": "Get full documentation for a specific Robot Framework keyword using native RF libdoc.\n\nUses Robot Framework's native LibraryDocumentation and KeywordDoc objects to provide\ncomprehensive keyword information including source location, argument types, and\ndeprecation status when available.",
+      "enabled_by_default": false,
+      "parameters": {
+        "keyword_name": {
+          "type": "string",
+          "required": true
+        },
+        "library_name": {
+          "type": "string",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "get_keyword_info",
+      "description": "Get keyword/library docs or parse a signature. Call this before execute_step\nwhen you know the keyword name but not its arguments.\n\nModes: \"keyword\" (default \u2014 document one keyword), \"library\" (list a library's\nkeywords), \"session\" (resolve against the live session namespace), \"parse\"\n(parse a signature string). Pass session_id to scope the lookup to that\nsession's libraries.",
+      "enabled_by_default": true,
+      "parameters": {
+        "mode": {
+          "type": "string",
+          "required": false,
+          "default": "keyword"
+        },
+        "keyword_name": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "library_name": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "session_id": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "arguments": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "get_library_documentation",
+      "description": "Get full documentation for a Robot Framework library using native RF libdoc.\n\nUses Robot Framework's native LibraryDocumentation API to provide comprehensive\nlibrary information including library metadata and all keywords with their\ndocumentation, arguments, and metadata.",
+      "enabled_by_default": false,
+      "parameters": {
+        "library_name": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "get_library_status",
+      "description": "Get detailed installation status for a specific library.",
+      "enabled_by_default": false,
+      "parameters": {
+        "library_name": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "get_loaded_libraries",
+      "description": "Get status of all loaded Robot Framework libraries using both libdoc and inspection methods.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "get_locator_guidance",
+      "description": "Provide locator/selector guidance for Browser, SeleniumLibrary, AppiumLibrary, PlatynUI.BareMetal, or RequestsLibrary.\n\nFor API testing, call with library=\"requests\" (or \"api\") to get a\nRequestsLibrary request/response cookbook \u2014 session setup, response-field\naccess (${resp.json()[\"field\"]}), the $resp-in-Evaluate rule, Status Should\nBe, JSON body/headers, the Cookie token header, and expected_status= for\nnon-2xx \u2014 BEFORE writing Evaluate-based assertions.\n\nFor VISUAL validation, call with library=\"visual\" (or \"screenshot\") to learn\nWHEN a screenshot beats the DOM/ARIA tree (canvas/image text, layout/overlap,\nobscured elements, color, charts) and the dual read-back pattern \u2014 useful for\nany UI library (Browser/Selenium/Appium/PlatynUI) when a multimodal model\ndrives rf-mcp.",
+      "enabled_by_default": true,
+      "parameters": {
+        "library": {
+          "type": "string",
+          "required": false,
+          "default": "browser"
+        },
+        "error_message": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "keyword_name": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "get_page_source",
+      "description": "Get page source and context for a browser session with optional DOM filtering.",
+      "enabled_by_default": false,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": false,
+          "default": "default"
+        },
+        "full_source": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        },
+        "filtered": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        },
+        "filtering_level": {
+          "type": "string",
+          "required": false,
+          "default": "standard"
+        },
+        "include_reduced_dom": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        }
+      }
+    },
+    {
+      "name": "get_selenium_locator_guidance",
+      "description": "Get comprehensive SeleniumLibrary locator strategy guidance for AI agents.\n\nThis tool helps AI agents understand SeleniumLibrary's locator strategies and\nprovides context-aware suggestions for element location and error resolution.\n\nSeleniumLibrary supports these locator strategies:\n- id: Element id (e.g., 'id:example')\n- name: name attribute (e.g., 'name:example')\n- identifier: Either id or name (e.g., 'identifier:example')\n- class: Element class (e.g., 'class:example')\n- tag: Tag name (e.g., 'tag:div')\n- xpath: XPath expression (e.g., 'xpath://div[@id=\"example\"]')\n- css: CSS selector (e.g., 'css:div#example')\n- dom: DOM expression (e.g., 'dom:document.images[5]')\n- link: Exact link text (e.g., 'link:Click Here')\n- partial link: Partial link text (e.g., 'partial link:Click')\n- data: Element data-* attribute (e.g., 'data:id:my_id')\n- jquery: jQuery expression (e.g., 'jquery:div.example')\n- default: Keyword-specific default (e.g., 'default:example')",
+      "enabled_by_default": false,
+      "parameters": {
+        "error_message": {
+          "type": "string",
+          "required": false,
+          "default": null
+        },
+        "keyword_name": {
+          "type": "string",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "get_session_info",
+      "description": "Get comprehensive information about a session's configuration and state.",
+      "enabled_by_default": false,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": false,
+          "default": "default"
+        }
+      }
+    },
+    {
+      "name": "get_session_keyword_documentation",
+      "description": "Get documentation for a keyword (library or resource) available in the session RF Namespace.",
+      "enabled_by_default": false,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": true
+        },
+        "keyword_name": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "get_session_state",
+      "description": "Retrieve aggregated session state for debugging and visibility.",
+      "enabled_by_default": true,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": true
+        },
+        "sections": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "state_type": {
+          "type": "string",
+          "required": false,
+          "default": "all"
+        },
+        "elements_of_interest": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "page_source_filtered": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        },
+        "page_source_filtering_level": {
+          "type": "string",
+          "required": false,
+          "default": "standard",
+          "enum": [
+            "standard",
+            "aggressive"
+          ]
+        },
+        "include_reduced_dom": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        },
+        "include_dom_stream": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        },
+        "dom_chunk_size": {
+          "type": "integer",
+          "required": false,
+          "default": 65536
+        },
+        "mode": {
+          "type": "string",
+          "required": false,
+          "default": "auto",
+          "enum": [
+            "full",
+            "delta",
+            "auto",
+            "none"
+          ]
+        },
+        "since_version": {
+          "type": "integer | null",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "get_session_validation_status",
+      "description": "Get validation status of all steps in a session with intelligent session resolution.",
+      "enabled_by_default": false,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": false,
+          "default": ""
+        }
+      }
+    },
+    {
+      "name": "import_custom_library",
+      "description": "Import a custom Robot Framework library (module name or file path) into the session RF Namespace.",
+      "enabled_by_default": false,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": true
+        },
+        "name_or_path": {
+          "type": "string",
+          "required": true
+        },
+        "args": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "alias": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "import_resource",
+      "description": "Import a Robot Framework resource file into the session RF Namespace.",
+      "enabled_by_default": false,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": true
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "initialize_context",
+      "description": "Initialize a session with libraries and variables.\n\nNOTE: Full RF context mode is not yet implemented. This tool currently\ninitializes a session with the specified libraries and variables using\nthe existing session-based variable system.",
+      "enabled_by_default": false,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": true
+        },
+        "libraries": {
+          "type": "array",
+          "required": false,
+          "default": null
+        },
+        "variables": {
+          "type": "object",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "intent_action",
+      "description": "Execute a high-level intent that auto-resolves to the correct library keyword.\n\nValid intents: navigate, click, fill, hover, select, assert_visible,\nextract, wait_for.\n\nAlso accepted but DEPRECATED:\n- extract_text \u2014 equivalent to ``extract`` with ``mode=\"text\"``. The\n  ``extract`` verb is the canonical mode-aware getter (text /\n  attribute / count / value / url / title) and additionally surfaces\n  ``extracted_value`` at the top level of the response. ``extract_text``\n  will be removed in a future release; prefer ``intent=\"extract\"`` for\n  new code.\n\nThe intent is resolved based on the session's active library (Browser/SeleniumLibrary/AppiumLibrary).",
+      "enabled_by_default": true,
+      "parameters": {
+        "intent": {
+          "type": "string",
+          "required": true,
+          "enum": [
+            "navigate",
+            "click",
+            "fill",
+            "hover",
+            "select",
+            "assert_visible",
+            "extract_text",
+            "wait_for",
+            "extract"
+          ]
+        },
+        "target": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "value": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "session_id": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "options": {
+          "type": "object | null",
+          "required": false,
+          "default": null
+        },
+        "assign_to": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "detail_level": {
+          "type": "string",
+          "required": false,
+          "default": "standard",
+          "enum": [
+            "minimal",
+            "standard",
+            "full"
+          ]
+        },
+        "force": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        },
+        "match": {
+          "type": "string",
+          "required": false,
+          "default": "label",
+          "enum": [
+            "label",
+            "value",
+            "index",
+            "text",
+            "auto"
+          ]
+        },
+        "nth": {
+          "type": "integer | null",
+          "required": false,
+          "default": null
+        },
+        "commit": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        },
+        "mode": {
+          "type": "string",
+          "required": false,
+          "default": "text",
+          "enum": [
+            "text",
+            "attribute",
+            "count",
+            "value",
+            "url",
+            "title"
+          ]
+        },
+        "attribute_name": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "list_available_keywords",
+      "description": "List available keywords from imported libraries and resources in the session RF Namespace.",
+      "enabled_by_default": false,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "list_library_plugins",
+      "description": "List discovered library plugins with basic metadata.",
+      "enabled_by_default": false,
+      "parameters": {}
+    },
+    {
+      "name": "load_test_data",
+      "description": "Load test data from an external file (CSV, Excel, JSON) for data-driven testing.\n\nUse this to inspect external data before building data-driven test suites.\nWorks with DataDriver-compatible formats (CSV, Excel, JSON).\nIf DataDriver is not installed, falls back to built-in CSV/JSON parsing.",
+      "enabled_by_default": false,
+      "parameters": {
+        "file_path": {
+          "type": "string",
+          "required": true
+        },
+        "encoding": {
+          "type": "string",
+          "required": false,
+          "default": "utf-8"
+        },
+        "dialect": {
+          "type": "string",
+          "required": false,
+          "default": "Excel-EU"
+        },
+        "delimiter": {
+          "type": "string",
+          "required": false,
+          "default": ";"
+        },
+        "sheet_name": {
+          "type": "string",
+          "required": false,
+          "default": "0"
+        },
+        "limit": {
+          "type": "integer",
+          "required": false,
+          "default": 100
+        }
+      }
+    },
+    {
+      "name": "manage_attach",
+      "description": "Inspect or control attach bridge configuration.",
+      "enabled_by_default": true,
+      "parameters": {
+        "action": {
+          "type": "string",
+          "required": false,
+          "default": "status",
+          "enum": [
+            "status",
+            "info",
+            "stop",
+            "shutdown",
+            "cleanup",
+            "clean",
+            "reset",
+            "reconnect",
+            "disconnect_all",
+            "terminate",
+            "force_stop"
+          ]
+        }
+      }
+    },
+    {
+      "name": "manage_library_plugins",
+      "description": "Inspect or reload library plugins.",
+      "enabled_by_default": true,
+      "parameters": {
+        "action": {
+          "type": "string",
+          "required": false,
+          "default": "list",
+          "enum": [
+            "list",
+            "reload",
+            "diagnose"
+          ]
+        },
+        "plugin_name": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "manage_session",
+      "description": "Manage session lifecycle: initialize, configure libraries/variables, and organize tests.\n\nFor a NEW scenario, prefer analyze_scenario \u2014 it is the front door that CREATES\nthe session (and auto-configures libraries). Use manage_session for explicit session\nops on an existing session (importing extra libraries/resources/variables, multi-test\nstructure). Do NOT call action=\"init\" right after analyze_scenario \u2014 the session\nalready exists; that only causes redundant churn.\n\nWorkflows:\n    Single test:  analyze_scenario -> execute_step (repeat) -> build_test_suite\n    Multi-test:   analyze_scenario -> set_suite_setup -> start_test -> execute_step\n                  (repeat) -> end_test -> start_test -> ... -> build_test_suite\n    (action=\"init\" is the explicit alternative when you are NOT starting from\n    analyze_scenario, e.g. driving a bare session directly.)\n\nActions and parameters (session_id is always required):\n\n    init             - Create session and load libraries (explicit entry; for a new\n                       scenario prefer analyze_scenario instead).\n                       Params: libraries (list of library names),\n                               variables (dict or list to pre-set).\n\n    import_library   - Add a library to an existing session.\n                       Params: library_name, args (constructor args), alias.\n\n    import_resource  - Import a Robot Framework resource file.\n                       Params: resource_path, args.\n\n    set_variables    - Set variables in the session.\n                       Params: variables (dict {\"NAME\": \"value\"} or list [\"NAME=value\"]),\n                               scope (\"test\" | \"suite\" | \"global\", default \"suite\").\n\n    import_variables - Load variables from a Python variable file.\n                       Params: variable_file_path, args (passed to get_variables()).\n\n    start_test       - Begin a named test (enables multi-test mode). Local mode only.\n                       Params: test_name (required),\n                               test_documentation, test_tags,\n                               test_setup (dict {\"keyword\": \"...\", \"arguments\": [...]}),\n                               test_teardown (same format as test_setup).\n                       Alias: start_task.\n\n    end_test         - End the current test. Local mode only.\n                       Params: test_status (\"pass\" or \"fail\", default \"pass\"),\n                               test_message (optional error description).\n                       NOTE: test_status and test_message are session tracking metadata.\n                       They do NOT affect the .robot file generated by build_test_suite.\n                       Alias: end_task.\n\n    add_data_row     - Add a data row to the current data-driven (template) test.\n                       Requires an active test with template set via start_test.\n                       Params: args (list of values matching the template keyword's [Arguments]).\n                       Alias: data_row.\n                       Example:\n                         manage_session(action=\"start_test\", test_name=\"Cart Test\",\n                                      template=\"Add And Verify Product\")\n                         manage_session(action=\"add_data_row\", args=[\"Backpack\", \"1\", \"$29.99\"])\n                         manage_session(action=\"add_data_row\", args=[\"Bike Light\", \"2\", \"$39.98\"])\n                         manage_session(action=\"end_test\")\n                       The data rows appear under [Template] in the generated .robot file.\n\n    list_tests       - List all tests in the session with their status and step counts.\n                       Params: (none).\n\n    set_suite_setup    - Set a suite-level setup keyword (appears in *** Settings ***).\n                         Params: keyword (required), args (keyword arguments).\n\n    set_suite_teardown - Set a suite-level teardown keyword (appears in *** Settings ***).\n                         Params: keyword (required), args (keyword arguments).\n\nReturns:\n    Dict with success, session_id, and action-specific details.\n    On failure: error and guidance fields are present.\n\nExamples:\n    Initialize session with libraries:\n        manage_session(action=\"init\", session_id=\"s1\",\n                       libraries=[\"Browser\", \"BuiltIn\", \"Collections\"])\n\n    Set suite-level variables:\n        manage_session(action=\"set_variables\", session_id=\"s1\",\n                       variables={\"BASE_URL\": \"https://example.com\", \"TIMEOUT\": \"30\"})\n\n    Import a library with constructor arguments:\n        manage_session(action=\"import_library\", session_id=\"s1\",\n                       library_name=\"Browser\", args=[\"chromium\"])\n\n    Load a Python variable file:\n        manage_session(action=\"import_variables\", session_id=\"s1\",\n                       variable_file_path=\"config/variables.py\",\n                       args=[\"production\", \"secret_key\"])\n\n    Start a named test (multi-test mode):\n        manage_session(action=\"start_test\", session_id=\"s1\",\n                       test_name=\"Login Test\", test_tags=[\"smoke\"],\n                       test_setup={\"keyword\": \"Open Browser\", \"arguments\": [\"chromium\"]})\n\n    End the current test:\n        manage_session(action=\"end_test\", session_id=\"s1\")\n\n    Set suite setup (for generated .robot file):\n        manage_session(action=\"set_suite_setup\", session_id=\"s1\",\n                       keyword=\"New Browser\", args=[\"chromium\"])\n\n    Set suite teardown:\n        manage_session(action=\"set_suite_teardown\", session_id=\"s1\",\n                       keyword=\"Close Browser\")",
+      "enabled_by_default": true,
+      "parameters": {
+        "action": {
+          "type": "string",
+          "required": true,
+          "enum": [
+            "init",
+            "initialize",
+            "bootstrap",
+            "import_library",
+            "library",
+            "import_resource",
+            "resource",
+            "set_variables",
+            "variables",
+            "import_variables",
+            "load_variables",
+            "start_test",
+            "end_test",
+            "start_task",
+            "end_task",
+            "add_data_row",
+            "data_row",
+            "list_tests",
+            "set_suite_setup",
+            "set_suite_teardown",
+            "set_tool_profile",
+            "tool_profile"
+          ]
+        },
+        "session_id": {
+          "type": "string",
+          "required": false,
+          "default": ""
+        },
+        "libraries": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "variables": {
+          "type": "object | array | null",
+          "required": false,
+          "default": null
+        },
+        "resource_path": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "library_name": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "args": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "alias": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "scope": {
+          "type": "string",
+          "required": false,
+          "default": "suite",
+          "enum": [
+            "test",
+            "suite",
+            "global"
+          ]
+        },
+        "variable_file_path": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "test_name": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "test_documentation": {
+          "type": "string",
+          "required": false,
+          "default": ""
+        },
+        "test_tags": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "test_setup": {
+          "type": "object | null",
+          "required": false,
+          "default": null
+        },
+        "test_teardown": {
+          "type": "object | null",
+          "required": false,
+          "default": null
+        },
+        "template": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "test_status": {
+          "type": "string",
+          "required": false,
+          "default": "pass",
+          "enum": [
+            "pass",
+            "fail"
+          ]
+        },
+        "test_message": {
+          "type": "string",
+          "required": false,
+          "default": ""
+        },
+        "keyword": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "tool_profile": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "model_tier": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "scenario": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "profile": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "model_name": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "recommend_libraries",
+      "description": "Recommend libraries for a scenario or generate/merge sampling prompts.\n\nWHEN TO USE THIS TOOL:\n- IMMEDIATELY after analyze_scenario, before execute_step\n- When you encounter \"No keyword with name\" errors\n- To discover which libraries provide needed functionality\n\nThis tool analyzes scenario text and suggests relevant libraries, saving you from\nguessing which libraries to import.",
+      "enabled_by_default": true,
+      "parameters": {
+        "scenario": {
+          "type": "string",
+          "required": true
+        },
+        "context": {
+          "type": "string",
+          "required": false,
+          "default": "web",
+          "enum": [
+            "web",
+            "mobile",
+            "api",
+            "desktop",
+            "generic",
+            "database"
+          ]
+        },
+        "session_id": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        },
+        "max_recommendations": {
+          "type": "integer",
+          "required": false,
+          "default": 5
+        },
+        "check_availability": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        },
+        "apply_search_order": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        },
+        "mode": {
+          "type": "string",
+          "required": false,
+          "default": "direct",
+          "enum": [
+            "direct",
+            "sampling_prompt",
+            "sampling",
+            "merge_samples",
+            "merge"
+          ]
+        },
+        "samples": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "k": {
+          "type": "integer | null",
+          "required": false,
+          "default": null
+        },
+        "available_libraries": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "include_keywords": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        },
+        "use_llm_refinement": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        }
+      }
+    },
+    {
+      "name": "reload_library_plugins",
+      "description": "Reload library plugins from builtin definitions, entry points, and manifests.",
+      "enabled_by_default": false,
+      "parameters": {
+        "manifest_paths": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "resume_batch",
+      "description": "Resume a failed batch from its failure point, optionally inserting fix steps.\n\nAfter execute_batch returns status=FAIL with a batch_id, call this to:\n1. Re-run the failed step (with optional fix_steps injected before it)\n2. Continue executing remaining steps from the original batch",
+      "enabled_by_default": true,
+      "parameters": {
+        "batch_id": {
+          "type": "string",
+          "required": true
+        },
+        "fix_steps": {
+          "type": "array | null",
+          "required": false,
+          "default": null
+        },
+        "timeout_ms": {
+          "type": "integer | null",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "run_test_suite",
+      "description": "Validate or execute a Robot Framework suite.",
+      "enabled_by_default": true,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": false,
+          "default": ""
+        },
+        "suite_file_path": {
+          "type": "string",
+          "required": false,
+          "default": null
+        },
+        "mode": {
+          "type": "string",
+          "required": false,
+          "default": "full",
+          "enum": [
+            "dry",
+            "validate",
+            "full"
+          ]
+        },
+        "validation_level": {
+          "type": "string",
+          "required": false,
+          "default": "standard",
+          "enum": [
+            "minimal",
+            "standard",
+            "strict"
+          ]
+        },
+        "include_warnings": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        },
+        "execution_options": {
+          "type": "object",
+          "required": false,
+          "default": null
+        },
+        "output_level": {
+          "type": "string",
+          "required": false,
+          "default": "standard"
+        },
+        "capture_screenshots": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        }
+      }
+    },
+    {
+      "name": "run_test_suite_dry",
+      "description": "Validate test suite using Robot Framework dry run mode.\n\nRECOMMENDED WORKFLOW - SUITE VALIDATION:\nThis tool should be used AFTER build_test_suite to validate the generated suite:\n1. \u2705 build_test_suite - Generate .robot file from session steps\n2. \u2705 run_test_suite_dry (THIS TOOL) - Validate syntax and structure\n3. \u27a1\ufe0f run_test_suite - Execute if validation passes\n\nEnhanced Session Resolution:\n- If session_id provided and valid: Uses that session's generated suite\n- If session_id empty/invalid: Automatically finds most suitable session\n- If suite_file_path provided: Validates specified file directly\n\nValidation Levels:\n- minimal: Basic syntax checking only\n- standard: Syntax + keyword verification + imports (default)\n- strict: All checks + argument validation + structure analysis",
+      "enabled_by_default": false,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": false,
+          "default": ""
+        },
+        "suite_file_path": {
+          "type": "string",
+          "required": false,
+          "default": null
+        },
+        "validation_level": {
+          "type": "string",
+          "required": false,
+          "default": "standard"
+        },
+        "include_warnings": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        },
+        "execution_options": {
+          "type": "object",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "search_keywords",
+      "description": "Search for Robot Framework keywords matching a pattern using native RF libdoc.\n\nUses Robot Framework's native libdoc API for accurate search results and documentation.\nSearches through keyword names, documentation, short_doc, and tags.\n\nCRITICAL FIX: Now ensures all session libraries are loaded before search.",
+      "enabled_by_default": false,
+      "parameters": {
+        "pattern": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "set_library_search_order",
+      "description": "Set explicit library search order for keyword resolution.",
+      "enabled_by_default": true,
+      "parameters": {
+        "libraries": {
+          "type": "array",
+          "required": true
+        },
+        "session_id": {
+          "type": "string",
+          "required": false,
+          "default": "default"
+        }
+      }
+    },
+    {
+      "name": "set_variables",
+      "description": "Set multiple variables in the RF session Variables store.\n\n- variables: either a dict {name: value} or a list of \"name=value\" strings.\n- scope: one of 'test', 'suite', 'global' (default 'test').",
+      "enabled_by_default": false,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": true
+        },
+        "variables": {
+          "type": "object | array",
+          "required": true
+        },
+        "scope": {
+          "type": "string",
+          "required": false,
+          "default": "test"
+        }
+      }
+    },
+    {
+      "name": "suggest_next_step",
+      "description": "AI-driven suggestion for next test step.",
+      "enabled_by_default": false,
+      "parameters": {
+        "current_state": {
+          "type": "object",
+          "required": true
+        },
+        "test_objective": {
+          "type": "string",
+          "required": true
+        },
+        "executed_steps": {
+          "type": "array",
+          "required": false,
+          "default": null
+        },
+        "session_id": {
+          "type": "string",
+          "required": false,
+          "default": "default"
+        }
+      }
+    },
+    {
+      "name": "validate_scenario",
+      "description": "Pre-execution validation of scenario feasibility.",
+      "enabled_by_default": false,
+      "parameters": {
+        "parsed_scenario": {
+          "type": "object",
+          "required": true
+        },
+        "available_libraries": {
+          "type": "array",
+          "required": false,
+          "default": null
+        }
+      }
+    },
+    {
+      "name": "validate_test_readiness",
+      "description": "Check if session is ready for test suite generation.\n\nEnforces stepwise workflow by verifying all steps have been validated.\nUse this before calling build_test_suite() to ensure quality.",
+      "enabled_by_default": false,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": false,
+          "default": "default"
+        }
+      }
+    },
+    {
+      "name": "visual_check",
+      "description": "Capture a screenshot of the current UI for VISUAL validation (change:\nvisual-inspection-guidance).\n\nToken-cheap by DEFAULT: saves the screenshot to disk and returns the PATH as\ntext \u2014 a multimodal agent WITH file access reads that file on demand for checks\nthe DOM/ARIA can't do (canvas/image text, layout/overlap, obscured elements,\ncolor, charts). Call get_locator_guidance(library=\"visual\") for when to use it.\n\nSet return_image=true ONLY if your model is multimodal AND cannot read the saved\nfile (e.g. a hosted/remote MCP): the response then includes an image content\nblock. This requires ROBOTMCP_SCREENSHOT_MODE to allow images (image|auto);\ntext-only deployments (mode=file, the default) always return just the path so a\ntext-only model is never sent unsupported image content.\n\nWorks across Browser/SeleniumLibrary/AppiumLibrary/PlatynUI (uses the session's\nscreenshot keyword). Degrades cleanly if capture fails.",
+      "enabled_by_default": true,
+      "parameters": {
+        "session_id": {
+          "type": "string",
+          "required": true
+        },
+        "return_image": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        },
+        "filename": {
+          "type": "string | null",
+          "required": false,
+          "default": null
+        }
+      }
+    }
+  ]
+}
