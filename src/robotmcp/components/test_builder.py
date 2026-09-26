@@ -4274,6 +4274,12 @@ class TestBuilder:
         res_owners: Dict[str, set] = {}
         lib_owners: Dict[str, set] = {}
         project = storage.project_libraries(session_id) if session_id else {}
+        if not project:
+            # No project sources: nothing here can create an ambiguity the recorder
+            # did not already resolve, and touching the catalogue below would
+            # trigger the LibDoc store's lazy load of every bundled library
+            # (~0.8s cold) - a cost build_suite never paid before.
+            return set()
         project_paths = set()
         for ns_name, info in project.items():
             spec = storage.project_import_spec(session_id, ns_name) or {}
@@ -4283,7 +4289,12 @@ class TestBuilder:
                 bucket.setdefault(norm(kw), set()).add(ns_name)
         stdlib = {"BuiltIn", "Collections", "String", "DateTime",
                   "OperatingSystem", "Process", "XML", "Screenshot", "Dialogs", "Telnet"}
-        for imp in suite.imports or []:
+        # Catalogue libraries only if the LibDoc store is ALREADY loaded - never
+        # trigger its lazy initialisation from suite generation. When it is not
+        # loaded, project-vs-catalogue collisions are still safe: the recorder
+        # qualified such steps from RF's live namespace at execution time.
+        catalogue_ready = bool(getattr(storage, "_initialized", False))
+        for imp in (suite.imports or []) if catalogue_ready else []:
             if imp in project_paths or imp in stdlib:
                 continue
             info = storage.get_library_documentation(imp)
