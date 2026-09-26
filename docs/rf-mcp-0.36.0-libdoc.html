@@ -1,0 +1,781 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>rf-mcp 0.36.0 - Tool Reference</title>
+<style>body{font-family:system-ui,sans-serif;max-width:960px;margin:2em auto;padding:0 1em;color:#1a1a1a}h1{border-bottom:2px solid #2563eb;padding-bottom:.3em}.tool{margin:1.5em 0;padding:1em;border:1px solid #e5e7eb;border-radius:8px}.tool h3{margin:0 0 .5em;color:#2563eb}.tool.disabled h3{color:#9ca3af}.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.75em;margin-left:.5em}.enabled{background:#dcfce7;color:#166534}.disabled{background:#f3f4f6;color:#6b7280}pre{background:#f8fafc;padding:.75em;border-radius:4px;overflow-x:auto;font-size:.85em;white-space:pre-wrap}table{border-collapse:collapse;font-size:.85em;margin-top:.5em}td,th{border:1px solid #e5e7eb;padding:2px 8px;text-align:left}</style></head><body>
+<h1>rf-mcp v0.36.0 - MCP Tool Reference</h1>
+<p><strong>57</strong> tools total, <strong>19</strong> enabled by default</p><hr>
+<div class="tool" id="analyze_scenario"><h3>analyze_scenario<span class="badge enabled">enabled</span></h3><pre>Analyze a natural-language scenario into structured intent and create a session.
+
+WORKFLOW: This is the single front door — your FIRST tool call for any test
+scenario. It CREATES the session, so do NOT also call manage_session(action=&quot;init&quot;)
+for the same scenario (that causes redundant session churn). Reuse the returned
+session_id in every later call.
+
+What this tool does:
+1. Creates a new session with unique session_id (or reuses provided one)
+2. Analyzes scenario to detect context (web/api/mobile/desktop)
+3. Auto-configures libraries based on scenario text
+4. Returns session_id for use in ALL subsequent tool calls
+
+CRITICAL: Save the session_id from the response and use it in all other tool calls.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>scenario</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>context</td><td>string</td><td></td><td>&quot;web&quot;</td></tr>
+<tr><td>session_id</td><td>string</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="attach_status"><h3>attach_status<span class="badge disabled">disabled</span></h3><pre>Report attach-mode configuration and bridge health. Indicates whether execute_step(use_context=true) will route externally.</pre>
+</div>
+<div class="tool disabled" id="attach_stop_bridge"><h3>attach_stop_bridge<span class="badge disabled">disabled</span></h3><pre>Send a stop command to the external attach bridge (McpAttach) to exit MCP Serve in the debugged suite.</pre>
+</div>
+<div class="tool" id="build_test_suite"><h3>build_test_suite<span class="badge enabled">enabled</span></h3><pre>Generate a Robot Framework test suite from previously executed steps.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>test_name</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>session_id</td><td>string</td><td></td><td>&quot;&quot;</td></tr>
+<tr><td>tags</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>documentation</td><td>string</td><td></td><td>&quot;&quot;</td></tr>
+<tr><td>remove_library_prefixes</td><td>boolean</td><td></td><td>true</td></tr>
+<tr><td>bdd_style</td><td>boolean</td><td></td><td>false</td></tr>
+<tr><td>data_driven_mode</td><td>string</td><td></td><td>&quot;auto&quot;</td></tr>
+<tr><td>include_pre_start</td><td>boolean</td><td></td><td>false</td></tr>
+<tr><td>output_path</td><td>string</td><td></td><td>&quot;&quot;</td></tr>
+</table>
+</div>
+<div class="tool" id="check_library_availability"><h3>check_library_availability<span class="badge enabled">enabled</span></h3><pre>Verify that specified Robot Framework libraries can be imported/installed.
+
+Recommended as step 3 after analyze_scenario and recommend_libraries; use the recommended
+names to avoid unnecessary checks.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>libraries</td><td>array</td><td>yes</td><td></td></tr>
+</table>
+</div>
+<div class="tool disabled" id="debug_parse_keyword_arguments"><h3>debug_parse_keyword_arguments<span class="badge disabled">disabled</span></h3><pre>No description</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>keyword_name</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>arguments</td><td>array</td><td>yes</td><td></td></tr>
+<tr><td>library_name</td><td>string</td><td></td><td>null</td></tr>
+<tr><td>session_id</td><td>string</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="diagnose_library_plugin"><h3>diagnose_library_plugin<span class="badge disabled">disabled</span></h3><pre>Inspect metadata, capabilities, and hooks for a specific library plugin.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>plugin_name</td><td>string</td><td>yes</td><td></td></tr>
+</table>
+</div>
+<div class="tool disabled" id="diagnose_rf_context"><h3>diagnose_rf_context<span class="badge disabled">disabled</span></h3><pre>Inspect RF context state for a session: libraries, search order, and variables count.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td>yes</td><td></td></tr>
+</table>
+</div>
+<div class="tool disabled" id="discover_keywords"><h3>discover_keywords<span class="badge disabled">disabled</span></h3><pre>Find matching Robot Framework keywords for an action.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>action_description</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>context</td><td>string</td><td></td><td>&quot;web&quot;</td></tr>
+<tr><td>current_state</td><td>object</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="evaluate_expression"><h3>evaluate_expression<span class="badge disabled">disabled</span></h3><pre>Evaluate a Python expression in RF context (BuiltIn.Evaluate).
+
+- Uses the current RF session variables; supports ${var} inside the expression.
+- Optionally assigns the result to a variable name (test scope).</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>expression</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>assign_to</td><td>string | null</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool" id="execute_batch"><h3>execute_batch<span class="badge enabled">enabled</span></h3><pre>Execute multiple RF keywords in one call with recovery and variable chaining.
+
+Reduces N MCP round-trips to 1. Steps run sequentially; each step&#x27;s return
+value is available to later steps via ${STEP_N} references in arguments.
+Both 0-based (${STEP_0} = first step) and 1-based (${STEP_1} = first step)
+indexing are accepted. When ambiguous, 1-based is preferred.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>steps</td><td>array</td><td>yes</td><td></td></tr>
+<tr><td>on_failure</td><td>string</td><td></td><td>&quot;recover&quot;</td></tr>
+<tr><td>max_recovery_attempts</td><td>integer</td><td></td><td>2</td></tr>
+<tr><td>timeout_ms</td><td>integer</td><td></td><td>120000</td></tr>
+</table>
+</div>
+<div class="tool" id="execute_flow"><h3>execute_flow<span class="badge enabled">enabled</span></h3><pre>Execute structured flow (if/for/try) within a session.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>structure</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>session_id</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>condition</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>then_steps</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>else_steps</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>items</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>item_var</td><td>string</td><td></td><td>&quot;item&quot;</td></tr>
+<tr><td>stop_on_failure</td><td>boolean</td><td></td><td>true</td></tr>
+<tr><td>max_iterations</td><td>integer</td><td></td><td>1000</td></tr>
+<tr><td>try_steps</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>except_patterns</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>except_steps</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>finally_steps</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>rethrow</td><td>boolean</td><td></td><td>false</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="execute_for_each"><h3>execute_for_each<span class="badge disabled">disabled</span></h3><pre>No description</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>items</td><td>array | null</td><td>yes</td><td></td></tr>
+<tr><td>steps</td><td>array</td><td>yes</td><td></td></tr>
+<tr><td>item_var</td><td>string</td><td></td><td>&quot;item&quot;</td></tr>
+<tr><td>stop_on_failure</td><td>boolean</td><td></td><td>true</td></tr>
+<tr><td>max_iterations</td><td>integer</td><td></td><td>1000</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="execute_if"><h3>execute_if<span class="badge disabled">disabled</span></h3><pre>No description</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>condition</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>then_steps</td><td>array</td><td>yes</td><td></td></tr>
+<tr><td>else_steps</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>stop_on_failure</td><td>boolean</td><td></td><td>true</td></tr>
+</table>
+</div>
+<div class="tool" id="execute_step"><h3>execute_step<span class="badge enabled">enabled</span></h3><pre>Execute a single Robot Framework keyword (or Evaluate) within a session.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>keyword</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>arguments</td><td>array</td><td></td><td>null</td></tr>
+<tr><td>session_id</td><td>string</td><td></td><td>&quot;default&quot;</td></tr>
+<tr><td>raise_on_failure</td><td>boolean</td><td></td><td>true</td></tr>
+<tr><td>detail_level</td><td>string</td><td></td><td>&quot;minimal&quot;</td></tr>
+<tr><td>scenario_hint</td><td>string</td><td></td><td>null</td></tr>
+<tr><td>assign_to</td><td>string | array | null</td><td></td><td>null</td></tr>
+<tr><td>use_context</td><td>boolean | null</td><td></td><td>null</td></tr>
+<tr><td>mode</td><td>string</td><td></td><td>&quot;keyword&quot;</td></tr>
+<tr><td>expression</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>timeout_ms</td><td>integer | null</td><td></td><td>null</td></tr>
+<tr><td>bdd_group</td><td>string</td><td></td><td>&quot;&quot;</td></tr>
+<tr><td>bdd_intent</td><td>string</td><td></td><td>&quot;&quot;</td></tr>
+<tr><td>record</td><td>boolean | null</td><td></td><td>null</td></tr>
+<tr><td>pre_validate_timeout_ms</td><td>integer | null</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="execute_try_except"><h3>execute_try_except<span class="badge disabled">disabled</span></h3><pre>No description</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>try_steps</td><td>array</td><td>yes</td><td></td></tr>
+<tr><td>except_patterns</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>except_steps</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>finally_steps</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>rethrow</td><td>boolean</td><td></td><td>false</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="fetch_artifact"><h3>fetch_artifact<span class="badge disabled">disabled</span></h3><pre>Retrieve externalized artifact content by ID.
+
+When tool responses are large, rf-mcp externalizes them to artifacts and returns
+a summary with an artifact_id. Use this tool to retrieve the full content.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>artifact_id</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>offset</td><td>integer</td><td></td><td>0</td></tr>
+<tr><td>limit</td><td>integer</td><td></td><td>4000</td></tr>
+</table>
+</div>
+<div class="tool" id="find_keywords"><h3>find_keywords<span class="badge enabled">enabled</span></h3><pre>Discover Robot Framework keywords using multiple strategies.
+
+WHEN TO USE THIS TOOL:
+- ALWAYS before calling execute_step with an unfamiliar keyword
+- When you&#x27;re unsure of exact keyword name or spelling
+- To discover what keywords are available in imported libraries
+- When error says &quot;No keyword with name &#x27;X&#x27; found&quot;</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>query</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>strategy</td><td>string</td><td></td><td>&quot;semantic&quot;</td></tr>
+<tr><td>context</td><td>string</td><td></td><td>&quot;web&quot;</td></tr>
+<tr><td>session_id</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>library_name</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>current_state</td><td>object | null</td><td></td><td>null</td></tr>
+<tr><td>limit</td><td>integer | null</td><td></td><td>null</td></tr>
+<tr><td>strict_library</td><td>boolean</td><td></td><td>false</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="get_appium_locator_guidance"><h3>get_appium_locator_guidance<span class="badge disabled">disabled</span></h3><pre>Get comprehensive AppiumLibrary locator strategy guidance for AI agents.
+
+This tool helps AI agents understand AppiumLibrary&#x27;s locator strategies and
+provides context-aware suggestions for mobile element location and error resolution.
+
+AppiumLibrary supports these locator strategies:
+
+**Basic Locators:**
+- id: Element ID (e.g., &#x27;id=my_element&#x27; or just &#x27;my_element&#x27;)
+- xpath: XPath expression (e.g., &#x27;//*[@type=&quot;android.widget.EditText&quot;]&#x27;)
+- identifier: Matches by @id attribute (e.g., &#x27;identifier=my_element&#x27;)
+- accessibility_id: Accessibility options utilize (e.g., &#x27;accessibility_id=button3&#x27;)
+- class: Matches by class (e.g., &#x27;class=UIAPickerWheel&#x27;)
+- name: Matches by @name attribute (e.g., &#x27;name=my_element&#x27;) - Only valid for Selendroid
+
+**Platform-Specific Locators:**
+- android: Android UI Automator (e.g., &#x27;android=UiSelector().description(&quot;Apps&quot;)&#x27;)
+- ios: iOS UI Automation (e.g., &#x27;ios=.buttons().withName(&quot;Apps&quot;)&#x27;)
+- predicate: iOS Predicate (e.g., &#x27;predicate=name==&quot;login&quot;&#x27;)
+- chain: iOS Class Chain (e.g., &#x27;chain=XCUIElementTypeWindow[1]/*&#x27;)
+
+**WebView Locators:**
+- css: CSS selector in webview (e.g., &#x27;css=.green_button&#x27;)
+
+**Default Behavior:**
+- By default, locators match against key attributes (id for all elements)
+- Plain text (e.g., &#x27;my_element&#x27;) is treated as ID lookup
+- XPath should start with // or use explicit &#x27;xpath=&#x27; prefix
+
+**WebElement Support:**
+Starting with AppiumLibrary v1.4, you can pass WebElement objects:
+- Get elements with: Get WebElements or Get WebElement
+- Use directly: Click Element ${element}</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>error_message</td><td>string</td><td></td><td>null</td></tr>
+<tr><td>keyword_name</td><td>string</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="get_application_state"><h3>get_application_state<span class="badge disabled">disabled</span></h3><pre>Retrieve current application state.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>state_type</td><td>string</td><td></td><td>&quot;all&quot;</td></tr>
+<tr><td>elements_of_interest</td><td>array</td><td></td><td>null</td></tr>
+<tr><td>session_id</td><td>string</td><td></td><td>&quot;default&quot;</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="get_available_keywords"><h3>get_available_keywords<span class="badge disabled">disabled</span></h3><pre>List available RF keywords with minimal metadata.
+
+Returns one entry per keyword with fields:
+- name: keyword name
+- library: library name
+- args: list of argument names
+- arg_types: list of argument types if available (empty when unknown)
+- short_doc: short documentation summary (no full docstrings)
+
+If `library_name` is provided, results are filtered to that library, loading it on demand if needed.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>library_name</td><td>string</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="get_browser_locator_guidance"><h3>get_browser_locator_guidance<span class="badge disabled">disabled</span></h3><pre>Get comprehensive Browser Library (Playwright) locator strategy guidance for AI agents.
+
+This tool helps AI agents understand Browser Library&#x27;s selector strategies and
+provides context-aware suggestions for element location and error resolution.
+
+Browser Library uses Playwright&#x27;s locator strategies with these key features:
+
+**Selector Strategies:**
+- css: CSS selector (default) - e.g., &#x27;.button&#x27; or &#x27;css=.button&#x27;
+- xpath: XPath expression - e.g., &#x27;//button&#x27; or &#x27;xpath=//button&#x27;
+- text: Text content matching - e.g., &#x27;&quot;Login&quot;&#x27; or &#x27;text=Login&#x27;
+- id: Element ID - e.g., &#x27;id=submit-btn&#x27;
+- data-testid: Test ID attribute - e.g., &#x27;data-testid=login-button&#x27;
+
+**Advanced Features:**
+- Cascaded selectors: &#x27;text=Hello &gt;&gt; ../.. &gt;&gt; .select_button&#x27;
+- iFrame piercing: &#x27;id=myframe &gt;&gt;&gt; .inner-button&#x27;
+- Shadow DOM: Automatic piercing with CSS and text engines
+- Strict mode: Controls behavior with multiple element matches
+- Element references: &#x27;${ref} &gt;&gt; .child&#x27; for chained operations
+
+**Implicit Detection Rules:**
+- Plain selectors → CSS (default): &#x27;.button&#x27; becomes &#x27;css=.button&#x27;
+- Starting with // or .. → XPath: &#x27;//button&#x27; becomes &#x27;xpath=//button&#x27;
+- Quoted text → Text selector: &#x27;&quot;Login&quot;&#x27; becomes &#x27;text=Login&#x27;
+- Explicit format: &#x27;strategy=value&#x27; for any strategy</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>error_message</td><td>string</td><td></td><td>null</td></tr>
+<tr><td>keyword_name</td><td>string</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="get_context_variables"><h3>get_context_variables<span class="badge disabled">disabled</span></h3><pre>Get all variables from a session.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td>yes</td><td></td></tr>
+</table>
+</div>
+<div class="tool disabled" id="get_keyword_documentation"><h3>get_keyword_documentation<span class="badge disabled">disabled</span></h3><pre>Get full documentation for a specific Robot Framework keyword using native RF libdoc.
+
+Uses Robot Framework&#x27;s native LibraryDocumentation and KeywordDoc objects to provide
+comprehensive keyword information including source location, argument types, and
+deprecation status when available.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>keyword_name</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>library_name</td><td>string</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool" id="get_keyword_info"><h3>get_keyword_info<span class="badge enabled">enabled</span></h3><pre>Get keyword/library docs or parse a signature. Call this before execute_step
+when you know the keyword name but not its arguments.
+
+Modes: &quot;keyword&quot; (default — document one keyword), &quot;library&quot; (list a library&#x27;s
+keywords), &quot;session&quot; (resolve against the live session namespace), &quot;parse&quot;
+(parse a signature string). Pass session_id to scope the lookup to that
+session&#x27;s libraries.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>mode</td><td>string</td><td></td><td>&quot;keyword&quot;</td></tr>
+<tr><td>keyword_name</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>library_name</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>session_id</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>arguments</td><td>array | null</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="get_library_documentation"><h3>get_library_documentation<span class="badge disabled">disabled</span></h3><pre>Get full documentation for a Robot Framework library using native RF libdoc.
+
+Uses Robot Framework&#x27;s native LibraryDocumentation API to provide comprehensive
+library information including library metadata and all keywords with their
+documentation, arguments, and metadata.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>library_name</td><td>string</td><td>yes</td><td></td></tr>
+</table>
+</div>
+<div class="tool disabled" id="get_library_status"><h3>get_library_status<span class="badge disabled">disabled</span></h3><pre>Get detailed installation status for a specific library.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>library_name</td><td>string</td><td>yes</td><td></td></tr>
+</table>
+</div>
+<div class="tool disabled" id="get_loaded_libraries"><h3>get_loaded_libraries<span class="badge disabled">disabled</span></h3><pre>Get status of all loaded Robot Framework libraries using both libdoc and inspection methods.</pre>
+</div>
+<div class="tool" id="get_locator_guidance"><h3>get_locator_guidance<span class="badge enabled">enabled</span></h3><pre>Provide locator/selector guidance for Browser, SeleniumLibrary, AppiumLibrary, PlatynUI.BareMetal, or RequestsLibrary.
+
+For API testing, call with library=&quot;requests&quot; (or &quot;api&quot;) to get a
+RequestsLibrary request/response cookbook — session setup, response-field
+access (${resp.json()[&quot;field&quot;]}), the $resp-in-Evaluate rule, Status Should
+Be, JSON body/headers, the Cookie token header, and expected_status= for
+non-2xx — BEFORE writing Evaluate-based assertions.
+
+For VISUAL validation, call with library=&quot;visual&quot; (or &quot;screenshot&quot;) to learn
+WHEN a screenshot beats the DOM/ARIA tree (canvas/image text, layout/overlap,
+obscured elements, color, charts) and the dual read-back pattern — useful for
+any UI library (Browser/Selenium/Appium/PlatynUI) when a multimodal model
+drives rf-mcp.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>library</td><td>string</td><td></td><td>&quot;browser&quot;</td></tr>
+<tr><td>error_message</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>keyword_name</td><td>string | null</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="get_page_source"><h3>get_page_source<span class="badge disabled">disabled</span></h3><pre>Get page source and context for a browser session with optional DOM filtering.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td></td><td>&quot;default&quot;</td></tr>
+<tr><td>full_source</td><td>boolean</td><td></td><td>false</td></tr>
+<tr><td>filtered</td><td>boolean</td><td></td><td>false</td></tr>
+<tr><td>filtering_level</td><td>string</td><td></td><td>&quot;standard&quot;</td></tr>
+<tr><td>include_reduced_dom</td><td>boolean</td><td></td><td>true</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="get_selenium_locator_guidance"><h3>get_selenium_locator_guidance<span class="badge disabled">disabled</span></h3><pre>Get comprehensive SeleniumLibrary locator strategy guidance for AI agents.
+
+This tool helps AI agents understand SeleniumLibrary&#x27;s locator strategies and
+provides context-aware suggestions for element location and error resolution.
+
+SeleniumLibrary supports these locator strategies:
+- id: Element id (e.g., &#x27;id:example&#x27;)
+- name: name attribute (e.g., &#x27;name:example&#x27;)
+- identifier: Either id or name (e.g., &#x27;identifier:example&#x27;)
+- class: Element class (e.g., &#x27;class:example&#x27;)
+- tag: Tag name (e.g., &#x27;tag:div&#x27;)
+- xpath: XPath expression (e.g., &#x27;xpath://div[@id=&quot;example&quot;]&#x27;)
+- css: CSS selector (e.g., &#x27;css:div#example&#x27;)
+- dom: DOM expression (e.g., &#x27;dom:document.images[5]&#x27;)
+- link: Exact link text (e.g., &#x27;link:Click Here&#x27;)
+- partial link: Partial link text (e.g., &#x27;partial link:Click&#x27;)
+- data: Element data-* attribute (e.g., &#x27;data:id:my_id&#x27;)
+- jquery: jQuery expression (e.g., &#x27;jquery:div.example&#x27;)
+- default: Keyword-specific default (e.g., &#x27;default:example&#x27;)</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>error_message</td><td>string</td><td></td><td>null</td></tr>
+<tr><td>keyword_name</td><td>string</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="get_session_info"><h3>get_session_info<span class="badge disabled">disabled</span></h3><pre>Get comprehensive information about a session&#x27;s configuration and state.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td></td><td>&quot;default&quot;</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="get_session_keyword_documentation"><h3>get_session_keyword_documentation<span class="badge disabled">disabled</span></h3><pre>Get documentation for a keyword (library or resource) available in the session RF Namespace.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>keyword_name</td><td>string</td><td>yes</td><td></td></tr>
+</table>
+</div>
+<div class="tool" id="get_session_state"><h3>get_session_state<span class="badge enabled">enabled</span></h3><pre>Retrieve aggregated session state for debugging and visibility.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>sections</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>state_type</td><td>string</td><td></td><td>&quot;all&quot;</td></tr>
+<tr><td>elements_of_interest</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>page_source_filtered</td><td>boolean</td><td></td><td>false</td></tr>
+<tr><td>page_source_filtering_level</td><td>string</td><td></td><td>&quot;standard&quot;</td></tr>
+<tr><td>include_reduced_dom</td><td>boolean</td><td></td><td>true</td></tr>
+<tr><td>include_dom_stream</td><td>boolean</td><td></td><td>false</td></tr>
+<tr><td>dom_chunk_size</td><td>integer</td><td></td><td>65536</td></tr>
+<tr><td>mode</td><td>string</td><td></td><td>&quot;auto&quot;</td></tr>
+<tr><td>since_version</td><td>integer | null</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="get_session_validation_status"><h3>get_session_validation_status<span class="badge disabled">disabled</span></h3><pre>Get validation status of all steps in a session with intelligent session resolution.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td></td><td>&quot;&quot;</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="import_custom_library"><h3>import_custom_library<span class="badge disabled">disabled</span></h3><pre>Import a custom Robot Framework library (module name or file path) into the session RF Namespace.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>name_or_path</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>args</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>alias</td><td>string | null</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="import_resource"><h3>import_resource<span class="badge disabled">disabled</span></h3><pre>Import a Robot Framework resource file into the session RF Namespace.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>path</td><td>string</td><td>yes</td><td></td></tr>
+</table>
+</div>
+<div class="tool disabled" id="initialize_context"><h3>initialize_context<span class="badge disabled">disabled</span></h3><pre>Initialize a session with libraries and variables.
+
+NOTE: Full RF context mode is not yet implemented. This tool currently
+initializes a session with the specified libraries and variables using
+the existing session-based variable system.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>libraries</td><td>array</td><td></td><td>null</td></tr>
+<tr><td>variables</td><td>object</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool" id="intent_action"><h3>intent_action<span class="badge enabled">enabled</span></h3><pre>Execute a high-level intent that auto-resolves to the correct library keyword.
+
+Valid intents: navigate, click, fill, hover, select, assert_visible,
+extract, wait_for.
+
+Also accepted but DEPRECATED:
+- extract_text — equivalent to ``extract`` with ``mode=&quot;text&quot;``. The
+  ``extract`` verb is the canonical mode-aware getter (text /
+  attribute / count / value / url / title) and additionally surfaces
+  ``extracted_value`` at the top level of the response. ``extract_text``
+  will be removed in a future release; prefer ``intent=&quot;extract&quot;`` for
+  new code.
+
+The intent is resolved based on the session&#x27;s active library (Browser/SeleniumLibrary/AppiumLibrary).</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>intent</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>target</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>value</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>session_id</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>options</td><td>object | null</td><td></td><td>null</td></tr>
+<tr><td>assign_to</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>detail_level</td><td>string</td><td></td><td>&quot;standard&quot;</td></tr>
+<tr><td>force</td><td>boolean</td><td></td><td>false</td></tr>
+<tr><td>match</td><td>string</td><td></td><td>&quot;label&quot;</td></tr>
+<tr><td>nth</td><td>integer | null</td><td></td><td>null</td></tr>
+<tr><td>commit</td><td>boolean</td><td></td><td>false</td></tr>
+<tr><td>mode</td><td>string</td><td></td><td>&quot;text&quot;</td></tr>
+<tr><td>attribute_name</td><td>string | null</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="list_available_keywords"><h3>list_available_keywords<span class="badge disabled">disabled</span></h3><pre>List available keywords from imported libraries and resources in the session RF Namespace.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td>yes</td><td></td></tr>
+</table>
+</div>
+<div class="tool disabled" id="list_library_plugins"><h3>list_library_plugins<span class="badge disabled">disabled</span></h3><pre>List discovered library plugins with basic metadata.</pre>
+</div>
+<div class="tool disabled" id="load_test_data"><h3>load_test_data<span class="badge disabled">disabled</span></h3><pre>Load test data from an external file (CSV, Excel, JSON) for data-driven testing.
+
+Use this to inspect external data before building data-driven test suites.
+Works with DataDriver-compatible formats (CSV, Excel, JSON).
+If DataDriver is not installed, falls back to built-in CSV/JSON parsing.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>file_path</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>encoding</td><td>string</td><td></td><td>&quot;utf-8&quot;</td></tr>
+<tr><td>dialect</td><td>string</td><td></td><td>&quot;Excel-EU&quot;</td></tr>
+<tr><td>delimiter</td><td>string</td><td></td><td>&quot;;&quot;</td></tr>
+<tr><td>sheet_name</td><td>string</td><td></td><td>&quot;0&quot;</td></tr>
+<tr><td>limit</td><td>integer</td><td></td><td>100</td></tr>
+</table>
+</div>
+<div class="tool" id="manage_attach"><h3>manage_attach<span class="badge enabled">enabled</span></h3><pre>Inspect or control attach bridge configuration.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>action</td><td>string</td><td></td><td>&quot;status&quot;</td></tr>
+</table>
+</div>
+<div class="tool" id="manage_library_plugins"><h3>manage_library_plugins<span class="badge enabled">enabled</span></h3><pre>Inspect or reload library plugins.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>action</td><td>string</td><td></td><td>&quot;list&quot;</td></tr>
+<tr><td>plugin_name</td><td>string | null</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool" id="manage_session"><h3>manage_session<span class="badge enabled">enabled</span></h3><pre>Manage session lifecycle: initialize, configure libraries/variables, and organize tests.
+
+For a NEW scenario, prefer analyze_scenario — it is the front door that CREATES
+the session (and auto-configures libraries). Use manage_session for explicit session
+ops on an existing session (importing extra libraries/resources/variables, multi-test
+structure). Do NOT call action=&quot;init&quot; right after analyze_scenario — the session
+already exists; that only causes redundant churn.
+
+Workflows:
+    Single test:  analyze_scenario -&gt; execute_step (repeat) -&gt; build_test_suite
+    Multi-test:   analyze_scenario -&gt; set_suite_setup -&gt; start_test -&gt; execute_step
+                  (repeat) -&gt; end_test -&gt; start_test -&gt; ... -&gt; build_test_suite
+    (action=&quot;init&quot; is the explicit alternative when you are NOT starting from
+    analyze_scenario, e.g. driving a bare session directly.)
+
+Actions and parameters (session_id is always required):
+
+    init             - Create session and load libraries (explicit entry; for a new
+                       scenario prefer analyze_scenario instead).
+                       Params: libraries (list of library names),
+                               variables (dict or list to pre-set).
+
+    import_library   - Add a library to an existing session.
+                       Params: library_name, args (constructor args), alias.
+
+    import_resource  - Import a Robot Framework resource file.
+                       Params: resource_path, args.
+
+    set_variables    - Set variables in the session.
+                       Params: variables (dict {&quot;NAME&quot;: &quot;value&quot;} or list [&quot;NAME=value&quot;]),
+                               scope (&quot;test&quot; | &quot;suite&quot; | &quot;global&quot;, default &quot;suite&quot;).
+
+    import_variables - Load variables from a Python variable file.
+                       Params: variable_file_path, args (passed to get_variables()).
+
+    start_test       - Begin a named test (enables multi-test mode). Local mode only.
+                       Params: test_name (required),
+                               test_documentation, test_tags,
+                               test_setup (dict {&quot;keyword&quot;: &quot;...&quot;, &quot;arguments&quot;: [...]}),
+                               test_teardown (same format as test_setup).
+                       Alias: start_task.
+
+    end_test         - End the current test. Local mode only.
+                       Params: test_status (&quot;pass&quot; or &quot;fail&quot;, default &quot;pass&quot;),
+                               test_message (optional error description).
+                       NOTE: test_status and test_message are session tracking metadata.
+                       They do NOT affect the .robot file generated by build_test_suite.
+                       Alias: end_task.
+
+    add_data_row     - Add a data row to the current data-driven (template) test.
+                       Requires an active test with template set via start_test.
+                       Params: args (list of values matching the template keyword&#x27;s [Arguments]).
+                       Alias: data_row.
+                       Example:
+                         manage_session(action=&quot;start_test&quot;, test_name=&quot;Cart Test&quot;,
+                                      template=&quot;Add And Verify Product&quot;)
+                         manage_session(action=&quot;add_data_row&quot;, args=[&quot;Backpack&quot;, &quot;1&quot;, &quot;$29.99&quot;])
+                         manage_session(action=&quot;add_data_row&quot;, args=[&quot;Bike Light&quot;, &quot;2&quot;, &quot;$39.98&quot;])
+                         manage_session(action=&quot;end_test&quot;)
+                       The data rows appear under [Template] in the generated .robot file.
+
+    list_tests       - List all tests in the session with their status and step counts.
+                       Params: (none).
+
+    set_suite_setup    - Set a suite-level setup keyword (appears in *** Settings ***).
+                         Params: keyword (required), args (keyword arguments).
+
+    set_suite_teardown - Set a suite-level teardown keyword (appears in *** Settings ***).
+                         Params: keyword (required), args (keyword arguments).
+
+Returns:
+    Dict with success, session_id, and action-specific details.
+    On failure: error and guidance fields are present.
+
+Examples:
+    Initialize session with libraries:
+        manage_session(action=&quot;init&quot;, session_id=&quot;s1&quot;,
+                       libraries=[&quot;Browser&quot;, &quot;BuiltIn&quot;, &quot;Collections&quot;])
+
+    Set suite-level variables:
+        manage_session(action=&quot;set_variables&quot;, session_id=&quot;s1&quot;,
+                       variables={&quot;BASE_URL&quot;: &quot;https://example.com&quot;, &quot;TIMEOUT&quot;: &quot;30&quot;})
+
+    Import a library with constructor arguments:
+        manage_session(action=&quot;import_library&quot;, session_id=&quot;s1&quot;,
+                       library_name=&quot;Browser&quot;, args=[&quot;chromium&quot;])
+
+    Load a Python variable file:
+        manage_session(action=&quot;import_variables&quot;, session_id=&quot;s1&quot;,
+                       variable_file_path=&quot;config/variables.py&quot;,
+                       args=[&quot;production&quot;, &quot;secret_key&quot;])
+
+    Start a named test (multi-test mode):
+        manage_session(action=&quot;start_test&quot;, session_id=&quot;s1&quot;,
+                       test_name=&quot;Login Test&quot;, test_tags=[&quot;smoke&quot;],
+                       test_setup={&quot;keyword&quot;: &quot;Open Browser&quot;, &quot;arguments&quot;: [&quot;chromium&quot;]})
+
+    End the current test:
+        manage_session(action=&quot;end_test&quot;, session_id=&quot;s1&quot;)
+
+    Set suite setup (for generated .robot file):
+        manage_session(action=&quot;set_suite_setup&quot;, session_id=&quot;s1&quot;,
+                       keyword=&quot;New Browser&quot;, args=[&quot;chromium&quot;])
+
+    Set suite teardown:
+        manage_session(action=&quot;set_suite_teardown&quot;, session_id=&quot;s1&quot;,
+                       keyword=&quot;Close Browser&quot;)</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>action</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>session_id</td><td>string</td><td></td><td>&quot;&quot;</td></tr>
+<tr><td>libraries</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>variables</td><td>object | array | null</td><td></td><td>null</td></tr>
+<tr><td>resource_path</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>library_name</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>args</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>alias</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>scope</td><td>string</td><td></td><td>&quot;suite&quot;</td></tr>
+<tr><td>variable_file_path</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>test_name</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>test_documentation</td><td>string</td><td></td><td>&quot;&quot;</td></tr>
+<tr><td>test_tags</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>test_setup</td><td>object | null</td><td></td><td>null</td></tr>
+<tr><td>test_teardown</td><td>object | null</td><td></td><td>null</td></tr>
+<tr><td>template</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>test_status</td><td>string</td><td></td><td>&quot;pass&quot;</td></tr>
+<tr><td>test_message</td><td>string</td><td></td><td>&quot;&quot;</td></tr>
+<tr><td>keyword</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>tool_profile</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>model_tier</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>scenario</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>profile</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>model_name</td><td>string | null</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool" id="recommend_libraries"><h3>recommend_libraries<span class="badge enabled">enabled</span></h3><pre>Recommend libraries for a scenario or generate/merge sampling prompts.
+
+WHEN TO USE THIS TOOL:
+- IMMEDIATELY after analyze_scenario, before execute_step
+- When you encounter &quot;No keyword with name&quot; errors
+- To discover which libraries provide needed functionality
+
+This tool analyzes scenario text and suggests relevant libraries, saving you from
+guessing which libraries to import.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>scenario</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>context</td><td>string</td><td></td><td>&quot;web&quot;</td></tr>
+<tr><td>session_id</td><td>string | null</td><td></td><td>null</td></tr>
+<tr><td>max_recommendations</td><td>integer</td><td></td><td>5</td></tr>
+<tr><td>check_availability</td><td>boolean</td><td></td><td>true</td></tr>
+<tr><td>apply_search_order</td><td>boolean</td><td></td><td>true</td></tr>
+<tr><td>mode</td><td>string</td><td></td><td>&quot;direct&quot;</td></tr>
+<tr><td>samples</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>k</td><td>integer | null</td><td></td><td>null</td></tr>
+<tr><td>available_libraries</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>include_keywords</td><td>boolean</td><td></td><td>true</td></tr>
+<tr><td>use_llm_refinement</td><td>boolean</td><td></td><td>false</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="reload_library_plugins"><h3>reload_library_plugins<span class="badge disabled">disabled</span></h3><pre>Reload library plugins from builtin definitions, entry points, and manifests.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>manifest_paths</td><td>array | null</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool" id="resume_batch"><h3>resume_batch<span class="badge enabled">enabled</span></h3><pre>Resume a failed batch from its failure point, optionally inserting fix steps.
+
+After execute_batch returns status=FAIL with a batch_id, call this to:
+1. Re-run the failed step (with optional fix_steps injected before it)
+2. Continue executing remaining steps from the original batch</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>batch_id</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>fix_steps</td><td>array | null</td><td></td><td>null</td></tr>
+<tr><td>timeout_ms</td><td>integer | null</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool" id="run_test_suite"><h3>run_test_suite<span class="badge enabled">enabled</span></h3><pre>Validate or execute a Robot Framework suite.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td></td><td>&quot;&quot;</td></tr>
+<tr><td>suite_file_path</td><td>string</td><td></td><td>null</td></tr>
+<tr><td>mode</td><td>string</td><td></td><td>&quot;full&quot;</td></tr>
+<tr><td>validation_level</td><td>string</td><td></td><td>&quot;standard&quot;</td></tr>
+<tr><td>include_warnings</td><td>boolean</td><td></td><td>true</td></tr>
+<tr><td>execution_options</td><td>object</td><td></td><td>null</td></tr>
+<tr><td>output_level</td><td>string</td><td></td><td>&quot;standard&quot;</td></tr>
+<tr><td>capture_screenshots</td><td>boolean</td><td></td><td>false</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="run_test_suite_dry"><h3>run_test_suite_dry<span class="badge disabled">disabled</span></h3><pre>Validate test suite using Robot Framework dry run mode.
+
+RECOMMENDED WORKFLOW - SUITE VALIDATION:
+This tool should be used AFTER build_test_suite to validate the generated suite:
+1. ✅ build_test_suite - Generate .robot file from session steps
+2. ✅ run_test_suite_dry (THIS TOOL) - Validate syntax and structure
+3. ➡️ run_test_suite - Execute if validation passes
+
+Enhanced Session Resolution:
+- If session_id provided and valid: Uses that session&#x27;s generated suite
+- If session_id empty/invalid: Automatically finds most suitable session
+- If suite_file_path provided: Validates specified file directly
+
+Validation Levels:
+- minimal: Basic syntax checking only
+- standard: Syntax + keyword verification + imports (default)
+- strict: All checks + argument validation + structure analysis</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td></td><td>&quot;&quot;</td></tr>
+<tr><td>suite_file_path</td><td>string</td><td></td><td>null</td></tr>
+<tr><td>validation_level</td><td>string</td><td></td><td>&quot;standard&quot;</td></tr>
+<tr><td>include_warnings</td><td>boolean</td><td></td><td>true</td></tr>
+<tr><td>execution_options</td><td>object</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="search_keywords"><h3>search_keywords<span class="badge disabled">disabled</span></h3><pre>Search for Robot Framework keywords matching a pattern using native RF libdoc.
+
+Uses Robot Framework&#x27;s native libdoc API for accurate search results and documentation.
+Searches through keyword names, documentation, short_doc, and tags.
+
+CRITICAL FIX: Now ensures all session libraries are loaded before search.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>pattern</td><td>string</td><td>yes</td><td></td></tr>
+</table>
+</div>
+<div class="tool" id="set_library_search_order"><h3>set_library_search_order<span class="badge enabled">enabled</span></h3><pre>Set explicit library search order for keyword resolution.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>libraries</td><td>array</td><td>yes</td><td></td></tr>
+<tr><td>session_id</td><td>string</td><td></td><td>&quot;default&quot;</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="set_variables"><h3>set_variables<span class="badge disabled">disabled</span></h3><pre>Set multiple variables in the RF session Variables store.
+
+- variables: either a dict {name: value} or a list of &quot;name=value&quot; strings.
+- scope: one of &#x27;test&#x27;, &#x27;suite&#x27;, &#x27;global&#x27; (default &#x27;test&#x27;).</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>variables</td><td>object | array</td><td>yes</td><td></td></tr>
+<tr><td>scope</td><td>string</td><td></td><td>&quot;test&quot;</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="suggest_next_step"><h3>suggest_next_step<span class="badge disabled">disabled</span></h3><pre>AI-driven suggestion for next test step.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>current_state</td><td>object</td><td>yes</td><td></td></tr>
+<tr><td>test_objective</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>executed_steps</td><td>array</td><td></td><td>null</td></tr>
+<tr><td>session_id</td><td>string</td><td></td><td>&quot;default&quot;</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="validate_scenario"><h3>validate_scenario<span class="badge disabled">disabled</span></h3><pre>Pre-execution validation of scenario feasibility.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>parsed_scenario</td><td>object</td><td>yes</td><td></td></tr>
+<tr><td>available_libraries</td><td>array</td><td></td><td>null</td></tr>
+</table>
+</div>
+<div class="tool disabled" id="validate_test_readiness"><h3>validate_test_readiness<span class="badge disabled">disabled</span></h3><pre>Check if session is ready for test suite generation.
+
+Enforces stepwise workflow by verifying all steps have been validated.
+Use this before calling build_test_suite() to ensure quality.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td></td><td>&quot;default&quot;</td></tr>
+</table>
+</div>
+<div class="tool" id="visual_check"><h3>visual_check<span class="badge enabled">enabled</span></h3><pre>Capture a screenshot of the current UI for VISUAL validation (change:
+visual-inspection-guidance).
+
+Token-cheap by DEFAULT: saves the screenshot to disk and returns the PATH as
+text — a multimodal agent WITH file access reads that file on demand for checks
+the DOM/ARIA can&#x27;t do (canvas/image text, layout/overlap, obscured elements,
+color, charts). Call get_locator_guidance(library=&quot;visual&quot;) for when to use it.
+
+Set return_image=true ONLY if your model is multimodal AND cannot read the saved
+file (e.g. a hosted/remote MCP): the response then includes an image content
+block. This requires ROBOTMCP_SCREENSHOT_MODE to allow images (image|auto);
+text-only deployments (mode=file, the default) always return just the path so a
+text-only model is never sent unsupported image content.
+
+Works across Browser/SeleniumLibrary/AppiumLibrary/PlatynUI (uses the session&#x27;s
+screenshot keyword). Degrades cleanly if capture fails.</pre>
+<table><tr><th>parameter</th><th>type</th><th>required</th><th>default</th></tr>
+<tr><td>session_id</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>return_image</td><td>boolean</td><td></td><td>false</td></tr>
+<tr><td>filename</td><td>string | null</td><td></td><td>null</td></tr>
+</table>
+</div>
+</body></html>

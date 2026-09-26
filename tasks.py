@@ -69,3 +69,23 @@ def lint(_context):
 def build(_context):
     """Build distribution artifacts."""
     _run(["uv", "build"])
+
+
+@task
+def libdoc(_context):
+    """Regenerate the documentation shipped with a release.
+
+    - docs/robotmcp.html: Robot Framework libdoc for the McpAttach library
+    - docs/rf-mcp-<version>-libdoc.{json,html}: MCP tool reference (all tools,
+      parameter schemas, enabled-by-default state)
+    """
+    _run(["uv", "run", "python", "-m", "robot.libdoc",
+          "robotmcp.attach.McpAttach", "docs/robotmcp.html"])
+    _run(["uv", "run", "python", "scripts/generate_tool_reference.py", "--out-dir", "docs"])
+
+
+@task(pre=[libdoc])
+def release(_context):
+    """Prepare release artifacts: regenerate docs, then build sdist + wheel into dist/."""
+    _run(["rm", "-rf", "dist"])
+    _run(["uv", "build"])
