@@ -18,9 +18,14 @@ pip install "rf-mcp[desktop]"                           # pip/poetry/pdm need no
 
 ## Highlights
 
-- **Custom project keywords are discoverable.** Keywords from a project's own libraries and
-  resource files imported into a session now show up in `find_keywords`, not just execute.
-  Scoped per session, so concurrent projects stay isolated.
+- **Project keywords work in every tool.** Keywords from your own libraries and resource
+  files are found by `find_keywords` (also in web sessions) and documented by
+  `get_keyword_info` — including qualified names (`MyLib.My Keyword`), resource and alias
+  scoping, and `mode="library"` for resources. `get_session_state` lists them under
+  `project_sources`.
+- **Generated suites replay what ran.** `build_test_suite` imports project libraries by path
+  with their arguments and alias, and keeps a `Library.` prefix when it disambiguates a
+  keyword — so `run_test_suite` passes suites that passed live.
 - **`intent_action` is recoverable for weaker models.** A literal `"null"`/`"None"` is treated
   as absent; a missing `target` is rejected naming the parameter with an example; an omitted
   `session_id` resolves to the only session with libraries loaded (reported as `session_note`)
@@ -33,9 +38,20 @@ pip install "rf-mcp[desktop]"                           # pip/poetry/pdm need no
 
 ## Fixes
 
+- A library imported with arguments or an alias no longer gains a second instance with
+  default configuration before each step.
+- `set_library_search_order` accepts project libraries and reports entries it cannot apply
+  instead of dropping them silently.
+- `check_library_availability` accepts library and resource file paths.
+- `execute_flow` steps accept `args` as well as `arguments`, like `execute_batch`.
 - Seven latent crashes on error and fallback paths, e.g. a `NameError` at import time when
   Robot Framework is unavailable, and snapshot compression (`fold_lists`) failing outright.
 - Dashboard (frontend) validation fixes: honest browser/platform metadata, session-switch race.
+
+## Known limitation
+
+All sessions in one rf-mcp process share a single Robot Framework namespace: two sessions
+importing same-named project libraries or resources can collide. Use one project per server.
 
 ## Dependencies
 
