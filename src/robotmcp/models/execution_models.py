@@ -23,6 +23,11 @@ class ExecutionStep:
     assigned_variables: List[str] = field(default_factory=list)  # Variables assigned from this step
     assignment_type: Optional[str] = None  # "single", "multiple", "none"
 
+    # RF library/resource that actually ran this keyword (RF namespace owner name,
+    # i.e. the alias for an aliased import). Lets build_test_suite qualify a keyword
+    # that only resolved because of the live search order at that moment.
+    resolved_library: Optional[str] = None
+
     # BDD step grouping (Phase 2 of BDD quality improvement)
     bdd_group: Optional[str] = None    # Group name, e.g., "add product to cart"
     bdd_intent: Optional[str] = None   # "given", "when", "then", "and", "but"

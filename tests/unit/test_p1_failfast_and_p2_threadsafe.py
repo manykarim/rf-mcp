@@ -382,28 +382,35 @@ class TestP1P2Integration:
             mock_ns.get_runner.return_value = mock_runner
             mock_vars = MagicMock(spec=[])
 
-            with patch(
-                "robotmcp.components.execution.rf_native_context_manager.EXECUTION_CONTEXTS"
-            ) as mock_ec:
-                mock_ctx = MagicMock()
-                mock_ec.current = mock_ctx
-                mock_ctx.steps = []
-
-                with _suppress_stdout():
-                    result = mgr._execute_with_native_resolution(
-                        session_id=f"t-{thread_id}",
-                        keyword_name="Fail",
-                        arguments=[],
-                        namespace=mock_ns,
-                        variables=mock_vars,
-                    )
+            with _suppress_stdout():
+                result = mgr._execute_with_native_resolution(
+                    session_id=f"t-{thread_id}",
+                    keyword_name="Fail",
+                    arguments=[],
+                    namespace=mock_ns,
+                    variables=mock_vars,
+                )
             results[thread_id] = result
 
-        threads = [threading.Thread(target=worker, args=(i,)) for i in range(n_threads)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=10)
+        # Patch ONCE, in this thread, around the whole fan-out. Each worker used to
+        # enter its own `with patch(...)` on the same module attribute concurrently;
+        # mock.patch is not thread-safe for that - a thread entering while another's
+        # patch is active records THAT mock as "the original" and restores it on
+        # exit. The production module was left holding a MagicMock for the rest of
+        # the session, so every later test that executed a real keyword silently ran
+        # against a mock (found via test_project_keywords_all_tools, whose keywords
+        # "returned" <MagicMock name='EXECUTION_CONTEXTS'> only in full-suite order).
+        with patch(
+            "robotmcp.components.execution.rf_native_context_manager.EXECUTION_CONTEXTS"
+        ) as mock_ec:
+            mock_ctx = MagicMock()
+            mock_ctx.steps = []
+            mock_ec.current = mock_ctx
+            threads = [threading.Thread(target=worker, args=(i,)) for i in range(n_threads)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
 
         # All should have failed with their specific error
         for i in range(n_threads):

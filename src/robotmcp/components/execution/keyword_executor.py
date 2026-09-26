@@ -2639,6 +2639,9 @@ class KeywordExecutor:
                 if step_result_value is None and "output" in result:
                     step_result_value = result.get("output")
                 step.mark_success(step_result_value)
+                step.resolved_library = result.get("resolved_library")
+                if result.get("qualified_keyword"):
+                    step.keyword = result["qualified_keyword"]
                 # F-N12: gate step recording so build_test_suite emits a clean
                 # narrative instead of every page-state probe.
                 record_resolved = _resolve_record_gate(
@@ -3936,6 +3939,32 @@ class KeywordExecutor:
                 if ctx_info is not None:
                     session_order = getattr(session, "search_order", None)
                     if session_order:
+                        # Project sources are recorded on the session by PATH, but
+                        # the RF namespace knows them by NAME (or alias). Map them,
+                        # or (a) RF's search order holds paths that match nothing,
+                        # and (b) the "ensure imported" loop below never finds them
+                        # and re-imports the path bare - which for a library
+                        # imported with args or an alias creates a SECOND instance
+                        # with default configuration ("Multiple keywords with name
+                        # 'Acme Environment' found: AcmeCfg... / Cfg...").
+                        _project_ns: set = set()
+                        try:
+                            from robotmcp.utils.rf_libdoc_integration import (
+                                get_rf_doc_storage,
+                            )
+
+                            _storage = get_rf_doc_storage()
+                            _mapped = []
+                            for _entry in session_order:
+                                _ns_name = _storage._resolve_project_name(session_id, _entry)
+                                if _ns_name:
+                                    _project_ns.add(_ns_name)
+                                    _entry = _ns_name
+                                if _entry not in _mapped:
+                                    _mapped.append(_entry)
+                            session_order = _mapped
+                        except Exception as _map_exc:
+                            logger.debug("project search-order mapping skipped: %s", _map_exc)
                         ctx_info["imported_libraries"] = list(session_order)
                         # Ensure every session library is ACTUALLY imported
                         # into the live RF namespace. The context may have
@@ -3952,6 +3981,10 @@ class KeywordExecutor:
                             getattr(_kw_store, "libraries", {}) if _kw_store else {}
                         )
                         for _lib in session_order:
+                            # Project sources were imported by import_library_for_
+                            # session with their real args/alias; never re-import.
+                            if _lib in _project_ns:
+                                continue
                             if _lib and _lib not in _loaded:
                                 try:
                                     _ns.import_library(_lib, args=(), alias=None)
@@ -3989,6 +4022,44 @@ class KeywordExecutor:
                 logger.debug(
                     f"Updated session variables from RF native context: {len(result['variables'])} variables"
                 )
+
+            # Record which library/resource actually ran the keyword (RF namespace,
+            # authoritative under the search order in force right now).
+            if result.get("success") and "." not in keyword:
+                try:
+                    from robot.running.context import EXECUTION_CONTEXTS as _EC
+
+                    _rctx = _EC.current
+                    if _rctx:
+                        _rrunner = _rctx.namespace.get_runner(keyword)
+                        _rowner = getattr(getattr(_rrunner, "keyword", None), "owner", None)
+                        _rname = getattr(_rowner, "name", None)
+                        if _rname:
+                            result["resolved_library"] = _rname
+                            # RF resolves resource-file keywords first, then library
+                            # keywords, and consults the search order only when the
+                            # tier it used has >1 candidate. In that case the bare name
+                            # ran only because of the search order in force right now;
+                            # record the qualified form so a generated suite replays
+                            # the same keyword instead of raising "Multiple keywords
+                            # with name ... found".
+                            _store = getattr(_rctx.namespace, "_kw_store", None)
+                            if _store is not None:
+                                _res_owners = {
+                                    k.owner.name
+                                    for _r in _store.resources.values()
+                                    for k in _r.find_keywords(keyword)
+                                }
+                                _lib_owners = {
+                                    k.owner.name
+                                    for _l in _store.libraries.values()
+                                    for k in _l.find_keywords(keyword)
+                                }
+                                _tier = _res_owners or _lib_owners
+                                if len(_tier) > 1 and _rname in _tier:
+                                    result["qualified_keyword"] = f"{_rname}.{keyword}"
+                except Exception as _own_exc:
+                    logger.debug("resolved-library capture skipped: %s", _own_exc)
 
             # Bridge RF-context browser state back to session for downstream services
             try:

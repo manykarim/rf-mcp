@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 import os
+import re
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -449,24 +450,56 @@ def _project_keyword_matches_for_query(
     def _norm(text: str) -> str:
         return " ".join((text or "").lower().replace("_", " ").split())
 
+    def _words(text: str) -> set:
+        return {w.strip(".,;:()`'\"") for w in _norm(text).split()} - {""}
+
+    def _word_hit(w: str, pool: set) -> bool:
+        # Exact, or a conservative stem match ("log" ~ "login", "click" ~ "clicks"):
+        # shorter side >= 3 chars and at most 3 extra characters, so "add" does not
+        # match "address".
+        if w in pool:
+            return True
+        for u in pool:
+            a, b = (w, u) if len(w) <= len(u) else (u, w)
+            if len(a) >= 3 and b.startswith(a) and len(b) - len(a) <= 3:
+                return True
+        return False
+
     q = _norm(query)
     # WORD-based, not substring: a substring test matched "a" (from "navigate to a
     # web page") inside "acme add" and scored an unrelated keyword 0.75. Short tokens
     # are dropped so stopwords cannot carry a match on their own.
-    q_words = {w for w in q.split() if len(w) > 2}
+    q_words = {w for w in _words(q) if len(w) > 2}
     out: List[Dict[str, Any]] = []
     for ki in keywords:
         name_n = _norm(ki.name)
-        name_words = set(name_n.split())
+        name_words = _words(ki.name)
+        doc_n = _norm(ki.doc)
         if name_n == q:
             confidence = 1.0
-        elif q and (q in name_n or name_n in q):
+        elif q and (
+            re.search(rf"\b{re.escape(q)}\b", name_n)
+            or re.search(rf"\b{re.escape(name_n)}\b", q)
+        ):
+            # Whole-word containment ("double" in "acme double"). A CHARACTER
+            # substring test scored "add" 0.9 against "Enter Address".
             confidence = 0.9
-        elif q_words and q_words <= name_words:
+        elif q_words and all(_word_hit(w, name_words) for w in q_words):
             confidence = 0.85
-        elif q_words and len(q_words & name_words) / len(q_words) >= 0.5:
-            confidence = 0.7
-        elif q and len(q) > 2 and q in _norm(ki.doc):
+        elif q_words:
+            # Graded relevance from BOTH name and documentation. The previous
+            # if-chain gave every partial name match a flat 0.7 and only looked at the
+            # documentation when the name matched nothing, so for "log in to acme"
+            # `Acme Add` tied with `Acme Login As` (doc: "Log in to Acme ...").
+            name_ratio = sum(_word_hit(w, name_words) for w in q_words) / len(q_words)
+            doc_ratio = sum(_word_hit(w, _words(ki.doc)) for w in q_words) / len(q_words)
+            phrase = len(q) > 2 and q in doc_n
+            if name_ratio < 0.5 and doc_ratio < 0.5 and not phrase:
+                continue
+            confidence = min(
+                0.84, 0.5 + 0.25 * name_ratio + 0.2 * doc_ratio + (0.05 if phrase else 0)
+            )
+        elif q and len(q) > 2 and q in doc_n:
             confidence = 0.6
         else:
             continue
@@ -486,6 +519,55 @@ def _project_keyword_matches_for_query(
     return out
 
 
+def _session_usable_library_names(session_id: Optional[str]) -> set:
+    """RF library names a session can call: its imports plus the neutral helpers."""
+    names = {
+        "BuiltIn", "Collections", "String", "DateTime",
+        "OperatingSystem", "Process", "XML",
+    }
+    if not session_id:
+        return names
+    try:
+        session = execution_engine.session_manager.get_session(session_id)
+        names.update(getattr(session, "imported_libraries", []) or [])
+        from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
+
+        names.update(get_rf_doc_storage().project_libraries(session_id).keys())
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("usable-library lookup failed for %s: %s", session_id, exc)
+    return names
+
+
+def _project_catalog_entries(
+    session_id: Optional[str], library_name: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """This session's project keywords in find_keywords' catalog item shape.
+
+    The catalog strategy listed only the engine's libraries, so a project's own
+    keywords were absent - `strategy="catalog", query="acme"` returned 0 matches in
+    a session where all four Acme keywords executed.
+    """
+    if not session_id:
+        return []
+    try:
+        from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
+
+        keywords = get_rf_doc_storage().project_keywords(session_id, library_name)
+    except Exception:  # pragma: no cover - defensive
+        return []
+    return [
+        {
+            "name": str(ki.name or ""),
+            "library": str(ki.library or ""),
+            "args": [str(a) for a in (ki.args or [])],
+            "arg_types": [str(t) for t in (ki.arg_types or [])],
+            "short_doc": str(ki.short_doc or ""),
+            "from_project": True,
+        }
+        for ki in keywords
+    ]
+
+
 def _merge_project_keywords(discovery: Dict[str, Any], query: str,
                             session_id: Optional[str],
                             library_name: Optional[str] = None,
@@ -495,8 +577,23 @@ def _merge_project_keywords(discovery: Dict[str, Any], query: str,
     if not project:
         return
     existing = discovery.get("matches") or []
-    if strict_library and library_name:
-        # Scoped strictly to the named source: project keywords are the answer.
+    names_project_source = False
+    if library_name:
+        try:
+            from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
+
+            names_project_source = (
+                get_rf_doc_storage().resolve_project_source(session_id, library_name)
+                is not None
+            )
+        except Exception:  # pragma: no cover - defensive
+            names_project_source = False
+    if library_name and (strict_library or names_project_source):
+        # Scoped to the named source: its keywords are the answer. A project source
+        # is always strict - the incompatibility table that makes library_name a
+        # soft filter (Browser excludes SeleniumLibrary) has no entry for a
+        # project's own library, so it excluded nothing and a query scoped to
+        # `acme_keywords` still returned SeleniumLibrary keywords.
         merged = project
     else:
         seen = {(m.get("keyword_name"), m.get("library")) for m in project}
@@ -504,7 +601,15 @@ def _merge_project_keywords(discovery: Dict[str, Any], query: str,
             m for m in existing
             if (m.get("keyword_name"), m.get("library")) not in seen
         ]
-        merged.sort(key=lambda m: -(m.get("confidence") or 0))
+        usable = _session_usable_library_names(session_id)
+        # Libraries this session can actually call rank above libraries it never
+        # imported. Without this, "log in to acme" in a session holding only BuiltIn
+        # and the Acme sources ranked eight SeleniumLibrary keywords above
+        # `Acme Login As`.
+        merged.sort(key=lambda m: (
+            0 if m.get("from_project") or m.get("library") in usable else 1,
+            -(m.get("confidence") or 0),
+        ))
     discovery["matches"] = merged
     discovery["project_keyword_count"] = len(project)
     discovery["success"] = True
@@ -533,7 +638,8 @@ def _register_session_project_libraries(session_id: str, libraries) -> Dict[str,
     return out
 
 
-def _register_project_source(session_id: str, source: str) -> Dict[str, Any]:
+def _register_project_source(session_id: str, source: str,
+                             args=None, alias: Optional[str] = None) -> Dict[str, Any]:
     """Make a session-imported library or resource file DISCOVERABLE.
 
     rf-mcp could execute a project's custom-library and resource keywords but not
@@ -547,7 +653,9 @@ def _register_project_source(session_id: str, source: str) -> Dict[str, Any]:
     try:
         from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
 
-        return get_rf_doc_storage().register_project_source(session_id, source)
+        return get_rf_doc_storage().register_project_source(
+            session_id, source, args=list(args or ()), alias=alias
+        )
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("Discovery registration failed for %r: %s", source, exc)
         return {"success": False, "error": str(exc)}
@@ -1304,8 +1412,24 @@ async def _ensure_all_session_libraries_loaded():
         session_manager = execution_engine.session_manager
         all_sessions = session_manager.sessions.values()
 
+        try:
+            from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
+
+            _storage = get_rf_doc_storage()
+        except Exception:  # pragma: no cover - defensive
+            _storage = None
+
         for session in all_sessions:
             for library_name in session.imported_libraries:
+                # Project sources (a custom library imported by path, a resource) are
+                # served by the session's project registry, not the orchestrator's
+                # name-keyed library table. Checking them there always "failed" and
+                # logged an ERROR claiming keyword filtering was at risk, for a
+                # library whose keywords were executing fine.
+                if _storage is not None and _storage.resolve_project_source(
+                    session.session_id, library_name
+                ) is not None:
+                    continue
                 # Check if library is loaded in the orchestrator
                 if library_name not in execution_engine.keyword_discovery.libraries:
                     logger.warning(
@@ -2841,7 +2965,11 @@ async def find_keywords(
         # catalogue (change: project-keyword-discovery).
         _merge_project_keywords(
             discovery, query, session_id,
-            library_name=effective_library_preference or library_name,
+            # Only an EXPLICIT per-call library_name scopes project keywords. The
+            # session-derived preference is "Browser"/"SeleniumLibrary" in any web
+            # session; passing it here matched no project source, so a web
+            # session's own project keywords were excluded from every query.
+            library_name=library_name,
             strict_library=strict_library,
         )
 
@@ -2932,7 +3060,17 @@ async def find_keywords(
 
     if strategy_norm in {"catalog", "library"}:
         await _ensure_all_session_libraries_loaded()
-        catalog = execution_engine.get_available_keywords(library_name)
+        project_catalog = _project_catalog_entries(session_id, library_name)
+        if library_name and project_catalog:
+            # Scoped to a project source: the engine does not know it by name.
+            catalog = project_catalog
+        else:
+            catalog = execution_engine.get_available_keywords(library_name)
+            if not library_name and project_catalog:
+                seen = {(c.get("name"), c.get("library")) for c in project_catalog}
+                catalog = project_catalog + [
+                    c for c in catalog if (c.get("name"), c.get("library")) not in seen
+                ]
         if query:
             lowered = query.lower()
             catalog = [
@@ -3647,7 +3785,9 @@ async def manage_session(
             # Register for DISCOVERY too (change: project-keyword-discovery). A
             # library imported into a session reached the RF namespace - so
             # execute_step worked - but never the store find_keywords reads.
-            result["discovery"] = _register_project_source(session_id, library_name)
+            result["discovery"] = _register_project_source(
+                session_id, library_name, args=args, alias=alias
+            )
             try:
                 session.import_library(library_name, force=True)
                 session.loaded_libraries.add(library_name)
@@ -4368,6 +4508,30 @@ async def get_session_state(
 
     if "libraries" in requested:
         libraries = await _get_loaded_libraries_payload()
+        # This session's own project sources (custom libraries, resource files):
+        # name to call them by, how they were imported, and their keywords. The
+        # loaded-libraries payload lists rf-mcp's catalogue only, so a session's
+        # resources did not appear anywhere in its state.
+        try:
+            from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
+
+            storage = get_rf_doc_storage()
+            project = []
+            for ns_name, info in storage.project_libraries(session_id).items():
+                spec = storage.project_import_spec(session_id, ns_name) or {}
+                project.append({
+                    "name": ns_name,
+                    "type": info.type,
+                    "source": info.source,
+                    "import": spec.get("spec"),
+                    "args": spec.get("args") or [],
+                    "alias": spec.get("alias"),
+                    "keywords": sorted(info.keywords.keys()),
+                })
+            if isinstance(libraries, dict) and project:
+                libraries["project_sources"] = project
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("project_sources section failed: %s", exc)
         payload["sections"]["libraries"] = libraries
 
     if "rf_context" in requested or "context" in requested:
@@ -5303,9 +5467,45 @@ async def check_library_availability(libraries: List[str]) -> Dict[str, Any]:
             - results: per-library availability/install guidance
             - error/guidance: present on failure
     """
-    result = execution_engine.check_library_requirements(libraries)
+    # A project's own library or resource file, named by PATH, is not an installable
+    # package: the package checker reported an existing, importable file as
+    # "missing" with a pip install suggestion. Probe such paths with libdoc instead.
+    local_ok: List[str] = []
+    local_bad: Dict[str, str] = {}
+    remaining: List[str] = []
+    for lib in libraries or []:
+        looks_like_path = any(ch in lib for ch in ("/", "\\")) or lib.lower().endswith(
+            (".py", ".resource", ".robot")
+        )
+        if looks_like_path and os.path.exists(lib):
+            try:
+                from robot.libdoc import LibraryDocumentation
+
+                LibraryDocumentation(lib)
+                local_ok.append(lib)
+            except Exception as exc:
+                local_bad[lib] = str(exc).splitlines()[0][:200]
+        else:
+            remaining.append(lib)
+
+    result = (
+        execution_engine.check_library_requirements(remaining)
+        if remaining
+        else {"available_libraries": [], "missing_libraries": [],
+              "installation_suggestions": []}
+    )
+    if local_ok or local_bad:
+        result["available_libraries"] = list(result.get("available_libraries") or []) + local_ok
+        result["missing_libraries"] = list(result.get("missing_libraries") or []) + list(local_bad)
+        if local_bad:
+            result["local_import_errors"] = local_bad
+        if not result.get("missing_libraries"):
+            result.pop("error", None)
+            result["hint"] = "All requested libraries are available. No installation needed."
     if "success" not in result:
         result["success"] = not bool(result.get("error"))
+    if local_bad:
+        result["success"] = False
     return result
 
 
@@ -5370,9 +5570,17 @@ async def search_keywords(pattern: str) -> List[Dict[str, Any]]:
 
 def _normalize_step(step: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize a step dict to expected keys."""
+    # Accept "args" as well as "arguments", matching execute_batch. Flow steps used
+    # to drop "args" silently and then fail with "expected 1 argument, got 0" - an
+    # error about the keyword rather than about the step's shape.
+    arguments = step.get("arguments")
+    if arguments is None:
+        arguments = step.get("args")
+    if isinstance(arguments, (str, int, float)):
+        arguments = [arguments]
     return {
         "keyword": step.get("keyword", ""),
-        "arguments": step.get("arguments", []) or [],
+        "arguments": list(arguments or []),
         "assign_to": step.get("assign_to"),
     }
 
@@ -6139,7 +6347,9 @@ async def get_keyword_info(
     if mode_norm in {"library", "libdoc"}:
         if not library_name:
             return {"success": False, "error": "library_name is required"}
-        result = await _get_library_documentation_payload(library_name)
+        result = _project_library_documentation(library_name, session_id)
+        if result is None:
+            result = await _get_library_documentation_payload(library_name)
         result["mode"] = "library"
         # OBS-21 — library mode is the major token whale (benchmark
         # K06 returned 71,521 tokens for full Browser libdoc).
@@ -6316,6 +6526,57 @@ async def get_keyword_documentation(
           - lineno: Line number in source (libdoc only)
     """
     return await _get_keyword_documentation_payload(keyword_name, library_name)
+
+
+def _project_library_documentation(
+    library_name: str, session_id: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """Library-mode docs for a project source (custom library or resource file).
+
+    The catalogue lookup knows rf-mcp's bundled libraries only, so a resource
+    imported into a session (``acme_keywords``) was "not found or not loaded" even
+    though its keywords executed. Resolves by namespace name, alias or file path;
+    without session_id, falls back to any session that registered the source.
+    Returns None to defer to the catalogue.
+    """
+    try:
+        from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
+
+        storage = get_rf_doc_storage()
+        candidates = [session_id] if session_id else storage.sessions_with_project_sources()
+        for sid in candidates:
+            info = storage.resolve_project_source(sid, library_name)
+            if info is None:
+                continue
+            spec = storage.project_import_spec(sid, library_name) or {}
+            return {
+                "success": True,
+                "library": {
+                    "name": spec.get("alias") or info.name,
+                    "doc": info.doc,
+                    "version": info.version,
+                    "type": info.type,
+                    "scope": info.scope,
+                    "source": info.source,
+                    "import": {k: spec.get(k) for k in ("spec", "args", "alias")},
+                    "keywords": [
+                        {
+                            "name": ki.name, "library": ki.library, "args": ki.args,
+                            "arg_types": ki.arg_types, "doc": ki.doc,
+                            "short_doc": ki.short_doc, "tags": ki.tags,
+                            "is_deprecated": ki.is_deprecated, "source": ki.source,
+                            "lineno": ki.lineno,
+                        }
+                        for ki in info.keywords.values()
+                    ],
+                    "keyword_count": len(info.keywords),
+                    "from_project": True,
+                    **({} if session_id else {"session_id": sid}),
+                },
+            }
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("Project library lookup failed for %r: %s", library_name, exc)
+    return None
 
 
 async def _get_library_documentation_payload(library_name: str) -> Dict[str, Any]:
@@ -6582,13 +6843,35 @@ async def set_library_search_order(
         # Get or create session
         session = execution_engine.session_manager.get_or_create_session(session_id)
 
-        # Set library search order
-        old_order = session.get_search_order()
-        session.set_library_search_order(libraries)
-        new_order = session.get_search_order()
+        # Project sources (custom libraries, resource files) are recorded on the
+        # session by PATH, but RF orders keywords by the source's NAME. Map each
+        # requested entry - name, alias or path - to its namespace name.
+        project_names: set = set()
+        requested: List[str] = []
+        try:
+            from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
 
-        return {
-            "success": True,
+            storage = get_rf_doc_storage()
+            for lib in libraries:
+                ns = storage._resolve_project_name(session_id, lib)
+                if ns:
+                    project_names.add(ns)
+                    requested.append(ns)
+                else:
+                    requested.append(lib)
+        except Exception:  # pragma: no cover - defensive
+            requested = list(libraries)
+
+        old_order = session.get_search_order()
+        session.set_library_search_order(requested, extra_valid=project_names)
+        new_order = session.get_search_order()
+        # Previously an unknown entry was dropped with only a log line while the tool
+        # still reported success - the project library the caller asked for simply
+        # vanished from the order.
+        rejected = [lib for lib in requested if lib not in new_order]
+
+        result = {
+            "success": not rejected,
             "session_id": session_id,
             "old_search_order": old_order,
             "new_search_order": new_order,
@@ -6596,6 +6879,14 @@ async def set_library_search_order(
             "libraries_applied": new_order,
             "message": f"Library search order updated for session '{session_id}'",
         }
+        if rejected:
+            result["libraries_rejected"] = rejected
+            result["message"] = (
+                f"Search order updated, but {rejected} were not applied: not imported "
+                f"in session '{session_id}'. Import them first with "
+                f"manage_session(action='import_library'|'import_resource')."
+            )
+        return result
 
     except Exception as e:
         logger.error(f"Error setting library search order: {e}")
