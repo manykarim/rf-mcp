@@ -1399,12 +1399,20 @@ class ExecutionSession:
         """Get current library search order."""
         return self.search_order.copy()
 
-    def set_library_search_order(self, libraries: List[str]) -> None:
-        """Set explicit library search order (similar to RF Set Library Search Order)."""
+    def set_library_search_order(
+        self, libraries: List[str], extra_valid: Optional[Set[str]] = None
+    ) -> None:
+        """Set explicit library search order (similar to RF Set Library Search Order).
+
+        ``extra_valid``: additional names known to be importable in this session -
+        a project's own libraries and resource files, which the session records by
+        PATH and would otherwise fail the name check below and be dropped silently.
+        """
         # Validate that all libraries are loaded or loadable
         valid_libraries = []
         for lib in libraries:
-            if lib in self.loaded_libraries or lib in self.imported_libraries or self.should_load_library(lib):
+            if (lib in self.loaded_libraries or lib in self.imported_libraries
+                    or lib in (extra_valid or set()) or self.should_load_library(lib)):
                 valid_libraries.append(lib)
             else:
                 logger.warning(

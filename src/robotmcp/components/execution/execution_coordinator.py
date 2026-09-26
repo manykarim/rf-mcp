@@ -1025,6 +1025,90 @@ class ExecutionCoordinator:
                 for kw in matches
             ]
 
+    @staticmethod
+    def _keyword_payload(m: Any) -> Dict[str, Any]:
+        return {
+            "name": m.name,
+            "library": m.library,
+            "args": m.args,
+            "arg_types": m.arg_types,
+            "doc": m.doc,
+            "short_doc": m.short_doc,
+            "tags": m.tags,
+            "is_deprecated": m.is_deprecated,
+            "source": m.source,
+            "lineno": m.lineno,
+        }
+
+    def _project_keyword_lookup(
+        self,
+        keyword_name: str,
+        library_name: Optional[str],
+        session_id: Optional[str],
+        allowed_libraries: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Resolve a keyword against project sources (custom libraries, resources).
+
+        Runs BEFORE the catalogue lookup because the session's own sources are what
+        the caller can execute. Previously project sources were consulted only after
+        the catalogue came up empty, so a project keyword sharing its name with a
+        keyword from a library the session never imported was reported as
+        "not available in this session's libraries" - hidden by an unrelated library.
+
+        Returns None to fall through to the catalogue lookup.
+        """
+        storage = self.rf_doc_storage
+        if session_id:
+            if library_name and storage.resolve_project_source(session_id, library_name) is None:
+                return None  # scoped to a non-project library: catalogue handles it
+            matches = storage.project_keyword_matches(keyword_name, session_id, library_name)
+            if not matches:
+                return None
+            qualified = "." in keyword_name and bool(
+                storage._resolve_project_name(session_id, keyword_name.rpartition(".")[0])
+            )
+            if library_name or qualified:
+                return {"success": True, "keyword": self._keyword_payload(matches[0])}
+            # Unscoped: also include catalogue matches from libraries this session can
+            # use, so an ambiguity stays visible rather than being silently resolved.
+            catalogue = storage.get_keywords_documentation_all(keyword_name) or []
+            if allowed_libraries is not None:
+                allowed = set(allowed_libraries)
+                catalogue = [m for m in catalogue if m.library in allowed]
+            return {
+                "success": True,
+                "matches": [self._keyword_payload(m) for m in list(matches) + list(catalogue)],
+            }
+
+        # No session_id. A keyword that exists only in some session's project sources
+        # used to be reported as nonexistent - answer with the session it lives in.
+        if storage.get_keywords_documentation_all(keyword_name) or (
+            library_name and storage.get_library_documentation(library_name)
+        ):
+            return None
+        found = storage.project_keyword_matches_any_session(keyword_name)
+        if library_name:
+            found = [
+                (sid, ki) for sid, ki in found
+                if storage.resolve_project_source(sid, library_name) is not None
+            ]
+        if not found:
+            return None
+        sessions = sorted({sid for sid, _ in found})
+        payload = []
+        for sid, ki in found:
+            entry = self._keyword_payload(ki)
+            entry["session_id"] = sid
+            payload.append(entry)
+        return {
+            "success": True,
+            "matches": payload,
+            "note": (
+                f"'{keyword_name}' is a project keyword available in session(s) "
+                f"{sessions}. Pass session_id to scope the lookup to one session."
+            ),
+        }
+
     def get_keyword_documentation(
         self,
         keyword_name: str,
@@ -1045,6 +1129,17 @@ class ExecutionCoordinator:
         """
         # LibDoc preferred path
         if self.rf_doc_storage.is_available():
+            project = self._project_keyword_lookup(
+                keyword_name, library_name, session_id, allowed_libraries
+            )
+            if project is not None:
+                return project
+            # RF's qualified form "Library.Keyword" with no explicit library: treat the
+            # prefix as the library scope when it names a known library.
+            if not library_name and "." in keyword_name:
+                prefix, _, rest = keyword_name.rpartition(".")
+                if prefix and rest and self.rf_doc_storage.get_library_documentation(prefix):
+                    library_name, keyword_name = prefix, rest
             if library_name:
                 kw = self.rf_doc_storage.get_keyword_documentation(keyword_name, library_name)
                 if kw:

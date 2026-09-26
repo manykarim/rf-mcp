@@ -93,6 +93,10 @@ class GeneratedTestSuite:
     teardown: Optional[TestCaseStep] = None
     imports: List[str] = None
     resources: List[str] = None
+    # Per-import settings for the Library line: import string -> {"args", "alias"}.
+    # Needed to replay a project library the session imported by path, with
+    # arguments or under an alias - a bare name is not importable by RF.
+    import_settings: Dict[str, Dict[str, Any]] | None = None
     # Optional: preserved high-level flow blocks recorded during execution
     flow_blocks: List[Dict[str, Any]] | None = None
     # ADR-005: per-test flow blocks (test_name → List[Dict]). When set, overrides
@@ -494,7 +498,7 @@ class TestBuilder:
 
             # Apply library prefix removal if requested
             if remove_library_prefixes:
-                suite = self._apply_prefix_removal(suite)
+                suite = self._apply_prefix_removal(suite, session_id)
 
             # Apply data-driven mode promotion BEFORE BDD (suite_template
             # skips BDD transformation for template test cases)
@@ -2171,6 +2175,10 @@ class TestBuilder:
             suite_variables = {}
             variable_files = []
 
+        all_imports, resources, import_settings = self._resolve_project_imports(
+            all_imports, resources, session_id
+        )
+
         return GeneratedTestSuite(
             name=f"Generated_Suite_{session_id}",
             test_cases=test_cases,
@@ -2178,10 +2186,57 @@ class TestBuilder:
             tags=common_tags,
             imports=list(all_imports),
             resources=resources,
+            import_settings=import_settings or None,
             flow_blocks=flow_blocks,
             variables=suite_variables if suite_variables else None,
             variable_files=variable_files if variable_files else None,
         )
+
+    def _resolve_project_imports(
+        self, imports, resources: List[str], session_id: str
+    ):
+        """Map project-source NAMES to the import the session actually performed.
+
+        Keywords are attributed to libraries by RF name (``AcmeLib``), but a
+        project library is usually imported by path, sometimes with arguments or an
+        alias. Emitting ``Library  AcmeLib`` produced a suite RF could not load -
+        run_test_suite then reported every project keyword as "not found". A
+        qualified resource keyword (``acme_keywords.Acme Double``) was worse: its
+        prefix became ``Library  acme_keywords``.
+
+        Returns ``(imports, resources, import_settings)``.
+        """
+        try:
+            from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
+
+            storage = get_rf_doc_storage()
+        except Exception:  # pragma: no cover - defensive
+            return list(imports), resources, {}
+
+        out_imports: List[str] = []
+        out_resources: List[str] = list(resources or [])
+        settings: Dict[str, Dict[str, Any]] = {}
+        for name in imports:
+            spec = storage.project_import_spec(session_id, name)
+            if not spec:
+                out_imports.append(name)
+                continue
+            target = spec.get("spec") or name
+            if str(spec.get("type", "")).upper() == "RESOURCE":
+                already = any(
+                    storage._same_path(target, r) or r == target for r in out_resources
+                )
+                if not already:
+                    out_resources.append(target)
+                continue
+            if target not in out_imports:
+                out_imports.append(target)
+            if spec.get("args") or spec.get("alias"):
+                settings[target] = {
+                    "args": list(spec.get("args") or []),
+                    "alias": spec.get("alias"),
+                }
+        return out_imports, out_resources, settings
 
     async def _optimize_step(
         self,
@@ -2802,6 +2857,11 @@ class TestBuilder:
                     lib_line = self._format_path_for_rf(library)
                 else:
                     lib_line = library
+                extra = (suite.import_settings or {}).get(library) or {}
+                for arg in extra.get("args") or []:
+                    lib_line += f"    {arg}"
+                if extra.get("alias"):
+                    lib_line += f"    AS    {extra['alias']}"
                 lines.append(f"Library         {lib_line}")
 
         # Variable files go in Settings section per RF documentation:
@@ -4191,7 +4251,54 @@ class TestBuilder:
             return keyword.rsplit(".", 1)[1]
         return keyword
 
-    def _apply_prefix_removal(self, suite: GeneratedTestSuite) -> GeneratedTestSuite:
+    def _ambiguous_bare_keywords(
+        self, suite: GeneratedTestSuite, session_id: Optional[str]
+    ) -> set:
+        """Normalised bare keyword names that >1 of the suite's sources define.
+
+        Mirrors RF's resolution tiers: resource-file keywords win over library
+        keywords, so a name is ambiguous if >1 resource defines it, or - when no
+        resource does - >1 library does. Standard libraries are left out: RF
+        prefers a custom keyword over a stdlib one, so that is not an ambiguity.
+        """
+        try:
+            from robotmcp.utils.rf_libdoc_integration import get_rf_doc_storage
+
+            storage = get_rf_doc_storage()
+        except Exception:  # pragma: no cover - defensive
+            return set()
+
+        def norm(name: str) -> str:
+            return " ".join(str(name).lower().replace("_", " ").split())
+
+        res_owners: Dict[str, set] = {}
+        lib_owners: Dict[str, set] = {}
+        project = storage.project_libraries(session_id) if session_id else {}
+        project_paths = set()
+        for ns_name, info in project.items():
+            spec = storage.project_import_spec(session_id, ns_name) or {}
+            project_paths.add(spec.get("spec"))
+            bucket = res_owners if str(info.type).upper() == "RESOURCE" else lib_owners
+            for kw in info.keywords:
+                bucket.setdefault(norm(kw), set()).add(ns_name)
+        stdlib = {"BuiltIn", "Collections", "String", "DateTime",
+                  "OperatingSystem", "Process", "XML", "Screenshot", "Dialogs", "Telnet"}
+        for imp in suite.imports or []:
+            if imp in project_paths or imp in stdlib:
+                continue
+            info = storage.get_library_documentation(imp)
+            for kw in (info.keywords if info else {}):
+                lib_owners.setdefault(norm(kw), set()).add(imp)
+        ambiguous = set()
+        for name in set(res_owners) | set(lib_owners):
+            tier = res_owners.get(name) or lib_owners.get(name) or set()
+            if len(tier) > 1:
+                ambiguous.add(name)
+        return ambiguous
+
+    def _apply_prefix_removal(
+        self, suite: GeneratedTestSuite, session_id: Optional[str] = None
+    ) -> GeneratedTestSuite:
         """Apply library prefix removal to all keywords in the test suite.
 
         Args:
@@ -4200,30 +4307,44 @@ class TestBuilder:
         Returns:
             Test suite with library prefixes removed from keywords
         """
+        # Keep a prefix when it is load-bearing. Stripping "Cfg.Acme Status" to
+        # "Acme Status" when both Cfg and AcmeLib define it produced a suite that
+        # passed live (under a search order) and failed on replay with "Multiple
+        # keywords with name 'Acme Status' found".
+        ambiguous = self._ambiguous_bare_keywords(suite, session_id)
+
+        def strip(keyword: str) -> str:
+            bare = self._remove_library_prefix(keyword)
+            norm = " ".join(bare.lower().replace("_", " ").split())
+            return keyword if keyword != bare and norm in ambiguous else bare
+
+        return self._strip_prefixes(suite, strip)
+
+    def _strip_prefixes(self, suite: GeneratedTestSuite, strip) -> GeneratedTestSuite:
         # Process test cases
         for test_case in suite.test_cases:
             # Process test steps
             for step in test_case.steps:
-                step.keyword = self._remove_library_prefix(step.keyword)
+                step.keyword = strip(step.keyword)
 
             # Process setup
             if test_case.setup:
-                test_case.setup.keyword = self._remove_library_prefix(
+                test_case.setup.keyword = strip(
                     test_case.setup.keyword
                 )
 
             # Process teardown
             if test_case.teardown:
-                test_case.teardown.keyword = self._remove_library_prefix(
+                test_case.teardown.keyword = strip(
                     test_case.teardown.keyword
                 )
 
         # Process suite-level setup and teardown
         if suite.setup:
-            suite.setup.keyword = self._remove_library_prefix(suite.setup.keyword)
+            suite.setup.keyword = strip(suite.setup.keyword)
 
         if suite.teardown:
-            suite.teardown.keyword = self._remove_library_prefix(suite.teardown.keyword)
+            suite.teardown.keyword = strip(suite.teardown.keyword)
 
         return suite
 

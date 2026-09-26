@@ -641,10 +641,17 @@ class RobotFrameworkDocStorage:
             self._libdoc_cache: Dict[tuple, RFLibraryInfo] = {}
         return self._libdoc_cache
 
-    def register_project_source(self, session_id: str, source: str) -> Dict[str, Any]:
+    def register_project_source(self, session_id: str, source: str,
+                                args: Optional[List[str]] = None,
+                                alias: Optional[str] = None) -> Dict[str, Any]:
         """Register a session-imported library or resource file for DISCOVERY.
 
-        ``source`` is a library name (``AcmeLibrary``) or a path to a resource file.
+        ``source`` is a library name (``AcmeLibrary``) or a path to a library or
+        resource file. ``args`` / ``alias`` are the import arguments exactly as the
+        session imported the library; they are recorded so that a generated suite can
+        reproduce the import (``Library  <path>  <args>  AS  <alias>``) rather than a
+        bare name RF cannot resolve.
+
         Returns ``{"success", "name", "type", "keywords"}``. A source that cannot be
         parsed NEVER raises and never fails the caller's import - execution would
         still work, so a parse failure degrades discovery for that source only.
@@ -682,9 +689,70 @@ class RobotFrameworkDocStorage:
             self._source_cache()[key] = info
             cached = info
 
-        self._project_sources().setdefault(session_id, {})[cached.name] = cached
-        return {"success": True, "name": cached.name, "type": cached.type,
+        # An aliased library is known to the RF namespace by its alias, so keywords
+        # resolve as "<alias>.<Keyword>"; register under that name.
+        ns_name = alias or cached.name
+        self._project_sources().setdefault(session_id, {})[ns_name] = cached
+        self._import_specs().setdefault(session_id, {})[ns_name] = {
+            "spec": source,
+            "args": [str(a) for a in (args or [])],
+            "alias": alias,
+            "type": cached.type,
+            "name": cached.name,
+        }
+        return {"success": True, "name": ns_name, "type": cached.type,
                 "keywords": len(cached.keywords)}
+
+    def _import_specs(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        if not hasattr(self, "_session_import_specs"):
+            self._session_import_specs: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        return self._session_import_specs
+
+    def project_import_spec(self, session_id: Optional[str],
+                            name: str) -> Optional[Dict[str, Any]]:
+        """How ``session_id`` imported the source RF knows as ``name``.
+
+        ``{"spec", "args", "alias", "type", "name"}`` or None. ``name`` may be the
+        namespace name, the source's own name, or its path.
+        """
+        if not session_id or not name:
+            return None
+        specs = self._import_specs().get(session_id, {})
+        ns = self._resolve_project_name(session_id, name)
+        return dict(specs[ns]) if ns and ns in specs else None
+
+    @staticmethod
+    def _same_path(a: str, b: str) -> bool:
+        try:
+            return bool(a and b) and Path(a).resolve() == Path(b).resolve()
+        except Exception:
+            return False
+
+    def _resolve_project_name(self, session_id: Optional[str],
+                              name_or_path: str) -> Optional[str]:
+        """Namespace name of the session source matching a name, alias or path."""
+        if not session_id or not name_or_path:
+            return None
+        sources = self._project_sources().get(session_id, {})
+        target = self._normalize_name(name_or_path)
+        for ns_name, info in sources.items():
+            if self._normalize_name(ns_name) == target or self._normalize_name(info.name) == target:
+                return ns_name
+        specs = self._import_specs().get(session_id, {})
+        for ns_name, info in sources.items():
+            spec = (specs.get(ns_name) or {}).get("spec", "")
+            if self._same_path(name_or_path, info.source) or self._same_path(name_or_path, spec):
+                return ns_name
+        return None
+
+    def resolve_project_source(self, session_id: Optional[str],
+                               name_or_path: str) -> Optional[RFLibraryInfo]:
+        """The session's project source matching a name, alias or file path."""
+        ns = self._resolve_project_name(session_id, name_or_path)
+        return self._project_sources().get(session_id, {}).get(ns) if ns else None
+
+    def sessions_with_project_sources(self) -> List[str]:
+        return [sid for sid, src in self._project_sources().items() if src]
 
     def project_libraries(self, session_id: Optional[str]) -> Dict[str, RFLibraryInfo]:
         """Sources registered by THIS session ({} for None/unknown sessions)."""
@@ -693,22 +761,63 @@ class RobotFrameworkDocStorage:
         return dict(self._project_sources().get(session_id, {}))
 
     def project_keyword_matches(self, keyword_name: str,
-                                session_id: Optional[str]) -> List[RFKeywordInfo]:
-        """Exact (normalized) matches for ``keyword_name`` among this session's sources."""
+                                session_id: Optional[str],
+                                library_name: Optional[str] = None) -> List[RFKeywordInfo]:
+        """Exact (normalized) matches for ``keyword_name`` among this session's sources.
+
+        Accepts RF's qualified form ``Source.Keyword`` (e.g. ``AcmeLib.Acme Add``,
+        ``acme_keywords.Acme Double``) - the form agents copy from execute_step output
+        and error messages. ``library_name`` (name, alias or path) restricts the search
+        to one source.
+        """
+        sources = self.project_libraries(session_id)
+        if not sources:
+            return []
+        scope: Optional[str] = None
+        if library_name:
+            scope = self._resolve_project_name(session_id, library_name)
+            if scope is None:
+                return []
+        elif "." in keyword_name:
+            prefix, _, rest = keyword_name.rpartition(".")
+            qualified = self._resolve_project_name(session_id, prefix)
+            if qualified is not None:
+                scope, keyword_name = qualified, rest
         target = self._normalize_name(keyword_name)
         out: List[RFKeywordInfo] = []
-        for info in self.project_libraries(session_id).values():
+        for ns_name, info in sources.items():
+            if scope is not None and ns_name != scope:
+                continue
             for name, ki in info.keywords.items():
                 if self._normalize_name(name) == target:
                     out.append(ki)
         return out
 
+    def project_keyword_matches_any_session(
+        self, keyword_name: str
+    ) -> List[tuple]:
+        """``(session_id, keyword)`` for every session source defining the keyword.
+
+        For callers that omitted session_id: better to answer with the session it
+        lives in (and say so) than to report a keyword that runs as nonexistent.
+        """
+        out: List[tuple] = []
+        for sid in self.sessions_with_project_sources():
+            for ki in self.project_keyword_matches(keyword_name, sid):
+                out.append((sid, ki))
+        return out
+
     def project_keywords(self, session_id: Optional[str],
                          library_name: Optional[str] = None) -> List[RFKeywordInfo]:
         """All keywords from this session's sources, optionally one source only."""
+        scope = None
+        if library_name:
+            scope = self._resolve_project_name(session_id, library_name)
+            if scope is None:
+                return []
         out: List[RFKeywordInfo] = []
         for name, info in self.project_libraries(session_id).items():
-            if library_name and self._normalize_name(name) != self._normalize_name(library_name):
+            if scope is not None and name != scope:
                 continue
             out.extend(info.keywords.values())
         return out
@@ -716,6 +825,7 @@ class RobotFrameworkDocStorage:
     def forget_session_sources(self, session_id: str) -> None:
         """Drop a session's registrations (session close)."""
         self._project_sources().pop(session_id, None)
+        self._import_specs().pop(session_id, None)
     
     def get_library_status(self) -> Dict[str, Any]:
         """Get status of all libraries."""
