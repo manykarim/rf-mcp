@@ -68,7 +68,7 @@ jobs:
 
       - name: Upload Copilot autonomous metrics
         if: env.SKIP_COPILOT != 'true' && always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-copilot-autonomous-metrics
           path: tests/e2e/metrics/copilot_autonomous/**/*.json
@@ -143,7 +143,7 @@ jobs:
 
       - name: Upload model comparison metrics
         if: env.SKIP_COPILOT != 'true' && always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: copilot-model-comparison-metrics
           path: tests/e2e/metrics/copilot_model_comparison/**/*.json
@@ -242,7 +242,7 @@ jobs:
 
       - name: Upload opencode E2E metrics
         if: env.SKIP_MINIMAX != 'true' && always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: opencode-e2e-metrics
           path: |
@@ -337,7 +337,7 @@ jobs:
 
       - name: Upload MiniMax matrix metrics
         if: env.SKIP_MINIMAX != 'true' && always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-minimax-matrix-metrics
           path: |

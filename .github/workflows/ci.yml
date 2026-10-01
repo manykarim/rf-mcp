@@ -93,7 +93,7 @@ jobs:
 
       - name: Upload coverage artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ matrix.os }}-py${{ matrix.python-version }}
           path: |
@@ -113,7 +113,7 @@ jobs:
 
       - name: Upload dist artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.os }}-py${{ matrix.python-version }}
           path: dist/*
@@ -238,7 +238,7 @@ jobs:
 
       - name: Upload E2E Copilot metrics
         if: env.SKIP_COPILOT != 'true' && always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-copilot-metrics
           path: tests/e2e/metrics/**/*.json
@@ -438,7 +438,7 @@ jobs:
 
       - name: Upload instruction-quality metrics
         if: env.SKIP_SMOKE != 'true' && always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-instruction-smoke-metrics
           path: tests/e2e/metrics/minimax/**/*.json
@@ -702,7 +702,7 @@ jobs:
 
       - name: Upload reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: quality-reports
           path: reports/
