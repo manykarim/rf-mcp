@@ -63,7 +63,7 @@ jobs:
             type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_latest }}
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3.6.0
+        uses: docker/login-action@v4.6.0
         # Only login for pushes and manual runs, not for PRs
         if: github.event_name != 'pull_request'
         with:
@@ -129,7 +129,7 @@ jobs:
             type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_latest }}
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3.6.0
+        uses: docker/login-action@v4.6.0
         # Only login for pushes and manual runs, not for PRs
         if: github.event_name != 'pull_request'
         with:
