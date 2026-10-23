@@ -2160,7 +2160,7 @@ async def recommend_libraries(
 
 @mcp.tool
 async def analyze_scenario(
-    scenario: str, context: AutomationContext = "web", session_id: str = None, ctx: Context = None
+    scenario: str, context: AutomationContext = "web", session_id: Optional[str] = None, ctx: Context = None
 ) -> Dict[str, Any]:
     """Analyze a natural-language scenario into structured intent and create a session.
 
@@ -4662,11 +4662,11 @@ async def get_session_state(
 @mcp.tool
 async def execute_step(
     keyword: str,
-    arguments: CoercedStringList = None,
+    arguments: OptionalCoercedStringList = None,
     session_id: str = "default",
     raise_on_failure: bool = True,
     detail_level: DetailLevel = "minimal",
-    scenario_hint: str = None,
+    scenario_hint: Optional[str] = None,
     assign_to: Optional[Union[str, List[str]]] = None,
     use_context: bool | None = None,
     mode: ExecutionMode = "keyword",
@@ -7583,11 +7583,11 @@ async def run_test_suite_dry(
 @mcp.tool
 async def run_test_suite(
     session_id: str = "",
-    suite_file_path: str = None,
+    suite_file_path: Optional[str] = None,
     mode: SuiteRunMode = "full",
     validation_level: ValidationLevel = "standard",
     include_warnings: bool = True,
-    execution_options: Dict[str, Any] = None,
+    execution_options: Optional[Dict[str, Any]] = None,
     output_level: str = "standard",
     capture_screenshots: bool = False,
 ) -> Dict[str, Any]:
