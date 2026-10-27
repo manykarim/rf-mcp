@@ -212,7 +212,7 @@ dev = [
     # bare-default rule set produced 5,763 findings here versus 439 for the selection in
     # [tool.ruff.lint], so an unpinned minor bump could multiply the reported volume
     # without any code changing. Bump deliberately, and re-measure when you do.
-    "ruff==0.16.8",
+    "ruff==0.17.2",
     "radon>=6.0.1",
 ]
 
