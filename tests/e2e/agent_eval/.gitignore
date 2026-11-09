@@ -1,0 +1,2 @@
+# The repository ignores every resources/ folder; the baseline project template needs its own.
+!projects/baseline/resources/

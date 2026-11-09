@@ -1,9 +1,15 @@
-"""rf-mcp onboarding: tool-install diagnostics (`init`/`doctor`/`--version`) and the
-multi-agent installer (`install`/`uninstall`/`list`).
+"""Onboarding package exports."""
 
-Dispatched from ``robotmcp.server:main`` before the server parser so bare
-``robotmcp`` still launches the MCP server.
-"""
-from robotmcp.onboarding.cli import SUBCOMMANDS, VERSION_FLAGS, run
+from robotmcp.onboarding.cli import (
+    generate_agent_mcp_configs,
+    run_doctor,
+    run_onboarding_cli,
+    sync_skills_to_directory,
+)
 
-__all__ = ["run", "SUBCOMMANDS", "VERSION_FLAGS"]
+__all__ = [
+    "generate_agent_mcp_configs",
+    "run_doctor",
+    "run_onboarding_cli",
+    "sync_skills_to_directory",
+]

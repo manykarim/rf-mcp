@@ -239,7 +239,6 @@ resources/
 notes/
 
 tests/experiments
-tests/*.robot
 
 .claude/
 .claude-flow/

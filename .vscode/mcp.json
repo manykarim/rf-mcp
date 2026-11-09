@@ -1,14 +1,24 @@
 {
   "servers": {
-    "robotmcp": {
+    "rf-mcp": {
       "type": "stdio",
       "command": "uv",
-      "args": ["run", "-m", "robotmcp.server"],
+      "args": [
+        "run",
+        "--directory",
+        "${workspaceFolder}",
+        "rf-mcp",
+        "--mode",
+        "server",
+        "--transport",
+        "stdio",
+        "-r",
+        "${workspaceFolder}"
+      ],
       "env": {
-        "ROBOTMCP_TOKENIZER": "auto",
-        "ROBOTMCP_OUTPUT_MODE": "auto",
-        "ROBOTMCP_MAX_INLINE_TOKENS": "300",
-        "ROBOTMCP_ARTIFACT_TTL": "3600"
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
+        "ROBOTCODE_FORCE_AI_AGENT": "1"
       }
     }
   }

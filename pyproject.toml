@@ -4,113 +4,32 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rf-mcp"
-# 0.36.0 ships the (never-published) 0.35.1 install-blocker fix - `desktop` removed from
-# the `[all]` extra, which
-# was making `uv tool install "rf-mcp[all]"` (and pipx, uvx, uv add) fail for every
-# user on every OS. See docs/RELEASE_NOTES_v0.35.1.md.
-version = "0.36.0"
-description = "Robot Framework MCP Server - Natural Language Test Automation Bridge"
+version = "2.0.0"
+description = "Robot Framework MCP Server powered by RobotCode CLI and Skills over MCP"
 authors = [{ name = "Many Kasiriha" }]
 license = { text = "Apache-2.0" }
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "fastmcp>=3.0",
-    "robotframework>=7.0",
+    "robotcode[all]>=2.9.0.dev115",
     "pydantic>=2.0.0",
-    "beautifulsoup4>=4.11.0",
-    "lxml>=4.9.0",
-    "python-dotenv>=1.0.1",
-    "pyyaml>=6.0.0",
-    "tomlkit>=0.12.0"
+    "tomlkit>=0.12.0",
 ]
 
 [project.optional-dependencies]
-slim = []
-web = ["robotframework-browser", "robotframework-seleniumlibrary"]
-frontend = ["django>=4.2,<6.0", "uvicorn[standard]>=0.24"]
-mobile = ["robotframework-appiumlibrary"]
-api = ["robotframework-requests"]
-database = ["robotframework-databaselibrary"]
-# PlatynUI new-core (Rust) native desktop automation (ADR-025). These are DEV
-# PRERELEASES tracking the latest Rust core and REQUIRE Python 3.12+ (the native
-# core ships cp312-abi3 wheels; robotframework-PlatynUI declares requires-python
-# >=3.12). The `python_version >= "3.12"` markers keep `pip install rf-mcp[desktop]`
-# resolvable on rf-mcp's 3.10/3.11 baseline (it just installs nothing there).
-# robotframework-PlatynUI pins `platynui-native==<same version>`, so the native
-# Rust core is pulled automatically at the matching version — do NOT pin it
-# separately (that risks a lockstep conflict on the next bump). platynui-cli is the
-# optional diagnostic CLI (window/snapshot/highlight, used by the display-safety
-# probes). Exact-pinned for reproducibility; bump both together to a newer dev.
-#
-# !! uv-BACKED RESOLVERS REQUIRE A FLAG FOR THIS EXTRA !!
-# uv's default pre-release policy is `if-necessary-or-explicit`, and "explicit"
-# only applies to FIRST-PARTY requirements. For anyone installing rf-mcp FROM
-# PyPI these pins are TRANSITIVE, so uv refuses them:
-#     uv tool install "rf-mcp[desktop]"   ->  "no solution found ... there is no
-#                                             version of robotframework-platynui"
-# The documented command is therefore:
-#     uv tool install --prerelease=allow "rf-mcp[desktop]"   (or UV_PRERELEASE=allow)
-# This applies to uv, uvx AND pipx (modern pipx delegates to uv). pip, poetry and
-# pdm honour a pinned pre-release transitively and need no flag. Loosening the pin
-# to `>=0.13.0.dev0` does NOT help — measured; only the flag changes the outcome.
-# Inside THIS repo the pins are first-party, so `uv sync` / `uv lock` /
-# `uv pip install -e .[desktop]` all resolve — which is exactly why CI cannot see
-# the consumer-side failure. See openspec/changes/install-extra-resolvability.
-#
-# PLATFORM LIMIT: platynui-cli / platynui-native publish ONLY
-#   manylinux_2_34_{x86_64,aarch64}, macosx_11_0_arm64, win_{amd64,arm64}
-# and NO sdist (identical from dev1 through dev117). So there is no desktop
-# support on macOS x86_64 (Intel), musl/Alpine, or glibc < 2.34 (Ubuntu 20.04,
-# Debian 11, RHEL/Rocky 8, Amazon Linux 2). A PEP 508 marker cannot express glibc
-# or musl, which is why `desktop` is NOT part of `[all]` — see `all` below.
-desktop = [
-    "robotframework-PlatynUI==0.13.0.dev2; python_version >= '3.12'",
-    "platynui-cli==0.13.0.dev2; python_version >= '3.12'",
+otel = [
+    "opentelemetry-sdk>=1.25.0",
+    "opentelemetry-exporter-otlp>=1.25.0",
 ]
-memory = ["sqlite-vec>=0.1.6", "model2vec>=0.4.0"]
-tokens = ["tiktoken>=0.7.0"]
-# OBS-30 / lazy-offline-embeddings — semantic find_keywords ranking runs on a
-# TORCH-FREE backend by default (model2vec, pulled by [memory]; benchmark
-# recall@5=0.97 == fastembed). Enable with ROBOTMCP_SEMANTIC_KEYWORDS=1.
-# This `semantic` extra installs sentence-transformers + torch (~2GB) as an
-# OPTIONAL max-quality backend only — NOT required and NOT the default. Do not
-# install it via `uv sync --all-extras` unless you specifically want the torch
-# path; `[all]` deliberately excludes it. fastembed (ONNX, torch-free) is the
-# lighter middle option.
-semantic = ["sentence-transformers>=2.2.0", "scipy>=1.10.0"]
-all = [
-    "robotframework-browser",
-    "robotframework-seleniumlibrary",
-    "robotframework-appiumlibrary",
-    "robotframework-requests",
-    "robotframework-databaselibrary",
-    "django>=4.2,<6.0",
-    "uvicorn[standard]>=0.24",
-    "sqlite-vec>=0.1.6",
-    "model2vec>=0.4.0",
-    "tiktoken>=0.7.0",
-    # Desktop automation is deliberately NOT part of [all].
-    #
-    # It used to be, via a `rf-mcp[desktop]` self-extra, and that made
-    # `uv tool install "rf-mcp[all]"` — the first command in the README Quick
-    # Start — fail for EVERY user on EVERY OS: uv refuses the transitive PlatynUI
-    # pre-release pin without `--prerelease=allow` (see the `desktop` comment
-    # above). It also hard-blocked everyone on macOS x86_64, musl/Alpine or
-    # glibc < 2.34 from installing [all] at all, because PlatynUI ships no wheel
-    # for them — even when all they wanted was web/API.
-    #
-    # [all] therefore means "every extra that resolves everywhere with default
-    # resolver settings". Desktop stays fully supported as an explicit opt-in:
-    #     uv tool install --prerelease=allow "rf-mcp[desktop]"
-    #     pip install "rf-mcp[desktop]"
-    # Revisit only when PlatynUI publishes a STABLE 0.13.x with broader wheels;
-    # the CI installability guard is what proves it is safe to fold back in.
+dev = [
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.1.0",
+    "opentelemetry-sdk>=1.25.0",
+    "opentelemetry-exporter-otlp>=1.25.0",
+    "ruff>=0.11.0",
+    "mypy>=1.10.0",
 ]
-# NOTE: dev tooling lives in [dependency-groups].dev (PEP 735), which is what
-# `uv sync` / CI use. The former [project.optional-dependencies].dev extra was
-# unused legacy (no `pip install .[dev]` anywhere) and was removed to avoid drift
-# (change: lazy-offline-embeddings §5.2).
 
 [project.urls]
 Homepage = "https://github.com/manykarim/rf-mcp"
@@ -125,8 +44,7 @@ rf-mcp = "robotmcp.entry:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/robotmcp"]
 include = [
-    "src/robotmcp/frontend/templates/**/*.html",
-    "src/robotmcp/frontend/static/**/*",
+    "src/robotmcp/skills/builtin/**/*",
 ]
 
 [tool.hatch.build.targets.sdist]
@@ -141,80 +59,31 @@ exclude = [
     "examples",
 ]
 
-[tool.black]
-line-length = 88
-target-version = ['py38']
-
-# Static analysis rule set (change: ci-quality-scanning sec 2).
-#
-# PINNED DELIBERATELY - do NOT fall back to ruff's bare default. Measured on src/
-# (90,210 LOC) the selection swings the finding volume 26x:
-#
-#     E4,E7,E9,F        ->    217 findings   (ruff's documented classic default)
-#     E4,E7,E9,F,S      ->    439 findings   (this selection)
-#     ruff 0.16.8 bare  ->  5,763 findings
-#     ALL               -> 11,263 auto-fixable alone
-#
-# 439 is a set someone can drive to zero and it already contains what matters: weak
-# hashing (S324), hardcoded SQL (S608), unguarded subprocess (S603), hardcoded passwords
-# (S105/S107). 5,763 would meet the fate of the SonarCloud check this replaces - red
-# forever, read by nobody. Widen the selection once this is at zero; do not start wide.
-#
-# CURRENT BASELINE: 295 (change: quality-baseline-cleanup drove 439 -> 295).
-#   F821 17 -> 0    three of them were REAL NameErrors on error/degraded paths, not
-#                   annotation noise; regression-tested in
-#                   tests/unit/test_quality_baseline_nameerrors.py
-#   F401 132 -> 23  |  F541 13 -> 0  |  F841 25 -> 21  |  F811 2 -> 1
-# The 295 remainder is dominated by S110 try-except-pass (160) and is NOT auto-fixable;
-# each needs a judgement call. Re-measure and update this number when it moves.
-#
-# `S` is flake8-bandit: it finds the same 6 HIGH issues bandit does (6x S324 == 6x B324)
-# and emits SARIF natively, so bandit is not a separate dependency.
-[tool.ruff]
-target-version = "py310"          # matches requires-python >=3.10
-line-length = 88                  # matches [tool.black]
-extend-exclude = ["examples", "test_data"]
-
-[tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "S"]
-
-[tool.ruff.lint.per-file-ignores]
-# Tests legitimately use asserts, subprocesses and hardcoded fixture credentials;
-# flagging those is noise, not signal.
-"tests/**" = ["S"]
-
-[tool.mypy]
-python_version = "3.10"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
+[tool.uv]
+prerelease = "allow"
 
 [dependency-groups]
-# Single source of truth for dev tooling (change: lazy-offline-embeddings §5.2/§5.3).
 dev = [
     "pytest>=8.4.1",
     "pytest-asyncio>=1.1.0",
-    "pytest-playwright>=0.7.1",
-    "pytest-rerunfailures>=14.0",
-    "black>=22.0.0",
-    "mypy>=1.0.0",
-    "pre-commit>=2.20.0",
-    "openai>=1.51.0",
-    # §5.3: pydantic-ai-slim with ONLY the extras the 3 e2e test files use
-    # (Agent/TestModel/UsageLimits core + OpenAIModel + FastMCPToolset). Drops the
-    # bedrock/cohere/temporal/google/groq/vertexai zoo (boto3/botocore, temporalio,
-    # fastavro, cohere, grpc — ~150MB of dev-only weight).
-    "pydantic-ai-slim[openai,fastmcp]>=1.37.0",
-    "python-dotenv>=1.0.1",
+    "opentelemetry-sdk>=1.25.0",
+    "opentelemetry-exporter-otlp>=1.25.0",
     "coverage[toml]>=7.6.0",
-    "invoke>=2.2.0",
-    # Static analysis (change: ci-quality-scanning). ruff is PINNED, not floored: its
-    # bare-default rule set produced 5,763 findings here versus 439 for the selection in
-    # [tool.ruff.lint], so an unpinned minor bump could multiply the reported volume
-    # without any code changing. Bump deliberately, and re-measure when you do.
-    "ruff==0.16.8",
-    "radon>=6.0.1",
+    "ruff>=0.11.0",
+    "mypy>=1.10.0",
 ]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+extend-exclude = ["examples", "test_data"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
 
 [tool.coverage.run]
 branch = true
