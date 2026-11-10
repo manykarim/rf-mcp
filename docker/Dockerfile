@@ -6,6 +6,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_PYTHON_DOWNLOADS=never
 
+# rf-mcp runs robotcode with the image's own Python, so the Robot Framework
+# libraries a project needs must be installed here. Override at build time:
+#   docker build --build-arg RF_LIBRARIES="robotframework-requests" ...
+ARG RF_LIBRARIES="robotframework-browser robotframework-seleniumlibrary robotframework-requests"
+
 RUN apt-get update && \
     apt-get install -y build-essential ca-certificates \
     fonts-liberation \
@@ -52,7 +57,8 @@ RUN apt-get update \
 
 RUN npx --yes playwright install-deps
 
-RUN groupadd -r appuser && useradd -r -g appuser -u 1000 -m -s /bin/bash appuser
+RUN groupadd -r appuser && useradd -r -g appuser -u 1000 -m -s /bin/bash appuser \
+    && mkdir -p /workspace && chown appuser:appuser /workspace
 
 WORKDIR /app
 
@@ -64,13 +70,18 @@ RUN chown -R appuser:appuser /app
 
 USER appuser
 
-ENV PATH="/home/appuser/.local/bin:$PATH"
+# The venv first on PATH: rf-mcp finds robotcode there, and robot finds the libraries.
+ENV PATH="/app/.venv/bin:/home/appuser/.local/bin:$PATH"
 
-RUN uv lock && \
-    uv sync --all-extras --no-dev && \
-    uv run -- rfbrowser init
+RUN uv sync --frozen --no-dev --extra otel && \
+    if [ -n "$RF_LIBRARIES" ]; then uv pip install --python /app/.venv/bin/python $RF_LIBRARIES; fi && \
+    if command -v rfbrowser >/dev/null; then rfbrowser init; fi && \
+    robotmcp --version && robotcode --version
 
-# Expose ports for HTTP transport (8000) and Frontend dashboard (8001)
-EXPOSE 8000 8001
+# Mount the Robot Framework project (the folder with robot.toml) here.
+VOLUME ["/workspace"]
 
-ENTRYPOINT ["uv", "run", "--no-sync", "robotmcp", "--transport", "http", "--host", "0.0.0.0", "--port", "8000", "--with-frontend", "--frontend-host", "0.0.0.0", "--frontend-port", "8001"]
+# MCP over streamable HTTP at http://<host>:8000/mcp
+EXPOSE 8000
+
+ENTRYPOINT ["robotmcp", "--transport", "http", "--host", "0.0.0.0", "--port", "8000", "--mode", "server", "--root", "/workspace"]
