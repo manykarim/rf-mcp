@@ -115,9 +115,9 @@ def test_doctor_reports_subcommands_and_hints_status(tmp_path: Path) -> None:
 
 
 def test_codex_config_says_how_to_route_and_approve(tmp_path: Path) -> None:
-    import tomllib
+    import tomlkit  # tomllib is 3.11+
 
     content = generate_agent_mcp_configs(agent="codex", root=tmp_path)["codex"]["content"]
-    server = tomllib.loads(content)["mcp_servers"]["rf-mcp"]
+    server = tomlkit.loads(content).unwrap()["mcp_servers"]["rf-mcp"]
     assert "default_tools_approval_mode" not in server  # opt-in only: the tools run outside Codex's sandbox
     assert "rf-mcp sync-skills --agent codex" in content and '# default_tools_approval_mode = "approve"' in content

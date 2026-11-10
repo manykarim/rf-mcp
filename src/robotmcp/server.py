@@ -10,7 +10,7 @@ from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from robotmcp.args import ArgumentAliases, Shell, StrDict, StrList, Target, tolerant_literal
+from robotmcp.args import ArgumentAliases, PlainOptionalSchemas, Shell, StrDict, StrList, Target, tolerant_literal
 from robotmcp.config import ServerConfig
 from robotmcp.hints import HintContext, HintEngine
 from robotmcp.runner import (
@@ -118,6 +118,7 @@ def create_server(config: ServerConfig | None = None) -> FastMCP:
 
     mcp = FastMCP(name="rf-mcp", lifespan=server_lifespan)
     mcp.add_middleware(ArgumentAliases())
+    mcp.add_transform(PlainOptionalSchemas())
     skill_summaries = mount_skills_provider(mcp, cfg)
     mcp.instructions = build_server_instructions(
         cfg, skill_summaries, hint_load_errors=hint_engine.load_errors

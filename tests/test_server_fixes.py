@@ -305,3 +305,20 @@ async def test_run_outcome_leads_with_the_verdict(tmp_path: Path) -> None:
         assert "note" in analyze
     async with Client(_server(tmp_path, "client")) as client:
         assert "outcome" not in (await client.call_tool("rf_run", {})).data
+
+
+def test_flatten_optional_unwraps_the_python_310_double_optional() -> None:
+    from robotmcp.args import flatten_optional
+
+    nested = {
+        "anyOf": [{"anyOf": [{"enum": ["server", "client"], "type": "string"}, {"type": "null"}], "description": "d"}, {"type": "null"}],
+        "default": None,
+    }
+    plain = {"anyOf": [{"items": {"type": "string"}, "type": "array"}, {"type": "null"}], "default": None, "description": "t"}
+    schema = flatten_optional({"properties": {"target": nested, "tags": dict(plain)}})
+    assert schema["properties"]["target"] == {
+        "anyOf": [{"enum": ["server", "client"], "type": "string"}, {"type": "null"}],
+        "description": "d",
+        "default": None,
+    }
+    assert schema["properties"]["tags"] == plain

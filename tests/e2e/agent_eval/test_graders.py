@@ -436,9 +436,9 @@ def test_codex_model_names_and_config() -> None:
     assert "model_auto_compact_token_limit=12800" in cx.config() and 'model_provider="ollama"' in cx.config()
     assert codex_model("cx-oss-qwen3_8b").context and 'model_provider="ollama"' not in codex_model("cx-gpt-5.6-luna").config()
     toml = codex_mcp_toml({"mcpServers": {"rf-mcp": {"command": r"C:\py.exe", "args": ["-m", "robotmcp"], "env": {"A": "1"}}}})
-    import tomllib
+    import tomlkit  # tomllib is 3.11+
 
-    server = tomllib.loads(toml)["mcp_servers"]["rf-mcp"]
+    server = tomlkit.loads(toml).unwrap()["mcp_servers"]["rf-mcp"]
     assert server["command"] == r"C:\py.exe" and server["default_tools_approval_mode"] == "approve" and server["env"] == {"A": "1"}
     assert [c.label for c in parse_conditions("mcp+sync", {})] == ["mcp-sync"]
 

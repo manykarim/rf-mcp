@@ -7,10 +7,14 @@ plain `array` / `enum` while the server also accepts what weak models send.
 from __future__ import annotations
 
 import ast
+import copy
 import json
+from collections.abc import Sequence
 from typing import Annotated, Any, Literal, get_args
 
 from fastmcp.server.middleware import Middleware, MiddlewareContext
+from fastmcp.server.transforms import GetToolNext, Transform, VersionSpec
+from fastmcp.tools import Tool
 from pydantic import BeforeValidator
 
 
@@ -113,3 +117,39 @@ class ArgumentAliases(Middleware):
             for name in [n for n, v in args.items() if is_unset(v)]:
                 del args[name]
         return await call_next(context)
+
+
+_NULL = {"type": "null"}
+
+
+def flatten_optional(schema: dict[str, Any]) -> dict[str, Any]:
+    """Unwrap `anyOf: [{anyOf: [X, null], ...}, null]` into `anyOf: [X, null]`.
+
+    Python 3.10's `get_type_hints` wraps every parameter that defaults to None in
+    another Optional, so `Annotated[X | None, Field(...)] = None` publishes the
+    nested form there (3.11+ does not). Small models then miss the enum and type.
+    """
+    props = schema.get("properties", {})
+    for name, prop in props.items():
+        branches = prop.get("anyOf")
+        if not branches or len(branches) != 2 or _NULL not in branches:
+            continue
+        inner = branches[0] if branches[1] == _NULL else branches[1]
+        if _NULL in inner.get("anyOf", []):
+            props[name] = {**inner, **{k: v for k, v in prop.items() if k != "anyOf"}}
+    return schema
+
+
+def _plain_tool(tool: Tool) -> Tool:
+    return tool.model_copy(update={"parameters": flatten_optional(copy.deepcopy(tool.parameters))})
+
+
+class PlainOptionalSchemas(Transform):
+    """Publish the same flat Optional schemas on every Python version (see `flatten_optional`)."""
+
+    async def list_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
+        return [_plain_tool(t) for t in tools]
+
+    async def get_tool(self, name: str, call_next: GetToolNext, *, version: VersionSpec | None = None) -> Tool | None:
+        tool = await call_next(name, version=version)
+        return _plain_tool(tool) if tool else None
