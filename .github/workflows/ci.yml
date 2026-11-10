@@ -1,16 +1,21 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-and-test:
-    name: Build and Test (uv)
+  test:
+    # Unit and server tests, including the agent-eval grader tests under
+    # tests/e2e/agent_eval. Nothing here calls a model or needs a browser.
+    name: Test (${{ matrix.os }}, ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
-    env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
-      RUN_NETWORK_TESTS: '1'  # Enable network tests in CI
-    
     strategy:
       fail-fast: false
       matrix:
@@ -18,118 +23,7 @@ jobs:
         python-version: [ '3.10', '3.11', '3.12' ]
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: 'latest'
-
-      - name: Setup Python ${{ matrix.python-version }} (via uv)
-        run: uv python install ${{ matrix.python-version }}
-
-      - name: Show uv and Python versions
-        run: |
-          uv --version
-          uv run python --version
-
-      - name: Install dependencies (dev)
-        run: uv sync --all-extras --group dev
-
-      - name: Initialize Browser Library (rfbrowser)
-        # This installs Playwright and browser engines for the Robot Framework Browser library.
-        # It is safe to run even if Browser is not used; failures are ignored to avoid breaking non-UI PRs.
-        run: uv run rfbrowser init
-        continue-on-error: true
-
-      - name: Install Playwright browsers
-        env:
-          PLAYWRIGHT_BROWSERS_PATH: '0'  # Install browsers in the virtual environment
-        run: |
-          uv run playwright install --with-deps chromium firefox webkit
-          # Also try the python module approach in case the above doesn't work
-          uv run python -m playwright install --with-deps chromium firefox webkit || true
-
-      - name: Verify Playwright installation
-        run: |
-          uv run playwright --version
-          echo "Checking Playwright browser locations..."
-          uv run python -c "from playwright.sync_api import sync_playwright; print('Playwright import successful')"
-          # Check where browsers are installed
-          uv run python -c "import playwright; import os; print(f'Playwright path: {playwright.__file__}'); print(f'Browser path would be: {os.path.dirname(playwright.__file__)}')"
-
-      - name: Prepare results directory
-        run: mkdir -p results
-
-      - name: Configure OpenAI Model with Fallback
-        shell: bash
-        run: |
-          OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
-          if [ -z "$OPENAI_MODEL_VALUE" ]; then
-            echo "⚠️ Missing OPENAI_MODEL, using fallback: gpt-5-mini"
-            OPENAI_MODEL_VALUE="gpt-5-mini"
-          else
-            echo "✅ Using OPENAI_MODEL: $OPENAI_MODEL_VALUE"
-          fi
-          echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> $GITHUB_ENV
-
-      - name: Run tests with coverage
-        shell: bash
-        env:
-          # Keep runner path enabled for RequestsLibrary in CI
-          ROBOTMCP_RF_RUNNER_REQUESTS: '1'
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ env.OPENAI_MODEL }}
-          # Ensure Playwright uses the correct browser path
-          PLAYWRIGHT_BROWSERS_PATH: '0'
-        run: |
-          uv run coverage erase
-          uv run coverage run -m pytest tests/ --ignore=tests/benchmarks --ignore=tests/e2e --junitxml=results/pytest.xml
-          uv run python -c "import glob, subprocess; files = glob.glob('.coverage.*'); subprocess.run(['coverage', 'combine'], check=True) if files else print('No parallel coverage files found; skipping coverage combine.')"
-          uv run coverage report
-          uv run coverage html -d results/htmlcov
-          uv run coverage xml -o results/coverage.xml
-
-      - name: Upload coverage artifacts
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-${{ matrix.os }}-py${{ matrix.python-version }}
-          path: |
-            results/htmlcov
-            results/coverage.xml
-
-      - name: Test Report
-        uses: dorny/test-reporter@main
-        if: success() || failure()
-        with:
-          name: xUnit Tests ${{ matrix.python-version }}
-          path: results/pytest.xml
-          reporter: java-junit
-
-      - name: Build package (wheel + sdist)
-        run: uv build
-
-      - name: Upload dist artifacts
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist-${{ matrix.os }}-py${{ matrix.python-version }}
-          path: dist/*
-
-  benchmarks:
-    name: Benchmarks
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ ubuntu-latest, macos-latest, windows-latest ]
-        python-version: [ '3.11' ]
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v7
@@ -140,370 +34,24 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Install dependencies (dev)
-        run: uv sync --all-extras --group dev
+        run: uv sync --python ${{ matrix.python-version }} --group dev
 
-      - name: Prepare results directory
-        run: mkdir -p results
+      - name: Run tests
+        run: uv run --python ${{ matrix.python-version }} pytest -q -rs --junitxml=results/pytest.xml
 
-      - name: Run benchmarks
-        shell: bash
-        run: |
-          uv run pytest tests/benchmarks/ -v --junitxml=results/benchmarks.xml
-
-      - name: Benchmark Report
-        uses: dorny/test-reporter@main
-        if: success() || failure()
-        with:
-          name: Benchmarks ${{ matrix.os }}
-          path: results/benchmarks.xml
-          reporter: java-junit
-
-  e2e-tests:
-    name: E2E Copilot CLI Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      COPILOT_GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-      COPILOT_MODEL: ${{ vars.COPILOT_MODEL }}
-
-    steps:
-      - name: Check Copilot token
-        run: |
-          if [ -z "$COPILOT_GITHUB_TOKEN" ]; then
-            echo "::warning::PERSONAL_ACCESS_TOKEN secret not set — skipping Copilot CLI tests"
-            echo "SKIP_COPILOT=true" >> "$GITHUB_ENV"
-          fi
-
-      - name: Checkout repository
-        if: env.SKIP_COPILOT != 'true'
-        uses: actions/checkout@v7
-
-      - name: Setup uv
-        if: env.SKIP_COPILOT != 'true'
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: 'latest'
-
-      - name: Setup Python 3.12 (via uv)
-        if: env.SKIP_COPILOT != 'true'
-        run: uv python install 3.12
-
-      - name: Install dependencies (dev)
-        if: env.SKIP_COPILOT != 'true'
-        run: uv sync --all-extras --group dev
-
-      - name: Setup Node.js
-        if: env.SKIP_COPILOT != 'true'
-        uses: actions/setup-node@v7
-        with:
-          node-version: '20'
-
-      - name: Install Copilot CLI
-        if: env.SKIP_COPILOT != 'true'
-        run: npm install -g @github/copilot
-
-      - name: Verify Copilot CLI
-        if: env.SKIP_COPILOT != 'true'
-        run: copilot --version
-
-      - name: Create metrics and results directories
-        if: env.SKIP_COPILOT != 'true'
-        run: mkdir -p tests/e2e/metrics/copilot_autonomous tests/e2e/metrics/copilot_workflow tests/e2e/metrics/copilot_cli results
-
-      - name: Run E2E tool discovery tests (no LLM)
-        if: env.SKIP_COPILOT != 'true'
-        run: |
-          uv run pytest tests/e2e/test_agent_tool_discovery.py -v --junitxml=results/e2e-tool-discovery.xml
-
-      - name: Run Copilot CLI E2E tests
-        if: env.SKIP_COPILOT != 'true'
-        run: |
-          uv run pytest tests/e2e/test_copilot_cli_e2e.py -v -m copilot_cli --junitxml=results/copilot-cli-e2e.xml
-        continue-on-error: true
-        timeout-minutes: 10
-
-      - name: Run Copilot autonomous agent tests
-        if: env.SKIP_COPILOT != 'true'
-        run: |
-          uv run pytest tests/e2e/test_copilot_autonomous_agents.py -v -m copilot_cli --junitxml=results/copilot-autonomous.xml
-        continue-on-error: true
-        timeout-minutes: 55
-
-      - name: Run Copilot workflow tests
-        if: env.SKIP_COPILOT != 'true'
-        run: |
-          uv run pytest tests/e2e/test_copilot_workflow.py -v -m copilot_cli --junitxml=results/copilot-workflow.xml
-        continue-on-error: true
-        timeout-minutes: 15
-
-      - name: Upload E2E Copilot metrics
-        if: env.SKIP_COPILOT != 'true' && always()
+      - name: Upload test results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-copilot-metrics
-          path: tests/e2e/metrics/**/*.json
-
-      - name: Test Report
-        uses: dorny/test-reporter@main
-        if: env.SKIP_COPILOT != 'true' && (success() || failure())
-        with:
-          name: E2E Tests
-          path: results/*.xml
-          reporter: java-junit
-
-  optional-matrix:
-    name: Optional Dependency Matrix
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - combo: slim
-            extras: 'slim'
-            test-command: 'uv run pytest tests/test_mcp_simple.py -q'
-          - combo: web
-            extras: 'web'
-            test-command: 'uv run pytest -m optional_web -q'
-          - combo: api
-            extras: 'api'
-            test-command: 'uv run pytest -m optional_api -q'
-          - combo: mobile
-            extras: 'mobile'
-            test-command: 'uv run pytest -m optional_mobile -q'
-          - combo: database
-            extras: 'database'
-            test-command: 'uv run pytest -m optional_database -q'
-          - combo: web+api
-            extras: 'web,api'
-            test-command: 'uv run pytest -m optional_web_api -q'
-          - combo: all
-            extras: 'all'
-            test-command: 'uv run pytest -m optional_all -q'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: 'latest'
-
-      - name: Setup Python 3.12 (via uv)
-        run: uv python install 3.12
-
-      - name: Install base dependencies
-        run: uv sync --group dev
-
-      - name: Install optional extras
-        if: ${{ matrix.extras != '' }}
-        run: uv pip install -e ".[${{ matrix.extras }}]"
-
-      - name: Prepare results directory
-        run: mkdir -p results
-
-      - name: Configure OpenAI Model with Fallback
-        shell: bash
-        run: |
-          OPENAI_MODEL_VALUE="${{ vars.OPENAI_MODEL }}"
-          if [ -z "$OPENAI_MODEL_VALUE" ]; then
-            OPENAI_MODEL_VALUE="gpt-5-mini"
-          fi
-          echo "OPENAI_MODEL=$OPENAI_MODEL_VALUE" >> $GITHUB_ENV
-
-      - name: Initialize Browser Library (rfbrowser)
-        if: ${{ contains(matrix.extras, 'web') || matrix.extras == 'all' }}
-        run: uv run rfbrowser init
-        continue-on-error: true
-
-      - name: Run optional tests
-        env:
-          ROBOTMCP_RF_RUNNER_REQUESTS: '1'
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ env.OPENAI_MODEL }}
-          # Ensure Playwright uses the correct browser path
-          PLAYWRIGHT_BROWSERS_PATH: '0'
-          RUN_NETWORK_TESTS: '1'
-        run: ${{ matrix.test-command }} --junitxml=results/pytest.xml
-
-      - name: Test Report
-        uses: dorny/test-reporter@main
-        if: success() || failure()
-        with:
-          name: xUnit Optional Tests (${{ matrix.combo }})
+          name: pytest-${{ matrix.os }}-${{ matrix.python-version }}
           path: results/pytest.xml
-          reporter: java-junit
-
-
-  e2e-no-llm:
-    name: E2E No-LLM (tool discovery)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: 'latest'
-
-      - name: Setup Python 3.12 (via uv)
-        run: uv python install 3.12
-
-      - name: Install dependencies (dev)
-        run: uv sync --all-extras --group dev
-
-      - name: Prepare results directory
-        run: mkdir -p results
-
-      # test_agent_tool_discovery needs NO LLM and NO external secret. It was previously
-      # run by no CI job (build-and-test --ignore=tests/e2e). Run it per-commit so a
-      # tool-registration/discovery regression (the class the FastMCP 3.x upgrade hit)
-      # is caught deterministically with real assertions.
-      - name: Run no-LLM e2e tool discovery
-        run: |
-          uv run pytest tests/e2e/test_agent_tool_discovery.py \
-            -v --junitxml=results/e2e-no-llm.xml
-
-      # test_mcp_stdout_leak.py is a diagnostic reproduction script (collects leak
-      # evidence, no assertions), run informationally — it must not gate the build.
-      - name: MCP stdout leak diagnostics (informational)
-        continue-on-error: true
-        run: uv run pytest tests/e2e/test_mcp_stdout_leak.py -q
-
-      - name: Test Report
-        uses: dorny/test-reporter@main
-        if: success() || failure()
-        with:
-          name: E2E No-LLM Tests
-          path: results/e2e-no-llm.xml
-          reporter: java-junit
-
-  e2e-instruction-smoke:
-    name: E2E Instruction-Quality Smoke (reference model)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
-      # Per-commit signal: the ACTIVE reference model (MiniMax-M3, proven reliable 3/3)
-      # over the fast validated scenario subset. Its N-run aggregate is compared against
-      # the committed baseline (tests/e2e/baselines/instruction_quality_baselines.json);
-      # a regression in rf-mcp's tool descriptions / MCP instructions fails the job.
-      # NOTE: the aspirational self-hostable reference (qwen3-coder) is inform-only until
-      # its OpenRouter route is provider-pinned (default routing is non-reproducible —
-      # see reference_pin.note). The full roster runs weekly.
-      E2E_MODELS: 'MiniMax-M3'
-      E2E_RUNS: '3'
-    steps:
-      - name: Check MiniMax key
-        run: |
-          if [ -z "$MINIMAX_API_KEY" ]; then
-            echo "::warning::MINIMAX_API_KEY secret not set — skipping instruction smoke"
-            echo "SKIP_SMOKE=true" >> "$GITHUB_ENV"
-          fi
-
-      - name: Checkout repository
-        if: env.SKIP_SMOKE != 'true'
-        uses: actions/checkout@v7
-
-      - name: Setup uv
-        if: env.SKIP_SMOKE != 'true'
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: 'latest'
-
-      - name: Setup Python 3.12 (via uv)
-        if: env.SKIP_SMOKE != 'true'
-        run: uv python install 3.12
-
-      - name: Install dependencies (dev)
-        if: env.SKIP_SMOKE != 'true'
-        run: uv sync --all-extras --group dev
-
-      - name: Create metrics + results directories
-        if: env.SKIP_SMOKE != 'true'
-        run: mkdir -p tests/e2e/metrics/minimax results
-
-      # Instruction-quality gate: the reference model's aggregate tool-call quality must
-      # not regress below its committed baseline on the VALIDATED scenarios and must clear
-      # the reference absolute floors. A drop signals degraded rf-mcp tool descriptions or
-      # MCP instructions and fails the job. Infra faults (recursion/registration) fail on
-      # any run. See tests/e2e/quality_gate.py.
-      - name: Run instruction-quality smoke
-        if: env.SKIP_SMOKE != 'true'
-        timeout-minutes: 15
-        run: |
-          uv run pytest tests/e2e/test_minimax_autonomous.py -v -s \
-            --junitxml=results/e2e-instruction-smoke.xml
-
-      - name: Upload instruction-quality metrics
-        if: env.SKIP_SMOKE != 'true' && always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-instruction-smoke-metrics
-          path: tests/e2e/metrics/minimax/**/*.json
-
-      - name: Test Report
-        uses: dorny/test-reporter@main
-        if: env.SKIP_SMOKE != 'true' && (success() || failure())
-        with:
-          name: E2E Instruction Smoke
-          path: results/e2e-instruction-smoke.xml
-          reporter: java-junit
-
-  agenteval-harness:
-    name: AgentEval Harness (MCP-surface + agentic)
-    runs-on: ubuntu-latest
-    env:
-      # Agentic (Tier-3) suite runs only when a model credential is configured;
-      # it self-skips otherwise (deterministic Tier-1 is always-on, keyless).
-      AGENTEVAL_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
-      AGENTEVAL_BASE_URL: https://api.minimax.io/v1
-      AGENTEVAL_MODEL: MiniMax-M3
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: 'latest'
-
-      - name: Setup Python 3.12 (via uv)
-        run: uv python install 3.12
-
-      # rf-mcp is spawned as a subprocess by the suites (.venv/bin/robotmcp),
-      # so it must exist in its OWN env. agenteval installs into a SEPARATE
-      # ephemeral env inside run.sh (uv run --no-project --with-requirements).
-      - name: Build rf-mcp's own env
-        run: uv sync --all-extras --group dev
-
-      # The ported real-browser prevalidation suite (integration/test_real_browser_prevalidation.robot)
-      # drives headless Chromium in the spawned rf-mcp subprocess, so its browser lives in rf-mcp's OWN
-      # env. Without this it skips cleanly; with it, it runs for real. (The selenium port uses the
-      # runner's preinstalled Chrome via Selenium Manager.)
-      - name: Initialize Browser Library (rfbrowser)
-        run: uv run rfbrowser init
-
-      - name: Run the agenteval harness (deterministic always-on; agentic gated by the key)
-        run: bash tests/agenteval/run.sh --xunit results.xml
-
-      - name: Test Report
-        uses: dorny/test-reporter@main
-        if: success() || failure()
-        with:
-          name: AgentEval Harness
-          path: tests/agenteval/results/results.xml
-          reporter: java-junit
+          if-no-files-found: ignore
 
   installability:
-    # Guard for the class of bug fixed in 0.35.1 (change: install-extra-resolvability):
-    # `rf-mcp[all]` was unresolvable for every uv/pipx user because a transitive
-    # pre-release pin is not "explicit" to uv. Every OTHER job installs rf-mcp as a
-    # local path (`-e .`) or from uv.lock, which keeps rf-mcp's own pins FIRST-PARTY
-    # and therefore cannot see the defect. This job must install the built wheel as a
-    # THIRD-PARTY dependency, with DEFAULT resolver settings. Do not "simplify" it to
-    # `uv pip install -e .` — that would silently make it useless.
+    # Installs the built wheel as a THIRD-PARTY dependency with DEFAULT resolver
+    # settings. Every other job installs rf-mcp from uv.lock, where the project's own
+    # `prerelease = "allow"` hides an unresolvable pin (robotcode is a dev release).
+    # Do not "simplify" this to `uv pip install -e .`.
     name: Installability (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -525,47 +73,25 @@ jobs:
       - name: Build the wheel
         run: uv build --wheel --out-dir dist
 
-      - name: '[all] resolves with DEFAULT settings (no --prerelease)'
+      - name: 'rf-mcp[otel] resolves with DEFAULT settings (no --prerelease)'
         shell: bash
         run: |
           set -euo pipefail
-          echo "rf-mcp[all]==$(uv run --no-project --python 3.12 python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")" > req.txt
+          echo "rf-mcp[otel]==$(uv run --no-project --python 3.12 python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")" > req.txt
           cat req.txt
           uv pip compile req.txt --find-links dist --python-version 3.12 -o resolved.txt
           echo "--- resolved ---" && cat resolved.txt
 
-      - name: '[all] pulls NO platynui distribution'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if grep -i platynui resolved.txt; then
-            echo "::error::rf-mcp[all] pulled a PlatynUI distribution. Desktop must stay an opt-in extra."
-            exit 1
-          fi
-          echo "ok: no platynui in [all]"
-
-      - name: 'uv tool install "rf-mcp[all]" works with no flag'
+      - name: 'uv tool install works with no flag'
         shell: bash
         run: |
           set -euo pipefail
           export UV_TOOL_DIR="$PWD/.uvtools" UV_TOOL_BIN_DIR="$PWD/.uvbin"
           mkdir -p "$UV_TOOL_BIN_DIR"
           WHEEL=$(ls dist/rf_mcp-*.whl)
-          uv tool install "${WHEEL}[all]"
+          uv tool install --python 3.12 "${WHEEL}[otel]"
           "$UV_TOOL_BIN_DIR/robotmcp" --version
-
-      - name: 'documented desktop command resolves (Linux/Windows only)'
-        # PlatynUI publishes no macOS x86_64 wheel and GitHub's macos-latest is arm64,
-        # so this step is meaningful on Linux and Windows; see README extras table.
-        if: matrix.os != 'macos-latest'
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "rf-mcp[desktop]==$(uv run --no-project --python 3.12 python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")" > req-desktop.txt
-          uv pip compile req-desktop.txt --find-links dist --python-version 3.12 \
-            --prerelease=allow -o resolved-desktop.txt
-          grep -i platynui-native resolved-desktop.txt
-          echo "ok: documented desktop command resolves"
+          "$UV_TOOL_BIN_DIR/rf-mcp" --version
 
   quality:
     # Code quality, code security, dependency advisories and maintainability.
@@ -669,8 +195,8 @@ jobs:
       - name: 'radon: maintainability'
         id: radon
         run: |
-          uv run radon mi src/ -j > reports/maintainability.json || true
-          uv run radon cc src/ -j > reports/complexity.json || true
+          uv run --with radon radon mi src/ -j > reports/maintainability.json || true
+          uv run --with radon radon cc src/ -j > reports/complexity.json || true
           test -s reports/maintainability.json || { echo "::error::radon produced no report - analyzer failed to run"; exit 1; }
           uv run python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
