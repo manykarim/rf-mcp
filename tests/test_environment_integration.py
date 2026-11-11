@@ -89,3 +89,17 @@ async def test_a_project_pinning_an_old_robotcode_keeps_it(tmp_path: Path) -> No
         analyzed = (await client.call_tool("rf_analyze", {})).data
         assert not analyzed.get("has_errors") and "warning" not in analyzed, analyzed
     assert _robotcode_version(project / ".venv") == "1.5.0"
+
+
+def test_doctor_reports_the_layered_environment(plain_project: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Task 5.2: doctor warms the layer and says how long it took."""
+    from robotmcp.onboarding import run_doctor
+    from robotmcp.runner.environment import EnvironmentResolver
+
+    environ = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
+    environ["PATH"] = os.pathsep.join(p for p in environ.get("PATH", "").split(os.pathsep) if ".venv" not in p)
+    report = run_doctor(root=plain_project, resolver=EnvironmentResolver(environ=environ))
+    out = capsys.readouterr().out
+    assert report["ok"] is True and report["environment"]["layered"] is True, report["environment"]
+    assert report["environment"]["source"] == "venv" and report["environment"]["python"].startswith("3.12")
+    assert "added by uv, ready in" in out and "Project Root" in out

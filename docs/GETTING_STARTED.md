@@ -40,15 +40,25 @@ rf-mcp doctor
 
 ```text
 === rf-mcp doctor ===
-Workspace Root : /path/to/project
-Python         : 3.12.8
-RobotCode      : robotcode, version 2.9.0-dev.115 (OK)
+Install        : global (rf-mcp 2.0.0, Python 3.10.22)
+Project Root   : /home/dev/shop (found by robot.toml)
+Environment    : venv /home/dev/shop/.venv/bin/python (Python 3.12.3)
+RobotCode      : robotcode 2.9.0-dev.186 added by uv, ready in 1.3 s (OK)
+uv             : uv 0.12.23 (/home/dev/.local/bin/uv)
 Active Skills  : rf-locators, rf-requests, rf-robotcode
 Custom Hints   : none (using built-in rules) [not present]
 ```
 
-`doctor` also lists the robotcode subcommands rf-mcp needs and whether `.robotframework/hints.toml` loaded
-(`--json` for a machine-readable report).
+- **Install:** `project` when rf-mcp runs from the project's `.venv`, else `global`.
+- **Project Root:** the folder `doctor` uses, found the way the server finds it (`-r` pins it).
+- **Environment:** the interpreter that runs robotcode for this project: `configured`, `venv`, `activated`,
+  `path`, `own`, or `fallback`. With `fallback`, `doctor` exits 1 and prints a warning with the fix, because the
+  project's libraries are not visible.
+- **RobotCode:** the version that runs. "added by uv" means rf-mcp layers its own robotcode onto the project
+  environment. `doctor` warms that layer, so the first agent call is fast.
+
+`doctor` also lists missing robotcode subcommands and whether `.robotframework/hints.toml` loaded (`--json` for a
+machine-readable report).
 
 ## 2. Connect your agent
 

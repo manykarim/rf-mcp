@@ -30,8 +30,8 @@
 
 ## 5. `rf-mcp doctor`
 
-- [ ] 5.1 Report the install kind, the resolved root with the rule or marker that found it, the environment source, interpreter, robotcode version and whether it is layered, the uv version and path, and the interpreter's Python version, all through the server's resolvers (D9). Exit non-zero on the fallback. Verify with `tests/test_onboarding_cli.py` for a global install over a venv without robotcode (exit 0, layered) and for uv missing with no project robotcode (exit 1, both remedies).
-- [ ] 5.2 Make `doctor` warm the layered environment and print how long that took. Document the new report fields in `docs/GETTING_STARTED.md`. Verify by running `rf-mcp doctor` in the scratch project from 2.4 and checking that the output matches the documented example.
+- [x] 5.1 Report the install kind, the resolved root with the rule or marker that found it, the environment source, interpreter, robotcode version and whether it is layered, the uv version and path, and the interpreter's Python version, all through the server's resolvers (D9). Exit non-zero on the fallback. Verify with `tests/test_onboarding_cli.py` for a global install over a venv without robotcode (exit 0, layered) and for uv missing with no project robotcode (exit 1, both remedies).
+- [x] 5.2 Make `doctor` warm the layered environment and print how long that took. Document the new report fields in `docs/GETTING_STARTED.md`. Verify by running `rf-mcp doctor` in the scratch project from 2.4 and checking that the output matches the documented example.
 
 ## 6. Agent behaviour checks (need the user's go-ahead for model calls)
 

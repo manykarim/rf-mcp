@@ -122,3 +122,33 @@ def test_codex_config_says_how_to_route_and_approve(tmp_path: Path) -> None:
     server = tomlkit.loads(content).unwrap()["mcp_servers"]["rf-mcp"]
     assert "default_tools_approval_mode" not in server  # opt-in only: the tools run outside Codex's sandbox
     assert "rf-mcp sync-skills --agent codex" in content and '# default_tools_approval_mode = "approve"' in content
+
+
+# --- project-independent-server 5.1: doctor reports root and environment resolution -----------------
+
+
+def test_doctor_finds_the_root_like_the_server(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "robot.toml").write_text("", encoding="utf-8")
+    (tmp_path / "tests" / "ui").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path / "tests" / "ui")
+    report = run_doctor(as_json=True)
+    assert report["workspace_root"] == str(tmp_path.resolve())
+    assert report["root_source"] == "marker:robot.toml"
+    assert report["install_kind"] == "global"
+    assert {"source", "interpreter", "python", "robotcode_version", "layered", "command"} <= set(report["environment"])
+    assert "version" in report["uv"]
+
+
+def test_doctor_fails_on_the_fallback_and_names_both_remedies(tmp_path: Path) -> None:
+    from robotmcp.runner.environment import EnvironmentResolver
+
+    project = tmp_path / "shop"
+    (project / ".venv" / "Scripts").mkdir(parents=True)
+    (project / ".venv" / "Scripts" / "python.exe").write_text("", encoding="utf-8")
+    (tmp_path / "empty").mkdir()
+    resolver = EnvironmentResolver(own_prefix=tmp_path / "tool-env", uv=False, version_probe=lambda _p: None,
+                                   environ={"PATH": str(tmp_path / "empty")})
+    report = run_doctor(root=project, as_json=True, resolver=resolver)
+    assert report["ok"] is False and report["environment"]["source"] == "fallback"
+    warning = report["environment"]["warning"]
+    assert "install uv" in warning and 'uv add --dev "robotcode[all]' in warning
