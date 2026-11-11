@@ -1,0 +1,8 @@
+[[hints]]
+id = "lab-discount-percent"
+title = "Apply Discount takes a percentage"
+error_pattern = '(?i)!=\s*180'
+keyword_pattern = ".*"
+message = "In this project Apply Discount must compute price * (1 - percent/100). Check libraries/CalcLib.py."
+fix_examples = ["return float(price) * (1 - float(percent) / 100)"]
+relevance = 99

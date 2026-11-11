@@ -1,176 +1,124 @@
-# Getting Started with rf-mcp
+# Getting started
 
-rf-mcp is an MCP server that hands your AI coding agent a live Robot Framework
-session. The agent discovers keywords, executes steps one at a time against real
-libraries — Browser, Selenium, Appium, Requests, Database, PlatynUI — inspects
-the DOM and page state as it goes, and builds a runnable `.robot` suite from what
-actually worked. No guessing, no hallucinated locators.
+This guide installs rf-mcp into a Robot Framework project, connects a coding agent and walks through a first
+session. For every option see [CONFIGURATION.md](CONFIGURATION.md); for the tools see [MCP_TOOLS.md](MCP_TOOLS.md).
 
-One thing to keep straight: rf-mcp is *not* a Robot Framework library of keywords.
-Its "keywords" are its MCP tools. It's the bridge, not the toolbox.
+## 1. Install
 
-This guide takes you from zero to a passing test. Grab a coffee.
+rf-mcp needs Python 3.10+ and `robotcode[all]>=2.9.0.dev115`, which is currently a pre-release. Install both into
+the environment your tests run in, next to the libraries the project uses: rf-mcp runs `robotcode` from that
+environment, so it sees the same libraries and `robot.toml`.
 
-## Prerequisites
+```bash
+# uv
+uv add --dev --prerelease=allow rf-mcp "robotcode[all]>=2.9.0.dev115"
 
-| You need | Why |
+# pip
+pip install --pre rf-mcp "robotcode[all]>=2.9.0.dev115"
+```
+
+Add `rf-mcp[otel]` for OpenTelemetry export.
+
+Check the setup from the project folder:
+
+```bash
+rf-mcp doctor
+```
+
+```text
+=== rf-mcp doctor ===
+Workspace Root : /path/to/project
+Python         : 3.12.8
+RobotCode      : robotcode, version 2.9.0-dev.115 (OK)
+Active Skills  : rf-locators, rf-requests, rf-robotcode
+Custom Hints   : none (using built-in rules) [not present]
+```
+
+`doctor` also lists the robotcode subcommands rf-mcp needs and whether `.robotframework/hints.toml` loaded
+(`--json` for a machine-readable report).
+
+## 2. Connect your agent
+
+`rf-mcp init` writes the MCP configuration for one agent or all of them:
+
+```bash
+rf-mcp init --agent claude --write      # .mcp.json
+rf-mcp init --agent codex --write       # .codex/config.toml
+rf-mcp init --agent copilot --write     # .vscode/mcp.json
+rf-mcp init --agent agy --write         # .gemini/settings.json and .agents/plugins/rf-mcp/
+rf-mcp init --agent opencode --write    # opencode.json
+rf-mcp init --agent all --write
+```
+
+Without `--write` it prints the configuration instead. The server starts from the project's environment:
+`uv run --directory <project> rf-mcp` when the project has a `pyproject.toml`, otherwise the Python interpreter
+that ran `init`.
+
+To connect to a server that already runs elsewhere, pass its URL:
+
+```bash
+rf-mcp init --agent claude --mode client --url http://test-runner:8000/mcp --write
+```
+
+Agents that do not read MCP resources well can get the built-in skills as files as well:
+
+```bash
+rf-mcp sync-skills --agent claude    # .claude/skills/  (codex, agy, opencode: .agents/skills/, copilot: .github/skills/)
+```
+
+`sync-skills` leaves a skill folder alone when its content differs (exit code 1, listed under `skipped`); pass
+`--force` to overwrite it.
+
+## 3. A first session
+
+Open the agent in the project folder and ask in plain language. The server's instructions and the
+`rf-robotcode` skill route each request to a tool; the agent does not need to know the tool names.
+
+| you ask | what the agent does |
 | --- | --- |
-| **Python 3.10+** | rf-mcp and Robot Framework 7.0+ run here. |
-| **Node.js** | Only for the Browser (Playwright) library. Skip it if you're doing API, Selenium, or database work. |
-| **A coding agent** | Claude Code, Codex, Copilot, Cursor, Gemini CLI, and friends — see [Register into coding agents](#3-register-into-coding-agents). |
+| "Which smoke tests do we have?" | `rf_discover` with `action='tags'` or `include_tags=['smoke']` |
+| "Run the login tests." | `rf_discover` for the longnames, then `rf_run` with `by_longname` |
+| "Why did *Checkout Total* fail?" | `rf_results` (`action='log'`, `failed_only=true`) before it opens any file |
+| "Check my new suite without running it." | `rf_analyze` |
+| "Which keyword uploads a file in Browser?" | `rf_doc` with `action='keywords'`, `library='Browser'` and synonyms as `pattern` |
+| "Write a test for the search page." | `rf_repl` to try the steps live, `save` them as a test, `rf_analyze`, then `rf_run` |
+| "*Valid Login* fails on CI, find out why." | `rf_debug` paused at the failure, inspecting variables in the real suite context |
 
-rf-mcp ships lean. The core install pulls minimal dependencies; you add exactly
-the test libraries you want through extras.
-
-## 1. Install as a tool
-
-The cleanest path is to install rf-mcp as a standalone CLI tool. `uv` drops it in
-its own isolated environment and puts a `robotmcp` command on your PATH.
-
-```bash
-# Everything: Browser, Selenium, Appium, Requests, Database, ...
-uv tool install "rf-mcp[all]"
-
-# Or just what you need
-uv tool install "rf-mcp[api]"        # API testing only, pure Python
-uv tool install "rf-mcp[web,api]"    # Web + API
-```
-
-Extras control which Robot Framework libraries are available and what, if
-anything, you have to do afterward:
-
-| Extra | Adds | Post-install |
-| --- | --- | --- |
-| `api` | RequestsLibrary | none |
-| `web` | SeleniumLibrary + Browser | Selenium: none (Selenium Manager fetches the driver); Browser: `robotmcp init --browsers` |
-| `mobile` | AppiumLibrary | Appium server (external) |
-| `database` | DatabaseLibrary | a DB driver |
-| `frontend` | Django dashboard | set `ROBOTMCP_ENABLE_FRONTEND=true` or start the server with `--with-frontend` (off by default) |
-| `memory` | Persistent semantic memory (sqlite-vec + model2vec) | set `ROBOTMCP_MEMORY_ENABLED=true` (off by default) |
-| `desktop` | PlatynUI native desktop automation (Rust core + `platynui-cli`) | Python 3.12+; pre-release — **not in `[all]`**, install separately |
-| `all` | all of the above **except** `desktop` | as above |
-
-> **`desktop` is a separate opt-in.** PlatynUI's native core is still a
-> pre-release, and uv-backed installers (`uv`, `uvx`, `pipx`) refuse a transitive
-> pre-release pin without a flag. So `[all]` does not include it — otherwise
-> `uv tool install "rf-mcp[all]"` would fail for everyone. Install it directly:
->
-> ```bash
-> uv tool install --prerelease=allow "rf-mcp[desktop]"   # uv / uvx / pipx
-> pip install "rf-mcp[desktop]"                          # pip / poetry / pdm — no flag
-> ```
->
-> It needs **Python 3.12+**, and PlatynUI publishes wheels only for Linux
-> x86_64/aarch64 with **glibc ≥ 2.34**, macOS **arm64**, and Windows x86_64/arm64.
-> There is no sdist, so macOS Intel, musl/Alpine and older-glibc Linux cannot
-> install it. `[all]` installs fine everywhere — you just don't get desktop there.
-
-> `[all]` deliberately leaves out the `semantic` extra — that one pulls
-> sentence-transformers and torch (~2GB) as an optional max-quality backend for
-> keyword ranking. You almost certainly don't need it; the default ranker is
-> torch-free and just as sharp on the metric that matters.
-
-Prefer `pip`? `pip install "rf-mcp[all]"` works too. The tool-install route just
-keeps rf-mcp's dependencies from tangling with your project's.
-
-## 2. Prepare and diagnose
-
-Two commands get you set up and tell you the truth about your environment.
-
-```bash
-robotmcp init            # reports libraries, prints the MCP config; also runs Playwright init when the Browser library is installed
-robotmcp init --browsers # also initializes the Playwright browser (needs Node.js)
-robotmcp doctor          # read-only health check: version, libraries, browser, Node
-robotmcp --version
-```
-
-`robotmcp init --browsers` runs the bundled `rfbrowser init` *inside* rf-mcp's own
-environment, so Playwright lands exactly where the installed Browser library looks
-for it. It advises rather than fails if the `web` extra or Node.js is missing — no
-dead ends, just a clear next step.
-
-`robotmcp doctor` never changes anything. Run it any time something feels off; it
-reports version, detected libraries, browser status, and Node without touching a
-byte.
-
-## 3. Register into coding agents
-
-rf-mcp can wire itself into your agent's config so you don't have to hand-edit
-JSON.
-
-```bash
-robotmcp list                              # supported agents + what's detected/registered
-robotmcp install                           # interactive: registers into detected agents
-robotmcp install --agents claude-code,codex,gemini
-robotmcp install --agents all --scope user
-robotmcp install --dry-run                 # show the plan, write nothing
-robotmcp uninstall                         # safe, reversible removal
-```
-
-**Supported agents:** Claude Code, OpenAI Codex, GitHub Copilot, opencode,
-Gemini CLI, Kilo Code, goose, and Cursor. Each is written in its own file and
-format, and any other MCP servers you already have configured are left untouched.
-
-**Scope.** Installs default to `--scope project` (writes into the current project,
-e.g. `./.mcp.json`) where the agent supports it. Use `--scope user` for a global,
-home-directory install. goose only supports user scope, and GitHub Copilot only supports project scope.
-
-**Safe and reversible.** Every change is recorded in a hash-tracked manifest at
-`~/.local/state/robotmcp/install-manifest.json`. `robotmcp uninstall` removes only
-the entries that are unchanged since install — edit an rf-mcp entry by hand and it
-gets left in place and reported instead of clobbered. Unrelated servers are never
-touched. Use `--dry-run` on either command to preview.
-
-**Manual fallback.** Prefer to edit config yourself? Add this to your agent's MCP
-config:
+A change counts as done when `rf_analyze` reports no errors and `rf_run` returns `outcome: PASS`. Every `rf_run`
+response starts with that verdict, for example:
 
 ```json
-{ "mcpServers": { "robotmcp": { "command": "robotmcp" } } }
+{"outcome": "FAIL: 3 tests, 2 passed, 1 failed. The tests do not pass yet: fix them and rerun before you report the task as done.",
+ "exit_code": 1,
+ "failures": ["Checkout Total: Expected 42.00 but was 40.00"]}
 ```
 
-For Claude Code specifically, one line does it:
+## 4. Teach the agent your project
 
-```bash
-claude mcp add rf-mcp -- uvx rf-mcp
-```
+Project knowledge lives in the repository, next to the tests:
 
-## 4. Your first test
+- `.robotframework/skills/<name>/SKILL.md`: conventions, page objects, custom libraries. The server serves it as
+  `skill://<name>/SKILL.md` and picks up changes without a restart.
+- `.robotframework/hints.toml`: recovery hints for errors specific to your system, returned by `rf_diagnose` and
+  attached to failing results.
 
-Restart your agent so it picks up the new MCP server, then just ask. rf-mcp guides
-the agent through discover → execute → verify → build, so plain English is enough:
+See [CONFIGURATION.md](CONFIGURATION.md#skills) for both formats.
 
-```
-Use rf-mcp to build and run a test for https://www.saucedemo.com/ that:
-- Logs in with a valid user
-- Adds two items to the cart
-- Completes checkout
-- Verifies the success message
+## 5. Other setups
 
-Use SeleniumLibrary. Execute the steps one at a time, then build the final suite.
-```
+- **Remote test runner**: run rf-mcp next to the browsers or devices (for example in the
+  [Docker image](DOCKER.md)) with `--transport http`. The agent sends changed files with the `files` argument.
+- **Client mode**: rf-mcp does not execute anything and returns `robotcode` commands that the agent runs in its own
+  shell. Useful when the MCP server is shared but tests must run on the developer's machine.
 
-Behind the scenes, the agent works through the rf-mcp tools roughly like this:
+Both are described under [Execution modes](CONFIGURATION.md#execution-modes). [EXAMPLES.md](EXAMPLES.md) shows
+complete tool sequences for the common tasks.
 
-1. **`manage_session`** — opens a session and loads SeleniumLibrary + BuiltIn.
-2. **`find_keywords`** / **`get_locator_guidance`** — finds the right keywords and
-   real locator syntax before touching the page.
-3. **`execute_step`** — runs each step live (open browser, fill login, click,
-   assert), inspecting the DOM with **`get_session_state`** when it needs to find
-   an actual id or label.
-4. **`build_test_suite`** — turns the steps that passed into a clean `.robot`
-   file.
-5. **`run_test_suite`** — runs the finished suite end to end to prove it's green.
+## Troubleshooting
 
-You watch it happen, step by step. When it's done you have a real, runnable Robot
-Framework suite built from executions that actually worked — not a hopeful draft.
-
-## Where to go next
-
-- **[MCP_TOOLS.md](MCP_TOOLS.md)** — the full reference for all rf-mcp tools:
-  signatures, parameters, and what each one does.
-- **[CONFIGURATION.md](CONFIGURATION.md)** — environment variables, instruction
-  templates, transports (STDIO / HTTP), and the frontend dashboard.
-- **[EXAMPLES.md](EXAMPLES.md)** — worked scenarios across web, API, mobile,
-  database, and desktop.
-
-Built by the community, for the community. Now go automate something.
+| symptom | fix |
+| --- | --- |
+| `` `robotcode` was not found on the MCP server host `` | Install `robotcode[all]>=2.9.0.dev115` in the environment rf-mcp starts from, or start rf-mcp from the project environment (`rf-mcp init` does this). |
+| `rf_doc` or `rf_analyze` cannot find a library | The library is missing from the environment rf-mcp runs in, or `robot.toml` does not put its folder on `python-path`. |
+| The agent reads `output.xml` instead of using `rf_results` | Sync the skills (`rf-mcp sync-skills`) for agents that ignore MCP resources. |
+| Client-mode commands fail to quote correctly | Pass `shell='powershell'` or `shell='bash'`, or start the server with `--shell`. PowerShell 7+ and bash are tested; Windows PowerShell 5.1 is not. |

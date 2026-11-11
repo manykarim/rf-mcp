@@ -60,8 +60,8 @@ def coverage(_context):
 
 @task
 def lint(_context):
-    """Run formatting and type checks."""
-    _run(["uv", "run", "black", "--check", "src", "tests"])
+    """Run lint and type checks."""
+    _run(["uv", "run", "ruff", "check", "src", "scripts", "tasks.py"])
     _run(["uv", "run", "mypy", "src"])
 
 
@@ -72,19 +72,12 @@ def build(_context):
 
 
 @task
-def libdoc(_context):
-    """Regenerate the documentation shipped with a release.
-
-    - docs/robotmcp.html: Robot Framework libdoc for the McpAttach library
-    - docs/rf-mcp-<version>-libdoc.{json,html}: MCP tool reference (all tools,
-      parameter schemas, enabled-by-default state)
-    """
-    _run(["uv", "run", "python", "-m", "robot.libdoc",
-          "robotmcp.attach.McpAttach", "docs/robotmcp.html"])
-    _run(["uv", "run", "python", "scripts/generate_tool_reference.py", "--out-dir", "docs"])
+def docs(_context):
+    """Regenerate docs/MCP_TOOLS.md from the tool schemas the server publishes."""
+    _run(["uv", "run", "python", "scripts/generate_tool_reference.py"])
 
 
-@task(pre=[libdoc])
+@task(pre=[docs])
 def release(_context):
     """Prepare release artifacts: regenerate docs, then build sdist + wheel into dist/."""
     _run(["rm", "-rf", "dist"])

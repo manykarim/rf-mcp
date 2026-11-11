@@ -1,318 +1,450 @@
-"""Argparse front-end for the onboarding/installer subcommands.
+"""Onboarding, diagnostics (`doctor`), MCP config generation (`init`), and skill sync (`sync-skills`) CLI."""
 
-Dispatched from ``robotmcp``'s ``main()`` BEFORE the server arg parser, so bare
-``robotmcp`` still launches the MCP server and these subcommands never start it.
-"""
 from __future__ import annotations
 
 import argparse
+import json
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Literal, Sequence
 
-from robotmcp.onboarding import diagnostics, installer
-from robotmcp.onboarding import adapters as A
+from robotmcp.config import ServerConfig
+from robotmcp.hints import load_custom_rules_with_errors
+from robotmcp.runner.cli_runner import resolve_robotcode_executable
+from robotmcp.runner.shell_escape import build_agent_env
+from robotmcp.skills.provider import discover_skill_summaries, resolve_skill_roots
 
-SUBCOMMANDS = ("init", "install", "uninstall", "list", "doctor")
-VERSION_FLAGS = ("--version", "-V")
+AgentName = Literal["claude", "codex", "agy", "copilot", "opencode", "all"]
 
-
-class UsageError(Exception):
-    """A bad argument value. Reported like argparse's own errors (exit 2)."""
-
-
-def _parse_env(pairs: List[str]) -> Dict[str, str]:
-    """Turn repeated ``KEY=VALUE`` --env flags into a dict.
-
-    Malformed entries used to be dropped silently, so ``--env FOO`` produced a
-    partial environment reported as a successful install (change:
-    installer-cli-safety sec 3).
-    """
-    out: Dict[str, str] = {}
-    for item in pairs or []:
-        if "=" not in item:
-            raise UsageError(f"--env {item!r} is not KEY=VALUE (missing '=').")
-        k, v = item.split("=", 1)
-        if not k.strip():
-            raise UsageError(f"--env {item!r} has an empty key.")
-        k = k.strip()
-        if k in out and out[k] != v:
-            raise UsageError(
-                f"--env {k} given twice with different values "
-                f"({out[k]!r} then {v!r}); pass it once."
-            )
-        out[k] = v
-    return out
+AGENT_SKILL_TARGETS: dict[str, str] = {
+    "claude": ".claude/skills",
+    "codex": ".agents/skills",
+    "agy": ".agents/skills",
+    "copilot": ".github/skills",
+    "opencode": ".agents/skills",
+}
 
 
-def _validate_whats(whats: List[str]) -> List[str]:
-    """Reject unknown --what kinds instead of reporting them as 'no-assets'."""
-    from robotmcp.onboarding import installer as _I
-
-    if not whats:
-        raise UsageError(f"--what is empty. Valid kinds: {', '.join(_I.WHAT_ALL)}.")
-    unknown = [w for w in whats if w not in _I.WHAT_ALL]
-    if unknown:
-        raise UsageError(
-            f"unknown --what kind(s): {', '.join(unknown)}. "
-            f"Valid kinds: {', '.join(_I.WHAT_ALL)}."
-        )
-    return whats
+REQUIRED_COMMANDS = ("discover", "analyze", "doc", "robot", "results", "session", "repl", "robot-debug", "rebot", "profiles", "config")
+REQUIRED_SESSION_COMMANDS = ("start", "send", "wait", "status", "result", "interrupt", "restart", "list", "stop")
+INSTALL_HINT = 'uv add --dev --prerelease=allow "robotcode[all]>=2.9.0.dev115"'
 
 
-def _validate_attach(attach: Optional[str]) -> Optional[str]:
-    """Validate ``host[:port]``; an invalid port silently became the hostname before."""
-    if attach in (None, "auto"):
-        return attach
-    value = attach.strip()
-    if not value:
-        raise UsageError("--attach was given an empty value; use host[:port] or omit it.")
-    host, _, port = value.partition(":")
-    if not host:
-        raise UsageError(f"--attach {attach!r} has an empty host.")
-    if _ and port == "":
-        raise UsageError(f"--attach {attach!r} has an empty port after ':'.")
-    if port:
-        if not port.isdigit():
-            raise UsageError(f"--attach port {port!r} is not a number.")
-        if not (1 <= int(port) <= 65535):
-            raise UsageError(f"--attach port {port} is out of range (1-65535).")
-    return value
+def _help_commands(help_text: str) -> set[str]:
+    """Return the subcommand names listed under `Commands:` (and `Aliases:`) of a click help text."""
+    names: set[str] = set()
+    in_section = False
+    for line in help_text.splitlines():
+        if line.strip() in ("Commands:", "Aliases:"):
+            in_section = True
+            continue
+        if in_section:
+            m = re.match(r"^  (\S+)\s{2,}", line)
+            if m:
+                names.add(m.group(1))
+            elif line and not line.startswith(" "):
+                in_section = False
+    return names
 
 
-class _SuggestingParser(argparse.ArgumentParser):
-    """argparse, plus a did-you-mean hint for a near-miss subcommand."""
-
-    def error(self, message: str) -> None:  # type: ignore[override]
-        import difflib
-
-        m = re.search(r"invalid choice: '([^']+)'", message)
-        if m:
-            close = difflib.get_close_matches(m.group(1), SUBCOMMANDS, n=1, cutoff=0.6)
-            if close:
-                message += f"  (did you mean '{close[0]}'?)"
-        super().error(message)
-
-
-def build_parser() -> argparse.ArgumentParser:
-    p = _SuggestingParser(
-        prog="robotmcp",
-        description="Install rf-mcp into coding agents and prepare the environment.",
-        epilog="Run `robotmcp <command> --help` for a command's options. With no "
-               "arguments, robotmcp starts the MCP server on stdin/stdout.",
+def _run_help(rc_exec: list[str], args: list[str], root: Path) -> str:
+    proc = subprocess.run(
+        [*rc_exec, *args, "--help"],
+        cwd=str(root),
+        env=build_agent_env(),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=False,
     )
-    sub = p.add_subparsers(dest="command", required=True, metavar="{" + ",".join(SUBCOMMANDS) + "}")
-
-    pi = sub.add_parser("init", help="Prepare the install and print the MCP config.")
-    pi.add_argument("--browsers", action="store_true",
-                    help="Initialize the Playwright browser (downloads a browser).")
-
-    pd = sub.add_parser("doctor", help="Report installation health (read-only).")
-    pd.add_argument("-C", "--project-dir", default=None,
-                    help="Report which of THIS project's RF libraries rf-mcp can see.")
-    pd.add_argument("--strict", action="store_true",
-                    help="Exit non-zero when a checked capability is missing "
-                         "(for CI; the default stays 0 so doctor is a plain report).")
-    sub.add_parser("list", help="List supported agents and their status.")
-
-    def add_install_flags(sp, is_install: bool):
-        sp.add_argument("--agents", default="detected",
-                        help="all | detected | comma-separated agent ids")
-        sp.add_argument("--scope", choices=["project", "user"],
-                        default="project" if is_install else None,
-                        help="project (default) or user (global) config")
-        sp.add_argument("--what", default="mcp" if is_install else "mcp,skills,agents,hooks",
-                        help="comma list of mcp,skills,agents,hooks")
-        sp.add_argument("-C", "--project-dir", default=None,
-                        help="Project directory: where the config is written AND whose "
-                             "environment is inspected for project-aware launch (default: cwd).")
-        sp.add_argument("--dry-run", action="store_true", help="Show the plan; write nothing.")
-        sp.add_argument("--yes", "--no-input", dest="no_input", action="store_true",
-                        help="Non-interactive; do not prompt.")
-        if not is_install:
-            sp.add_argument("--force", action="store_true",
-                            help="Remove an entry even if it was modified by hand "
-                                 "(otherwise it is kept and reported).")
-        if is_install:
-            sp.add_argument("--force", action="store_true",
-                            help="Overwrite an existing robotmcp entry / write despite verify failure.")
-            sp.add_argument("--into-project", action="store_true",
-                            help="Opt-in: install rf-mcp INTO the detected project env (mutating).")
-            sp.add_argument("--attach", nargs="?", const="auto", default=None,
-                            help="Use the attach bridge (optionally host[:port]); the project runs "
-                                 "its own RF process with the McpAttach library.")
-            sp.add_argument("--command", dest="command_override", default=None,
-                            help="Override the launch command entirely (advanced).")
-            sp.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
-                            help="Extra environment for the server entry (repeatable).")
-            sp.add_argument("--no-verify", action="store_true",
-                            help="Skip launching the resolved command to verify it before writing.")
-
-    add_install_flags(sub.add_parser("install", help="Register rf-mcp into agents."), True)
-    add_install_flags(sub.add_parser("uninstall", help="Remove rf-mcp from agents."), False)
-    return p
+    return (proc.stdout or "") + "\n" + (proc.stderr or "")
 
 
-# Statuses that mean "the requested work did not happen". `_print_results` turns
-# any of these into a non-zero exit so scripted installs can detect failure
-# (change: installer-cli-safety sec 2). Everything else is a benign outcome.
-FAILED_STATUSES = frozenset({"unverified", "error", "no-assets", "planned"})
-
-
-def _print_results(results) -> int:
-    if not results:
-        # Previously "Nothing to do." + exit 0, which is what a typo'd --agents
-        # produced. Selection errors now raise before reaching here, so an empty
-        # result set means the selection resolved to no targets.
-        print("Nothing to do: no matching agents. See `robotmcp list`.")
-        return 1
-    width = max(len(r.agent) for r in results)
-    rc = 0
-    for r in results:
-        line = f"  {r.agent:<{width}}  {r.scope or '-':<7}  {r.what:<7}  {r.status}"
-        if r.detail:
-            line += f"  ({r.detail})"
-        if r.path and r.status in ("installed", "updated", "removed",
-                                   "would-install", "would-update", "would-remove"):
-            line += f"  -> {r.path}"
-        print(line)
-        if r.status in FAILED_STATUSES:
-            rc = 1
-    return rc
-
-
-def _cmd_list() -> int:
-    rows = installer.list_agents()
-    # The ID column is what `--agents` accepts. Without it the flag's valid values
-    # appeared nowhere in the UI, so `--agents claude` (for `claude-code`) was an
-    # easy mistake (change: installer-cli-safety sec 3).
-    print(f"  {'ID':<14} {'AGENT':<22} {'STATUS':<10} {'DETECTED':<9} {'REGISTERED':<11} FORMAT")
-    for r in rows:
-        print(f"  {r['id']:<14} {r['name']:<22} {r['status']:<10} {r['detected']:<9} "
-              f"{r['registered']:<11} {r['format']}")
-    planned = [r for r in rows if r["status"] != "supported"]
-    if planned:
-        print("\nplanned adapters (convention unconfirmed, never written): "
-              + ", ".join(r["id"] for r in planned))
-    return 0
-
-
-DECLINED = "\0declined"          # sentinel: the user said no at the prompt
-NO_AGENTS_DETECTED = "\0none"    # sentinel: nothing to confirm in the first place
-
-
-def _interactive_agents(spec: str, no_input: bool) -> str:
-    """When run on a TTY without an explicit agent list, confirm the detected set.
-
-    Returns a sentinel rather than ``""`` for a declined prompt: an empty spec used
-    to be coerced back to ``detected`` by ``resolve_selection``, so answering "n"
-    installed into every detected agent (change: installer-cli-safety sec 3b).
-    """
-    # NOTE: no `spec or "detected"` here. That fallback was a second copy of the
-    # same coercion bug: with --yes, `--agents ""` still became "detected" even
-    # after resolve_selection was fixed (change: installer-cli-safety sec 3b).
-    if no_input or spec not in ("detected", "") or not sys.stdin.isatty():
-        return spec
-    detected = [a for a in A.REGISTRY if a.status == "supported" and a.detect()]
-    if not detected:
-        print("No coding agents detected. Pass --agents <id,...> or --agents all.")
-        return NO_AGENTS_DETECTED
-    print("Detected agents: " + ", ".join(a.id for a in detected))
+def _check_robotcode_status(root: Path) -> dict[str, Any]:
+    """Inspect `robotcode` CLI version and the subcommands rf-mcp calls (`session` needs >=2.9.0.dev115)."""
+    rc_exec = resolve_robotcode_executable()
     try:
-        ans = input("Register rf-mcp into these? [Y/n] ").strip().lower()
-    except EOFError:
-        return DECLINED
-    return "detected" if ans in ("", "y", "yes") else DECLINED
+        ver_proc = subprocess.run(
+            [*rc_exec, "--version"],
+            cwd=str(root),
+            env=build_agent_env(),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+            check=False,
+        )
+    except FileNotFoundError:
+        return {
+            "installed": False,
+            "version": None,
+            "meets_min_version": False,
+            "commands": {},
+            "session_commands": {},
+            "install_hint": INSTALL_HINT,
+        }
+
+    version_str = (ver_proc.stdout or ver_proc.stderr or "").strip()
+    top_level = _help_commands(_run_help(rc_exec, [], root))
+    required_commands = {name: name in top_level for name in REQUIRED_COMMANDS}
+    session_level = (
+        _help_commands(_run_help(rc_exec, ["session"], root)) if required_commands["session"] else set()
+    )
+    session_commands = {name: name in session_level for name in REQUIRED_SESSION_COMMANDS}
+
+    meets_min = False
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", version_str)
+    if m:
+        major, minor = int(m.group(1)), int(m.group(2))
+        if (major, minor) >= (2, 9) and all(session_commands.values()):
+            meets_min = True
+
+    complete = meets_min and all(required_commands.values())
+    return {
+        "installed": ver_proc.returncode == 0,
+        "version": version_str,
+        "meets_min_version": meets_min,
+        "commands": required_commands,
+        "session_commands": session_commands,
+        "install_hint": None if complete else INSTALL_HINT,
+    }
 
 
-def _resolve_project_dir(raw: Optional[str]) -> Optional[Path]:
-    """Validate --project-dir for EVERY subcommand that accepts it.
+def run_doctor(
+    *,
+    root: Path | None = None,
+    skills_dirs: Sequence[Path] | None = None,
+    as_json: bool = False,
+) -> dict[str, Any]:
+    """Run `rf-mcp doctor` diagnostics and print report."""
+    ws_root = (root or Path.cwd()).expanduser().resolve()
+    cfg = ServerConfig(
+        workspace_root=ws_root,
+        skills_dirs=list(skills_dirs or []),
+    )
+    rc_info = _check_robotcode_status(ws_root)
+    skill_roots = resolve_skill_roots(cfg)
+    skills = discover_skill_summaries(skill_roots)
+    hints_path = cfg.resolve_hints_file()
+    hint_errors = load_custom_rules_with_errors(hints_path)[1] if hints_path else []
 
-    The existence check used to live after the `doctor` branch had already
-    returned, so `doctor -C /nonexistent` reported a clean result and exited 0.
-    An empty value silently meant the CWD (change: installer-cli-safety sec 6).
+    report: dict[str, Any] = {
+        "ok": bool(
+            rc_info["installed"]
+            and rc_info["meets_min_version"]
+            and all(rc_info["commands"].values())
+        ),
+        "python": sys.version.split()[0],
+        "workspace_root": str(ws_root),
+        "robotcode": rc_info,
+        "skills": skills,
+        "hints_file": str(hints_path) if hints_path else None,
+        "hints_status": "not present" if not hints_path else ("errors" if hint_errors else "ok"),
+        "hints_errors": hint_errors,
+    }
+
+    if as_json:
+        print(json.dumps(report, indent=2))
+    else:
+        print("=== rf-mcp doctor ===")
+        print(f"Workspace Root : {ws_root}")
+        print(f"Python         : {report['python']}")
+        print(
+            f"RobotCode      : {rc_info['version'] or 'NOT FOUND'} "
+            f"({'OK' if report['ok'] else 'NEEDS UPGRADE/EXTRAS'})"
+        )
+        missing = [k for k, v in rc_info["commands"].items() if not v]
+        missing += [f"session {k}" for k, v in rc_info.get("session_commands", {}).items() if not v]
+        if missing:
+            print(f"Missing Cmds   : {', '.join(missing)}")
+        if rc_info["install_hint"]:
+            print(f"Install Hint   : {rc_info['install_hint']}")
+        print(f"Active Skills  : {', '.join(s['name'] for s in skills) or 'none'}")
+        print(f"Custom Hints   : {report['hints_file'] or 'none (using built-in rules)'} [{report['hints_status']}]")
+        for err in hint_errors:
+            print(f"  Hint Error   : {err}")
+    return report
+
+
+def project_server_command(ws_root: Path, mode: str) -> tuple[str, list[str]]:
+    """Return (command, args) that start rf-mcp from the project's environment.
+
+    A uv project (`pyproject.toml` in the root) runs `uv run --directory <root> rf-mcp`, so the
+    server sees the project's robotcode and libraries. Otherwise the interpreter that runs this
+    command is used. The rf-mcp source checkout is never referenced.
     """
-    if raw is None:
-        return None
-    if not raw.strip():
-        raise UsageError("--project-dir was given an empty value; omit it to use the "
-                         "current directory.")
-    proj = Path(raw).expanduser()
-    if proj.exists() and not proj.is_dir():
-        raise UsageError(f"--project-dir {proj} is not a directory.")
-    return proj
+    server_flags = ["--mode", mode, "--transport", "stdio", "-r", str(ws_root)]
+    if (ws_root / "pyproject.toml").is_file():
+        return "uv", ["run", "--directory", str(ws_root), "rf-mcp", *server_flags]
+    return sys.executable, ["-m", "robotmcp", *server_flags]
 
 
-def _warn_project_dir(proj: Optional[Path]) -> None:
-    if proj is None:
-        return
-    from robotmcp.onboarding import project_env as _pe
-    if not proj.exists():
-        print(f"WARNING: --project-dir {proj} does not exist.")
-    elif not _pe.looks_like_project(proj):
-        print(f"WARNING: --project-dir {proj} has no project markers "
-              f"(pyproject/.git/.venv/*.robot); config will be written there anyway.")
+# Measured with codex-cli 0.166 (2026-11-07): Codex loads MCP tools lazily and shows the model neither the server
+# instructions nor the tool descriptions, so without the synced skills GPT-5.6-Luna made 0 rf-mcp calls in 14 runs;
+# and under approval_policy="never" every tool not annotated read-only (rf_run, rf_repl, rf_debug) is rejected.
+CODEX_NOTES = (
+    "# Codex shows the agent neither rf-mcp's instructions nor its tool descriptions: run\n"
+    "#   rf-mcp sync-skills --agent codex\n"
+    "# so the skills in .agents/skills route Robot Framework work to these tools.\n"
+    "# Unattended runs (codex exec, approval_policy = \"never\") reject rf_run, rf_repl and rf_debug unless approved.\n"
+    "# They run outside Codex's sandbox (as the project's own robot runs would); to allow them, uncomment:\n"
+    "# default_tools_approval_mode = \"approve\"\n"
+)
 
 
-def run(argv: Optional[List[str]] = None) -> int:
-    try:
-        return _run(argv)
-    except (UsageError, A.UnknownAgentError, A.EmptySelectionError) as exc:
-        print(f"robotmcp: error: {exc}", file=sys.stderr)
-        return 2
-    except KeyboardInterrupt:
-        # Ctrl-C used to surface a raw traceback. Nothing is written before the
-        # per-agent loop commits, so an interrupt leaves no partial state.
-        print("\nrobotmcp: cancelled by user; nothing was changed.", file=sys.stderr)
-        return 130
+def generate_agent_mcp_configs(
+    *,
+    agent: AgentName = "all",
+    mode: Literal["server", "client"] = "server",
+    root: Path | None = None,
+    url: str | None = None,
+    write_files: bool = False,
+) -> dict[str, Any]:
+    """Generate (and optionally write) MCP client configuration files for coding agents."""
+    ws_root = (root or Path.cwd()).expanduser().resolve()
+    targets = (
+        ["claude", "codex", "agy", "copilot", "opencode"]
+        if agent == "all"
+        else [agent]
+    )
+    generated: dict[str, Any] = {}
+
+    server_command, server_args = project_server_command(ws_root, mode)
+    default_env = {
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
+        "ROBOTCODE_FORCE_AI_AGENT": "1",
+    }
+
+    for target_agent in targets:
+        if target_agent == "claude":
+            rel_path = ".mcp.json"
+            entry: dict[str, Any] = (
+                {"type": "http", "url": url}
+                if url
+                else {"type": "stdio", "command": server_command, "args": server_args, "env": default_env}
+            )
+            content = json.dumps({"mcpServers": {"rf-mcp": entry}}, indent=2) + "\n"
+        elif target_agent == "codex":
+            rel_path = ".codex/config.toml"
+            if url:
+                content = f'[mcp_servers.rf-mcp]\nurl = "{url}"\n'
+            else:
+                args_toml = ", ".join(f'"{a.replace(chr(92), "/")}"' for a in server_args)
+                content = (
+                    f'[mcp_servers.rf-mcp]\ncommand = "{server_command.replace(chr(92), "/")}"\nargs = [{args_toml}]\n'
+                    + CODEX_NOTES
+                    + '\n[mcp_servers.rf-mcp.env]\nPYTHONUTF8 = "1"\nPYTHONIOENCODING = "utf-8"\nROBOTCODE_FORCE_AI_AGENT = "1"\n'
+                )
+        elif target_agent == "agy":
+            rel_path = ".gemini/settings.json"
+            entry_agy: dict[str, Any] = (
+                {"url": url}
+                if url
+                else {"command": server_command, "args": server_args, "env": default_env}
+            )
+            content = json.dumps({"mcpServers": {"rf-mcp": entry_agy}}, indent=2) + "\n"
+            if write_files:
+                plugin_dir = ws_root / ".agents" / "plugins" / "rf-mcp"
+                plugin_dir.mkdir(parents=True, exist_ok=True)
+                (plugin_dir / "plugin.json").write_text(
+                    json.dumps({"name": "rf-mcp"}, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                (plugin_dir / "mcp_config.json").write_text(
+                    content,
+                    encoding="utf-8",
+                )
+        elif target_agent == "copilot":
+            rel_path = ".vscode/mcp.json"
+            entry_cp: dict[str, Any] = (
+                {"type": "http", "url": url}
+                if url
+                else {"type": "stdio", "command": server_command, "args": server_args, "env": default_env}
+            )
+            content = json.dumps({"servers": {"rf-mcp": entry_cp}}, indent=2) + "\n"
+        elif target_agent == "opencode":
+            rel_path = "opencode.json"
+            entry_oc: dict[str, Any] = (
+                {"type": "remote", "url": url}
+                if url
+                else {"type": "local", "command": [server_command, *server_args], "environment": default_env}
+            )
+            content = json.dumps({"mcp": {"rf-mcp": entry_oc}}, indent=2) + "\n"
+        else:
+            continue
+
+        file_path = ws_root / rel_path
+        if write_files:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(content, encoding="utf-8")
+
+        generated[target_agent] = {
+            "path": str(file_path),
+            "written": write_files,
+            "content": content,
+        }
+
+    return generated
 
 
-def _run(argv: Optional[List[str]] = None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] in VERSION_FLAGS:
-        return diagnostics.cmd_version()
-    args = build_parser().parse_args(argv)
+def sync_skills_to_directory(
+    *,
+    root: Path | None = None,
+    agent: str = "codex",
+    target_dir: str | Path | None = None,
+    skills_dirs: Sequence[Path] | None = None,
+    force: bool = False,
+) -> dict[str, list[str]]:
+    """Copy active skill directories into the target agent skill folder.
 
-    if args.command == "init":
-        return diagnostics.cmd_init(browsers=args.browsers)
-    if args.command == "doctor":
-        proj = _resolve_project_dir(args.project_dir)
-        _warn_project_dir(proj)
-        return diagnostics.cmd_doctor(project_dir=str(proj) if proj else None,
-                                      strict=args.strict)
-    if args.command == "list":
-        return _cmd_list()
+    An existing skill folder whose content differs is left alone (listed under `skipped`)
+    unless `force` is set; identical folders are listed under `unchanged`.
+    """
+    ws_root = (root or Path.cwd()).expanduser().resolve()
+    cfg = ServerConfig(
+        workspace_root=ws_root,
+        skills_dirs=list(skills_dirs or []),
+    )
+    roots = resolve_skill_roots(cfg)
+    summaries = discover_skill_summaries(roots)
 
-    whats = _validate_whats([w.strip() for w in args.what.split(",") if w.strip()])
-    if args.agents is not None and not args.agents.strip():
-        # Explicitly empty (e.g. `--agents "$UNSET_VAR"`). The default is
-        # "detected"; an empty value must never silently mean "everything".
-        raise A.EmptySelectionError()
-    proj = _resolve_project_dir(args.project_dir)
-    _warn_project_dir(proj)
-    if args.command == "install":
-        attach = _validate_attach(args.attach)
-        if attach and args.command_override:
-            raise UsageError("--attach and --command are mutually exclusive; "
-                             "--command overrides the launch entirely.")
-        env_extra = _parse_env(args.env)
-        agents = _interactive_agents(args.agents, args.no_input)
-        if agents == DECLINED:
-            print("Cancelled: nothing was installed. "
-                  "Re-run with --agents <id,...> to choose explicitly.")
+    rel_target = (
+        Path(target_dir)
+        if target_dir is not None
+        else Path(AGENT_SKILL_TARGETS.get(agent, ".agents/skills"))
+    )
+    dest_root = (
+        rel_target.expanduser().resolve()
+        if rel_target.is_absolute()
+        else (ws_root / rel_target).resolve()
+    )
+    dest_root.mkdir(parents=True, exist_ok=True)
+
+    result: dict[str, list[str]] = {"synced": [], "unchanged": [], "skipped": []}
+    for item in summaries:
+        src_dir = Path(item["path"])
+        dst_dir = dest_root / item["name"]
+        if src_dir.resolve() == dst_dir.resolve() or (
+            dst_dir.exists() and _tree_snapshot(src_dir) == _tree_snapshot(dst_dir)
+        ):
+            result["unchanged"].append(str(dst_dir))
+            continue
+        if dst_dir.exists():
+            if not force:
+                result["skipped"].append(str(dst_dir))
+                continue
+            shutil.rmtree(dst_dir)
+        shutil.copytree(src_dir, dst_dir)
+        result["synced"].append(str(dst_dir))
+
+    return result
+
+
+def _tree_snapshot(directory: Path) -> dict[str, bytes]:
+    """Map each file below `directory` (relative POSIX path) to its bytes."""
+    return {
+        f.relative_to(directory).as_posix(): f.read_bytes()
+        for f in sorted(directory.rglob("*"))
+        if f.is_file() and "__pycache__" not in f.parts
+    }
+
+
+def run_onboarding_cli(argv: Sequence[str]) -> int:
+    """Dispatch `rf-mcp {doctor|init|sync-skills}` subcommands."""
+    parser = argparse.ArgumentParser(prog="rf-mcp")
+    subparsers = parser.add_subparsers(dest="subcommand", required=True)
+
+    doc_p = subparsers.add_parser(
+        "doctor", help="Check robotcode >= 2.9.0.dev115, extras, skills, and hints."
+    )
+    doc_p.add_argument("-r", "--root", default=None, help="Workspace root.")
+    doc_p.add_argument(
+        "--skills-dir", action="append", dest="skills_dirs", default=None
+    )
+    doc_p.add_argument("--json", action="store_true", help="Output JSON report.")
+
+    init_p = subparsers.add_parser(
+        "init",
+        help="Generate MCP configuration for Claude Code, Codex, Antigravity, Copilot, or OpenCode.",
+    )
+    init_p.add_argument(
+        "--agent",
+        choices=["claude", "codex", "agy", "copilot", "opencode", "all"],
+        default="all",
+    )
+    init_p.add_argument("--mode", choices=["server", "client"], default="server")
+    init_p.add_argument("--url", default=None, help="Remote HTTP MCP URL (Modes 2 & 3).")
+    init_p.add_argument("-r", "--root", default=None, help="Workspace root.")
+    init_p.add_argument(
+        "--write", action="store_true", help="Write config files to workspace."
+    )
+
+    sync_p = subparsers.add_parser(
+        "sync-skills",
+        help="Synchronize active MCP skills into a local agent skill directory.",
+    )
+    sync_p.add_argument(
+        "--agent",
+        choices=["claude", "codex", "agy", "copilot", "opencode"],
+        default="codex",
+    )
+    sync_p.add_argument(
+        "--target", default=None, help="Target directory (default: .agents/skills)."
+    )
+    sync_p.add_argument("-r", "--root", default=None, help="Workspace root.")
+    sync_p.add_argument(
+        "--skills-dir", action="append", dest="skills_dirs", default=None
+    )
+    sync_p.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing skill folders whose content differs.",
+    )
+
+    ns = parser.parse_args(list(argv))
+    ws_root = Path(ns.root).expanduser().resolve() if ns.root else Path.cwd().resolve()
+
+    if ns.subcommand == "doctor":
+        s_dirs = [Path(p) for p in (ns.skills_dirs or [])]
+        rep = run_doctor(root=ws_root, skills_dirs=s_dirs, as_json=ns.json)
+        return 0 if rep["ok"] else 1
+
+    if ns.subcommand == "init":
+        configs = generate_agent_mcp_configs(
+            agent=ns.agent,
+            mode=ns.mode,
+            root=ws_root,
+            url=ns.url,
+            write_files=ns.write,
+        )
+        print(json.dumps(configs, indent=2))
+        return 0
+
+    if ns.subcommand == "sync-skills":
+        s_dirs = [Path(p) for p in (ns.skills_dirs or [])]
+        outcome = sync_skills_to_directory(
+            root=ws_root,
+            agent=ns.agent,
+            target_dir=ns.target,
+            skills_dirs=s_dirs,
+            force=ns.force,
+        )
+        print(json.dumps(outcome, indent=2))
+        if outcome["skipped"]:
+            print(
+                "Skipped existing skill folders that differ from the source; "
+                "rerun with --force to overwrite them.",
+                file=sys.stderr,
+            )
             return 1
-        if agents == NO_AGENTS_DETECTED:
-            return 1
-        results = installer.install(
-            agents=agents, scope=args.scope, whats=whats, dry_run=args.dry_run,
-            force=args.force, command=args.command_override, env=env_extra,
-            cwd=proj, project_dir=proj, into_project=args.into_project,
-            attach=attach, no_verify=args.no_verify)
-        return _print_results(results)
-    if args.command == "uninstall":
-        results = installer.uninstall(agents=args.agents, scope=args.scope,
-                                      whats=whats, dry_run=args.dry_run, cwd=proj,
-                                      project_dir=proj, force=args.force)
-        return _print_results(results)
-    return 2
+        return 0
+
+    return 1

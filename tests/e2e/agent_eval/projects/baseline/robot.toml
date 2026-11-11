@@ -1,0 +1,16 @@
+paths = ["tests"]
+python-path = ["libraries", "resources"]
+output-dir = "results"
+
+[variables]
+BASE_URL = "https://restful-booker.herokuapp.com"
+
+[profiles.ci]
+description = "CI profile: headless, retries off"
+[profiles.ci.variables]
+HEADLESS = "True"
+
+[profiles.dev]
+description = "Local dev profile"
+[profiles.dev.variables]
+HEADLESS = "False"

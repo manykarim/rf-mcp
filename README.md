@@ -1,931 +1,153 @@
-# 🤖 RobotMCP - AI-Powered Test Automation Bridge
+# rf-mcp — Robot Framework Agentic Engineering MCP Server
 
-[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://python.org)
-[![Robot Framework](https://img.shields.io/badge/robot%20framework-7.0+-green.svg)](https://robotframework.org)
-[![FastMCP](https://img.shields.io/badge/fastmcp-3.0+-orange.svg)](https://github.com/jlowin/fastmcp)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+`rf-mcp` is a lean, customizable Model Context Protocol (MCP) server built on **[RobotCode](https://robotcode.io/) (`>=2.9.0.dev115`) CLI**, **`robotcode session`**, and **FastMCP Skills over MCP (SEP-2640)**.
 
-**Plain English in, real Robot Framework tests out — with an AI agent doing the typing.**
-
-RobotMCP (`rf-mcp`) is a Model Context Protocol (MCP) server that hands your coding
-agent the keys to Robot Framework. The agent discovers keywords, runs steps *live*
-against Browser, Selenium, Appium, Requests, a database, or the desktop, sees what
-actually happens, and — once the steps pass — writes you a clean `.robot` suite.
-No guessed locators, no hallucinated keywords, no "works on my machine". Built on
-Robot Framework: open source, and always evolving.
-
-> **New to rf-mcp?** Jump to **[Getting Started](docs/GETTING_STARTED.md)**. Want the
-> full picture? See the **[MCP tool reference](docs/MCP_TOOLS.md)**,
-> **[configuration](docs/CONFIGURATION.md)**, and **[worked examples](docs/EXAMPLES.md)**.
-
-**📺 Video Tutorial**
-
-[![RobotMCP Tutorial](https://img.youtube.com/vi/CBXGEn8jRtU/0.jpg)](https://www.youtube.com/watch?v=CBXGEn8jRtU)
-
-**Intro**
-
-https://github.com/user-attachments/assets/ad89064f-cab3-4ae6-a4c4-5e8c241301a1
+It empowers coding agents (**Claude Code**, **OpenAI Codex**, **Google Antigravity (`agy`)**, **GitHub Copilot**, **OpenCode**) to discover, analyze, document, author (`repl`), debug (`robot-debug`), execute, and maintain Robot Framework tests and tasks across local machines, remote test runners, zero-daemon remote MCP setups, and CI pipelines.
 
 ---
 
-## ✨ Quick Start
+## Key Capabilities
 
-Three commands and a sentence. That's the whole setup.
+1. **8 Focused `robotcode`-Powered MCP Tools**:
+   - `rf_discover`: Project suite, test, task, tag, file, test metadata (`--values`), profile (`profiles show` for a profile's effective settings), and merged `robot.toml` discovery (`robotcode -f json discover|config|profiles`), with `--search` and a compact `longname` / `source:line` / `tags` projection (`verbose=true` for full items).
+   - `rf_analyze`: Millisecond headless LSP semantic static analysis (`robotcode -r <root> -f json analyze code`).
+   - `rf_doc`: Project-aware library, `.resource`, and keyword documentation (`robotcode -f json doc {lib|keywords|keyword}`).
+   - `rf_run`: Scoped test/task execution (`robotcode robot`, supporting `-bl <longname>`, `-btm <metadata>`, `--rpa`, `-p <profile>`, `--wrapper`, and inline file synchronization for remote test runners).
+   - `rf_results`: Server-side querying, diffing and merging of `output.xml` / `output.json` (`robotcode -f json results {summary|show|log|stats|diff}` with `--search`, `--sort`, `--level`, `--max-depth`, `--by`, `--extract` screenshot extraction, and `rebot --merge`). Result files are chosen only with `output_path`.
+   - `rf_repl`: Stateful multi-turn interactive exploration and test authoring (`start`, `send`, `wait`, `status`, `result`, `interrupt`, `restart`, `list`, `save`, `stop`) backed by `robotcode -f json session` (`session start repl`, `.save -t "Name" file.robot`, hot-reload via `session restart`, and native `Browser.Get Aria Snapshot`).
+   - `rf_debug`: Stateful multi-turn live test debugger (`start`, `send`, `wait`, `status`, `result`, `interrupt`, `restart`, `list`, `stop`) backed by `robotcode -f json session` (`session start debug`, pausing on uncaught failures or `--break file.robot:line`, preserving `output.xml` via `--output NONE --log NONE --report NONE`, and inspecting `.where`, `.vars --user`, `.list`).
+   - `rf_diagnose`: Ranked, library-aware error recovery hinting (Browser, Selenium, Appium, Requests, PlatynUI, BuiltIn, REPL syntax) extensible via `<workspace>/.robotframework/hints.toml`.
 
-### 1️⃣ Install it as a tool
+2. **3 Execution Topologies (`server`, `client`, and CI) — Zero Extra Client Daemons**:
+   - **Mode 1: Full Local (`--mode server`, `stdio` or `http`)**: `rf-mcp` runs locally alongside your project and executes `robotcode` and `robotcode session` directly.
+   - **Mode 2: Remote Test Runner (`--mode server --transport http`)**: `rf-mcp` and `robotcode` run on a remote test container/VM (with browsers/devices/displays), accepting inline `files` synchronization from the coding agent.
+   - **Mode 3: Zero-Daemon Remote MCP + Local `robotcode` (`--mode client --transport http`)**: `rf-mcp` runs remotely while the coding agent and `robotcode` run on the developer's machine. `rf-mcp` serves project/ecosystem skills over MCP, synthesizes shell-safe local `robotcode` & `robotcode session` commands for PowerShell and Bash, and diagnoses failures via `rf_diagnose`. The agent's `root` is passed to `robotcode -r` verbatim (it is a path on the client machine); without one, `-r` is omitted. `rf_debug start` also returns a one-shot `fallback_command` for agent shells that kill background processes; `rf_repl` has none, because a one-shot REPL cannot replay earlier turns.
 
-```bash
-# Everything (Browser, Selenium, Appium, Requests, Database)
-uv tool install "rf-mcp[all]"
+   Client-mode commands are executed by a test in both supported shells: **PowerShell 7+** and **bash**. Windows PowerShell 5.1 is untested (its quoting of native arguments differs). Commands set `PYTHONUTF8=1`, `PYTHONIOENCODING=utf-8` and `ROBOTCODE_FORCE_AI_AGENT=1`.
 
-# ...or just what you need — API testing is pure Python, nothing else to do:
-uv tool install "rf-mcp[api]"
-```
+3. **Skills over MCP (SEP-2640 + `ResourcesAsTools`) & Plugin Coexistence**:
+   - Serves layered `SKILL.md` directories over MCP (`skill://{name}/SKILL.md` + `list_resources` / `read_resource` tools for tool-only agents):
+     1. Project-local `<workspace>/.robotframework/skills/`
+     2. External plugin directories via `--skills-dir` / `RF_MCP_SKILLS_DIR` (compatible with [`robotcodedev/robotframework-agent-plugins`](https://github.com/robotcodedev/robotframework-agent-plugins/tree/next) and [`manykarim/robotframework-agentskills`](https://github.com/manykarim/robotframework-agentskills))
+     3. Built-in skills: `rf-robotcode` (tool routing, triage, debugging, REPL authoring, results, analysis, configuration; maps the upstream robotcode practices P1-P46), `rf-locators` (Browser, SeleniumLibrary, AppiumLibrary and PlatynUI locators, shadow DOM and iframes, keyword per intent, library chooser) and `rf-requests` (RequestsLibrary for REST, SOAP/XML and GraphQL). Detail lives in `references/` files, e.g. `skill://rf-robotcode/references/triage.md`.
+   - The server `instructions` are a short intent routing table plus the authoring loop and its finish condition (done only when `rf_analyze` is clean and `rf_run` passes).
 
-This puts a `robotmcp` command on your PATH. Extras decide which test libraries come
-along — see the [extras table](#extras) under Installation.
-
-### 2️⃣ Wire it into your coding agent
-
-```bash
-robotmcp init            # detects libraries, prints the MCP config to paste
-robotmcp install         # registers rf-mcp into the agents it finds
-```
-
-`robotmcp install` writes the right MCP config for **Claude Code, Codex, GitHub
-Copilot, opencode, Gemini CLI, Kilo Code, goose, and Cursor** — each in its own
-format, without touching your other servers. Prefer to do it by hand? Every agent
-accepts:
-
-```json
-{ "mcpServers": { "robotmcp": { "command": "robotmcp" } } }
-```
-
-> **If you have an existing Robot Framework project, run `robotmcp install` from that
-> project's directory instead of pasting the snippet.** The snippet launches rf-mcp in
-> its own environment; `robotmcp install` inspects your project and writes a launch that
-> can also see *your* libraries. See [Which environment runs your tests](#which-environment-runs-your-tests).
-
-### Which environment runs your tests
-
-rf-mcp imports Robot Framework libraries into **its own Python process**, and runs your
-suites in that same interpreter. So whichever environment rf-mcp launches in is the
-environment your tests execute in.
-
-- **No existing RF project** (you're exploring a site or API and authoring tests from
-  scratch): a plain `uv tool install` is exactly right. rf-mcp's own environment has the
-  bundled libraries, and there is nothing to configure.
-- **An existing RF project** (your own keyword libraries, a pinned Robot Framework, pip
-  libraries rf-mcp doesn't bundle): rf-mcp's own environment cannot see any of it. Run
-  `robotmcp install` **from the project directory** — it detects the project's environment
-  and writes a launch that layers rf-mcp onto it, so your libraries are importable. Check
-  what it resolved with:
-
-  ```bash
-  robotmcp doctor -C .
-  ```
-
-  That reports the resolved launch, which of your project's libraries rf-mcp would see,
-  and whether your project's Robot Framework version differs from the one that would
-  execute the tests. If your project pins Robot Framework 6.x, rf-mcp routes to the
-  attach bridge instead of silently testing on a different RF.
-
-  Note that desktop automation (PlatynUI) is never layered onto a project environment —
-  it is a pre-release that uv will not resolve as a transitive dependency. Desktop
-  sessions use rf-mcp's own environment.
-
-<details>
-<summary>Legacy / manual config (running from a checkout, HTTP transport)</summary>
-
-```json
-{
-  "servers": {
-    "robotmcp": {
-      "type": "stdio",
-      "command": "uv",
-      "args": ["run", "-m", "robotmcp.server"],
-      "env": { "UV_COMPILE_BYTECODE": "1" }
-    }
-  }
-}
-```
-
-> `UV_COMPILE_BYTECODE=1` precompiles the dependency tree at install time. Without
-> it, the **first** server launch after an install/upgrade pays several seconds of
-> `.pyc` compilation before the MCP handshake completes (some clients time out and
-> show the server as unavailable). It is a one-time, install-time cost.
-
-#### HTTP
-
-Start the MCP server with HTTP transport:
-
-```bash
-uv run -m robotmcp.server --transport http --host 127.0.0.1 --port 8000
-```
-
-Then configure your AI agent:
-
-```json
-{
-  "servers": {
-    "robotmcp": {
-      "type": "http",
-      "url": "http://localhost:8000/mcp"
-    }
-  }
-}
-```
-
-#### Claude Code
-
-```bash
-claude mcp add rf-mcp -- uvx rf-mcp
-```
-
-</details>
-
-### 3️⃣ Start testing — just ask
-
-```
-Use #robotmcp to create a TestSuite and execute it step wise.
-Create a test for https://www.saucedemo.com/ that:
-- Logs in to https://www.saucedemo.com/ with valid credentials
-- Adds two items to cart
-- Completes checkout process
-- Verifies success message
-
-Use Selenium Library.
-Execute the test suite stepwise and build the final version afterwards.
-```
-
-**That's it.** rf-mcp walks the agent through discovery, live execution, and suite
-generation — you just describe the test.
+4. **OpenTelemetry Observability**:
+   - Built-in child spans (`rf_mcp.discover`, `rf_mcp.analyze`, `rf_mcp.doc`, `rf_mcp.run`, `rf_mcp.results`, `rf_mcp.repl`, `rf_mcp.debug`, `rf_mcp.diagnose`) nested under FastMCP server spans, plus metrics (`rf_mcp.commands.total`, `rf_mcp.command.duration_ms`, `rf_mcp.hints.generated`, `rf_mcp.skills.read`).
 
 ---
 
-## 📚 Documentation
+## Installation & Quick Start
 
-| Guide | What's inside |
-|-------|---------------|
-| **[Getting Started](docs/GETTING_STARTED.md)** | Install, wire into your agent, run your first test |
-| **[MCP Tool Reference](docs/MCP_TOOLS.md)** | Every tool rf-mcp exposes to the agent — parameters, returns, when to reach for it |
-| **[Configuration](docs/CONFIGURATION.md)** | Every `ROBOTMCP_*` environment variable and CLI flag |
-| **[Examples](docs/EXAMPLES.md)** | Copy-pasteable web / API / mobile / desktop / BDD / data-driven walkthroughs |
-| **[Library Plugins](docs/library-plugin-authoring.md)** | Teach rf-mcp about your own Robot Framework libraries |
-| **[Instruction Templates](docs/INSTRUCTION_TEMPLATES_GUIDE.md)** | Steer the agent's behavior per project |
+`rf-mcp` requires Python 3.10+ and `robotcode[all]>=2.9.0.dev115` (currently available as a pre-release build):
+
+```bash
+# Using uv (recommended)
+uv add --dev --prerelease=allow "rf-mcp" "robotcode[all]>=2.9.0.dev115"
+
+# Or with pip
+pip install --pre "rf-mcp" "robotcode[all]>=2.9.0.dev115"
+```
+
+Verify your environment with `rf-mcp doctor`:
+
+```bash
+rf-mcp doctor
+```
+
+Generate MCP configuration for your coding agent (`claude`, `codex`, `agy`, `copilot`, `opencode`, or `all`):
+
+```bash
+# Write local stdio MCP configs for all supported coding agents
+rf-mcp init --agent all --mode server --write
+
+# Or configure for a remote Mode 3 (client-mode) MCP server
+rf-mcp init --agent claude --mode client --url http://mcp.internal:8000/mcp --write
+
+# Synchronize skills into a local agent folder (e.g. .claude/skills or .agents/skills)
+rf-mcp sync-skills --agent claude
+```
+
+`init` starts the server from the project's environment: `uv run --directory <project> rf-mcp` when the project has a `pyproject.toml`, otherwise the Python interpreter that ran `init`. `sync-skills` leaves an existing skill folder alone when its content differs (exit code 1, listed under `skipped`); pass `--force` to overwrite it. `doctor` lists every `robotcode` subcommand rf-mcp needs, the `session` subcommands, and whether `.robotframework/hints.toml` loaded.
 
 ---
 
-## 🛠️ Installation
-
-The [Quick Start](#-quick-start) covers the recommended path (`uv tool install`). This
-section has the extras table, alternative install methods, and the full agent-registration
-details.
-
-### Extras
-
-Extras decide which Robot Framework libraries come along:
-
-| Extra | Adds | Post-install |
-| --- | --- | --- |
-| `api` | RequestsLibrary | none |
-| `web` | SeleniumLibrary + Browser | Selenium: none (Selenium Manager fetches the driver); Browser: `robotmcp init --browsers` |
-| `mobile` | AppiumLibrary | Appium server (external) |
-| `database` | DatabaseLibrary | a DB driver |
-| `desktop` | PlatynUI native desktop (Windows/Linux) | Python 3.12+; **not in `[all]`** — see below |
-| `frontend` | Django dashboard | — |
-| `memory` | Persistent semantic memory (sqlite-vec + model2vec) | `ROBOTMCP_MEMORY_ENABLED=true` |
-| `all` | every extra above **except** `desktop` (and `semantic`) | as above |
-
-Browser Library also needs Playwright browsers — run `robotmcp init --browsers` (or
-`rfbrowser init`) once, inside rf-mcp's own environment. Node.js is only needed for Browser.
-
-#### Desktop (`desktop`) — an explicit opt-in
-
-PlatynUI's native core is still published as a **pre-release**, so `desktop` is not part
-of `[all]`: including it would make `uv tool install "rf-mcp[all]"` fail for everyone.
-Install it on its own:
+## Running `rf-mcp`
 
 ```bash
-uv tool install --prerelease=allow "rf-mcp[desktop]"   # uv, uvx and pipx need the flag
-pip install "rf-mcp[desktop]"                          # pip, poetry and pdm do not
-```
+# Mode 1: Local stdio MCP server (default)
+rf-mcp --mode server -r /path/to/project -p ci
 
-`uv`, `uvx` and `pipx` (which is uv-backed) refuse a transitive pre-release pin unless you
-pass `--prerelease=allow` (or set `UV_PRERELEASE=allow`).
+# Mode 2: Remote Test Runner over Streamable HTTP
+rf-mcp --mode server --transport http --host 0.0.0.0 --port 8000 -r /workspace
 
-**Supported desktop platforms** — PlatynUI publishes wheels only for:
-
-| Supported | Not supported |
-| --- | --- |
-| Linux x86_64 / aarch64 with **glibc ≥ 2.34** (Ubuntu 22.04+, Debian 12+, RHEL 9+) | Linux with glibc < 2.34 (Ubuntu 20.04, Debian 11, RHEL/Rocky 8, Amazon Linux 2) |
-| macOS **Apple Silicon** (arm64) | macOS **Intel** (x86_64) |
-| Windows x86_64 / arm64 | musl / Alpine |
-
-There is no source distribution, so unsupported platforms cannot build it either. `[all]`
-installs fine on all of them — you just don't get desktop automation.
-
-### Other install methods
-
-```bash
-pip install "rf-mcp[all]"                 # pip instead of uv
-pipx install "rf-mcp[all]"                # pipx
-uv add "rf-mcp[all]" && uv sync           # into an existing uv project
-
-# Desktop automation is a separate opt-in (pre-release; uv/uvx/pipx need the flag):
-uv tool install --prerelease=allow "rf-mcp[desktop]"
-uv add --prerelease=allow "rf-mcp[desktop]" && uv sync
-
-# From source (development)
-git clone https://github.com/manykarim/rf-mcp.git && cd rf-mcp
-uv sync --all-extras --dev
+# Mode 3: Zero-Daemon Remote MCP Server (synthesizes client-side robotcode commands)
+rf-mcp --mode client --transport http --host 0.0.0.0 --port 8000 \
+  --skills-dir /opt/robotframework-agent-plugins \
+  --skills-dir /opt/robotframework-agentskills
 ```
 
 ### Docker
 
-Pre-built images (headless for CI, plus a VNC image for visual debugging):
+The images run Mode 2 with Browser, SeleniumLibrary and RequestsLibrary installed; `rf-mcp-vnc` adds a display you can watch in the browser. Mount the project at `/workspace`:
 
 ```bash
-docker pull ghcr.io/manykarim/rf-mcp:latest          # headless
-docker run -p 8000:8000 -p 8001:8001 ghcr.io/manykarim/rf-mcp:latest    # HTTP + frontend
-docker run -it --rm ghcr.io/manykarim/rf-mcp:latest uv run robotmcp     # STDIO
-
-docker pull ghcr.io/manykarim/rf-mcp-vnc:latest      # X11 desktop over VNC/noVNC
-docker run -p 8000:8000 -p 8001:8001 -p 5900:5900 -p 6080:6080 ghcr.io/manykarim/rf-mcp-vnc:latest
+docker run --rm --shm-size=1g -p 8000:8000 -v "$PWD:/workspace" ghcr.io/manykarim/rf-mcp
+rf-mcp init --agent claude --url http://localhost:8000/mcp --write
 ```
 
-Headless bundles Chromium, Firefox ESR and the Playwright browsers. VNC ports: 8000 (MCP
-HTTP), 8001 (frontend), 5900 (VNC), 6080 (noVNC — http://localhost:6080/vnc.html).
+See [docs/DOCKER.md](docs/DOCKER.md) for the VNC image and for building with other libraries.
 
-### Register into coding agents
+---
+
+## Project Customization (Zero Code Required)
+
+### 1. Project Skills (`<workspace>/.robotframework/skills/`)
+Create `<workspace>/.robotframework/skills/<skill-name>/SKILL.md` to teach connected agents your project's custom libraries, page object patterns, and naming rules. `rf-mcp` automatically discovers and hot-reloads it at `skill://<skill-name>/SKILL.md`.
+
+### 2. Custom Error Recovery Hints (`<workspace>/.robotframework/hints.toml`)
+Define project-specific error recovery hints in `.robotframework/hints.toml`:
+
+```toml
+[[hints]]
+id = "corp-sso-expired"
+title = "Corporate SSO token expired"
+error_pattern = "401 Unauthorized.*SSO"
+keyword_pattern = ".*"
+message = "Refresh the session token using the Auth resource before calling the endpoint."
+fix_examples = [
+    "Import Resource    resources/auth.resource",
+    "Refresh SSO Token",
+]
+relevance = 99
+applies_to = ["runtime", "static"]  # default; "static" = rf_analyze diagnostics
+```
+
+A file that does not parse, or a rule with an invalid regular expression, is skipped with a warning naming the file, line and rule id; the valid rules and all built-in rules stay active. `rf-mcp doctor` and the server instructions report the skipped entries.
+
+### 3. Verified cookbook snippets
+
+Every snippet in the built-in `rf-locators` shadow DOM / iframe reference and in `rf-requests` is executed by `tests/test_cookbook.py` (suites in `tests/cookbook/`) against local fixtures: a widget page with open, nested and closed shadow roots and same-origin, nested, cross-origin and shadow-hosted iframes (`tests/fixtures/web/`), and a strict REST/SOAP/GraphQL "ledger" API (`tests/fixtures/ledger/`). The suites need libraries rf-mcp does not depend on and are skipped unless available:
 
 ```bash
-robotmcp list                              # supported agents + what's detected/registered
-robotmcp install                           # interactive: registers into detected agents
-robotmcp install --agents claude-code,codex,gemini
-robotmcp install --agents all --scope user
-robotmcp install --dry-run                 # show the plan, write nothing
-robotmcp uninstall                         # safe, reversible removal
+RF_MCP_COOKBOOK_PYTHON=/path/to/venv-with-requests-browser-selenium/python \
+RF_MCP_FIXTURE_PYTHON=/path/to/venv-with-fastapi-uvicorn-strawberry/python \
+uv run pytest tests/test_cookbook.py
 ```
 
-Supported agents (each written in its own file/format, other MCP servers preserved):
-**Claude Code, OpenAI Codex, GitHub Copilot, opencode, Gemini CLI, Kilo Code, goose,
-Cursor** (plus `pi`, listed as *planned* until its config convention is confirmed).
-
-**Uses your project's environment.** Install into a project that has its own set-up
-environment (uv, poetry, pdm, pipenv, rye, hatch, or a plain `.venv`) and rf-mcp is wired to
-run against *that* environment — so it sees your project's libraries, keywords and resources,
-not just its bundled ones. It launches the resolved command and verifies your libraries are
-reachable **before** writing the config; a blind or broken command is refused. A global
-`uvx` / `uv tool` install still serves every project with no per-project setup. Point it with
-`-C <dir>`, opt into installing rf-mcp into the project env with `--into-project`, and run
-`robotmcp doctor --project-dir <dir>` to see which of your libraries the launch reaches.
-
-**Scope.** Installs default to `--scope project` (writes into the current project, e.g.
-`./.mcp.json`) where the agent supports it; use `--scope user` for a global (home-directory)
-install. goose only supports user scope; GitHub Copilot only supports project scope.
-
-**Safe & reversible.** Every change is recorded in a hash-tracked manifest
-(`~/.local/state/robotmcp/install-manifest.json`). `robotmcp uninstall` removes only entries
-unchanged since install — a hand-edited entry is left in place and reported, and unrelated
-servers are never touched. Prefer to edit config yourself? Add
-`{ "mcpServers": { "robotmcp": { "command": "robotmcp" } } }`.
-
-## 🔌 Library Plugins
-
-Extend RobotMCP with custom libraries via the plugin system. Two discovery modes are available:
-
-- **Entry points** (`robotmcp.library_plugins`) for packaged plugins.
-- **Manifest files** (JSON) under `.robotmcp/plugins/` for workspace overrides.
-
-See the [Library Plugin Authoring Guide](docs/library-plugin-authoring.md) for detailed instructions and explore the sample plugin in [`examples/plugins/sample_plugin`](examples/plugins/sample_plugin/) to get started quickly.
+### 4. OpenTelemetry Export
+Install `rf-mcp[otel]` and pass `--otel-endpoint http://localhost:4318` (or set `OTEL_EXPORTER_OTLP_ENDPOINT`) to export traces and metrics over OTLP.
 
 ---
 
-## 🖥️ Frontend Dashboard
-
-RobotMCP ships with an optional Django-based dashboard that mirrors active sessions, keywords, and tool activity.
-
-![RobotMCP Frontend Dashboard](media/frontend.png)
-
-1. **Install frontend extras**
-   ```bash
-   pip install rf-mcp[frontend]
-   ```
-2. **Start the MCP server with the frontend enabled**
-   ```bash
-   uv run -m robotmcp.server --with-frontend
-   ```
-   - Default URL: <http://127.0.0.1:8001/>
-   - Quick toggles: `--frontend-host`, `--frontend-port`, `--frontend-base-path`
-   - Environment equivalents: `ROBOTMCP_ENABLE_FRONTEND=1`, `ROBOTMCP_FRONTEND_HOST`, `ROBOTMCP_FRONTEND_PORT`, `ROBOTMCP_FRONTEND_BASE_PATH`, `ROBOTMCP_FRONTEND_DEBUG`
-3. **Connect your MCP client** (Cline, Claude Desktop, etc.) to the same server process—the dashboard automatically streams events once the session is active.
-
-To disable the dashboard for a given run, either omit the flag or pass `--without-frontend`.
-
----
-
-## 📋 Instruction Templates
-
-RobotMCP sends server-level instructions to LLMs via the MCP `initialize` response, guiding them to discover keywords before executing them. This significantly reduces failed tool calls and wasted tokens, especially for smaller LLMs.
-
-### Configuration
-
-Three environment variables control instruction behavior:
-
-| Variable | Values | Default |
-|----------|--------|---------|
-| `ROBOTMCP_INSTRUCTIONS` | `off` / `default` / `custom` | `default` |
-| `ROBOTMCP_INSTRUCTIONS_TEMPLATE` | `minimal` / `standard` / `detailed` / `browser-focused` / `api-focused` | `standard` |
-| `ROBOTMCP_INSTRUCTIONS_FILE` | Path to `.txt` or `.md` file | *(none, required when mode=custom)* |
-| `ROBOTMCP_LOG_LEVEL` | `DEBUG` / `INFO` / `WARNING` / `ERROR` — stderr log verbosity | `WARNING` |
-| `ROBOTMCP_MCP_LOG_NOTIFICATIONS` | set to `1` to also forward logs to the client as MCP `notifications/message` (structured, level-tagged) | *(off)* |
-
-> **Output & logging.** The MCP stdio channel (stdout) carries only JSON-RPC; all
-> logs and a one-line readiness banner go to stderr. Logging defaults to `WARNING`
-> so the client is not flooded — set `ROBOTMCP_LOG_LEVEL=INFO`/`DEBUG` to
-> troubleshoot. Logging never blocks execution (it is drained on a background
-> thread with drop-on-overflow), and fd 1 is never redirected out from under the
-> transport.
-
-### Built-in Templates
-
-| Template | ~Tokens | Best For |
-|----------|---------|----------|
-| `minimal` | ~40 | Capable LLMs (Claude Opus, GPT-4) — brief reminder only |
-| `standard` | ~400 | Mid-range LLMs (Claude Sonnet, GPT-4o) — balanced workflow guide |
-| `detailed` | ~600 | Smaller LLMs (Claude Haiku, GPT-4o-mini) — step-by-step with examples |
-| `browser-focused` | ~350 | Web-only testing scenarios |
-| `api-focused` | ~300 | API-only testing scenarios |
-
-### Example
-
-```json
-{
-  "servers": {
-    "robotmcp": {
-      "type": "stdio",
-      "command": "uv",
-      "args": ["run", "-m", "robotmcp.server"],
-      "env": {
-        "ROBOTMCP_INSTRUCTIONS": "default",
-        "ROBOTMCP_INSTRUCTIONS_TEMPLATE": "detailed"
-      }
-    }
-  }
-}
-```
-
-### Custom Instructions
-
-Set `ROBOTMCP_INSTRUCTIONS=custom` and provide a file via `ROBOTMCP_INSTRUCTIONS_FILE`. Custom files support `{available_tools}` placeholder substitution. Allowed extensions: `.txt`, `.md`, `.instruction`, `.instructions`. If the file is missing or fails validation, the server falls back to the `standard` template automatically.
-
-See [docs/INSTRUCTION_TEMPLATES_GUIDE.md](docs/INSTRUCTION_TEMPLATES_GUIDE.md) for the full guide.
-
----
-
-## 🪝 Debug Attach Bridge
-
-https://github.com/user-attachments/assets/8d87cd6e-c32e-4481-9f37-48b83f69f72f
-
-RobotMCP ships with `robotmcp.attach.McpAttach`, a lightweight Robot Framework library that exposes the live `ExecutionContext` over a localhost HTTP bridge. When you debug a suite from VS Code (RobotCode) or another IDE, the bridge lets RobotMCP reuse the in-process variables, imports, and keyword search order instead of creating a separate context.
-
-### MCP Server Setup
-
-Example configuration with passed environment variables for Debug Bridge
-
-#### Using UV
-
-```json
-{
-  "servers": {
-    "RobotMCP": {
-      "type": "stdio",
-      "command": "uv",
-      "args": ["run", "src/robotmcp/server.py"],
-      "env": {
-        "ROBOTMCP_ATTACH_HOST": "127.0.0.1",
-        "ROBOTMCP_ATTACH_PORT": "7317",
-        "ROBOTMCP_ATTACH_TOKEN": "change-me",
-        "ROBOTMCP_ATTACH_DEFAULT": "auto"
-      }
-    }
-  }
-}
-```
-
-#### Using Docker
-
-```json
-{
-  "servers": {
-    "RobotMCP": {
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "ghcr.io/manykarim/rf-mcp:latest", "uv", "run", "robotmcp"],
-      "env": {
-        "ROBOTMCP_ATTACH_HOST": "127.0.0.1",
-        "ROBOTMCP_ATTACH_PORT": "7317",
-        "ROBOTMCP_ATTACH_TOKEN": "change-me",
-        "ROBOTMCP_ATTACH_DEFAULT": "auto"
-      }
-    }
-  }
-}
-```
-
-### Robot Framework setup
-
-Import the library and start the serve loop inside the suite that you are debugging:
-
-```robotframework
-*** Settings ***
-Library    robotmcp.attach.McpAttach    token=${DEBUG_TOKEN}
-
-*** Variables ***
-${DEBUG_TOKEN}    change-me
-
-*** Test Cases ***
-Serve From Debugger
-    MCP Serve    port=7317    token=${DEBUG_TOKEN}    mode=blocking    poll_ms=100
-    [Teardown]    MCP Stop
-```
-
-- `MCP Serve    port=7317    token=${TOKEN}    mode=blocking|step    poll_ms=100` — starts the HTTP server (if not running) and processes bridge commands. Use `mode=step` during keyword body execution to process exactly one queued request.
-- `MCP Stop` — signals the serve loop to exit (used from the suite or remotely via RobotMCP `attach_stop_bridge`).
-- `MCP Process Once` — processes a single pending request and returns immediately; useful when the suite polls between test actions.
-- `MCP Start` — alias for `MCP Serve` for backwards compatibility.
-
-The bridge binds to `127.0.0.1` by default and expects clients to send the shared token in the `X-MCP-Token` header.
-
-### Configure RobotMCP to attach
-
-Start `robotmcp.server` with attach routing by providing the bridge connection details via environment variables (token must match the suite):
-
-```bash
-export ROBOTMCP_ATTACH_HOST=127.0.0.1
-export ROBOTMCP_ATTACH_PORT=7317          # optional, defaults to 7317
-export ROBOTMCP_ATTACH_TOKEN=change-me    # optional, defaults to 'change-me'
-export ROBOTMCP_ATTACH_DEFAULT=auto       # auto|force|off (auto routes when reachable)
-export ROBOTMCP_ATTACH_STRICT=0           # set to 1/true to fail when bridge is unreachable
-uv run python -m robotmcp.server
-```
-
-When `ROBOTMCP_ATTACH_HOST` is set, `execute_step(..., use_context=true)` and other context-aware tools first try to run inside the live debug session. Use the new MCP tools to manage the bridge from any agent:
-
-- `attach_status` — reports configuration, reachability, and diagnostics from the bridge (`/diagnostics`).
-- `attach_stop_bridge` — sends a `/stop` command, which in turn triggers `MCP Stop` in the debugged suite.
-
----
-
-## 🎪 Example Workflows
-
-### 🌐 Web Application Testing (BDD)
-
-**Prompt:**
-
-```
-Use RobotMCP to create a test suite and execute it step wise.
-It shall:
-
-- Open https://demoshop.makrocode.de/
-- Add item to cart
-- Assert item was added to cart
-- Add another item to cart
-- Assert another item was added to cart
-- Checkout
-- Assert checkout was successful
-
-Execute step by step and build final test suite afterwards
-Create in BDD style and use Keywords with embedded arguments when applicable
-```
-
-**Result:** BDD-style Robot Framework test suite with Given/When/Then keywords, embedded arguments, and extracted variables.
-
-### 🌐 Web Application Testing (Data-Driven)
-
-**Prompt:**
-
-```
-Use RobotMCP to create a test suite and execute it step wise.
-It shall:
-
-- Open https://saucedemo.com
-- Login with different user/password combinations
-- Assert message or login
-
-Execute step by step and build final test suite afterwards
-Create in datadriven style and add multiple test rows with different scenarios
-Use Test Template setting in suite
-```
-
-**Result:** Data-driven Robot Framework test suite with `Test Template` and parameterized rows for each login scenario.
-
-### 📱 Mobile App Testing
-
-**Prompt:**
-
-```
-Use RobotMCP to create a TestSuite and execute it step wise.
-It shall:
-- Launch app from tests/appium/SauceLabs.apk
-- Perform login flow
-- Add products to cart
-- Complete purchase
-
-Appium server is running at http://localhost:4723
-Execute the test suite stepwise and build the final version afterwards.
-```
-
-**Result:** Mobile test suite with AppiumLibrary keywords and device capabilities.
-
-### 🔌 API Testing
-
-**Prompt:**
-
-```
-Read the Restful Booker API documentation at https://restful-booker.herokuapp.com.
-Use RobotMCP to create a TestSuite and execute it step wise.
-It shall:
-
-- Create a new booking
-- Authenticate as admin
-- Update the booking
-- Delete the booking
-- Verify each response
-
-Execute the test suite stepwise and build the final version afterwards.
-```
-
-**Result:** API test suite using RequestsLibrary with proper error handling.
-
-### 🧪 XML/Database Testing
-
-**Prompt:**
-
-```
-Create a xml file with books and authors.
-Use RobotMCP to create a TestSuite and execute it step wise.
-It shall:
-- Parse XML structure
-- Validate specific nodes and attributes
-- Assert content values
-- Check XML schema compliance
-
-Execute the test suite stepwise and build the final version afterwards.
-```
-
-**Result:** XML processing test using Robot Framework's XML library.
-
----
-
-## 🔍 MCP Tools
-
-rf-mcp exposes its capabilities to the agent as MCP tools, grouped by purpose:
-planning & orchestration, session & execution, discovery & documentation,
-observability & diagnostics, suite lifecycle, locator guidance, visual validation,
-and optional persistent memory.
-
-**Full reference:** [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md) — every tool with its
-parameters, returns, and when to reach for it. Your agent reads these descriptions
-directly; you rarely need to call them by hand.
-## 🧪 BDD & Data-Driven Test Generation
-
-### BDD Style (Given/When/Then)
-
-**Prompt:**
-
-```
-Use RobotMCP to create a test suite and execute it step wise.
-It shall:
-
-- Open https://demoshop.makrocode.de/
-- Add item to cart
-- Assert item was added to cart
-- Add another item to cart
-- Assert another item was added to cart
-- Checkout
-- Assert checkout was successful
-
-Execute step by step and build final test suite afterwards
-Create in BDD style and use Keywords with embedded arguments when applicable
-```
-
-**Result:** RobotMCP executes each step, inspects the DOM between actions, and generates a BDD-style suite with Given/When/Then keywords:
-
-```robotframework
-*** Test Cases ***
-Demoshop BDD Purchase Workflow
-    Given the demoshop is open
-    When the user adds the first product to cart
-    Then the cart should contain 1 item
-    When the user adds the second product to cart
-    Then the cart should contain 2 items
-    When the user proceeds to checkout
-    And the user fills in the checkout form
-    And the user places the order
-    Then the order confirmation should be displayed
-
-*** Keywords ***
-the demoshop is open
-    New Browser    chromium
-    New Context
-    New Page    ${DEMOSHOP_URL}
-
-the user adds the first product to cart
-    Click    ${FIRST_PRODUCT_BUTTON}
-```
-
-During stepwise execution, use `bdd_group` and `bdd_intent` on `execute_step` to control how steps are grouped into behavioral keywords. Call `build_test_suite(bdd_style=True)` at the end.
-
-### Data-Driven Templates
-
-**Prompt:**
-
-```
-Use RobotMCP to create a test suite and execute it step wise.
-It shall:
-
-- Open https://saucedemo.com
-- Login with different user/password combinations
-- Assert message or login
-
-Execute step by step and build final test suite afterwards
-Create in datadriven style and add multiple test rows with different scenarios
-Use Test Template setting in suite
-```
-
-**Result:** RobotMCP builds a parameterized suite using `Test Template` with named data rows:
-
-```robotframework
-*** Settings ***
-Library         Browser
-Test Template   Verify Login
-
-*** Test Cases ***          USERNAME            PASSWORD        EXPECTED
-Valid User                  standard_user       secret_sauce    Products
-Locked Out User             locked_out_user     secret_sauce    locked out
-Invalid Password            standard_user       wrong_pass      Username and password do not match
-```
-
-Use `manage_session(action="start_test", template="Verify Login")` to set the template keyword, then `manage_session(action="add_data_row", test_name="Valid User", args=["standard_user", "secret_sauce", "Products"])` to add each row.
-
----
-
-## 🧠 Small LLM Optimization
-
-RobotMCP includes optimizations for small and medium-sized LLMs (8K-32K context windows) that reduce token overhead and improve tool call accuracy.
-
-### Dynamic Tool Profiles
-
-Control which tools are visible to the LLM based on the workflow phase. Smaller models see fewer, more compact tools:
-
-```
-manage_session(action="set_tool_profile", tool_profile="browser_exec")
-```
-
-Profiles: `browser_exec`, `api_exec`, `discovery`, `minimal_exec`, `full`. Reduces tool description overhead from ~7,000 to ~1,000 tokens. Can also be set via the `ROBOTMCP_TOOL_PROFILE` environment variable.
-
-### Response Verbosity
-
-Control response detail level to reduce token consumption. Available on most tools via the `detail_level` parameter:
-
-- `minimal` – Essential output only (60-80% token reduction)
-- `standard` – Balanced output (default)
-- `full` – Complete detailed output
-
-Set a default via `ROBOTMCP_OUTPUT_VERBOSITY=compact|standard|verbose`.
-
-### Delta State Responses
-
-`get_session_state` supports incremental responses that only return sections that changed since the last call:
-
-```
-# First call returns full state (version 1):
-get_session_state(session_id="...", sections=["variables", "page_source"])
-
-# Subsequent calls return only what changed:
-get_session_state(session_id="...", mode="delta", since_version=1)
-```
-
-In `mode="auto"` (the default), the server automatically returns delta responses when a previous version exists. This reduces token usage by 50-80% for multi-step workflows where only variables or page content change between steps.
-
-### Artifact Externalization
-
-Large outputs (HTML page source, execution logs, stack traces) are automatically externalized into fetchable artifacts instead of being inlined in the response:
-
-```
-# Response includes artifact_id instead of full content:
-{"result": "...", "artifact_id": "abc123", "artifact_hint": "Full page source available via fetch_artifact"}
-
-# Fetch when needed:
-fetch_artifact(artifact_id="abc123")
-```
-
-This keeps tool responses compact while preserving access to full output on demand.
-
-### Intent Action
-
-The `intent_action` tool provides a library-agnostic entry point for common test actions. Instead of requiring the LLM to know library-specific keyword names and locator syntax, it expresses intent:
-
-```
-intent_action(intent="click", target="text=Login", session_id="...")
-intent_action(intent="fill", target="#username", value="testuser", session_id="...")
-```
-
-The server resolves intent + target to the correct keyword and locator format for the session's active library (Browser, SeleniumLibrary, or AppiumLibrary).
-
-#### Navigate Fallback
-
-When `intent_action(intent="navigate")` fails because no browser or page is open, the server automatically opens the browser/page and retries:
-- **Browser Library**: executes `New Browser` + `New Page` (or just `New Page` if browser exists)
-- **SeleniumLibrary**: executes `Open Browser about:blank chrome`
-
-The response includes `fallback_applied: true` and `fallback_steps` count. Saves 2-4 tool calls per session.
-
-### Batch Execution
-
-The `execute_batch` tool executes multiple keywords in a single MCP call, reducing N round-trips to 1. Steps can reference results from earlier steps via `${STEP_N}` variables:
-
-```
-execute_batch(session_id="...", steps=[
-    {"keyword": "Go To", "args": ["https://example.com"]},
-    {"keyword": "Get Title", "assign_to": "title"},
-    {"keyword": "Should Be Equal", "args": ["${STEP_2}", "Example Domain"]}
-], on_failure="recover")
-```
-
-If a step fails, `resume_batch` lets you insert fix steps and retry from the failure point.
-
-### Strict Mode Hints
-
-When a Browser Library keyword fails because the selector matches multiple elements (Playwright strict mode), the error response includes a hint suggesting `>> nth=0` (zero-based index) or `>> visible=true` selector chains, with concrete examples using the actual keyword name and element count.
-
-### Type-Constrained Parameters
-
-All action/mode/strategy parameters use `Literal` types, producing `enum` constraints in the JSON Schema. This eliminates hallucinated values (e.g., `action="setup"` instead of `action="init"`). All values accept case-insensitive input.
-
-### Automatic Parameter Coercion
-
-Common small LLM mistakes are corrected server-side:
-- JSON-stringified arrays (`"[\"Browser\"]"`) are parsed to native arrays
-- Comma-separated strings (`"Browser,BuiltIn"`) are split into lists
-- Deprecated keywords (`GET`) are mapped to current equivalents (`GET On Session`)
-
-### Instruction Templates
-
-Configurable server-level instructions guide LLMs to follow the "discover-then-act" pattern. Choose a template sized for your LLM's capability — from `minimal` (~40 tokens) for Claude Opus to `detailed` (~600 tokens) for Claude Haiku. See [Instruction Templates](#-instruction-templates) above.
-
----
-
-## 🧠 Persistent Semantic Memory
-
-RobotMCP can learn from past sessions and recall successful patterns, locators, and error fixes — reducing trial-and-error for repeated testing scenarios.
-
-### How It Works
-
-Memory is powered by **sqlite-vec** (vector search) and **model2vec** (256-dimensional embeddings). When enabled, the server:
-
-1. **Stores** successful step sequences, working locators, and error→fix mappings after each tool call
-2. **Recalls** relevant memories and injects them as hints into tool responses (e.g., `execute_step` failures include previous fixes, `get_session_state` includes previously successful step patterns)
-3. **Learns** across sessions — the warm database persists between server restarts
-
-### Installation
-
-```bash
-pip install rf-mcp[memory]
-# or
-uv pip install rf-mcp[memory]
-```
-
-### Configuration
-
-Enable via environment variables:
-
-```json
-{
-  "servers": {
-    "robotmcp": {
-      "type": "stdio",
-      "command": "uv",
-      "args": ["run", "-m", "robotmcp.server"],
-      "env": {
-        "ROBOTMCP_MEMORY_ENABLED": "true",
-        "ROBOTMCP_MEMORY_DB_PATH": "./memory.db"
-      }
-    }
-  }
-}
-```
-
-### Memory MCP Tools
-
-When memory is enabled, five additional tools become available:
-
-| Tool | Description |
-|------|-------------|
-| `recall_step` | Recall previously successful step sequences. Call **before** building new test steps to reuse proven patterns. |
-| `recall_fix` | Recall known fixes for an error. Call **immediately** when `execute_step` fails before retrying. |
-| `recall_locator` | Recall working locators for a UI element. Call **before** DOM inspection for familiar elements. |
-| `store_knowledge` | Store domain knowledge (e.g., site structure, auth flows) for future recall. |
-| `get_memory_status` | Check memory availability and statistics at session start. |
-
-### Response Augmentation
-
-Memory hints are automatically injected into existing tool responses — no LLM cooperation required:
-
-- **`execute_step` failures**: Previous fixes and working locators are included in the error response
-- **`get_session_state`**: Previously successful step patterns for the scenario are included
-- **`analyze_scenario`**: Recalled step sequences from past sessions are suggested
-
-All memory lookups have a 50ms timeout to avoid impacting response latency.
-
-### Benchmark Results
-
-Tested across 8 scenarios (72 opencode invocations, 3 iterations each) with `qwen/qwen3-coder`:
-
-| Scenario Type | Best Result | Memory Recall Rate |
-|---|---|---|
-| Complex web flows (checkout) | **-23% calls, -22% tokens** | 3/3 iterations |
-| Exploration-heavy browsing | -44% calls on best iteration | 3/3 iterations |
-| API error recovery | -3% calls ±3% (tightest CI) | 3/3 iterations |
-
-Memory benefits are strongest for **complex, multi-step scenarios** where past locators and step sequences reduce exploratory tool calls.
-
----
-
-## ⚙️ Configuration
-
-rf-mcp runs with sensible defaults; when you need to tune it, everything is an
-environment variable away — instruction templates, the attach bridge, output/token
-economy, memory, the frontend dashboard, PlatynUI desktop safety, and more.
-
-**Full reference:** [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — every
-`ROBOTMCP_*` variable with its accepted values and default, plus the `robotmcp`
-CLI flags and subcommands.
-## 🤝 Contributing
-
-We welcome contributions! Here's how to get started:
-
-1. **Fork** the repository
-2. **Clone** your fork locally
-3. **Install** development dependencies: `uv sync`
-4. **Create** a feature branch
-5. **Add** comprehensive tests for new functionality
-6. **Run** tests: `uv run pytest tests/`
-7. **Submit** a pull request
-
-### Code quality and security analysis
-
-Every push runs a **Quality** job covering four areas:
-
-| area | tool | where findings appear |
-| --- | --- | --- |
-| code quality | `ruff` | Security tab (code scanning) + `quality-reports` artifact |
-| code security | `ruff --select S` (flake8-bandit) | as above |
-| dependency advisories | `osv-scanner` against `uv.lock` | as above |
-| maintainability | `radon` | run summary + artifact |
-
-**The Quality check never fails on findings.** It reports them and stays green, so a
-finding never blocks a merge. It fails only when an analyzer could not *run* — an
-analyzer that fails to install would otherwise report zero findings, which is
-indistinguishable from a clean result.
-
-Every run prints a short digest to the job log and the run summary. For the full detail,
-download the `quality-reports` artifact or open the repository's **Security** tab.
-
-Run the same checks locally:
-
-```bash
-uv run ruff check src/          # quality + security, same rules as CI
-uv run radon mi src/ -s         # maintainability per file
-```
-
-**On the rule set:** `[tool.ruff.lint].select` in `pyproject.toml` is pinned
-deliberately, and `ruff` is pinned to an exact version. Measured on this codebase the
-selection swings the finding count **26×** — 439 for the current selection versus 5,763
-for ruff's bare default. If you widen it, widen it on purpose and re-measure; don't
-delete the selection to "use the defaults". A signal nobody can act on gets ignored, which
-is what happened to the SonarCloud check this replaced.
-
-There is deliberately **no "new code" quality gate** (fail only on newly-introduced
-issues). No open-source artifact-based stack provides one for free. If the finding count
-is driven down and starts creeping back up, that's the point to reconsider.
-
-## 📝 Changelog
-
-- [**v0.34.0**](docs/RELEASE_NOTES_v0.34.0.md) – Native desktop automation (`rf-mcp[desktop]`, PlatynUI, Windows-ready); project-aware installer that uses your project's own libraries; leaner agent instructions; cold-start hang, Windows dry-run deadlock and generated-suite path fixes; tool profiles restored on FastMCP 3
-- [**v0.31.1**](docs/RELEASE_NOTES_v0.31.0.md) – Packaging cleanup (exclude tests/examples from sdist)
-- [**v0.31.0**](docs/RELEASE_NOTES_v0.31.0.md) – BDD/data-driven generation, namespace architecture fixes, persistent memory, 71-88% token reduction
-- [v0.30.1](docs/RELEASE_NOTES_v0.30.1.md) – FastMCP 3.x compatibility layer
-- [v0.30.0](docs/RELEASE_NOTES_v0.30.0.md) – Small LLM optimization (tool profiles, intent action, response optimization, type constraints)
-- [v0.29.0](docs/RELEASE_NOTES_v0.29.0.md) – Instruction templates, multi-test sessions, batch execution, smart timeouts
-
-## 📄 License
-
-Apache 2.0 License - see [LICENSE](LICENSE) file for details.
-
----
-
-**⭐ Star us on GitHub if RobotMCP helps your test automation journey!**
-
-Made with ❤️ for the Robot Framework and AI automation community.
+## Documentation
+
+- [Getting started](docs/GETTING_STARTED.md): install, connect an agent, a first session, troubleshooting
+- [Configuration](docs/CONFIGURATION.md): options, environment variables, execution modes, skills, hints, OpenTelemetry
+- [MCP tool reference](docs/MCP_TOOLS.md): every tool and parameter, generated from the published schemas
+- [Examples](docs/EXAMPLES.md): tool sequences for triage, authoring, debugging, reruns, remote runners and client mode
+- [Docker images](docs/DOCKER.md): headless and VNC test-runner images
+- [Release notes 2.0.0](docs/RELEASE_NOTES_v2.0.0.md): what changed from 0.x, with a tool migration table
+- [Agent evaluation harness](tests/e2e/agent_eval/README.md): how rf-mcp is measured with real agents and models
+
+Documentation for rf-mcp 0.36 and earlier is at the [`v0.36.0` tag](https://github.com/manykarim/rf-mcp/tree/v0.36.0).
