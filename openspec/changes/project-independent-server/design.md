@@ -172,15 +172,20 @@ Other sources add nothing to the response, which keeps responses compact as `rob
 The entry contains no arguments. Everything is resolved at run time, and `--mode` defaults to `auto`. `--url` keeps
 writing an HTTP entry in either scope.
 
-User-level targets, all to be verified per agent (task 6.2):
+User-level entries go through each agent's own CLI, which knows its file format and locking. Implementation
+found that every installed agent has one, so this replaced the planned file merges. Verified on 2026-11-11 against
+a redirected home (task 6.2), where each agent's own `mcp list` showed the entry:
 
 | agent | how the entry is written |
 | --- | --- |
-| Claude Code | `claude mcp add --scope user rf-mcp -- <cmd>` when the `claude` CLI is on `PATH`; otherwise the command is printed. `~/.claude.json` is never edited directly, because Claude Code rewrites it while running. |
-| Codex | merge into `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`) with tomlkit, which keeps comments |
-| Copilot | merge into VS Code's user `mcp.json`: `%APPDATA%\Code\User`, `~/Library/Application Support/Code/User` or `~/.config/Code/User` |
-| OpenCode | merge into `~/.config/opencode/opencode.json` |
-| Antigravity | merge into `~/.gemini/settings.json` |
+| Claude Code | `claude mcp remove --scope user rf-mcp`, then `claude mcp add --scope user rf-mcp -e K=V ... -- <cmd>`. The name goes before `-e`, because `-e` takes several values and would swallow it. `~/.claude.json` is never edited directly. |
+| Codex | `codex mcp add rf-mcp --env K=V ... -- <cmd>` (`$CODEX_HOME/config.toml`) |
+| Copilot | `code --add-mcp '<json>'` (VS Code user profile) and `copilot mcp add --env K=V ... rf-mcp -- <cmd>` (Copilot CLI, `~/.copilot/mcp-config.json`), reported as `copilot` and `copilot-cli` |
+| Antigravity | `agy mcp add -e K=V ... rf-mcp <cmd>` (flags before the name, as `agy` requires) |
+| OpenCode | no CLI command: merge into `$XDG_CONFIG_HOME/opencode/opencode.json` (default `~/.config`) |
+
+An agent whose CLI is not on `PATH` is reported as `manual` with the command to run. A CLI that fails is
+reported as `error` with its output. Both make `init` exit 1.
 
 Merging:
 

@@ -1,14 +1,25 @@
 # Getting started
 
-This guide installs rf-mcp into a Robot Framework project, connects a coding agent and walks through a first
-session. For every option see [CONFIGURATION.md](CONFIGURATION.md); for the tools see [MCP_TOOLS.md](MCP_TOOLS.md).
+This guide installs rf-mcp, connects a coding agent and walks through a first session. For every option see
+[CONFIGURATION.md](CONFIGURATION.md); for the tools see [MCP_TOOLS.md](MCP_TOOLS.md).
 
 ## 1. Install
 
-rf-mcp needs Python 3.10+ and `robotcode[all]>=2.9.0.dev115`, which is currently a pre-release. Install both into
-the environment your tests run in, next to the libraries the project uses: rf-mcp runs `robotcode` from that
-environment, so it sees the same libraries and `robot.toml`. Naming robotcode with its pre-release version lets uv and pip
-install it without `--prerelease=allow` / `--pre`, which would pull pre-releases of every other dependency too.
+rf-mcp needs Python 3.10+ and [uv](https://docs.astral.sh/uv/). It runs `robotcode[all]>=2.9.0.dev115` (currently a
+pre-release) in each project's own environment, so robotcode sees the same libraries and `robot.toml` as your
+tests. Pick one of two setups.
+
+**One install for all projects (recommended):**
+
+```bash
+uv tool install rf-mcp
+```
+
+A project then needs only Robot Framework and its libraries in its `.venv`. When that environment has no
+robotcode, or an older one, rf-mcp adds its own robotcode version with uv and leaves the project unchanged; see
+[Which Python runs your tests](CONFIGURATION.md#which-python-runs-your-tests).
+
+**Installed into the project**, for example to pin the rf-mcp version for a team:
 
 ```bash
 # uv
@@ -18,7 +29,8 @@ uv add --dev rf-mcp "robotcode[all]>=2.9.0.dev115"
 pip install rf-mcp "robotcode[all]>=2.9.0.dev115"
 ```
 
-Add `rf-mcp[otel]` for OpenTelemetry export.
+Naming robotcode with its pre-release version lets uv and pip install it without `--prerelease=allow` / `--pre`,
+which would pull pre-releases of every other dependency too. Add `rf-mcp[otel]` for OpenTelemetry export.
 
 Check the setup from the project folder:
 
@@ -40,7 +52,25 @@ Custom Hints   : none (using built-in rules) [not present]
 
 ## 2. Connect your agent
 
-`rf-mcp init` writes the MCP configuration for one agent or all of them:
+With the global install, register rf-mcp once for every project:
+
+```bash
+rf-mcp init --scope user --agent all --write
+```
+
+| agent | how `--scope user` registers `rf-mcp` |
+| --- | --- |
+| Claude Code | `claude mcp add --scope user rf-mcp -- rf-mcp` |
+| Codex | `codex mcp add rf-mcp -- rf-mcp` (`~/.codex/config.toml`) |
+| Copilot | `code --add-mcp` (VS Code user profile) and `copilot mcp add` (Copilot CLI) |
+| Antigravity | `agy mcp add rf-mcp rf-mcp` |
+| OpenCode | merges `~/.config/opencode/opencode.json` |
+
+An agent whose command is not installed is skipped with the command to run later. When the folder holding
+`rf-mcp` is not on `PATH` (agents started from a desktop shortcut often lack `~/.local/bin`), the entry names it by
+its full path.
+
+To configure one project instead (and commit the files for the team), run `init` in the project:
 
 ```bash
 rf-mcp init --agent claude --write      # .mcp.json
@@ -51,14 +81,16 @@ rf-mcp init --agent opencode --write    # opencode.json
 rf-mcp init --agent all --write
 ```
 
-Without `--write` it prints the configuration instead. The server starts from the project's environment:
-`uv run --directory <project> rf-mcp` when the project has a `pyproject.toml`, otherwise the Python interpreter
-that ran `init`.
+The entries contain no paths: `uv run rf-mcp` when rf-mcp is installed in a uv project, the project
+interpreter's `-m robotmcp` in a plain venv, and `rf-mcp` for a global install. Without `--write`, `init` prints
+what it would change. It replaces only its own `rf-mcp` entry, leaves every other server in the file alone, and does
+not touch a file with comments or one that does not parse (it prints the entry instead and exits 1). Both scopes
+name the server `rf-mcp`.
 
 To connect to a server that already runs elsewhere, pass its URL:
 
 ```bash
-rf-mcp init --agent claude --mode client --url http://test-runner:8000/mcp --write
+rf-mcp init --agent claude --url http://test-runner:8000/mcp --write
 ```
 
 Agents that do not read MCP resources well can get the built-in skills as files as well:

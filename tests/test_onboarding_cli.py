@@ -63,24 +63,25 @@ def _rf_mcp_checkout() -> Path:
 
 def test_init_runs_from_the_project_uv_environment(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "demo"\n', encoding="utf-8")
-    configs = generate_agent_mcp_configs(agent="all", root=tmp_path)
+    configs = generate_agent_mcp_configs(agent="all", root=tmp_path, install_kind="project")
     checkout = str(_rf_mcp_checkout())
     for agent, item in configs.items():
         assert checkout not in item["content"].replace("/", "\\"), agent
         assert checkout.replace("\\", "/") not in item["content"], agent
+        assert str(tmp_path.resolve()) not in item["content"], agent
+        assert tmp_path.resolve().as_posix() not in item["content"], agent
     claude = json.loads(configs["claude"]["content"])["mcpServers"]["rf-mcp"]
     assert claude["command"] == "uv"
-    assert claude["args"][:4] == ["run", "--directory", str(tmp_path.resolve()), "rf-mcp"]
+    assert claude["args"] == ["run", "rf-mcp"]
 
 
 def test_init_without_uv_project_uses_the_current_interpreter(tmp_path: Path) -> None:
     import sys
 
-    configs = generate_agent_mcp_configs(agent="claude", root=tmp_path)
+    configs = generate_agent_mcp_configs(agent="claude", root=tmp_path, install_kind="project")
     claude = json.loads(configs["claude"]["content"])["mcpServers"]["rf-mcp"]
     assert claude["command"] == sys.executable
-    assert claude["args"][:2] == ["-m", "robotmcp"]
-    assert "--directory" not in claude["args"]
+    assert claude["args"] == ["-m", "robotmcp"]
 
 
 def test_sync_skills_refuses_to_overwrite_a_changed_skill(tmp_path: Path) -> None:

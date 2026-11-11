@@ -9,15 +9,14 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Literal, Sequence
+from typing import Any, Sequence
 
 from robotmcp.config import ServerConfig
+from robotmcp.onboarding.agent_config import generate_agent_mcp_configs, init_exit_code
 from robotmcp.hints import load_custom_rules_with_errors
 from robotmcp.runner.cli_runner import resolve_robotcode_executable
 from robotmcp.runner.shell_escape import build_agent_env
 from robotmcp.skills.provider import discover_skill_summaries, resolve_skill_roots
-
-AgentName = Literal["claude", "codex", "agy", "copilot", "opencode", "all"]
 
 AGENT_SKILL_TARGETS: dict[str, str] = {
     "claude": ".claude/skills",
@@ -173,128 +172,6 @@ def run_doctor(
     return report
 
 
-def project_server_command(ws_root: Path, mode: str) -> tuple[str, list[str]]:
-    """Return (command, args) that start rf-mcp from the project's environment.
-
-    A uv project (`pyproject.toml` in the root) runs `uv run --directory <root> rf-mcp`, so the
-    server sees the project's robotcode and libraries. Otherwise the interpreter that runs this
-    command is used. The rf-mcp source checkout is never referenced.
-    """
-    server_flags = ["--mode", mode, "--transport", "stdio", "-r", str(ws_root)]
-    if (ws_root / "pyproject.toml").is_file():
-        return "uv", ["run", "--directory", str(ws_root), "rf-mcp", *server_flags]
-    return sys.executable, ["-m", "robotmcp", *server_flags]
-
-
-# Measured with codex-cli 0.166 (2026-11-07): Codex loads MCP tools lazily and shows the model neither the server
-# instructions nor the tool descriptions, so without the synced skills GPT-5.6-Luna made 0 rf-mcp calls in 14 runs;
-# and under approval_policy="never" every tool not annotated read-only (rf_run, rf_repl, rf_debug) is rejected.
-CODEX_NOTES = (
-    "# Codex shows the agent neither rf-mcp's instructions nor its tool descriptions: run\n"
-    "#   rf-mcp sync-skills --agent codex\n"
-    "# so the skills in .agents/skills route Robot Framework work to these tools.\n"
-    "# Unattended runs (codex exec, approval_policy = \"never\") reject rf_run, rf_repl and rf_debug unless approved.\n"
-    "# They run outside Codex's sandbox (as the project's own robot runs would); to allow them, uncomment:\n"
-    "# default_tools_approval_mode = \"approve\"\n"
-)
-
-
-def generate_agent_mcp_configs(
-    *,
-    agent: AgentName = "all",
-    mode: Literal["server", "client"] = "server",
-    root: Path | None = None,
-    url: str | None = None,
-    write_files: bool = False,
-) -> dict[str, Any]:
-    """Generate (and optionally write) MCP client configuration files for coding agents."""
-    ws_root = (root or Path.cwd()).expanduser().resolve()
-    targets = (
-        ["claude", "codex", "agy", "copilot", "opencode"]
-        if agent == "all"
-        else [agent]
-    )
-    generated: dict[str, Any] = {}
-
-    server_command, server_args = project_server_command(ws_root, mode)
-    default_env = {
-        "PYTHONUTF8": "1",
-        "PYTHONIOENCODING": "utf-8",
-        "ROBOTCODE_FORCE_AI_AGENT": "1",
-    }
-
-    for target_agent in targets:
-        if target_agent == "claude":
-            rel_path = ".mcp.json"
-            entry: dict[str, Any] = (
-                {"type": "http", "url": url}
-                if url
-                else {"type": "stdio", "command": server_command, "args": server_args, "env": default_env}
-            )
-            content = json.dumps({"mcpServers": {"rf-mcp": entry}}, indent=2) + "\n"
-        elif target_agent == "codex":
-            rel_path = ".codex/config.toml"
-            if url:
-                content = f'[mcp_servers.rf-mcp]\nurl = "{url}"\n'
-            else:
-                args_toml = ", ".join(f'"{a.replace(chr(92), "/")}"' for a in server_args)
-                content = (
-                    f'[mcp_servers.rf-mcp]\ncommand = "{server_command.replace(chr(92), "/")}"\nargs = [{args_toml}]\n'
-                    + CODEX_NOTES
-                    + '\n[mcp_servers.rf-mcp.env]\nPYTHONUTF8 = "1"\nPYTHONIOENCODING = "utf-8"\nROBOTCODE_FORCE_AI_AGENT = "1"\n'
-                )
-        elif target_agent == "agy":
-            rel_path = ".gemini/settings.json"
-            entry_agy: dict[str, Any] = (
-                {"url": url}
-                if url
-                else {"command": server_command, "args": server_args, "env": default_env}
-            )
-            content = json.dumps({"mcpServers": {"rf-mcp": entry_agy}}, indent=2) + "\n"
-            if write_files:
-                plugin_dir = ws_root / ".agents" / "plugins" / "rf-mcp"
-                plugin_dir.mkdir(parents=True, exist_ok=True)
-                (plugin_dir / "plugin.json").write_text(
-                    json.dumps({"name": "rf-mcp"}, indent=2) + "\n",
-                    encoding="utf-8",
-                )
-                (plugin_dir / "mcp_config.json").write_text(
-                    content,
-                    encoding="utf-8",
-                )
-        elif target_agent == "copilot":
-            rel_path = ".vscode/mcp.json"
-            entry_cp: dict[str, Any] = (
-                {"type": "http", "url": url}
-                if url
-                else {"type": "stdio", "command": server_command, "args": server_args, "env": default_env}
-            )
-            content = json.dumps({"servers": {"rf-mcp": entry_cp}}, indent=2) + "\n"
-        elif target_agent == "opencode":
-            rel_path = "opencode.json"
-            entry_oc: dict[str, Any] = (
-                {"type": "remote", "url": url}
-                if url
-                else {"type": "local", "command": [server_command, *server_args], "environment": default_env}
-            )
-            content = json.dumps({"mcp": {"rf-mcp": entry_oc}}, indent=2) + "\n"
-        else:
-            continue
-
-        file_path = ws_root / rel_path
-        if write_files:
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            file_path.write_text(content, encoding="utf-8")
-
-        generated[target_agent] = {
-            "path": str(file_path),
-            "written": write_files,
-            "content": content,
-        }
-
-    return generated
-
-
 def sync_skills_to_directory(
     *,
     root: Path | None = None,
@@ -380,11 +257,18 @@ def run_onboarding_cli(argv: Sequence[str]) -> int:
         choices=["claude", "codex", "agy", "copilot", "opencode", "all"],
         default="all",
     )
-    init_p.add_argument("--mode", choices=["server", "client"], default="server")
+    init_p.add_argument("--mode", choices=["server", "client"], default="server", help=argparse.SUPPRESS)
     init_p.add_argument("--url", default=None, help="Remote HTTP MCP URL (Modes 2 & 3).")
     init_p.add_argument("-r", "--root", default=None, help="Workspace root.")
     init_p.add_argument(
-        "--write", action="store_true", help="Write config files to workspace."
+        "--scope",
+        choices=["project", "user"],
+        default="project",
+        help="project: write the project's agent files (commit them); user: register rf-mcp for every project of "
+        "this user with each agent's own CLI (for a global install, `uv tool install rf-mcp`).",
+    )
+    init_p.add_argument(
+        "--write", action="store_true", help="Apply the entries (default: print what would change)."
     )
 
     sync_p = subparsers.add_parser(
@@ -424,9 +308,10 @@ def run_onboarding_cli(argv: Sequence[str]) -> int:
             root=ws_root,
             url=ns.url,
             write_files=ns.write,
+            scope=ns.scope,
         )
         print(json.dumps(configs, indent=2))
-        return 0
+        return init_exit_code(configs)
 
     if ns.subcommand == "sync-skills":
         s_dirs = [Path(p) for p in (ns.skills_dirs or [])]
