@@ -5,7 +5,9 @@ Regenerate with `uv run python scripts/generate_tool_reference.py`.
 
 The `rf_*` tools share these parameters (`rf_diagnose` takes only `root`):
 
-- `root` is the project folder (with `robot.toml`); without it the server's `--root` is used.
+- `root` is the project folder (with `robot.toml`); without it the server's `--root`, the client's workspace folder or
+  the server's working folder walked up to `robot.toml` is used (see
+  [How the project root is found](CONFIGURATION.md#how-the-project-root-is-found)).
 - `profile` applies a `robot.toml` profile (`-p`).
 - `target` overrides the execution mode for one call: `server` runs robotcode on the MCP host, `client` returns
   the command for the agent's own shell (see [Execution modes](CONFIGURATION.md#execution-modes)).

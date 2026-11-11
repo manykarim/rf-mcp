@@ -6,14 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from robotmcp.config import ServerConfig
+from robotmcp.config import ServerConfig, find_project_root
 
 
 def test_default_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     cfg = ServerConfig.from_env_and_args(argv=[], env={})
     assert cfg.execution_mode == "auto"
-    assert cfg.workspace_root == tmp_path.resolve()
+    assert cfg.workspace_root is None
+    assert cfg.resolve_root() == tmp_path.resolve()
     assert cfg.profile is None
     assert cfg.skills_dirs == []
     assert cfg.hints_file is None
@@ -94,3 +95,53 @@ def test_auto_mode_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("shutil.which", lambda _cmd: None)
     assert cfg.resolved_mode() == "client"
+
+
+# --- project root discovery (project-independent-server, task 1.1) -----------------------------
+
+
+def test_pinned_root_wins_over_the_working_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "elsewhere").mkdir()
+    monkeypatch.chdir(tmp_path / "elsewhere")
+    cfg = ServerConfig.from_env_and_args(argv=["--root", str(tmp_path)], env={})
+    assert cfg.startup_root() == (tmp_path.resolve(), "pinned")
+    assert cfg.resolve_root("other") == Path("other").resolve()
+
+
+def test_root_argument_wins_over_the_pinned_root(tmp_path: Path) -> None:
+    cfg = ServerConfig(workspace_root=tmp_path / "a")
+    assert cfg.resolve_root(tmp_path / "b") == (tmp_path / "b").resolve()
+
+
+def test_start_in_a_subfolder_finds_the_robot_toml_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "robot.toml").write_text("", encoding="utf-8")
+    sub = tmp_path / "tests" / "ui"
+    sub.mkdir(parents=True)
+    monkeypatch.chdir(sub)
+    cfg = ServerConfig.from_env_and_args(argv=[], env={})
+    assert cfg.startup_root() == (tmp_path.resolve(), "marker:robot.toml")
+
+
+def test_each_folder_is_checked_for_all_markers_before_its_parent(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "robot.toml").write_text("", encoding="utf-8")
+    project = tmp_path / "api"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("", encoding="utf-8")
+    (project / "src").mkdir()
+    assert find_project_root(project / "src") == (project.resolve(), "pyproject.toml")
+    assert find_project_root(tmp_path) == (tmp_path.resolve(), "robot.toml")
+
+
+def test_git_file_of_a_worktree_counts_as_a_marker(tmp_path: Path) -> None:
+    (tmp_path / ".git").write_text("gitdir: /elsewhere", encoding="utf-8")
+    (tmp_path / "suite").mkdir()
+    assert find_project_root(tmp_path / "suite") == (tmp_path.resolve(), ".git")
+
+
+def test_no_marker_means_the_working_directory_itself(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    start = tmp_path / "plain"
+    start.mkdir()
+    monkeypatch.setattr("robotmcp.config._has_marker", lambda directory, marker: False)
+    monkeypatch.chdir(start)
+    assert ServerConfig().startup_root() == (start.resolve(), "cwd")

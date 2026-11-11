@@ -9,7 +9,7 @@ duplicate them.
 | option | environment variable | default | meaning |
 | --- | --- | --- | --- |
 | `--mode {server,client,auto}` | `RF_MCP_MODE` | `auto` | Where robotcode runs; see [Execution modes](#execution-modes). |
-| `-r`, `--root` | `RF_MCP_ROOT` | current directory | Default project root (the folder with `robot.toml`). Tools take `root` to override it per call. |
+| `-r`, `--root` | `RF_MCP_ROOT` | not pinned | Pins the project root (the folder with `robot.toml`) for every call that passes no `root`; see [How the project root is found](#how-the-project-root-is-found). |
 | `-p`, `--profile` | `RF_MCP_PROFILE` | none | Default `robot.toml` profile (`-p`). |
 | `--skills-dir` (repeatable) | `RF_MCP_SKILLS_DIR` (`;` or the OS path separator) | none | Extra skill folders; see [Skills](#skills). |
 | `--hints-file` | `RF_MCP_HINTS_FILE` | `<root>/.robotframework/hints.toml` | Custom recovery hints; see [Hints](#hints). |
@@ -42,10 +42,12 @@ Every tool takes `target='server'` or `target='client'` to override the mode for
 ### Local (server mode, stdio)
 
 ```bash
-rf-mcp --mode server -r /path/to/project -p ci
+rf-mcp
 ```
 
-This is what `rf-mcp init` configures.
+Started by the agent in the project, rf-mcp finds the project itself (see
+[How the project root is found](#how-the-project-root-is-found)). `-r <path>` pins the root and `-p ci` sets a default
+profile, for example `rf-mcp -r /path/to/project -p ci`. This is what `rf-mcp init` configures.
 
 ### Remote test runner (server mode, HTTP)
 
@@ -73,6 +75,25 @@ cannot replay earlier turns. After a local run, the agent can pass the output to
 
 Client-mode commands are tested in PowerShell 7+ and bash. Windows PowerShell 5.1 is not tested; its quoting of
 native arguments differs.
+
+## How the project root is found
+
+In server mode, each tool call works in one project root, chosen in this order:
+
+1. The call's `root` argument.
+2. `--root` / `RF_MCP_ROOT`, when set. Docker images and remote runners pin `/workspace` this way.
+3. The client's workspace folders (MCP roots), when the client reports them. With one folder, that folder is used.
+   With several, rf-mcp uses the one that contains its working directory. If none does, the call fails and asks
+   the agent to pass `root`. rf-mcp asks only clients on the older, handshake-era MCP protocol: the 2026-07-28
+   revision removed requests from the server to the client.
+4. The server's working directory, walked up to the nearest folder with `.robot.toml`, `robot.toml`,
+   `pyproject.toml`, `.git` or `.hg`. This is the order robotcode uses to find its own project root. Without any
+   of them, the working directory itself is used.
+
+Project skills (`.robotframework/skills/`), the server instructions and the default hints are read once at
+startup, from the pinned root or from step 4. Custom hints are read again for each call's root.
+
+In client mode, `root` is a path on the client machine and is passed on unchanged; see [Client mode](#client-mode).
 
 ## robot.toml
 

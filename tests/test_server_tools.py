@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
+import pytest
 from fastmcp.client import Client
+from fastmcp.exceptions import ToolError
 
+from robotmcp.client_roots import choose_root, file_uri_to_path
 from robotmcp.config import ServerConfig
 from robotmcp.server import create_server
 
@@ -135,3 +139,81 @@ async def test_server_mode_end_to_end_workflow(tmp_path: Path) -> None:
             await client.call_tool(
                 "rf_repl", {"action": "stop", "session_id": sid}
             )
+
+
+# --- the client's MCP roots (project-independent-server, task 1.2) ---------------------------
+
+_LEGACY = {"mode": "legacy"} if "mode" in inspect.signature(Client.__init__).parameters else {}
+
+
+def _project(path: Path, name: str) -> Path:
+    path.mkdir(parents=True)
+    (path / "robot.toml").write_text("", encoding="utf-8")
+    (path / "which.txt").write_text(name, encoding="utf-8")
+    return path
+
+
+async def _which(client: Client) -> str:
+    res = await client.call_tool("rf_discover", {"action": "read", "paths": ["which.txt"]})
+    return res.data["files"]["which.txt"]
+
+
+@pytest.fixture
+def projects(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
+    found = {"api": _project(tmp_path / "api", "api"), "web": _project(tmp_path / "web", "web"),
+             "home": _project(tmp_path / "home", "home")}
+    monkeypatch.chdir(found["home"])
+    return found
+
+
+def _unpinned_server():
+    return create_server(ServerConfig(execution_mode="server"))
+
+
+async def test_the_clients_single_root_is_used(projects: dict[str, Path]) -> None:
+    async with Client(_unpinned_server(), roots=[projects["api"].as_uri()], **_LEGACY) as client:
+        assert await _which(client) == "api"
+
+
+async def test_the_working_directory_picks_one_of_several_roots(projects, monkeypatch) -> None:
+    monkeypatch.chdir(projects["web"])
+    async with Client(_unpinned_server(), roots=[projects["api"].as_uri(), projects["web"].as_uri()], **_LEGACY) as client:
+        assert await _which(client) == "web"
+
+
+async def test_several_roots_without_a_match_ask_for_root(projects: dict[str, Path]) -> None:
+    async with Client(_unpinned_server(), roots=[projects["api"].as_uri(), projects["web"].as_uri()], **_LEGACY) as client:
+        with pytest.raises(ToolError, match="several workspace folders") as err:
+            await _which(client)
+        assert str(projects["api"]) in str(err.value) and str(projects["web"]) in str(err.value)
+        res = await client.call_tool("rf_discover", {"action": "read", "paths": ["which.txt"], "root": str(projects["web"])})
+        assert res.data["files"]["which.txt"] == "web"
+
+
+async def test_a_client_without_roots_falls_back_to_the_working_directory(projects: dict[str, Path]) -> None:
+    async with Client(_unpinned_server(), **_LEGACY) as client:
+        assert await _which(client) == "home"
+
+
+async def test_a_pinned_root_beats_the_clients_roots(projects: dict[str, Path]) -> None:
+    server = create_server(ServerConfig(execution_mode="server", workspace_root=projects["web"]))
+    async with Client(server, roots=[projects["api"].as_uri()], **_LEGACY) as client:
+        assert await _which(client) == "web"
+
+
+@pytest.mark.skipif(not _LEGACY, reason="FastMCP 3 has only the handshake-era protocol")
+async def test_new_protocol_clients_are_not_asked_for_roots(projects: dict[str, Path]) -> None:
+    async with Client(_unpinned_server(), roots=[projects["api"].as_uri()]) as client:
+        assert await _which(client) == "home"
+
+
+async def test_client_mode_never_injects_a_server_side_root(projects: dict[str, Path]) -> None:
+    async with Client(create_server(ServerConfig(execution_mode="client")), roots=[projects["api"].as_uri()], **_LEGACY) as client:
+        res = await client.call_tool("rf_run", {"by_longname": ["S.T"]})
+        assert "-r" not in res.data["command"]
+
+
+def test_only_file_uris_become_roots(tmp_path: Path) -> None:
+    assert file_uri_to_path(tmp_path.as_uri()) == tmp_path
+    assert file_uri_to_path("https://example.com/repo") is None
+    assert choose_root([], tmp_path) is None

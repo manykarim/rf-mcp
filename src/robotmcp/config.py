@@ -16,10 +16,36 @@ ResolvedMode = Literal["server", "client"]
 ShellKind = Literal["powershell", "bash"]
 TransportKind = Literal["stdio", "http", "sse"]
 
+# robotcode's own project markers, in its order (robotcode.robot.config.loader.find_project_root).
+PROJECT_ROOT_MARKERS = (".robot.toml", "robot.toml", "pyproject.toml", ".git", ".hg")
+
 
 def default_shell_for_os() -> ShellKind:
     """Return the default shell syntax for the current platform."""
     return "powershell" if sys.platform == "win32" else "bash"
+
+
+def _has_marker(directory: Path, marker: str) -> bool:
+    candidate = directory / marker
+    if marker == ".git":
+        return candidate.exists()
+    if marker == ".hg":
+        return candidate.is_dir()
+    return candidate.is_file()
+
+
+def find_project_root(start: Path) -> tuple[Path, str | None]:
+    """Return the nearest folder at or above `start` holding a project marker, and that marker.
+
+    Each folder is checked for every marker before its parent, as robotcode does. Without any marker the
+    result is `start` itself and `None`.
+    """
+    resolved = start.expanduser().resolve()
+    for directory in (resolved, *resolved.parents):
+        for marker in PROJECT_ROOT_MARKERS:
+            if _has_marker(directory, marker):
+                return directory, marker
+    return resolved, None
 
 
 class ServerConfig(BaseModel):
@@ -28,7 +54,8 @@ class ServerConfig(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     execution_mode: ExecutionMode = "auto"
-    workspace_root: Path = Field(default_factory=Path.cwd)
+    # Pinned by --root / RF_MCP_ROOT. None: each call finds its root (see resolve_root).
+    workspace_root: Path | None = None
     profile: str | None = None
     skills_dirs: list[Path] = Field(default_factory=list)
     hints_file: Path | None = None
@@ -51,11 +78,22 @@ class ServerConfig(BaseModel):
             return "client"
         return "server" if shutil.which("robotcode") is not None else "client"
 
+    def startup_root(self) -> tuple[Path, str]:
+        """Return the root used when a call names none, and how it was found.
+
+        The source is `pinned` (--root / RF_MCP_ROOT), `marker:<name>` (the working directory walked up to a
+        project marker) or `cwd` (no marker above the working directory).
+        """
+        if self.workspace_root is not None:
+            return self.workspace_root.expanduser().resolve(), "pinned"
+        root, marker = find_project_root(Path.cwd())
+        return root, f"marker:{marker}" if marker else "cwd"
+
     def resolve_root(self, root_override: str | Path | None = None) -> Path:
-        """Return resolved workspace root path."""
+        """Return the call's root: `root_override`, else the startup root."""
         if root_override is not None:
             return Path(root_override).expanduser().resolve()
-        return self.workspace_root.expanduser().resolve()
+        return self.startup_root()[0]
 
     def resolve_hints_file(self, root_override: str | Path | None = None) -> Path | None:
         """Return configured hints.toml path or workspace .robotframework/hints.toml if present."""
@@ -91,7 +129,8 @@ class ServerConfig(BaseModel):
             "-r",
             "--root",
             default=None,
-            help="Default Robot Framework workspace root directory.",
+            help="Pin the project root (the folder with robot.toml). Default: each call's root argument, the client's "
+            "MCP roots, or the working directory walked up to robot.toml / pyproject.toml / .git.",
         )
         parser.add_argument(
             "-p",
@@ -174,11 +213,7 @@ class ServerConfig(BaseModel):
             mode_raw = "auto"
 
         root_raw = ns.root or environ.get("RF_MCP_ROOT")
-        workspace_root = (
-            Path(root_raw).expanduser().resolve()
-            if root_raw
-            else Path.cwd().resolve()
-        )
+        workspace_root = Path(root_raw).expanduser().resolve() if root_raw else None
 
         profile = ns.profile or environ.get("RF_MCP_PROFILE") or None
 
