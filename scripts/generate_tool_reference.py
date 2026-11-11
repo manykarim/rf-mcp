@@ -117,7 +117,7 @@ def render(tools: list[Any], templates: list[Any]) -> str:
         lines.append("")
         if templates:
             lines += ["Resource templates of the built-in skills: "
-                      + ", ".join(f"`{t.uriTemplate}`" for t in templates) + ".", ""]
+                      + ", ".join(f"`{t.uriTemplate}`" for t in sorted(templates, key=lambda t: t.uriTemplate)) + ".", ""]
     return "\n".join(lines).rstrip() + "\n"
 
 
