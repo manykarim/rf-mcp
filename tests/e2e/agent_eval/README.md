@@ -36,6 +36,10 @@ uv run python -m tests.e2e.agent_eval trim run.jsonl tests/e2e/agent_eval/record
 ```
 
 Options: `--scenarios s1_triage_fix,s3_analyze`, `--max-turns`, `--timeout` (seconds per run), `--cli-skill <dir>`.
+
+`.github/workflows/e2e-weekly.yml` runs the baseline suite every Sunday on Linux with `or-z-ai.glm-5.3-flash`
+(condition `mcp`, needs the `OPENROUTER_API_KEY` secret) and publishes `report.md` as the job summary; manual runs
+take `models`, `scenarios` and `reps`. Pull requests that touch the harness get a `--dry-run` of the same command.
 Model names `haiku` = `claude-haiku-5-5`, `sonnet` = `claude-sonnet-5-5`; other values are passed through as ids.
 
 ### Codex CLI

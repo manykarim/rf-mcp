@@ -87,6 +87,17 @@ rf-mcp --mode client --transport http --host 0.0.0.0 --port 8000 \
   --skills-dir /opt/robotframework-agentskills
 ```
 
+### Docker
+
+The images run Mode 2 with Browser, SeleniumLibrary and RequestsLibrary installed; `rf-mcp-vnc` adds a display you can watch in the browser. Mount the project at `/workspace`:
+
+```bash
+docker run --rm --shm-size=1g -p 8000:8000 -v "$PWD:/workspace" ghcr.io/manykarim/rf-mcp
+rf-mcp init --agent claude --url http://localhost:8000/mcp --write
+```
+
+See [docs/DOCKER.md](docs/DOCKER.md) for the VNC image and for building with other libraries.
+
 ---
 
 ## Project Customization (Zero Code Required)
@@ -126,3 +137,17 @@ uv run pytest tests/test_cookbook.py
 
 ### 4. OpenTelemetry Export
 Install `rf-mcp[otel]` and pass `--otel-endpoint http://localhost:4318` (or set `OTEL_EXPORTER_OTLP_ENDPOINT`) to export traces and metrics over OTLP.
+
+---
+
+## Documentation
+
+- [Getting started](docs/GETTING_STARTED.md): install, connect an agent, a first session, troubleshooting
+- [Configuration](docs/CONFIGURATION.md): options, environment variables, execution modes, skills, hints, OpenTelemetry
+- [MCP tool reference](docs/MCP_TOOLS.md): every tool and parameter, generated from the published schemas
+- [Examples](docs/EXAMPLES.md): tool sequences for triage, authoring, debugging, reruns, remote runners and client mode
+- [Docker images](docs/DOCKER.md): headless and VNC test-runner images
+- [Release notes 2.0.0](docs/RELEASE_NOTES_v2.0.0.md): what changed from 0.x, with a tool migration table
+- [Agent evaluation harness](tests/e2e/agent_eval/README.md): how rf-mcp is measured with real agents and models
+
+Documentation for rf-mcp 0.36 and earlier is at the [`v0.36.0` tag](https://github.com/manykarim/rf-mcp/tree/v0.36.0).
