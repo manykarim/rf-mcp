@@ -5,9 +5,10 @@ This guide installs rf-mcp, connects a coding agent and walks through a first se
 
 ## 1. Install
 
-rf-mcp needs Python 3.10+ and [uv](https://docs.astral.sh/uv/). It runs `robotcode[all]>=2.9.0.dev115` (currently a
-pre-release) in each project's own environment, so robotcode sees the same libraries and `robot.toml` as your
-tests. Pick one of two setups.
+rf-mcp needs Python 3.10+ and [uv](https://docs.astral.sh/uv/) 0.12 or newer (`uv self update`). It runs
+`robotcode[all]>=2.9.0.dev115` (currently a pre-release) in each project's own environment, so robotcode sees the
+same libraries and `robot.toml` as your tests. Older uv versions (0.9 is confirmed) refuse robotcode's pre-release
+sub-packages during the install unless `--prerelease=allow` is passed. Pick one of two setups.
 
 **One install for all projects (recommended):**
 

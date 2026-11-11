@@ -63,6 +63,24 @@ def own_robotcode_version() -> str | None:
         return None
 
 
+def own_robotcode_requirements(pin: str | None = None) -> list[str]:
+    """`robotcode[all]==<pin>` plus every robotcode sub-package installed next to rf-mcp, pinned exactly.
+
+    Naming each pre-release sub-package lets uv versions that do not treat a transitive exact pin as explicit
+    (uv 0.9 refuses `robotcode-core==2.9.0.dev115` under `robotcode[all]==2.9.0.dev115`) resolve the layer without
+    `--prerelease=allow`, which would let pre-releases of unrelated dependencies in.
+    """
+    pin = pin or own_robotcode_version()
+    if not pin:
+        return []
+    subpackages = set()
+    for dist in importlib.metadata.distributions():
+        name = (dist.metadata.get("Name") or "").lower().replace("_", "-")
+        if name.startswith("robotcode-") and dist.version == pin:
+            subpackages.add(f"{name}=={dist.version}")
+    return [f"robotcode[all]=={pin}", *sorted(subpackages)]
+
+
 def own_robotcode_command() -> tuple[str, ...]:
     """Return the robotcode executable of rf-mcp's own environment (`python -m robotcode.cli` without one)."""
     for directory in (Path(sys.executable).parent, Path(sys.prefix) / ("Scripts" if os.name == "nt" else "bin")):
@@ -145,6 +163,7 @@ class EnvironmentResolver:
         self.own_prefix = (own_prefix or Path(sys.prefix)).resolve()
         self._uv = uv
         self.pin = pin or own_robotcode_version()
+        self.requirements = [f"robotcode[all]=={pin}"] if pin else own_robotcode_requirements(self.pin)
         self._version_probe = version_probe
         self._command_probe = command_probe
         self._environ = environ
@@ -211,6 +230,9 @@ class EnvironmentResolver:
             env = self._from_interpreter(python, "venv", notes)
             if env is not None:
                 return env
+        # The project has an environment of its own that could not run robotcode: landing on rf-mcp's own
+        # environment below (through VIRTUAL_ENV or PATH, as under `uv run`) must not look like a normal run.
+        project_env = configured is not None or python is not None
 
         active = self._env().get("VIRTUAL_ENV")
         if active:
@@ -218,13 +240,13 @@ class EnvironmentResolver:
             if python is not None:
                 env = self._from_interpreter(python, "activated", notes)
                 if env is not None:
-                    return env
+                    return self._fallback(root, notes) if env.source == "own" and project_env else env
 
         on_path = shutil.which("robotcode", path=self._env().get("PATH"))
         if on_path:
             exe = Path(on_path)
             if self.is_own(exe):
-                return self._own(notes)
+                return self._fallback(root, notes) if project_env else self._own(notes)
             ok, output = self._command_probe((str(exe),))
             version = output.rsplit("version", 1)[-1].strip() if ok else None
             if supported(version):
@@ -273,8 +295,8 @@ class EnvironmentResolver:
         if not self.pin:
             notes.append("rf-mcp's own robotcode version is unknown, so it cannot be layered onto the project.")
             return None
-        layered: tuple[str, ...] = (uv, "run", "--quiet", "--no-project", "--python", str(python), "--with", f"robotcode[all]=={self.pin}",
-                  "robotcode")
+        withs = [arg for req in self.requirements for arg in ("--with", req)]
+        layered: tuple[str, ...] = (uv, "run", "--quiet", "--no-project", "--python", str(python), *withs, "robotcode")
         started = time.monotonic()
         ok, output = self._command_probe(layered)
         self.last_layer_seconds = time.monotonic() - started

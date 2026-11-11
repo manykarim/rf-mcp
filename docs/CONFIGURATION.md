@@ -130,7 +130,8 @@ What runs in the chosen environment:
 - **rf-mcp's own environment** (rf-mcp is installed in the project): its robotcode runs directly.
 - **An environment with robotcode `2.9.0.dev115` or newer:** that robotcode runs directly.
 - **An environment without robotcode, or with an older one:** rf-mcp adds its own robotcode version on top with
-  `uv run --no-project --python <interpreter> --with "robotcode[all]==<version>"`. This needs
+  `uv run --no-project --python <interpreter> --with "robotcode[all]==<version>"`, plus one `--with` per robotcode
+  sub-package at the same version, so every pre-release is named and works on older uv too. This needs
   [uv](https://docs.astral.sh/uv/). The project environment is not changed: uv keeps robotcode in its cache. The
   first call per robotcode version takes about ten seconds while uv downloads it; later calls add about 0.1 s.
 

@@ -59,8 +59,10 @@ It empowers coding agents (**Claude Code**, **OpenAI Codex**, **Google Antigravi
 
 ## Installation & Quick Start
 
-rf-mcp needs Python 3.10+ and [uv](https://docs.astral.sh/uv/). It runs `robotcode[all]>=2.9.0.dev115` (currently a
-pre-release) in your project's own environment, so it sees the libraries and `robot.toml` your tests use.
+rf-mcp needs Python 3.10+ and [uv](https://docs.astral.sh/uv/) 0.12 or newer (`uv self update`). It runs
+`robotcode[all]>=2.9.0.dev115` (currently a pre-release) in your project's own environment, so it sees the libraries
+and `robot.toml` your tests use. Older uv versions (0.9 is confirmed) refuse robotcode's pre-release sub-packages
+during the install unless `--prerelease=allow` is passed.
 
 ### Option A: one install for all projects (recommended)
 

@@ -192,3 +192,40 @@ def test_the_documented_rf_mcp_toml_example_resolves(tmp_path: Path, empty_path)
     (tmp_path / ".robotframework" / "rf-mcp.toml").write_text(line + "\n", encoding="utf-8")
     env = resolver(Probes({python: "2.9.0.dev186"}), empty_path).resolve(tmp_path)
     assert env.source == "configured" and env.interpreter == python
+
+
+def test_a_failed_layer_does_not_hide_behind_rf_mcps_own_activated_environment(tmp_path: Path) -> None:
+    """Found on Linux with uv 0.9: the layer failed and `uv run`'s VIRTUAL_ENV (rf-mcp's own) ran silently."""
+    own = tmp_path / "rf-mcp-venv"
+    make_venv(own, robotcode_exe=True)
+    project = tmp_path / "shop"
+    python = make_venv(project / ".venv")
+    scripts = own / ("Scripts" if os.name == "nt" else "bin")
+    env = resolver(Probes({python: None}, layer_ok=False), {"PATH": str(scripts), "VIRTUAL_ENV": str(own)},
+                   own=own).resolve(project)
+    assert env.source == "fallback" and "project's libraries are not visible" in env.warning
+    assert "No solution found" in env.warning
+
+
+def test_rf_mcps_own_environment_on_path_is_fine_for_a_root_without_an_environment(tmp_path: Path) -> None:
+    """Docker: /workspace has no .venv and the image's environment holds the libraries."""
+    own = tmp_path / "app-venv"
+    make_venv(own, robotcode_exe=True)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    scripts = own / ("Scripts" if os.name == "nt" else "bin")
+    env = resolver(Probes(), {"PATH": str(scripts), "VIRTUAL_ENV": str(own)}, own=own).resolve(workspace)
+    assert env.source == "own" and env.warning is None
+
+
+def test_the_default_layer_pins_every_robotcode_sub_package() -> None:
+    from robotmcp.runner.environment import own_robotcode_requirements, own_robotcode_version
+
+    reqs = own_robotcode_requirements()
+    version = own_robotcode_version()
+    assert reqs[0] == f"robotcode[all]=={version}"
+    assert f"robotcode-core=={version}" in reqs and f"robotcode-robot=={version}" in reqs
+    assert all(r.split("==")[1] == version for r in reqs)
+    layered = EnvironmentResolver(uv="uv", version_probe=lambda _p: None,
+                                  command_probe=lambda _p: (True, "")).requirements
+    assert layered == reqs
