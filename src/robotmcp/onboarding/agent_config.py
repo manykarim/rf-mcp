@@ -2,14 +2,13 @@
 
 Entries carry no project path: the server finds the project root and environment per call. Project files are merged
 (only the `rf-mcp` entry is added or replaced). User-level entries are written with each agent's own CLI
-(`claude mcp add --scope user`, `codex mcp add`, `copilot mcp add`, `code --add-mcp`, `agy mcp add`), so the agent's
-file format and locking stay its own business; OpenCode has no such command and its user file is merged.
+(`claude mcp add --scope user`, `codex mcp add`, `copilot mcp add`, `code --add-mcp`, `agy mcp add`,
+`opencode mcp add --global`), so the agent's file format and locking stay its own business.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -83,9 +82,22 @@ def detect_install_kind(ws_root: Path) -> InstallKind:
         return "global"
 
 
+def _same_version_on_path(found: str) -> bool:
+    """True when the `rf-mcp` that PATH finds is this version (an older install earlier on PATH is not)."""
+    from robotmcp import __version__
+
+    try:
+        proc = subprocess.run([found, "--version"], capture_output=True, text=True, timeout=30,
+                              stdin=subprocess.DEVNULL, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.stdout.strip() == f"{SERVER_NAME} {__version__}"
+
+
 def _rf_mcp_by_path_or_name() -> str:
-    """`rf-mcp` when it is on PATH, else the full path of the executable next to this interpreter."""
-    if shutil.which(SERVER_NAME):
+    """`rf-mcp` when PATH finds this version of it, else the full path of the executable next to this interpreter."""
+    found = shutil.which(SERVER_NAME)
+    if found and _same_version_on_path(found):
         return SERVER_NAME
     for name in (f"{SERVER_NAME}.exe", SERVER_NAME):
         candidate = Path(sys.executable).parent / name
@@ -234,11 +246,6 @@ def project_targets(agent: str, ws_root: Path, command: str, args: list[str], ur
     return [t]
 
 
-def _config_home() -> Path:
-    raw = os.environ.get("XDG_CONFIG_HOME")
-    return Path(raw) if raw else Path.home() / ".config"
-
-
 def user_targets(agent: str, command: str, args: list[str], url: str | None) -> list[Target]:
     env_flags = [f"{k}={v}" for k, v in DEFAULT_ENV.items()]
     if agent == "claude":
@@ -262,12 +269,11 @@ def user_targets(agent: str, command: str, args: list[str], url: str | None) -> 
                ["copilot", "mcp", "add", *[x for f in env_flags for x in ("--env", f)], SERVER_NAME, "--", command,
                 *args])
         return [Target("copilot", command=["code", "--add-mcp", json.dumps(vscode)]), Target("copilot-cli", command=cli)]
-    if agent == "opencode":
-        t = Target("opencode")
-        oc_entry: dict[str, Any] = ({"type": "remote", "url": url} if url
-                 else {"type": "local", "command": [command, *args], "environment": dict(DEFAULT_ENV)})
-        _merge_json(t, _config_home() / "opencode" / "opencode.json", "mcp", oc_entry)
-        return [t]
+    if agent == "opencode":  # `add` replaces an existing entry of the same name (checked with opencode 2.2.7)
+        cmd = (["opencode", "mcp", "add", "--global", SERVER_NAME, "--url", url] if url else
+               ["opencode", "mcp", "add", "--global", SERVER_NAME, *[x for f in env_flags for x in ("--env", f)],
+                "--", command, *args])
+        return [Target("opencode", command=cmd)]
     return []
 
 

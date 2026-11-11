@@ -182,7 +182,7 @@ a redirected home (task 6.2), where each agent's own `mcp list` showed the entry
 | Codex | `codex mcp add rf-mcp --env K=V ... -- <cmd>` (`$CODEX_HOME/config.toml`) |
 | Copilot | `code --add-mcp '<json>'` (VS Code user profile) and `copilot mcp add --env K=V ... rf-mcp -- <cmd>` (Copilot CLI, `~/.copilot/mcp-config.json`), reported as `copilot` and `copilot-cli` |
 | Antigravity | `agy mcp add -e K=V ... rf-mcp <cmd>` (flags before the name, as `agy` requires) |
-| OpenCode | no CLI command: merge into `$XDG_CONFIG_HOME/opencode/opencode.json` (default `~/.config`) |
+| OpenCode | `opencode mcp add --global rf-mcp --env K=V ... -- <cmd>` (2.2.7; a second `add` replaces the entry) |
 
 An agent whose CLI is not on `PATH` is reported as `manual` with the command to run. A CLI that fails is
 reported as `error` with its output. Both make `init` exit 1.

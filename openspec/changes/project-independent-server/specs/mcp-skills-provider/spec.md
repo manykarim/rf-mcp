@@ -30,7 +30,7 @@ The system SHALL provide CLI subcommands (`rf-mcp init`, `rf-mcp sync-skills`, `
 ## ADDED Requirements
 
 ### Requirement: init registers a global install at user level
-`rf-mcp init --scope user` SHALL register an `rf-mcp` stdio entry in each selected agent's user-level configuration, so that every project the agent opens can use it. The entry SHALL contain no project path. It SHALL name the `rf-mcp` executable by its full path when the folder holding it is not on `PATH`.
+`rf-mcp init --scope user` SHALL register an `rf-mcp` stdio entry in each selected agent's user-level configuration, so that every project the agent opens can use it. The entry SHALL contain no project path. It SHALL name the `rf-mcp` executable by its full path when `PATH` does not find this version of it, because its folder is not on `PATH` or another rf-mcp version comes first.
 
 #### Scenario: Global install registered for Claude Code
 - **WHEN** a user who installed rf-mcp with `uv tool install` runs `rf-mcp init --scope user --agent claude --write`

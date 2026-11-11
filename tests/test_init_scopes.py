@@ -41,7 +41,7 @@ def test_url_gives_an_http_entry_in_both_scopes(tmp_path: Path, monkeypatch: pyt
     assert user["claude"]["command"][-3:] == ["http", "rf-mcp", URL]
     assert user["codex"]["command"][-2:] == ["--url", URL]
     assert json.loads(user["copilot"]["command"][2]) == {"name": "rf-mcp", "type": "http", "url": URL}
-    assert json.loads(user["opencode"]["content"])["mcp"]["rf-mcp"] == {"type": "remote", "url": URL}
+    assert user["opencode"]["command"] == ["opencode", "mcp", "add", "--global", "rf-mcp", "--url", URL]
 
 
 def test_install_kind_is_project_only_when_running_from_the_projects_venv(tmp_path: Path, monkeypatch) -> None:
@@ -150,8 +150,8 @@ def test_user_scope_registers_with_each_agents_cli_and_writes_nothing_here(home:
     assert ["copilot", "mcp", "add", "--env", env[0], "--env", env[1], "--env", env[2], "rf-mcp", "--", exe] in rec.calls
     vscode = next(c for c in rec.calls if c[0] == "code")
     assert vscode[1] == "--add-mcp" and json.loads(vscode[2])["command"] == exe
-    oc = json.loads((home / ".config" / "opencode" / "opencode.json").read_text(encoding="utf-8"))
-    assert oc["mcp"]["rf-mcp"]["command"] == [exe]
+    assert ["opencode", "mcp", "add", "--global", "rf-mcp", "--env", env[0], "--env", env[1], "--env", env[2], "--",
+            exe] in rec.calls
     assert all(item["status"] == "written" for item in report.values())
 
 
@@ -187,3 +187,16 @@ def test_a_failing_agent_cli_is_an_error(home: Path, monkeypatch) -> None:
 
     report = generate_agent_mcp_configs(agent="agy", scope="user", write_files=True, run=fail)
     assert report["agy"]["status"] == "error" and "read-only" in report["agy"]["message"]
+
+
+def test_an_older_rf_mcp_earlier_on_path_is_not_named(tmp_path: Path, monkeypatch) -> None:
+    """Found with OpenCode: plain `rf-mcp` started an rf-mcp 0.34 that came first on PATH."""
+    exe = tmp_path / "toolenv" / "rf-mcp.exe"
+    exe.parent.mkdir()
+    exe.write_text("", encoding="utf-8")
+    monkeypatch.setattr(ac.sys, "executable", str(exe.parent / "python.exe"))
+    monkeypatch.setattr(ac.shutil, "which", lambda name: "/old/bin/rf-mcp" if name == "rf-mcp" else None)
+    monkeypatch.setattr(ac, "_same_version_on_path", lambda found: False)
+    assert ac._rf_mcp_by_path_or_name() == str(exe)
+    monkeypatch.setattr(ac, "_same_version_on_path", lambda found: True)
+    assert ac._rf_mcp_by_path_or_name() == "rf-mcp"

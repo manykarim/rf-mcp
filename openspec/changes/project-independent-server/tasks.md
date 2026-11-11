@@ -35,9 +35,11 @@
 
 ## 6. Agent behaviour checks (need the user's go-ahead for model calls)
 
-- [ ] 6.1 With the probe server from the exploration (it logs the working directory and the client's `initialize` capabilities, then calls `roots/list`), start one minimal session per agent (Claude Code, Codex, Copilot in VS Code, OpenCode, Antigravity) on the cheapest model, after the user approves the calls. Record per agent the working directory and roots in `docs/CONFIGURATION.md`. Verify that the table lists all five agents.
+- [x] 6.1 With the probe server from the exploration (it logs the working directory and the client's `initialize` capabilities, then calls `roots/list`), start one minimal session per agent (Claude Code, Codex, Copilot in VS Code, OpenCode, Antigravity) on the cheapest model, after the user approves the calls. Record per agent the working directory and roots in `docs/CONFIGURATION.md`. Verify that the table lists all five agents.
 - [x] 6.2 Check each agent's user-level configuration location and format against D8, by reading each agent's documentation or running its own `mcp add`/`mcp list` against a redirected home. Correct `init` and its tests where they differ. Verify that `rf-mcp init --scope user --agent <agent> --write` followed by the agent's `mcp list` shows `rf-mcp` for each available agent.
-- [ ] 6.3 For each agent from 6.2, register `rf-mcp` at both user and project level with distinguishable commands, and record which one the agent starts in a project. Document the result in `docs/GETTING_STARTED.md`. Verify that the documented precedence matches the observed one for every agent tested.
+- [x] 6.3 For each agent from 6.2, register `rf-mcp` at both user and project level with distinguishable commands, and record which one the agent starts in a project. Document the result in `docs/GETTING_STARTED.md`. Verify that the documented precedence matches the observed one for every agent tested.
+
+- [ ] 6.4 Measure Copilot in VS Code (working directory, roots, user-vs-workspace precedence) in the VS Code GUI, which has no headless mode; 6.1 and 6.3 cover Claude Code, Codex, the Copilot CLI, Antigravity and OpenCode. Verify by adding its row to the tables in docs/CONFIGURATION.md and docs/GETTING_STARTED.md.
 
 ## 7. Integration
 

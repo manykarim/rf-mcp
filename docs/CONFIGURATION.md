@@ -102,10 +102,15 @@ and the client's `initialize` request:
 | Codex | 0.166.0 | the project | 2025-06-18 | no |
 | Copilot CLI | 1.0.105 | the project | 2025-11-25 | no |
 | Antigravity (`agy`) | 1.0.0 | the plugin folder (`.agents/plugins/<name>`) for a project plugin | 2025-11-25 | yes: the project folder |
-| Copilot in VS Code, OpenCode | | not measured | | |
+| OpenCode | 2.2.7 | the project | 2025-11-25 | yes: the project folder |
+| Copilot in VS Code | | not measured (no headless mode) | | |
 
-All four measured agents give rf-mcp the right root: Claude Code and Antigravity through their roots (and the
-working directory), Codex and the Copilot CLI through the working directory.
+All five measured agents give rf-mcp the right root: Claude Code, Antigravity and OpenCode through their roots
+(and the working directory), Codex and the Copilot CLI through the working directory.
+
+OpenCode starts MCP servers from its background service (`opencode serve --service`) and keeps them running after
+`opencode run` ends. The command is therefore looked up on the service's `PATH`, not the one of the shell that
+started `opencode run`.
 
 In client mode, `root` is a path on the client machine and is passed on unchanged; see [Client mode](#client-mode).
 

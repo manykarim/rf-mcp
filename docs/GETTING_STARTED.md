@@ -75,11 +75,11 @@ rf-mcp init --scope user --agent all --write
 | Codex | `codex mcp add rf-mcp -- rf-mcp` (`~/.codex/config.toml`) |
 | Copilot | `code --add-mcp` (VS Code user profile) and `copilot mcp add` (Copilot CLI) |
 | Antigravity | `agy mcp add rf-mcp rf-mcp` |
-| OpenCode | merges `~/.config/opencode/opencode.json` |
+| OpenCode | `opencode mcp add --global rf-mcp -- rf-mcp` |
 
-An agent whose command is not installed is skipped with the command to run later. When the folder holding
-`rf-mcp` is not on `PATH` (agents started from a desktop shortcut often lack `~/.local/bin`), the entry names it by
-its full path.
+An agent whose command is not installed is skipped with the command to run later. The entry names `rf-mcp` by its
+full path when `PATH` does not find this version of it: when its folder is not on `PATH` (agents started from a
+desktop shortcut often lack `~/.local/bin`), or when an older rf-mcp comes first on `PATH`.
 
 To configure one project instead (and commit the files for the team), run `init` in the project:
 
@@ -96,9 +96,18 @@ The entries contain no paths: `uv run rf-mcp` when rf-mcp is installed in a uv p
 interpreter's `-m robotmcp` in a plain venv, and `rf-mcp` for a global install. Without `--write`, `init` prints
 what it would change. It replaces only its own `rf-mcp` entry, leaves every other server in the file alone, and does
 not touch a file with comments or one that does not parse (it prints the entry instead and exits 1). Both scopes
-name the server `rf-mcp`, so a project that pins its own rf-mcp can take precedence over the global one. Claude
-Code uses the project's `.mcp.json` entry over the user entry (checked with `claude mcp get rf-mcp`). For Codex,
-the Copilot CLI and Antigravity this has not been checked yet: their `mcp list` shows only user-level servers.
+name the server `rf-mcp`, so a project that pins its own rf-mcp can take precedence over the global one.
+
+When both a user entry and a project entry named `rf-mcp` exist, the agents behave like this (measured on
+2026-11-11 with probe servers in both places):
+
+| agent | which entry runs |
+| --- | --- |
+| Claude Code | the project's `.mcp.json` entry |
+| Codex | the project's `.codex/config.toml` entry when the project is trusted; otherwise the user entry |
+| Copilot CLI | the workspace `.mcp.json` entry when the folder is trusted (for example `--trust-folder`); otherwise the user entry |
+| Antigravity | both: the project plugin's server is named separately, so the agent gets two rf-mcp servers. Register it in one place only. |
+| OpenCode | the project's `opencode.json` entry |
 
 To connect to a server that already runs elsewhere, pass its URL:
 

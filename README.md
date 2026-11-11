@@ -100,7 +100,7 @@ rf-mcp sync-skills --agent claude               # copy the skills into .claude/s
 `init` without `--write` prints what it would change. It replaces only its own `rf-mcp` entry in existing files;
 a file with comments (common in VS Code) is left alone and the entry is printed to paste. With `--scope user` it
 uses each agent's own command (`claude mcp add --scope user`, `codex mcp add`, `copilot mcp add`, `code --add-mcp`,
-`agy mcp add`). `sync-skills` leaves an existing skill folder alone when its content differs (exit code 1, listed
+`agy mcp add`, `opencode mcp add --global`). `sync-skills` leaves an existing skill folder alone when its content differs (exit code 1, listed
 under `skipped`); pass `--force` to overwrite it.
 
 ---
