@@ -93,7 +93,12 @@ def test_auto_mode_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("shutil.which", lambda _cmd: "/usr/bin/robotcode")
     assert cfg.resolved_mode() == "server"
 
+    # A global install has no robotcode on PATH; the one next to rf-mcp still means server mode.
     monkeypatch.setattr("shutil.which", lambda _cmd: None)
+    monkeypatch.setattr("robotmcp.runner.environment.own_robotcode_available", lambda: True)
+    assert cfg.resolved_mode() == "server"
+
+    monkeypatch.setattr("robotmcp.runner.environment.own_robotcode_available", lambda: False)
     assert cfg.resolved_mode() == "client"
 
 

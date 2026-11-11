@@ -355,7 +355,7 @@ def create_server(config: ServerConfig | None = None) -> FastMCP:
                 timeout_seconds=timeout_seconds,
                 hint_keyword="robot",
             )
-            res.warning = warning
+            res.warning = " ".join(w for w in (warning, res.warning) if w) or None
             if res.mode == "server":
                 res.instruction = failure_streaks.update(res.failures or [], res.exit_code) or res.instruction
             tracker.set_result(exit_code=res.exit_code or 0, hints_count=len(res.hints))
@@ -606,7 +606,7 @@ def create_server(config: ServerConfig | None = None) -> FastMCP:
                     root=root, paths=paths, by_longname=by_longname, mode=mode
                 )
                 if warning:
-                    out["warning"] = warning
+                    out["warning"] = " ".join(w for w in (warning, out.get("warning")) if w)
             if synced:
                 out["synced_files"] = synced
             return out

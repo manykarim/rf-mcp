@@ -11,12 +11,11 @@ from pydantic import BaseModel, Field
 from robotmcp.config import ResolvedMode, ServerConfig, ShellKind
 from robotmcp.hints import Hint, HintContext, HintEngine
 from robotmcp.runner.cli_runner import (
-    ROBOTCODE_INSTALL_HINT,
     CliRunner,
     _longname_flag,
-    resolve_robotcode_executable,
     truncate_text,
 )
+from robotmcp.runner.environment import missing_robotcode_instruction
 from robotmcp.runner.process import run_process
 from robotmcp.runner.shell_escape import build_agent_env, format_cli_command
 
@@ -128,6 +127,7 @@ class SessionResult(BaseModel):
     fallback_command: str | None = None
     one_shot: bool | None = None
     hints: list[Hint] = Field(default_factory=list)
+    warning: str | None = None
     instruction: str | None = None
 
     def to_response(self) -> dict[str, Any]:
@@ -175,6 +175,7 @@ class SessionRunner:
         )
         self.cli_runner = cli_runner or CliRunner(config, self.hint_engine)
         self._single_sends: dict[str, int] = {}  # REPL session id -> passed one-line sends in a row
+        self._session_roots: set[Path] = set()  # every root a session was started in, stopped on shutdown
 
     def _batching_nudge(self, res: SessionResult, statement: str | None) -> SessionResult:
         """After 3 passed one-line keyword sends in a row (and every 10th after), say to batch the next steps.
@@ -498,9 +499,9 @@ class SessionRunner:
             )
 
         resolved_root = self.config.resolve_root(root)
-        exec_cmd = list(cmd_list)
-        if exec_cmd and exec_cmd[0] == "robotcode":
-            exec_cmd = resolve_robotcode_executable() + exec_cmd[1:]
+        exec_cmd, environment = self.cli_runner.robotcode_command(cmd_list, resolved_root)
+        if action == "start":
+            self._session_roots.add(resolved_root)
 
         outcome = run_process(
             exec_cmd,
@@ -517,10 +518,8 @@ class SessionRunner:
                 status="error",
                 output=outcome.error or "",
                 command=cmd_list,
-                instruction=(
-                    "`robotcode` was not found on the MCP server host. Install it in the project environment "
-                    f"(`{ROBOTCODE_INSTALL_HINT}`) and start rf-mcp from that environment; run `rf-mcp doctor` to check."
-                ),
+                warning=environment.warning,
+                instruction=missing_robotcode_instruction(resolved_root, environment, self.cli_runner.environments),
             )
         if outcome.status == "timeout":
             return SessionResult(
@@ -628,6 +627,7 @@ class SessionRunner:
             sessions=sessions_list,
             command=cmd_list,
             hints=hints,
+            warning=environment.warning,
             instruction=instruction,
         )
 
@@ -808,10 +808,12 @@ class SessionRunner:
         return last.model_copy(update=update)
 
     def stop_project_sessions(self, root: str | Path | None = None) -> None:
-        """Stop all open `robotcode session` instances for the workspace project on shutdown."""
+        """Stop the open `robotcode session` instances of every project this server started one in (on shutdown)."""
         if self.config.resolved_mode() != "server":
             return
-        try:
-            self.run_repl("stop", stop_scope="project", root=root)
-        except Exception:
-            pass
+        roots: list[str | Path | None] = [root] if root is not None else [*sorted(self._session_roots), None]
+        for project in dict.fromkeys(roots):
+            try:
+                self.run_repl("stop", stop_scope="project", root=project)
+            except Exception:
+                pass

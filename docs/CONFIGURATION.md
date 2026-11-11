@@ -35,7 +35,7 @@ process, and client-mode commands set them too.
 | --- | --- | --- |
 | `server` | on the MCP host, started by rf-mcp | Local stdio server in the project environment, or a remote test runner over HTTP |
 | `client` | in the agent's own shell | A shared HTTP server that serves skills and hints; tests run on the developer's machine |
-| `auto` | `server` when `robotcode` is on the PATH, else `client` | Default |
+| `auto` | `server` when `robotcode` is on the PATH or installed next to rf-mcp, else `client` | Default |
 
 Every tool takes `target='server'` or `target='client'` to override the mode for one call.
 
@@ -94,6 +94,35 @@ Project skills (`.robotframework/skills/`), the server instructions and the defa
 startup, from the pinned root or from step 4. Custom hints are read again for each call's root.
 
 In client mode, `root` is a path on the client machine and is passed on unchanged; see [Client mode](#client-mode).
+
+## Which Python runs your tests
+
+robotcode imports your libraries, so it has to run in the project's Python environment. For each project root,
+rf-mcp picks that environment in this order:
+
+1. `python` in `<root>/.robotframework/rf-mcp.toml`, for environments outside the project folder (Poetry, conda,
+   hatch). A relative path is relative to the root:
+
+   ```toml
+   python = "envs/robot/bin/python"
+   ```
+
+2. `<root>/.venv`.
+3. The activated virtual environment (`VIRTUAL_ENV`), then a `robotcode` on `PATH`.
+4. rf-mcp's own environment.
+
+What runs in the chosen environment:
+
+- **rf-mcp's own environment** (rf-mcp is installed in the project): its robotcode runs directly.
+- **An environment with robotcode `2.9.0.dev115` or newer:** that robotcode runs directly.
+- **An environment without robotcode, or with an older one:** rf-mcp adds its own robotcode version on top with
+  `uv run --no-project --python <interpreter> --with "robotcode[all]==<version>"`. This needs
+  [uv](https://docs.astral.sh/uv/). The project environment is not changed: uv keeps robotcode in its cache. The
+  first call per robotcode version takes about ten seconds while uv downloads it; later calls add about 0.1 s.
+
+If step 4 runs for a project that is not rf-mcp's own environment, the project's libraries are not visible. The
+result then carries a `warning` that says so and names the fix, and `rf_analyze` marks the resulting import errors
+as "not a project defect". `rf-mcp doctor` shows which environment a project gets and why.
 
 ## robot.toml
 

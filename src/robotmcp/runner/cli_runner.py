@@ -15,6 +15,11 @@ import tomlkit
 
 from robotmcp.config import ResolvedMode, ServerConfig, ShellKind
 from robotmcp.hints import Hint, HintContext, HintEngine
+from robotmcp.runner.environment import (
+    EnvironmentResolver,
+    ProjectEnvironment,
+    missing_robotcode_instruction,
+)
 from robotmcp.runner.process import run_process
 from robotmcp.runner.shell_escape import build_agent_env, format_cli_command
 
@@ -347,6 +352,22 @@ class CommandResult(BaseModel):
         return out
 
 
+_IMPORT_ERROR = re.compile(r"^Importing (test )?(library|resource|variables|variable file)\b", re.IGNORECASE)
+FALLBACK_IMPORT_NOTE = "[not a project defect: rf-mcp's own robotcode ran, see `warning`] "
+
+
+def mark_fallback_import_errors(data: Any) -> None:
+    """Prefix analysis import errors that come from running without the project's environment."""
+    diagnostics = data.get("diagnostics") if isinstance(data, dict) else None
+    if not isinstance(diagnostics, dict):
+        return
+    for items in diagnostics.values():
+        for item in items if isinstance(items, list) else []:
+            message = item.get("message") if isinstance(item, dict) else None
+            if isinstance(message, str) and _IMPORT_ERROR.match(message):
+                item["message"] = FALLBACK_IMPORT_NOTE + message
+
+
 class CliRunner:
     """Executes stateless `robotcode` CLI subcommands (`server` mode) or synthesizes shell-safe commands (`client` mode)."""
 
@@ -354,11 +375,21 @@ class CliRunner:
         self,
         config: ServerConfig,
         hint_engine: HintEngine | None = None,
+        environments: EnvironmentResolver | None = None,
     ) -> None:
         self.config = config
         self.hint_engine = hint_engine or HintEngine(
             hints_file=config.resolve_hints_file()
         )
+        self.environments = environments or EnvironmentResolver()
+
+    def robotcode_command(self, cmd: Sequence[str], root: Path) -> tuple[list[str], ProjectEnvironment]:
+        """Replace a leading `robotcode` with the command of the environment resolved for `root`."""
+        env = self.environments.resolve(root)
+        exec_cmd = list(cmd)
+        if exec_cmd and exec_cmd[0] == "robotcode":
+            exec_cmd = list(env.command_prefix) + exec_cmd[1:]
+        return exec_cmd, env
 
     def _mode(self, mode: str | None) -> ResolvedMode:
         return self.config.resolved_mode(mode)
@@ -701,7 +732,7 @@ class CliRunner:
     def _longnames_for_file(self, root: Path, rel: str) -> list[str]:
         args = self.build_global_args(root=root, json_format=True, mode="server") + ["discover", "tests"]
         outcome = run_process(
-            resolve_robotcode_executable() + args[1:],
+            self.robotcode_command(args, root)[0],
             cwd=str(root),
             env=build_agent_env(),
             timeout_seconds=60,
@@ -751,9 +782,7 @@ class CliRunner:
             )
 
         resolved_root = self.config.resolve_root(root)
-        exec_cmd = list(cmd_list)
-        if exec_cmd and exec_cmd[0] == "robotcode":
-            exec_cmd = resolve_robotcode_executable() + exec_cmd[1:]
+        exec_cmd, environment = self.robotcode_command(cmd_list, resolved_root)
 
         outcome = run_process(
             exec_cmd,
@@ -768,10 +797,8 @@ class CliRunner:
                 command=cmd_list,
                 status="error",
                 stderr=outcome.error or "",
-                instruction=(
-                    "`robotcode` was not found on the MCP server host. Install it in the project environment "
-                    f"(`{ROBOTCODE_INSTALL_HINT}`) and start rf-mcp from that environment; run `rf-mcp doctor` to check."
-                ),
+                warning=environment.warning,
+                instruction=missing_robotcode_instruction(resolved_root, environment, self.environments),
             )
         stdout = outcome.stdout.lstrip("﻿")
         stderr = outcome.stderr.lstrip("﻿")
@@ -796,6 +823,8 @@ class CliRunner:
                 parsed_data = None
             if "results" in cmd_list and "log" in cmd_list:
                 parsed_data = compact_result_log(parsed_data)
+        if not environment.libraries_visible:
+            mark_fallback_import_errors(parsed_data)
 
         hints: list[Hint] = []
         failures: list[str] | None = None
@@ -825,6 +854,7 @@ class CliRunner:
             data=parsed_data,
             failures=failures,
             hints=hints,
+            warning=environment.warning,
         )
         self._truncate(result)
         return result

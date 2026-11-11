@@ -119,7 +119,8 @@ complete tool sequences for the common tasks.
 
 | symptom | fix |
 | --- | --- |
-| `` `robotcode` was not found on the MCP server host `` | Install `robotcode[all]>=2.9.0.dev115` in the environment rf-mcp starts from, or start rf-mcp from the project environment (`rf-mcp init` does this). |
-| `rf_doc` or `rf_analyze` cannot find a library | The library is missing from the environment rf-mcp runs in, or `robot.toml` does not put its folder on `python-path`. |
+| `` `robotcode` could not be started for <root> `` | The environment chosen for that project has no runnable robotcode. With rf-mcp installed in the project, add `robotcode[all]>=2.9.0.dev115` to it. With a global install, install uv so rf-mcp can add robotcode itself, or add robotcode to the project environment. `rf-mcp doctor` shows which environment was chosen. |
+| `warning`: "the project's libraries are not visible" (and analysis import errors marked "not a project defect") | rf-mcp found no environment for the project and ran its own robotcode. Create the project's `.venv`, set `python` in `.robotframework/rf-mcp.toml`, or start the agent in an activated environment; see [Which Python runs your tests](CONFIGURATION.md#which-python-runs-your-tests). |
+| `rf_doc` or `rf_analyze` cannot find a library | The library is missing from the project environment, or `robot.toml` does not put its folder on `python-path`. |
 | The agent reads `output.xml` instead of using `rf_results` | Sync the skills (`rf-mcp sync-skills`) for agents that ignore MCP resources. |
 | Client-mode commands fail to quote correctly | Pass `shell='powershell'` or `shell='bash'`, or start the server with `--shell`. PowerShell 7+ and bash are tested; Windows PowerShell 5.1 is not. |

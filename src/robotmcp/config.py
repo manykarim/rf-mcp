@@ -76,7 +76,10 @@ class ServerConfig(BaseModel):
             return "server"
         if candidate == "client":
             return "client"
-        return "server" if shutil.which("robotcode") is not None else "client"
+        from robotmcp.runner.environment import own_robotcode_available
+
+        # A global install (uv tool) puts only rf-mcp on PATH; its own robotcode still makes server mode work.
+        return "server" if shutil.which("robotcode") is not None or own_robotcode_available() else "client"
 
     def startup_root(self) -> tuple[Path, str]:
         """Return the root used when a call names none, and how it was found.
