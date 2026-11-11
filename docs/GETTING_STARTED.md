@@ -99,7 +99,7 @@ not touch a file with comments or one that does not parse (it prints the entry i
 name the server `rf-mcp`, so a project that pins its own rf-mcp can take precedence over the global one.
 
 When both a user entry and a project entry named `rf-mcp` exist, the agents behave like this (measured on
-2026-11-11 with probe servers in both places):
+2026-11-11 and 2026-11-12 with probe servers in both places):
 
 | agent | which entry runs |
 | --- | --- |
@@ -108,6 +108,8 @@ When both a user entry and a project entry named `rf-mcp` exist, the agents beha
 | Copilot CLI | the workspace `.mcp.json` entry when the folder is trusted (for example `--trust-folder`); otherwise the user entry |
 | Antigravity | both: the project plugin's server is named separately, so the agent gets two rf-mcp servers. Register it in one place only. |
 | OpenCode | the project's `opencode.json` entry |
+| Copilot in VS Code (its own agent) | both: the user and the workspace entry run side by side (measured on 2026-11-12, VS Code 1.145.2). Register it in one place only. |
+| Copilot CLI chats in VS Code | the workspace `.vscode/mcp.json` entry |
 
 To connect to a server that already runs elsewhere, pass its URL:
 

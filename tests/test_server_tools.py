@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import sys
 from pathlib import Path
 
 import pytest
@@ -217,3 +218,9 @@ def test_only_file_uris_become_roots(tmp_path: Path) -> None:
     assert file_uri_to_path(tmp_path.as_uri()) == tmp_path
     assert file_uri_to_path("https://example.com/repo") is None
     assert choose_root([], tmp_path) is None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="drive letters are Windows paths")
+def test_vscode_root_uri_with_encoded_drive_colon() -> None:
+    # VS Code 1.145 sends workspace folders as file:///c%3A/... (lowercase drive, encoded colon).
+    assert file_uri_to_path("file:///c%3A/work/my%20shop") == Path("C:/work/my shop")

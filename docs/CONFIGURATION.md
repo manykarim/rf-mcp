@@ -103,10 +103,17 @@ and the client's `initialize` request:
 | Copilot CLI | 1.0.105 | the project | 2025-11-25 | no |
 | Antigravity (`agy`) | 1.0.0 | the plugin folder (`.agents/plugins/<name>`) for a project plugin | 2025-11-25 | yes: the project folder |
 | OpenCode | 2.2.7 | the project | 2025-11-25 | yes: the project folder |
-| Copilot in VS Code | | not measured (no headless mode) | | |
+| Copilot in VS Code (its own agent) | 1.145.2 | the project for a workspace entry (`.vscode/mcp.json`); the user's home folder for a user entry | 2025-11-25 | yes: the workspace folder |
+| Copilot CLI chats in VS Code | 1.0.103 | the project | 2025-11-25 | no |
 
-All five measured agents give rf-mcp the right root: Claude Code, Antigravity and OpenCode through their roots
-(and the working directory), Codex and the Copilot CLI through the working directory.
+All measured agents give rf-mcp's tools the right root: Claude Code, Antigravity, OpenCode and VS Code through
+their roots (and the working directory), Codex and the Copilot CLI through the working directory. VS Code was
+measured on 2026-11-12.
+
+VS Code's own agent starts a user entry in the user's home folder. Tool calls still get the project through its
+roots, but project skills are read from the startup folder, so `.robotframework/skills/` is not served. For
+project skills in VS Code, use a workspace entry (`rf-mcp init --agent copilot --write`) or copy the skills with
+`rf-mcp sync-skills --agent copilot`.
 
 OpenCode starts MCP servers from its background service (`opencode serve --service`) and keeps them running after
 `opencode run` ends. The command is therefore looked up on the service's `PATH`, not the one of the shell that

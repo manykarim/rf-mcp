@@ -24,7 +24,10 @@ See proposal.md for the motivation. The current state that shapes the approach:
 - MCP roots:
   - FastMCP 3.4.4 provides `Context.list_roots()`.
   - The Claude Code binary contains its own roots handling.
-  - Roots support in Codex, VS Code Copilot, OpenCode and Antigravity is unverified.
+  - Roots support in Codex, VS Code Copilot, OpenCode and Antigravity is unverified. Measured later (tasks 6.1
+    and 6.4): Codex and the Copilot CLI send no roots; VS Code 1.145.2, OpenCode and Antigravity do. VS Code sends
+    `file:///c%3A/...` URIs, starts a user entry in the home folder, and runs a user and a workspace entry of the
+    same name side by side; Copilot CLI chats inside VS Code start only the workspace entry.
 
 ## Goals / Non-Goals
 
