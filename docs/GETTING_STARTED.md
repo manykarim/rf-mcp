@@ -7,14 +7,15 @@ session. For every option see [CONFIGURATION.md](CONFIGURATION.md); for the tool
 
 rf-mcp needs Python 3.10+ and `robotcode[all]>=2.9.0.dev115`, which is currently a pre-release. Install both into
 the environment your tests run in, next to the libraries the project uses: rf-mcp runs `robotcode` from that
-environment, so it sees the same libraries and `robot.toml`.
+environment, so it sees the same libraries and `robot.toml`. Naming robotcode with its pre-release version lets uv and pip
+install it without `--prerelease=allow` / `--pre`, which would pull pre-releases of every other dependency too.
 
 ```bash
 # uv
-uv add --dev --prerelease=allow rf-mcp "robotcode[all]>=2.9.0.dev115"
+uv add --dev rf-mcp "robotcode[all]>=2.9.0.dev115"
 
 # pip
-pip install --pre rf-mcp "robotcode[all]>=2.9.0.dev115"
+pip install rf-mcp "robotcode[all]>=2.9.0.dev115"
 ```
 
 Add `rf-mcp[otel]` for OpenTelemetry export.

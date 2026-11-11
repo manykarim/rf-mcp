@@ -18,6 +18,11 @@ from robotmcp.skills.provider import INSTRUCTIONS_MAX_CHARS
 RF_TOOLS = ("rf_discover", "rf_analyze", "rf_doc", "rf_run", "rf_results", "rf_repl", "rf_debug", "rf_diagnose")
 
 
+def _field(obj, snake: str, camel: str):
+    """Read an MCP type field by its MCP SDK v2 name (FastMCP 4) or, before that, its v1 name (FastMCP 3)."""
+    return getattr(obj, snake if snake in type(obj).model_fields else camel)
+
+
 def _server(tmp_path: Path, mode: str = "client"):
     return create_server(ServerConfig(execution_mode=mode, workspace_root=tmp_path))
 
@@ -85,7 +90,7 @@ async def test_server_mode_responses_have_no_duplicates(tmp_path: Path) -> None:
 async def test_result_file_outside_output_path_is_rejected(tmp_path: Path) -> None:
     async with Client(_server(tmp_path)) as client:
         tool = next(t for t in await client.list_tools() if t.name == "rf_results")
-        assert "paths" not in tool.inputSchema["properties"]
+        assert "paths" not in _field(tool, "input_schema", "inputSchema")["properties"]
         with pytest.raises(ToolError, match="output_path"):
             await client.call_tool("rf_results", {"action": "log", "search": "results/output.xml"})
         with pytest.raises(ToolError, match="output_path"):
@@ -102,7 +107,7 @@ async def test_tool_schemas_share_parameter_names_and_describe_every_parameter(t
         tools = {t.name: t for t in await client.list_tools()}
     for name in RF_TOOLS:
         tool = tools[name]
-        props = tool.inputSchema["properties"]
+        props = _field(tool, "input_schema", "inputSchema")["properties"]
         assert "kind" not in props and "mode" not in props and "execution_target" not in props, name
         if name != "rf_diagnose":
             assert "action" in props or name in ("rf_analyze", "rf_run"), name
@@ -116,16 +121,16 @@ async def test_tool_schemas_share_parameter_names_and_describe_every_parameter(t
         assert desc.startswith("Use when"), name
         assert "Mistake to avoid" in desc, name
         assert len(desc) <= 600, (name, len(desc))
-        assert tool.annotations is not None and tool.annotations.readOnlyHint is not None, name
-    assert tools["rf_doc"].inputSchema["properties"]["library"]
+        assert tool.annotations is not None and _field(tool.annotations, "read_only_hint", "readOnlyHint") is not None, name
+    assert _field(tools["rf_doc"], "input_schema", "inputSchema")["properties"]["library"]
     assert "grep" in tools["rf_discover"].description
     assert "output.xml" in tools["rf_results"].description and "why did" in tools["rf_results"].description
     assert "before any rf_run" in tools["rf_analyze"].description
     assert "existing test fails" in tools["rf_debug"].description
     assert "no existing test" in tools["rf_repl"].description
     for read_only in ("rf_discover", "rf_doc", "rf_results", "rf_diagnose"):
-        assert tools[read_only].annotations.readOnlyHint is True
-    assert tools["rf_repl"].annotations.destructiveHint is True
+        assert _field(tools[read_only].annotations, "read_only_hint", "readOnlyHint") is True
+    assert _field(tools["rf_repl"].annotations, "destructive_hint", "destructiveHint") is True
 
 
 # --- 12.1 / 14.4 / 14.10 instructions -----------------------------------------------------------
@@ -177,9 +182,9 @@ async def test_weak_model_argument_shapes_are_accepted(
 async def test_published_schema_stays_plain(tmp_path: Path) -> None:
     async with Client(_server(tmp_path)) as client:
         tools = {t.name: t for t in await client.list_tools()}
-    tags = tools["rf_discover"].inputSchema["properties"]["include_tags"]
+    tags = _field(tools["rf_discover"], "input_schema", "inputSchema")["properties"]["include_tags"]
     assert tags["anyOf"][0] == {"items": {"type": "string"}, "type": "array"}
-    action = tools["rf_results"].inputSchema["properties"]["action"]
+    action = _field(tools["rf_results"], "input_schema", "inputSchema")["properties"]["action"]
     assert action["enum"] == ["summary", "show", "log", "stats", "diff", "merge"]
 
 

@@ -34,7 +34,7 @@ DiscoverAction = Literal[
 ResultsAction = Literal["summary", "show", "log", "stats", "diff", "merge"]
 DocAction = Literal["lib", "keywords", "keyword"]
 
-ROBOTCODE_INSTALL_HINT = 'uv add --dev --prerelease=allow "robotcode[all]>=2.9.0.dev115"'
+ROBOTCODE_INSTALL_HINT = 'uv add --dev "robotcode[all]>=2.9.0.dev115"'
 
 
 def resolve_robotcode_executable() -> list[str]:

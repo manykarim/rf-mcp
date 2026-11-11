@@ -70,15 +70,20 @@ def _default(schema: dict[str, Any], required: bool) -> str:
 _COMMON = ("root", "profile", "target", "shell")
 
 
+def _field(obj: Any, snake: str, camel: str) -> Any:
+    """Read an MCP type field by its MCP SDK v2 name (FastMCP 4) or, before that, its v1 name (FastMCP 3)."""
+    return getattr(obj, snake if snake in type(obj).model_fields else camel)
+
+
 def _annotations(tool: Any) -> str:
     ann = tool.annotations
     if ann is None:
         return ""
     flags = [name for name, value in (
-        ("read-only", ann.readOnlyHint),
-        ("destructive", ann.destructiveHint),
-        ("idempotent", ann.idempotentHint),
-        ("open world", ann.openWorldHint),
+        ("read-only", _field(ann, "read_only_hint", "readOnlyHint")),
+        ("destructive", _field(ann, "destructive_hint", "destructiveHint")),
+        ("idempotent", _field(ann, "idempotent_hint", "idempotentHint")),
+        ("open world", _field(ann, "open_world_hint", "openWorldHint")),
     ) if value]
     return ", ".join(flags) or "none"
 
@@ -93,7 +98,7 @@ def render(tools: list[Any], templates: list[Any]) -> str:
         lines.append(f"| [`{tool.name}`](#{tool.name}) | {_cell(first.removeprefix('Use when '))} |")
     lines.append("")
     for tool in rf_tools:
-        schema = tool.inputSchema or {}
+        schema = _field(tool, "input_schema", "inputSchema") or {}
         props = schema.get("properties", {})
         required = set(schema.get("required", []))
         lines += [f"### `{tool.name}`", "", _cell(tool.description or ""), "",
@@ -117,7 +122,7 @@ def render(tools: list[Any], templates: list[Any]) -> str:
         lines.append("")
         if templates:
             lines += ["Resource templates of the built-in skills: "
-                      + ", ".join(f"`{t.uriTemplate}`" for t in sorted(templates, key=lambda t: t.uriTemplate)) + ".", ""]
+                      + ", ".join(f"`{u}`" for u in sorted(_field(t, "uri_template", "uriTemplate") for t in templates)) + ".", ""]
     return "\n".join(lines).rstrip() + "\n"
 
 

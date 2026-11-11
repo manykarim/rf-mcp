@@ -30,7 +30,7 @@ AGENT_SKILL_TARGETS: dict[str, str] = {
 
 REQUIRED_COMMANDS = ("discover", "analyze", "doc", "robot", "results", "session", "repl", "robot-debug", "rebot", "profiles", "config")
 REQUIRED_SESSION_COMMANDS = ("start", "send", "wait", "status", "result", "interrupt", "restart", "list", "stop")
-INSTALL_HINT = 'uv add --dev --prerelease=allow "robotcode[all]>=2.9.0.dev115"'
+INSTALL_HINT = 'uv add --dev "robotcode[all]>=2.9.0.dev115"'
 
 
 def _help_commands(help_text: str) -> set[str]:

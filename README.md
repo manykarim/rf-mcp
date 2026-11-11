@@ -1,5 +1,25 @@
 # rf-mcp — Robot Framework Agentic Engineering MCP Server
 
+> [!IMPORTANT]
+> **rf-mcp is being heavily refactored.** Version 2.0 rebuilds it on the RobotCode CLI, and this README already
+> describes that new implementation. See the [2.0 release notes](docs/RELEASE_NOTES_v2.0.0.md) for what changed.
+>
+> 2.0 is not on PyPI yet, so `pip install rf-mcp` and `uv add rf-mcp` still install **0.36.x**. To try 2.0 now,
+> install it from GitHub:
+>
+> ```bash
+> uv add --dev "rf-mcp @ git+https://github.com/manykarim/rf-mcp" "robotcode[all]>=2.9.0.dev115"
+> ```
+>
+> **Using rf-mcp 0.36.x or earlier?** Install it as a tool and register it with your coding agents:
+>
+> ```bash
+> uv tool install "rf-mcp[all]==0.36.*"
+> robotmcp install          # or: claude mcp add rf-mcp -- uvx "rf-mcp[all]==0.36.*"
+> ```
+>
+> The full 0.36 documentation is at the [`v0.36.0` tag](https://github.com/manykarim/rf-mcp/tree/v0.36.0).
+
 `rf-mcp` is a lean, customizable Model Context Protocol (MCP) server built on **[RobotCode](https://robotcode.io/) (`>=2.9.0.dev115`) CLI**, **`robotcode session`**, and **FastMCP Skills over MCP (SEP-2640)**.
 
 It empowers coding agents (**Claude Code**, **OpenAI Codex**, **Google Antigravity (`agy`)**, **GitHub Copilot**, **OpenCode**) to discover, analyze, document, author (`repl`), debug (`robot-debug`), execute, and maintain Robot Framework tests and tasks across local machines, remote test runners, zero-daemon remote MCP setups, and CI pipelines.
@@ -39,14 +59,14 @@ It empowers coding agents (**Claude Code**, **OpenAI Codex**, **Google Antigravi
 
 ## Installation & Quick Start
 
-`rf-mcp` requires Python 3.10+ and `robotcode[all]>=2.9.0.dev115` (currently available as a pre-release build):
+`rf-mcp` requires Python 3.10+ and `robotcode[all]>=2.9.0.dev115` (currently available as a pre-release build). List robotcode explicitly as below: that lets uv and pip take its pre-release without `--prerelease=allow` or `--pre`, which would also pull pre-releases of every other dependency (for example FastMCP alphas):
 
 ```bash
 # Using uv (recommended)
-uv add --dev --prerelease=allow "rf-mcp" "robotcode[all]>=2.9.0.dev115"
+uv add --dev "rf-mcp" "robotcode[all]>=2.9.0.dev115"
 
 # Or with pip
-pip install --pre "rf-mcp" "robotcode[all]>=2.9.0.dev115"
+pip install "rf-mcp" "robotcode[all]>=2.9.0.dev115"
 ```
 
 Verify your environment with `rf-mcp doctor`:
