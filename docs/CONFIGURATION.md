@@ -93,6 +93,20 @@ In server mode, each tool call works in one project root, chosen in this order:
 Project skills (`.robotframework/skills/`), the server instructions and the default hints are read once at
 startup, from the pinned root or from step 4. Custom hints are read again for each call's root.
 
+How the agents start a stdio server, measured on 2026-11-11 with a probe server that logged its working directory
+and the client's `initialize` request:
+
+| agent | version | working directory | MCP protocol | roots |
+| --- | --- | --- | --- | --- |
+| Claude Code | 2.1.296 | the project | 2025-11-25 | yes: the project folder |
+| Codex | 0.166.0 | the project | 2025-06-18 | no |
+| Copilot CLI | 1.0.105 | the project | 2025-11-25 | no |
+| Antigravity (`agy`) | 1.0.0 | the plugin folder (`.agents/plugins/<name>`) for a project plugin | 2025-11-25 | yes: the project folder |
+| Copilot in VS Code, OpenCode | | not measured | | |
+
+All four measured agents give rf-mcp the right root: Claude Code and Antigravity through their roots (and the
+working directory), Codex and the Copilot CLI through the working directory.
+
 In client mode, `root` is a path on the client machine and is passed on unchanged; see [Client mode](#client-mode).
 
 ## Which Python runs your tests

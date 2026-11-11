@@ -42,7 +42,7 @@
 ## 7. Integration
 
 - [ ] 7.1 Run the full suite on Python 3.10 and 3.12 (`uv run pytest -q`) and ruff on `src scripts tasks.py`. Verify both are clean, and that the CI matrix (ubuntu, macos, windows) passes on the branch.
-- [ ] 7.2 End to end with a global install: in a scratch environment, `uv tool install` the built wheel, run `rf-mcp init --scope user --agent claude --write` against a redirected home, and start the server from a sample project through an in-memory or stdio MCP client. `rf_discover`, `rf_analyze` (Browser and Requests imports) and `rf_run` must pass without any project path in the configuration.
+- [x] 7.2 End to end with a global install: in a scratch environment, `uv tool install` the built wheel, run `rf-mcp init --scope user --agent claude --write` against a redirected home, and start the server from a sample project through an in-memory or stdio MCP client. `rf_discover`, `rf_analyze` (Browser and Requests imports) and `rf_run` must pass without any project path in the configuration.
 
 ## Workflow follow-up
 

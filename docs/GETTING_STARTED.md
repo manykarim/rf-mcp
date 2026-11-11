@@ -95,7 +95,9 @@ The entries contain no paths: `uv run rf-mcp` when rf-mcp is installed in a uv p
 interpreter's `-m robotmcp` in a plain venv, and `rf-mcp` for a global install. Without `--write`, `init` prints
 what it would change. It replaces only its own `rf-mcp` entry, leaves every other server in the file alone, and does
 not touch a file with comments or one that does not parse (it prints the entry instead and exits 1). Both scopes
-name the server `rf-mcp`.
+name the server `rf-mcp`, so a project that pins its own rf-mcp can take precedence over the global one. Claude
+Code uses the project's `.mcp.json` entry over the user entry (checked with `claude mcp get rf-mcp`). For Codex,
+the Copilot CLI and Antigravity this has not been checked yet: their `mcp list` shows only user-level servers.
 
 To connect to a server that already runs elsewhere, pass its URL:
 
