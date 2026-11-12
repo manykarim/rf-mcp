@@ -1,14 +1,26 @@
 # Getting started
 
-This guide installs rf-mcp into a Robot Framework project, connects a coding agent and walks through a first
-session. For every option see [CONFIGURATION.md](CONFIGURATION.md); for the tools see [MCP_TOOLS.md](MCP_TOOLS.md).
+This guide installs rf-mcp, connects a coding agent and walks through a first session. For every option see
+[CONFIGURATION.md](CONFIGURATION.md); for the tools see [MCP_TOOLS.md](MCP_TOOLS.md).
 
 ## 1. Install
 
-rf-mcp needs Python 3.10+ and `robotcode[all]>=2.9.0.dev115`, which is currently a pre-release. Install both into
-the environment your tests run in, next to the libraries the project uses: rf-mcp runs `robotcode` from that
-environment, so it sees the same libraries and `robot.toml`. Naming robotcode with its pre-release version lets uv and pip
-install it without `--prerelease=allow` / `--pre`, which would pull pre-releases of every other dependency too.
+rf-mcp needs Python 3.10+ and [uv](https://docs.astral.sh/uv/) 0.12 or newer (`uv self update`). It runs
+`robotcode[all]>=2.9.0.dev115` (currently a pre-release) in each project's own environment, so robotcode sees the
+same libraries and `robot.toml` as your tests. Older uv versions (0.9 is confirmed) refuse robotcode's pre-release
+sub-packages during the install unless `--prerelease=allow` is passed. Pick one of two setups.
+
+**One install for all projects (recommended):**
+
+```bash
+uv tool install rf-mcp
+```
+
+A project then needs only Robot Framework and its libraries in its `.venv`. When that environment has no
+robotcode, or an older one, rf-mcp adds its own robotcode version with uv and leaves the project unchanged; see
+[Which Python runs your tests](CONFIGURATION.md#which-python-runs-your-tests).
+
+**Installed into the project**, for example to pin the rf-mcp version for a team:
 
 ```bash
 # uv
@@ -18,7 +30,8 @@ uv add --dev rf-mcp "robotcode[all]>=2.9.0.dev115"
 pip install rf-mcp "robotcode[all]>=2.9.0.dev115"
 ```
 
-Add `rf-mcp[otel]` for OpenTelemetry export.
+Naming robotcode with its pre-release version lets uv and pip install it without `--prerelease=allow` / `--pre`,
+which would pull pre-releases of every other dependency too. Add `rf-mcp[otel]` for OpenTelemetry export.
 
 Check the setup from the project folder:
 
@@ -28,19 +41,47 @@ rf-mcp doctor
 
 ```text
 === rf-mcp doctor ===
-Workspace Root : /path/to/project
-Python         : 3.12.8
-RobotCode      : robotcode, version 2.9.0-dev.115 (OK)
+Install        : global (rf-mcp 2.0.0, Python 3.10.22)
+Project Root   : /home/dev/shop (found by robot.toml)
+Environment    : venv /home/dev/shop/.venv/bin/python (Python 3.12.3)
+RobotCode      : robotcode 2.9.0-dev.186 added by uv, ready in 1.3 s (OK)
+uv             : uv 0.12.23 (/home/dev/.local/bin/uv)
 Active Skills  : rf-locators, rf-requests, rf-robotcode
 Custom Hints   : none (using built-in rules) [not present]
 ```
 
-`doctor` also lists the robotcode subcommands rf-mcp needs and whether `.robotframework/hints.toml` loaded
-(`--json` for a machine-readable report).
+- **Install:** `project` when rf-mcp runs from the project's `.venv`, else `global`.
+- **Project Root:** the folder `doctor` uses, found the way the server finds it (`-r` pins it).
+- **Environment:** the interpreter that runs robotcode for this project: `configured`, `venv`, `activated`,
+  `path`, `own`, or `fallback`. With `fallback`, `doctor` exits 1 and prints a warning with the fix, because the
+  project's libraries are not visible.
+- **RobotCode:** the version that runs. "added by uv" means rf-mcp layers its own robotcode onto the project
+  environment. `doctor` warms that layer, so the first agent call is fast.
+
+`doctor` also lists missing robotcode subcommands and whether `.robotframework/hints.toml` loaded (`--json` for a
+machine-readable report).
 
 ## 2. Connect your agent
 
-`rf-mcp init` writes the MCP configuration for one agent or all of them:
+With the global install, register rf-mcp once for every project:
+
+```bash
+rf-mcp init --scope user --agent all --write
+```
+
+| agent | how `--scope user` registers `rf-mcp` |
+| --- | --- |
+| Claude Code | `claude mcp add --scope user rf-mcp -- rf-mcp` |
+| Codex | `codex mcp add rf-mcp -- rf-mcp` (`~/.codex/config.toml`) |
+| Copilot | `code --add-mcp` (VS Code user profile) and `copilot mcp add` (Copilot CLI) |
+| Antigravity | `agy mcp add rf-mcp rf-mcp` |
+| OpenCode | `opencode mcp add --global rf-mcp -- rf-mcp` |
+
+An agent whose command is not installed is skipped with the command to run later. The entry names `rf-mcp` by its
+full path when `PATH` does not find this version of it: when its folder is not on `PATH` (agents started from a
+desktop shortcut often lack `~/.local/bin`), or when an older rf-mcp comes first on `PATH`.
+
+To configure one project instead (and commit the files for the team), run `init` in the project:
 
 ```bash
 rf-mcp init --agent claude --write      # .mcp.json
@@ -51,14 +92,29 @@ rf-mcp init --agent opencode --write    # opencode.json
 rf-mcp init --agent all --write
 ```
 
-Without `--write` it prints the configuration instead. The server starts from the project's environment:
-`uv run --directory <project> rf-mcp` when the project has a `pyproject.toml`, otherwise the Python interpreter
-that ran `init`.
+The entries contain no paths: `uv run rf-mcp` when rf-mcp is installed in a uv project, the project
+interpreter's `-m robotmcp` in a plain venv, and `rf-mcp` for a global install. Without `--write`, `init` prints
+what it would change. It replaces only its own `rf-mcp` entry, leaves every other server in the file alone, and does
+not touch a file with comments or one that does not parse (it prints the entry instead and exits 1). Both scopes
+name the server `rf-mcp`, so a project that pins its own rf-mcp can take precedence over the global one.
+
+When both a user entry and a project entry named `rf-mcp` exist, the agents behave like this (measured on
+2026-11-11 and 2026-11-12 with probe servers in both places):
+
+| agent | which entry runs |
+| --- | --- |
+| Claude Code | the project's `.mcp.json` entry |
+| Codex | the project's `.codex/config.toml` entry when the project is trusted; otherwise the user entry |
+| Copilot CLI | the workspace `.mcp.json` entry when the folder is trusted (for example `--trust-folder`); otherwise the user entry |
+| Antigravity | both: the project plugin's server is named separately, so the agent gets two rf-mcp servers. Register it in one place only. |
+| OpenCode | the project's `opencode.json` entry |
+| Copilot in VS Code (its own agent) | both: the user and the workspace entry run side by side (measured on 2026-11-12, VS Code 1.145.2). Register it in one place only. |
+| Copilot CLI chats in VS Code | the workspace `.vscode/mcp.json` entry |
 
 To connect to a server that already runs elsewhere, pass its URL:
 
 ```bash
-rf-mcp init --agent claude --mode client --url http://test-runner:8000/mcp --write
+rf-mcp init --agent claude --url http://test-runner:8000/mcp --write
 ```
 
 Agents that do not read MCP resources well can get the built-in skills as files as well:
@@ -119,7 +175,8 @@ complete tool sequences for the common tasks.
 
 | symptom | fix |
 | --- | --- |
-| `` `robotcode` was not found on the MCP server host `` | Install `robotcode[all]>=2.9.0.dev115` in the environment rf-mcp starts from, or start rf-mcp from the project environment (`rf-mcp init` does this). |
-| `rf_doc` or `rf_analyze` cannot find a library | The library is missing from the environment rf-mcp runs in, or `robot.toml` does not put its folder on `python-path`. |
+| `` `robotcode` could not be started for <root> `` | The environment chosen for that project has no runnable robotcode. With rf-mcp installed in the project, add `robotcode[all]>=2.9.0.dev115` to it. With a global install, install uv so rf-mcp can add robotcode itself, or add robotcode to the project environment. `rf-mcp doctor` shows which environment was chosen. |
+| `warning`: "the project's libraries are not visible" (and analysis import errors marked "not a project defect") | rf-mcp found no environment for the project and ran its own robotcode. Create the project's `.venv`, set `python` in `.robotframework/rf-mcp.toml`, or start the agent in an activated environment; see [Which Python runs your tests](CONFIGURATION.md#which-python-runs-your-tests). |
+| `rf_doc` or `rf_analyze` cannot find a library | The library is missing from the project environment, or `robot.toml` does not put its folder on `python-path`. |
 | The agent reads `output.xml` instead of using `rf_results` | Sync the skills (`rf-mcp sync-skills`) for agents that ignore MCP resources. |
 | Client-mode commands fail to quote correctly | Pass `shell='powershell'` or `shell='bash'`, or start the server with `--shell`. PowerShell 7+ and bash are tested; Windows PowerShell 5.1 is not. |

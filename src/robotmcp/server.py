@@ -10,6 +10,7 @@ from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from robotmcp.client_roots import ClientRoots
 from robotmcp.args import ArgumentAliases, PlainOptionalSchemas, Shell, StrDict, StrList, Target, tolerant_literal
 from robotmcp.config import ServerConfig
 from robotmcp.hints import HintContext, HintEngine
@@ -34,7 +35,7 @@ from robotmcp.skills import build_server_instructions, mount_skills_provider
 from robotmcp.telemetry import record_operation
 
 # Shared parameter types: every tool uses the same names for the same things.
-Root = Annotated[str | None, Field(description="Project root (folder with robot.toml); default: the server's root.")]
+Root = Annotated[str | None, Field(description="Project root (folder with robot.toml); default: --root, the client's workspace folder, or the server's working folder walked up to robot.toml.")]
 Profile = Annotated[str | None, Field(description="robot.toml profile to apply (-p).")]
 TargetArg = Annotated[Target | None, Field(description="Override the execution mode: 'server' runs robotcode here, 'client' returns a command for your shell.")]
 ShellArg = Annotated[Shell | None, Field(description="Shell syntax of client-mode commands.")]
@@ -118,6 +119,7 @@ def create_server(config: ServerConfig | None = None) -> FastMCP:
 
     mcp = FastMCP(name="rf-mcp", lifespan=server_lifespan)
     mcp.add_middleware(ArgumentAliases())
+    mcp.add_middleware(ClientRoots(cfg))
     mcp.add_transform(PlainOptionalSchemas())
     skill_summaries = mount_skills_provider(mcp, cfg)
     mcp.instructions = build_server_instructions(
@@ -353,7 +355,7 @@ def create_server(config: ServerConfig | None = None) -> FastMCP:
                 timeout_seconds=timeout_seconds,
                 hint_keyword="robot",
             )
-            res.warning = warning
+            res.warning = " ".join(w for w in (warning, res.warning) if w) or None
             if res.mode == "server":
                 res.instruction = failure_streaks.update(res.failures or [], res.exit_code) or res.instruction
             tracker.set_result(exit_code=res.exit_code or 0, hints_count=len(res.hints))
@@ -604,7 +606,7 @@ def create_server(config: ServerConfig | None = None) -> FastMCP:
                     root=root, paths=paths, by_longname=by_longname, mode=mode
                 )
                 if warning:
-                    out["warning"] = warning
+                    out["warning"] = " ".join(w for w in (warning, out.get("warning")) if w)
             if synced:
                 out["synced_files"] = synced
             return out

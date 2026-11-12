@@ -59,44 +59,57 @@ It empowers coding agents (**Claude Code**, **OpenAI Codex**, **Google Antigravi
 
 ## Installation & Quick Start
 
-`rf-mcp` requires Python 3.10+ and `robotcode[all]>=2.9.0.dev115` (currently available as a pre-release build). List robotcode explicitly as below: that lets uv and pip take its pre-release without `--prerelease=allow` or `--pre`, which would also pull pre-releases of every other dependency (for example FastMCP alphas):
+rf-mcp needs Python 3.10+ and [uv](https://docs.astral.sh/uv/) 0.12 or newer (`uv self update`). It runs
+`robotcode[all]>=2.9.0.dev115` (currently a pre-release) in your project's own environment, so it sees the libraries
+and `robot.toml` your tests use. Older uv versions (0.9 is confirmed) refuse robotcode's pre-release sub-packages
+during the install unless `--prerelease=allow` is passed.
+
+### Option A: one install for all projects (recommended)
 
 ```bash
-# Using uv (recommended)
-uv add --dev "rf-mcp" "robotcode[all]>=2.9.0.dev115"
-
-# Or with pip
-pip install "rf-mcp" "robotcode[all]>=2.9.0.dev115"
+uv tool install rf-mcp
+rf-mcp init --scope user --agent all --write   # registers `rf-mcp` with each installed agent, for every project
 ```
 
-Verify your environment with `rf-mcp doctor`:
+Open any Robot Framework project in your agent and the tools work there: rf-mcp finds the project root from the
+folder the agent starts it in and runs robotcode with the project's `.venv`. A project needs only Robot Framework
+and its libraries; when its environment has no robotcode (or an older one), rf-mcp adds its own robotcode version
+through uv without changing the project. See
+[Which Python runs your tests](docs/CONFIGURATION.md#which-python-runs-your-tests).
+
+### Option B: install into the project
 
 ```bash
-rf-mcp doctor
+uv add --dev rf-mcp "robotcode[all]>=2.9.0.dev115"
+rf-mcp init --agent all --write                 # writes .mcp.json, .codex/config.toml, .vscode/mcp.json, ...
 ```
 
-Generate MCP configuration for your coding agent (`claude`, `codex`, `agy`, `copilot`, `opencode`, or `all`):
+The project files `init` writes start `uv run rf-mcp` and contain no paths, so they can be committed and work in
+every clone. With pip: `pip install rf-mcp "robotcode[all]>=2.9.0.dev115"`. Name robotcode with its pre-release
+version as shown: `--prerelease=allow` or `pip --pre` would also pull pre-releases of every other dependency (for
+example FastMCP alphas).
+
+### Check and customize
 
 ```bash
-# Write local stdio MCP configs for all supported coding agents
-rf-mcp init --agent all --mode server --write
-
-# Or configure for a remote Mode 3 (client-mode) MCP server
-rf-mcp init --agent claude --mode client --url http://mcp.internal:8000/mcp --write
-
-# Synchronize skills into a local agent folder (e.g. .claude/skills or .agents/skills)
-rf-mcp sync-skills --agent claude
+rf-mcp doctor                                   # which root and environment a project gets, robotcode, skills, hints
+rf-mcp init --agent claude --url http://mcp.internal:8000/mcp --write   # connect to a remote server instead
+rf-mcp sync-skills --agent claude               # copy the skills into .claude/skills (or .agents/skills)
 ```
 
-`init` starts the server from the project's environment: `uv run --directory <project> rf-mcp` when the project has a `pyproject.toml`, otherwise the Python interpreter that ran `init`. `sync-skills` leaves an existing skill folder alone when its content differs (exit code 1, listed under `skipped`); pass `--force` to overwrite it. `doctor` lists every `robotcode` subcommand rf-mcp needs, the `session` subcommands, and whether `.robotframework/hints.toml` loaded.
+`init` without `--write` prints what it would change. It replaces only its own `rf-mcp` entry in existing files;
+a file with comments (common in VS Code) is left alone and the entry is printed to paste. With `--scope user` it
+uses each agent's own command (`claude mcp add --scope user`, `codex mcp add`, `copilot mcp add`, `code --add-mcp`,
+`agy mcp add`, `opencode mcp add --global`). `sync-skills` leaves an existing skill folder alone when its content differs (exit code 1, listed
+under `skipped`); pass `--force` to overwrite it.
 
 ---
 
 ## Running `rf-mcp`
 
 ```bash
-# Mode 1: Local stdio MCP server (default)
-rf-mcp --mode server -r /path/to/project -p ci
+# Mode 1: Local stdio MCP server (default); the agent starts it in the project
+rf-mcp                                          # optional: -r /path/to/project pins the root, -p ci a profile
 
 # Mode 2: Remote Test Runner over Streamable HTTP
 rf-mcp --mode server --transport http --host 0.0.0.0 --port 8000 -r /workspace

@@ -81,7 +81,7 @@ def test_status_reflects_run_exit_code(
 def test_session_command_missing_robotcode_returns_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(sr, "resolve_robotcode_executable", lambda: ["robotcode-missing-xyz"])
+    monkeypatch.setattr("robotmcp.runner.environment.own_robotcode_command", lambda: ("robotcode-missing-xyz",))
     res = _runner(tmp_path).run_repl("list")
     assert res.status == "error"
     assert "not found" in res.output.lower()

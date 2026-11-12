@@ -20,6 +20,7 @@ from robotmcp.runner.cli_runner import (
     project_discover_data,
     truncate_data,
 )
+from robotmcp.runner.environment import EnvironmentResolver, missing_robotcode_instruction
 from robotmcp.runner.shell_escape import build_agent_env
 
 
@@ -72,12 +73,66 @@ def test_run_timeout_kills_the_whole_process_tree(tmp_path: Path) -> None:
 def test_missing_robotcode_returns_actionable_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(cr, "resolve_robotcode_executable", lambda: ["robotcode-missing-xyz"])
+    monkeypatch.setattr("robotmcp.runner.environment.own_robotcode_command", lambda: ("robotcode-missing-xyz",))
     runner = _runner(tmp_path)
     res = runner.execute(runner.build_discover_args("tests"))
     assert res.status == "error"
     assert "robotcode-missing-xyz" in res.stderr
-    assert "rf-mcp doctor" in (res.instruction or "")
+    assert "rf-mcp doctor" in (res.instruction or "") and str(tmp_path) in (res.instruction or "")
+
+
+# --- project-independent-server 3.1/3.2: resolved environment, fallback warning, install-kind fixes ---
+
+
+def _isolated(tmp_path: Path, **kw) -> EnvironmentResolver:
+    (tmp_path / "_no_path").mkdir(exist_ok=True)
+    return EnvironmentResolver(own_prefix=tmp_path / "_rf_mcp_tool_env", environ={"PATH": str(tmp_path / "_no_path")}, **kw)
+
+
+def test_a_layered_prefix_reaches_run_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = tmp_path / "p"
+    (project / ".venv" / "Scripts").mkdir(parents=True)
+    (project / ".venv" / "Scripts" / "python.exe").write_text("", encoding="utf-8")
+    seen: list[list[str]] = []
+    real_run = cr.run_process
+
+    def fake_run(cmd, **kwargs):
+        seen.append(list(cmd))
+        return real_run([sys.executable, "-c", "print('{}')"], **kwargs)
+
+    monkeypatch.setattr(cr, "run_process", fake_run)
+    resolver = _isolated(tmp_path, uv="uv", pin="2.9.0.dev115", version_probe=lambda _p: None,
+                         command_probe=lambda _prefix: (True, "robotcode, version 2.9.0-dev.115"))
+    runner = CliRunner(ServerConfig(execution_mode="server", workspace_root=project), environments=resolver)
+    runner.execute(runner.build_discover_args("tests"))
+    assert seen[0][:9] == ["uv", "run", "--quiet", "--no-project", "--python",
+                           str(project / ".venv" / "Scripts" / "python.exe"), "--with", "robotcode[all]==2.9.0.dev115",
+                           "robotcode"]
+    assert seen[0][9:11] == ["-r", str(project.resolve())]
+
+
+def test_the_fallback_warning_reaches_the_result(tmp_path: Path) -> None:
+    project = tmp_path / "p"
+    project.mkdir()
+    (project / "t.robot").write_text(
+        "*** Settings ***\nLibrary    NoSuchProjectLibrary\n\n*** Test Cases ***\nT\n    Log    x\n", encoding="utf-8"
+    )
+    runner = CliRunner(ServerConfig(execution_mode="server", workspace_root=project), environments=_isolated(tmp_path))
+    res = runner.execute(runner.build_analyze_args(), hint_kind="static")
+    assert "project's libraries are not visible" in (res.warning or "")
+    messages = [d["message"] for items in res.data["diagnostics"].values() for d in items]
+    assert any(m.startswith(cr.FALLBACK_IMPORT_NOTE + "Importing library 'NoSuchProjectLibrary'") for m in messages)
+
+
+def test_missing_robotcode_instruction_per_install_kind(tmp_path: Path) -> None:
+    project = tmp_path / "p"
+    (project / ".venv").mkdir(parents=True)
+    env = _isolated(tmp_path).resolve(project)
+    project_install = EnvironmentResolver(own_prefix=project / ".venv")
+    no_uv = _isolated(tmp_path, uv=False)
+    assert "Add robotcode to the project environment" in missing_robotcode_instruction(project, env, project_install)
+    text = missing_robotcode_instruction(project, env, no_uv)
+    assert "Install uv" in text and 'uv add --dev "robotcode[all]' in text and str(project) in text
 
 
 # --- 9.1 client mode passes the agent's root verbatim ------------------------------------

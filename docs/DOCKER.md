@@ -78,8 +78,11 @@ The build fails unless `robotmcp --version` and `robotcode --version` succeed in
 ## Server options
 
 The entrypoint is
-`robotmcp --transport http --host 0.0.0.0 --port 8000 --mode server --root /workspace`. Further options can be
-appended, or set as environment variables (see [CONFIGURATION.md](CONFIGURATION.md)):
+`robotmcp --transport http --host 0.0.0.0 --port 8000 --mode server --root /workspace`. `--root /workspace` pins
+the project root, so the server does not look for one per call (see
+[How the project root is found](CONFIGURATION.md#how-the-project-root-is-found)); robotcode runs in the image's own
+environment, which holds the libraries. Further options can be appended, or set as environment variables (see
+[CONFIGURATION.md](CONFIGURATION.md)):
 
 ```bash
 docker run --rm -p 8000:8000 -v "$PWD:/workspace" -e RF_MCP_PROFILE=ci \

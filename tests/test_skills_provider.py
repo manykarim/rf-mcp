@@ -87,3 +87,22 @@ External workflow guidance.
             "read_resource", {"uri": "skill://project-conventions/SKILL.md"}
         )
         assert "resources/auth.resource" in str(read_res.data)
+
+
+async def test_server_started_in_a_subfolder_serves_the_project_skills(tmp_path: Path, monkeypatch) -> None:
+    """project-independent-server 1.3: the startup root is the working directory walked up to robot.toml."""
+    from robotmcp.server import create_server
+
+    (tmp_path / "robot.toml").write_text("", encoding="utf-8")
+    (tmp_path / ".robotframework" / "hints.toml").parent.mkdir(parents=True)
+    skill = tmp_path / ".robotframework" / "skills" / "shop-conventions"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: shop-conventions\ndescription: Shop rules.\n---\n\n# Shop\n", encoding="utf-8")
+    (tmp_path / "tests" / "ui").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path / "tests" / "ui")
+
+    mcp = create_server(ServerConfig(execution_mode="server"))
+    assert "skill://shop-conventions/SKILL.md" in (mcp.instructions or "")
+    async with Client(mcp) as client:
+        uris = {str(r.uri) for r in await client.list_resources()}
+        assert "skill://shop-conventions/SKILL.md" in uris

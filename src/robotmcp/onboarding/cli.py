@@ -9,15 +9,15 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Literal, Sequence
+from typing import Any, Sequence
 
 from robotmcp.config import ServerConfig
+from robotmcp.onboarding.agent_config import detect_install_kind, generate_agent_mcp_configs, init_exit_code
 from robotmcp.hints import load_custom_rules_with_errors
 from robotmcp.runner.cli_runner import resolve_robotcode_executable
+from robotmcp.runner.environment import EnvironmentResolver
 from robotmcp.runner.shell_escape import build_agent_env
 from robotmcp.skills.provider import discover_skill_summaries, resolve_skill_roots
-
-AgentName = Literal["claude", "codex", "agy", "copilot", "opencode", "all"]
 
 AGENT_SKILL_TARGETS: dict[str, str] = {
     "claude": ".claude/skills",
@@ -66,9 +66,9 @@ def _run_help(rc_exec: list[str], args: list[str], root: Path) -> str:
     return (proc.stdout or "") + "\n" + (proc.stderr or "")
 
 
-def _check_robotcode_status(root: Path) -> dict[str, Any]:
+def _check_robotcode_status(root: Path, rc_exec: list[str] | None = None) -> dict[str, Any]:
     """Inspect `robotcode` CLI version and the subcommands rf-mcp calls (`session` needs >=2.9.0.dev115)."""
-    rc_exec = resolve_robotcode_executable()
+    rc_exec = rc_exec or resolve_robotcode_executable()
     try:
         ver_proc = subprocess.run(
             [*rc_exec, "--version"],
@@ -78,10 +78,10 @@ def _check_robotcode_status(root: Path) -> dict[str, Any]:
             capture_output=True,
             text=True,
             encoding="utf-8",
-            timeout=30,
+            timeout=300,
             check=False,
         )
-    except FileNotFoundError:
+    except (FileNotFoundError, subprocess.SubprocessError):
         return {
             "installed": False,
             "version": None,
@@ -117,32 +117,80 @@ def _check_robotcode_status(root: Path) -> dict[str, Any]:
     }
 
 
+_ROOT_SOURCES = {"pinned": "given with -r", "cwd": "working directory, no project marker above it"}
+
+
+def _python_version(interpreter: Path | None) -> str | None:
+    if interpreter is None:
+        return None
+    if Path(sys.executable) == interpreter:
+        return sys.version.split()[0]
+    try:
+        proc = subprocess.run([str(interpreter), "-c", "import sys; print(sys.version.split()[0])"],
+                              capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.stdout.strip() or None
+
+
+def _uv_info(resolver: EnvironmentResolver) -> dict[str, Any]:
+    path = resolver.uv
+    if path is None:
+        return {"path": None, "version": None}
+    try:
+        proc = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=30,
+                              stdin=subprocess.DEVNULL, check=False)
+        version = proc.stdout.strip() or None
+    except (OSError, subprocess.SubprocessError):
+        version = None
+    return {"path": path, "version": version}
+
+
 def run_doctor(
     *,
     root: Path | None = None,
     skills_dirs: Sequence[Path] | None = None,
     as_json: bool = False,
+    resolver: EnvironmentResolver | None = None,
 ) -> dict[str, Any]:
-    """Run `rf-mcp doctor` diagnostics and print report."""
-    ws_root = (root or Path.cwd()).expanduser().resolve()
+    """Run `rf-mcp doctor`: the root and environment a call would get, robotcode, skills and hints."""
     cfg = ServerConfig(
-        workspace_root=ws_root,
+        workspace_root=root.expanduser().resolve() if root else None,
         skills_dirs=list(skills_dirs or []),
     )
-    rc_info = _check_robotcode_status(ws_root)
+    ws_root, root_source = cfg.startup_root()
+    resolver = resolver or EnvironmentResolver()
+    env = resolver.resolve(ws_root)
+    rc_info = _check_robotcode_status(ws_root, list(env.command_prefix))
     skill_roots = resolve_skill_roots(cfg)
     skills = discover_skill_summaries(skill_roots)
     hints_path = cfg.resolve_hints_file()
     hint_errors = load_custom_rules_with_errors(hints_path)[1] if hints_path else []
+    uv = _uv_info(resolver)
 
     report: dict[str, Any] = {
         "ok": bool(
             rc_info["installed"]
             and rc_info["meets_min_version"]
             and all(rc_info["commands"].values())
+            and env.libraries_visible
         ),
         "python": sys.version.split()[0],
+        "install_kind": detect_install_kind(ws_root),
         "workspace_root": str(ws_root),
+        "root_source": root_source,
+        "environment": {
+            "source": env.source,
+            "interpreter": str(env.interpreter) if env.interpreter else None,
+            "python": _python_version(env.interpreter),
+            "robotcode_version": env.robotcode_version,
+            "layered": env.layered,
+            "layer_seconds": round(resolver.last_layer_seconds, 1) if env.layered and resolver.last_layer_seconds else None,
+            "command": list(env.command_prefix),
+            "warning": env.warning,
+            "notes": list(env.notes),
+        },
+        "uv": uv,
         "robotcode": rc_info,
         "skills": skills,
         "hints_file": str(hints_path) if hints_path else None,
@@ -153,146 +201,39 @@ def run_doctor(
     if as_json:
         print(json.dumps(report, indent=2))
     else:
+        e = report["environment"]
+        how = _ROOT_SOURCES.get(root_source, f"found by {root_source.removeprefix('marker:')}")
+        where = f"{e['source']} {e['interpreter'] or ''}".strip()
+        if e["python"]:
+            where += f" (Python {e['python']})"
+        robotcode = f"robotcode {e['robotcode_version'] or 'unknown'}"
+        if e["layered"]:
+            robotcode += " added by uv" + (f", ready in {e['layer_seconds']} s" if e["layer_seconds"] else "")
         print("=== rf-mcp doctor ===")
-        print(f"Workspace Root : {ws_root}")
-        print(f"Python         : {report['python']}")
-        print(
-            f"RobotCode      : {rc_info['version'] or 'NOT FOUND'} "
-            f"({'OK' if report['ok'] else 'NEEDS UPGRADE/EXTRAS'})"
-        )
+        print(f"Install        : {report['install_kind']} (rf-mcp {_rf_mcp_version()}, Python {report['python']})")
+        print(f"Project Root   : {ws_root} ({how})")
+        print(f"Environment    : {where}")
+        print(f"RobotCode      : {robotcode} ({'OK' if report['ok'] else 'NEEDS ATTENTION'})")
+        print(f"uv             : {uv['version'] or 'not installed'}" + (f" ({uv['path']})" if uv["path"] else ""))
         missing = [k for k, v in rc_info["commands"].items() if not v]
         missing += [f"session {k}" for k, v in rc_info.get("session_commands", {}).items() if not v]
         if missing:
             print(f"Missing Cmds   : {', '.join(missing)}")
-        if rc_info["install_hint"]:
+        if rc_info["install_hint"] and env.libraries_visible:
             print(f"Install Hint   : {rc_info['install_hint']}")
         print(f"Active Skills  : {', '.join(s['name'] for s in skills) or 'none'}")
         print(f"Custom Hints   : {report['hints_file'] or 'none (using built-in rules)'} [{report['hints_status']}]")
         for err in hint_errors:
             print(f"  Hint Error   : {err}")
+        if env.warning:
+            print(f"Warning        : {env.warning}")
     return report
 
 
-def project_server_command(ws_root: Path, mode: str) -> tuple[str, list[str]]:
-    """Return (command, args) that start rf-mcp from the project's environment.
+def _rf_mcp_version() -> str:
+    from robotmcp import __version__
 
-    A uv project (`pyproject.toml` in the root) runs `uv run --directory <root> rf-mcp`, so the
-    server sees the project's robotcode and libraries. Otherwise the interpreter that runs this
-    command is used. The rf-mcp source checkout is never referenced.
-    """
-    server_flags = ["--mode", mode, "--transport", "stdio", "-r", str(ws_root)]
-    if (ws_root / "pyproject.toml").is_file():
-        return "uv", ["run", "--directory", str(ws_root), "rf-mcp", *server_flags]
-    return sys.executable, ["-m", "robotmcp", *server_flags]
-
-
-# Measured with codex-cli 0.166 (2026-11-07): Codex loads MCP tools lazily and shows the model neither the server
-# instructions nor the tool descriptions, so without the synced skills GPT-5.6-Luna made 0 rf-mcp calls in 14 runs;
-# and under approval_policy="never" every tool not annotated read-only (rf_run, rf_repl, rf_debug) is rejected.
-CODEX_NOTES = (
-    "# Codex shows the agent neither rf-mcp's instructions nor its tool descriptions: run\n"
-    "#   rf-mcp sync-skills --agent codex\n"
-    "# so the skills in .agents/skills route Robot Framework work to these tools.\n"
-    "# Unattended runs (codex exec, approval_policy = \"never\") reject rf_run, rf_repl and rf_debug unless approved.\n"
-    "# They run outside Codex's sandbox (as the project's own robot runs would); to allow them, uncomment:\n"
-    "# default_tools_approval_mode = \"approve\"\n"
-)
-
-
-def generate_agent_mcp_configs(
-    *,
-    agent: AgentName = "all",
-    mode: Literal["server", "client"] = "server",
-    root: Path | None = None,
-    url: str | None = None,
-    write_files: bool = False,
-) -> dict[str, Any]:
-    """Generate (and optionally write) MCP client configuration files for coding agents."""
-    ws_root = (root or Path.cwd()).expanduser().resolve()
-    targets = (
-        ["claude", "codex", "agy", "copilot", "opencode"]
-        if agent == "all"
-        else [agent]
-    )
-    generated: dict[str, Any] = {}
-
-    server_command, server_args = project_server_command(ws_root, mode)
-    default_env = {
-        "PYTHONUTF8": "1",
-        "PYTHONIOENCODING": "utf-8",
-        "ROBOTCODE_FORCE_AI_AGENT": "1",
-    }
-
-    for target_agent in targets:
-        if target_agent == "claude":
-            rel_path = ".mcp.json"
-            entry: dict[str, Any] = (
-                {"type": "http", "url": url}
-                if url
-                else {"type": "stdio", "command": server_command, "args": server_args, "env": default_env}
-            )
-            content = json.dumps({"mcpServers": {"rf-mcp": entry}}, indent=2) + "\n"
-        elif target_agent == "codex":
-            rel_path = ".codex/config.toml"
-            if url:
-                content = f'[mcp_servers.rf-mcp]\nurl = "{url}"\n'
-            else:
-                args_toml = ", ".join(f'"{a.replace(chr(92), "/")}"' for a in server_args)
-                content = (
-                    f'[mcp_servers.rf-mcp]\ncommand = "{server_command.replace(chr(92), "/")}"\nargs = [{args_toml}]\n'
-                    + CODEX_NOTES
-                    + '\n[mcp_servers.rf-mcp.env]\nPYTHONUTF8 = "1"\nPYTHONIOENCODING = "utf-8"\nROBOTCODE_FORCE_AI_AGENT = "1"\n'
-                )
-        elif target_agent == "agy":
-            rel_path = ".gemini/settings.json"
-            entry_agy: dict[str, Any] = (
-                {"url": url}
-                if url
-                else {"command": server_command, "args": server_args, "env": default_env}
-            )
-            content = json.dumps({"mcpServers": {"rf-mcp": entry_agy}}, indent=2) + "\n"
-            if write_files:
-                plugin_dir = ws_root / ".agents" / "plugins" / "rf-mcp"
-                plugin_dir.mkdir(parents=True, exist_ok=True)
-                (plugin_dir / "plugin.json").write_text(
-                    json.dumps({"name": "rf-mcp"}, indent=2) + "\n",
-                    encoding="utf-8",
-                )
-                (plugin_dir / "mcp_config.json").write_text(
-                    content,
-                    encoding="utf-8",
-                )
-        elif target_agent == "copilot":
-            rel_path = ".vscode/mcp.json"
-            entry_cp: dict[str, Any] = (
-                {"type": "http", "url": url}
-                if url
-                else {"type": "stdio", "command": server_command, "args": server_args, "env": default_env}
-            )
-            content = json.dumps({"servers": {"rf-mcp": entry_cp}}, indent=2) + "\n"
-        elif target_agent == "opencode":
-            rel_path = "opencode.json"
-            entry_oc: dict[str, Any] = (
-                {"type": "remote", "url": url}
-                if url
-                else {"type": "local", "command": [server_command, *server_args], "environment": default_env}
-            )
-            content = json.dumps({"mcp": {"rf-mcp": entry_oc}}, indent=2) + "\n"
-        else:
-            continue
-
-        file_path = ws_root / rel_path
-        if write_files:
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            file_path.write_text(content, encoding="utf-8")
-
-        generated[target_agent] = {
-            "path": str(file_path),
-            "written": write_files,
-            "content": content,
-        }
-
-    return generated
+    return __version__
 
 
 def sync_skills_to_directory(
@@ -380,11 +321,18 @@ def run_onboarding_cli(argv: Sequence[str]) -> int:
         choices=["claude", "codex", "agy", "copilot", "opencode", "all"],
         default="all",
     )
-    init_p.add_argument("--mode", choices=["server", "client"], default="server")
+    init_p.add_argument("--mode", choices=["server", "client"], default="server", help=argparse.SUPPRESS)
     init_p.add_argument("--url", default=None, help="Remote HTTP MCP URL (Modes 2 & 3).")
     init_p.add_argument("-r", "--root", default=None, help="Workspace root.")
     init_p.add_argument(
-        "--write", action="store_true", help="Write config files to workspace."
+        "--scope",
+        choices=["project", "user"],
+        default="project",
+        help="project: write the project's agent files (commit them); user: register rf-mcp for every project of "
+        "this user with each agent's own CLI (for a global install, `uv tool install rf-mcp`).",
+    )
+    init_p.add_argument(
+        "--write", action="store_true", help="Apply the entries (default: print what would change)."
     )
 
     sync_p = subparsers.add_parser(
@@ -414,7 +362,8 @@ def run_onboarding_cli(argv: Sequence[str]) -> int:
 
     if ns.subcommand == "doctor":
         s_dirs = [Path(p) for p in (ns.skills_dirs or [])]
-        rep = run_doctor(root=ws_root, skills_dirs=s_dirs, as_json=ns.json)
+        # Without -r, doctor finds the root the way the server does (working directory walked up).
+        rep = run_doctor(root=Path(ns.root) if ns.root else None, skills_dirs=s_dirs, as_json=ns.json)
         return 0 if rep["ok"] else 1
 
     if ns.subcommand == "init":
@@ -424,9 +373,10 @@ def run_onboarding_cli(argv: Sequence[str]) -> int:
             root=ws_root,
             url=ns.url,
             write_files=ns.write,
+            scope=ns.scope,
         )
         print(json.dumps(configs, indent=2))
-        return 0
+        return init_exit_code(configs)
 
     if ns.subcommand == "sync-skills":
         s_dirs = [Path(p) for p in (ns.skills_dirs or [])]
