@@ -90,8 +90,12 @@ In server mode, each tool call works in one project root, chosen in this order:
    `pyproject.toml`, `.git` or `.hg`. This is the order robotcode uses to find its own project root. Without any
    of them, the working directory itself is used.
 
-Project skills (`.robotframework/skills/`), the server instructions and the default hints are read once at
-startup, from the pinned root or from step 4. Custom hints are read again for each call's root.
+Project skills (`.robotframework/skills/`) follow the same rules for every request, so they come from the
+client's workspace folders even when the agent starts rf-mcp elsewhere. With several workspace folders, the
+skills of all of them are served, and the first folder wins when two define a skill of the same name. Client
+mode uses only the pinned root or step 4. Custom hints are read again for each call's root. The server
+instructions and the default hints are read once at startup, from the pinned root or from step 4: the
+instructions go out before the client reports its folders.
 
 How the agents start a stdio server, measured on 2026-11-11 with a probe server that logged its working directory
 and the client's `initialize` request:
@@ -110,10 +114,9 @@ All measured agents give rf-mcp's tools the right root: Claude Code, Antigravity
 their roots (and the working directory), Codex and the Copilot CLI through the working directory. VS Code was
 measured on 2026-11-12.
 
-VS Code's own agent starts a user entry in the user's home folder. Tool calls still get the project through its
-roots, but project skills are read from the startup folder, so `.robotframework/skills/` is not served. For
-project skills in VS Code, use a workspace entry (`rf-mcp init --agent copilot --write`) or copy the skills with
-`rf-mcp sync-skills --agent copilot`.
+VS Code's own agent starts a user entry in the user's home folder. Tool calls and project skills still get the
+project through its roots; the server instructions then note that project skills are listed by
+`list_resources`, because they cannot be known at startup.
 
 OpenCode starts MCP servers from its background service (`opencode serve --service`) and keeps them running after
 `opencode run` ends. The command is therefore looked up on the service's `PATH`, not the one of the shell that
