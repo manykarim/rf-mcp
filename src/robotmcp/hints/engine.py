@@ -17,6 +17,8 @@ class Hint(BaseModel):
     message: str
     fix_examples: list[str] = Field(default_factory=list)
     relevance: int = 50
+    skills: list[str] = Field(default_factory=list)
+    """Candidate skill links; the server replaces them with `skill`, the first one it serves."""
 
 
 HintKind = Literal["runtime", "static", "any"]
@@ -40,6 +42,8 @@ class HintRule(BaseModel):
     applies_to: list[Literal["runtime", "static"]] = Field(default_factory=lambda: ["runtime"])
     library_pattern: str | None = None
     """Only for this library: tested against the context's libraries, or the error text when none are known."""
+    skills: list[str] = Field(default_factory=list)
+    """`skill://` links to the sections that explain the fix, in order of preference."""
 
     def validate_patterns(self) -> None:
         """Compile every pattern; raise `re.error` naming the field on an invalid one."""
@@ -84,6 +88,7 @@ class HintRule(BaseModel):
             message=self.message,
             fix_examples=list(self.fix_examples),
             relevance=self.relevance,
+            skills=list(self.skills),
         )
 
 

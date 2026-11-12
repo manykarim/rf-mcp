@@ -54,6 +54,10 @@ BUILTIN_HINT_RULES: list[HintRule] = [
             "Click    css=button.submit >> visible=true",
             "Click    text=Add to cart >> nth=0",
         ],
+        skills=[
+            "skill://rf-browser/references/locators.md",
+            "skill://rf-locators/references/browser.md",
+        ],
         relevance=95,
     ),
     # 3. Browser: Click intercepted by overlay/modal
@@ -72,6 +76,10 @@ BUILTIN_HINT_RULES: list[HintRule] = [
             "Wait For Elements State    css=.modal-backdrop    hidden    timeout=5s",
             "Click With Options    <selector>    force=True",
         ],
+        skills=[
+            "skill://rf-browser/references/troubleshooting.md",
+            "skill://rf-locators/references/browser.md",
+        ],
         relevance=92,
     ),
     # 4. Browser: Locator timeout / element not found
@@ -89,6 +97,10 @@ BUILTIN_HINT_RULES: list[HintRule] = [
             "Get Aria Snapshot    css=body",
             "Get Url",
             "Wait For Elements State    <selector>    visible    timeout=5s",
+        ],
+        skills=[
+            "skill://rf-browser/references/troubleshooting.md",
+            "skill://rf-locators/references/browser.md",
         ],
         relevance=88,
     ),
@@ -153,6 +165,10 @@ BUILTIN_HINT_RULES: list[HintRule] = [
             "${value}=    Set Variable    ${data}[key]",
             "Should Be Equal    ${response.json()}[status]    ok",
         ],
+        skills=[
+            "skill://rf-requests/references/response-validation.md",
+            "skill://rf-requests/SKILL.md",
+        ],
         relevance=91,
     ),
     # 9. RequestsLibrary: Session & named arguments
@@ -171,6 +187,10 @@ BUILTIN_HINT_RULES: list[HintRule] = [
             "${resp}=    GET On Session    api    /get    expected_status=200",
             "${resp}=    POST On Session    api    /post    json=${payload}    expected_status=201",
         ],
+        skills=[
+            "skill://rf-requests/references/request-options.md",
+            "skill://rf-requests/SKILL.md",
+        ],
         relevance=90,
     ),
     # 10. SeleniumLibrary: Element not interactable / not found
@@ -186,6 +206,10 @@ BUILTIN_HINT_RULES: list[HintRule] = [
             "Wait Until Element Is Visible    css:button.submit    timeout=10s",
             "Scroll Element Into View    css:button.submit",
             "Click Element    css:button.submit",
+        ],
+        skills=[
+            "skill://rf-selenium/references/waiting-strategies.md",
+            "skill://rf-locators/references/selenium.md",
         ],
         relevance=86,
     ),
@@ -203,6 +227,10 @@ BUILTIN_HINT_RULES: list[HintRule] = [
             "Wait Until Page Contains Element    accessibility_id=login_button    timeout=10s",
             "${xml}=    Get Source",
         ],
+        skills=[
+            "skill://rf-appium/references/locators-mobile.md",
+            "skill://rf-locators/references/appium.md",
+        ],
         relevance=85,
     ),
     # 12. PlatynUI: Desktop control lookup
@@ -216,6 +244,10 @@ BUILTIN_HINT_RULES: list[HintRule] = [
         ),
         fix_examples=[
             "robotcode doc keywords -i PlatynUI",
+        ],
+        skills=[
+            "skill://rf-platynui/references/locators-and-queries.md",
+            "skill://rf-locators/references/platynui.md",
         ],
         relevance=84,
     ),
@@ -360,6 +392,10 @@ BUILTIN_HINT_RULES: list[HintRule] = [
             "Click    css=button:text-is('Calculate')",
             "Click    role=button[name=\"Calculate\"]",
         ],
+        skills=[
+            "skill://rf-browser/references/locators.md",
+            "skill://rf-locators/references/browser.md",
+        ],
         relevance=92,
     ),
     # 20. Element outside the viewport
@@ -427,6 +463,9 @@ BUILTIN_HINT_RULES: list[HintRule] = [
             "Select Frame    css:iframe#payment",
             "Click    css=iframe#payment >>> css=button.pay",
         ],
+        skills=[
+            "skill://rf-locators/references/shadow-dom-iframes.md",
+        ],
         relevance=80,
     ),
     # 24. Window or tab not found
@@ -471,6 +510,10 @@ BUILTIN_HINT_RULES: list[HintRule] = [
             "Get Current Context",
             "Get Contexts",
             "Switch To Context    NATIVE_APP",
+        ],
+        skills=[
+            "skill://rf-appium/references/troubleshooting.md",
+            "skill://rf-locators/references/appium.md",
         ],
         relevance=85,
     ),

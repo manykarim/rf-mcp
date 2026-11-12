@@ -48,12 +48,13 @@ It empowers coding agents (**Claude Code**, **OpenAI Codex**, **Google Antigravi
 3. **Skills over MCP (SEP-2640 + `ResourcesAsTools`) & Plugin Coexistence**:
    - Serves layered `SKILL.md` directories over MCP (`skill://{name}/SKILL.md` + `list_resources` / `read_resource` tools for tool-only agents):
      1. Project-local `<workspace>/.robotframework/skills/`
-     2. External plugin directories via `--skills-dir` / `RF_MCP_SKILLS_DIR` (compatible with [`robotcodedev/robotframework-agent-plugins`](https://github.com/robotcodedev/robotframework-agent-plugins/tree/next) and [`manykarim/robotframework-agentskills`](https://github.com/manykarim/robotframework-agentskills))
-     3. Built-in skills: `rf-robotcode` (tool routing, triage, debugging, REPL authoring, results, analysis, configuration; maps the upstream robotcode practices P1-P46), `rf-locators` (Browser, SeleniumLibrary, AppiumLibrary and PlatynUI locators, shadow DOM and iframes, keyword per intent, library chooser) and `rf-requests` (RequestsLibrary for REST, SOAP/XML and GraphQL). Detail lives in `references/` files, e.g. `skill://rf-robotcode/references/triage.md`.
+     2. External plugin directories via `--skills-dir` / `RF_MCP_SKILLS_DIR`, for example a clone or company mirror of [`MarketSquare/robotframework-plugins`](https://github.com/MarketSquare/robotframework-plugins)
+     3. The official Robot Framework skills of the `robotframework-plugins` package, when it is installed next to rf-mcp
+     4. Built-in skills: `rf-robotcode` (tool routing, triage, debugging, REPL authoring, results, analysis, configuration; maps the upstream robotcode practices P1-P46), `rf-locators` (Browser, SeleniumLibrary, AppiumLibrary and PlatynUI locators, shadow DOM and iframes, keyword per intent, library chooser) and `rf-requests` (RequestsLibrary for REST, SOAP/XML and GraphQL). Detail lives in `references/` files, e.g. `skill://rf-robotcode/references/triage.md`.
    - The server `instructions` are a short intent routing table plus the authoring loop and its finish condition (done only when `rf_analyze` is clean and `rf_run` passes).
 
 4. **OpenTelemetry Observability**:
-   - Built-in child spans (`rf_mcp.discover`, `rf_mcp.analyze`, `rf_mcp.doc`, `rf_mcp.run`, `rf_mcp.results`, `rf_mcp.repl`, `rf_mcp.debug`, `rf_mcp.diagnose`) nested under FastMCP server spans, plus metrics (`rf_mcp.commands.total`, `rf_mcp.command.duration_ms`, `rf_mcp.hints.generated`, `rf_mcp.skills.read`).
+   - Built-in child spans (`rf_mcp.discover`, `rf_mcp.analyze`, `rf_mcp.doc`, `rf_mcp.run`, `rf_mcp.results`, `rf_mcp.repl`, `rf_mcp.debug`, `rf_mcp.diagnose`) nested under FastMCP server spans, plus metrics (`rf_mcp.commands.total`, `rf_mcp.command.duration_ms`, `rf_mcp.hints.generated`, `rf_mcp.skills.read`, `rf_mcp.skills.pointed`).
 
 ---
 
