@@ -28,7 +28,7 @@ dev = [
     "pytest-asyncio>=1.1.0",
     "opentelemetry-sdk>=1.25.0",
     "opentelemetry-exporter-otlp>=1.25.0",
-    "ruff>=0.11.0",
+    "ruff>=0.17.4",
     "mypy>=1.10.0",
 ]
 
@@ -67,7 +67,7 @@ dev = [
     "opentelemetry-sdk>=1.25.0",
     "opentelemetry-exporter-otlp>=1.25.0",
     "coverage[toml]>=7.6.0",
-    "ruff>=0.11.0",
+    "ruff>=0.17.4",
     "mypy>=1.10.0",
 ]
 
