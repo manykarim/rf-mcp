@@ -3,7 +3,8 @@
 ## 1. Upstream and test fixtures
 
 - [x] 1.1 Add a test fixture that installs a fake `robotframework_plugins.bundle` module in `sys.modules`, with `CATALOG_FORMAT`, `catalog()` and `skills_dirs()` over a `tmp_path` tree shaped like the official plugins (rf-web with `rf-browser` and `rf-selenium`, rf-api with `rf-requests`). Also add a fixture that builds a `--skills-dir` plugin repository with `plugins/<p>/catalog.yaml`. Verify that both are importable from `tests/conftest.py` and used by one smoke test.
-- [ ] 1.2 Once the user agrees to post it, open an issue on MarketSquare/robotframework-plugins proposing an optional `libraries[].skills` field in `catalog.yaml` and `catalog.json`, which names the skills for each library (for example Browser → `rf-browser`). Verify that the issue URL is recorded in this file next to the task.
+- [x] 1.2 Once the user agrees to post it, open an issue on MarketSquare/robotframework-plugins proposing an optional `libraries[].skills` field in `catalog.yaml` and `catalog.json`, which names the skills for each library (for example Browser → `rf-browser`). Verify that the issue URL is recorded in this file next to the task.
+  - Opened 2026-11-12: https://github.com/MarketSquare/robotframework-plugins/issues/7
 
 ## 2. Catalogues and matching (D1)
 
