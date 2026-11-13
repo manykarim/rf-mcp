@@ -49,7 +49,7 @@ It empowers coding agents (**Claude Code**, **OpenAI Codex**, **Google Antigravi
    - Serves layered `SKILL.md` directories over MCP (`skill://{name}/SKILL.md` + `list_resources` / `read_resource` tools for tool-only agents):
      1. Project-local `<workspace>/.robotframework/skills/`
      2. External plugin directories via `--skills-dir` / `RF_MCP_SKILLS_DIR`, for example a clone or company mirror of [`MarketSquare/robotframework-plugins`](https://github.com/MarketSquare/robotframework-plugins)
-     3. The official Robot Framework skills of the `robotframework-plugins` package, when it is installed next to rf-mcp
+     3. The official Robot Framework skills from [`robotframework-plugins`](https://pypi.org/project/robotframework-plugins/), installed with rf-mcp
      4. Built-in skills: `rf-robotcode` (tool routing, triage, debugging, REPL authoring, results, analysis, configuration; maps the upstream robotcode practices P1-P46), `rf-locators` (Browser, SeleniumLibrary, AppiumLibrary and PlatynUI locators, shadow DOM and iframes, keyword per intent, library chooser) and `rf-requests` (RequestsLibrary for REST, SOAP/XML and GraphQL). Detail lives in `references/` files, e.g. `skill://rf-robotcode/references/triage.md`.
    - The server `instructions` are a short intent routing table plus the authoring loop and its finish condition (done only when `rf_analyze` is clean and `rf_run` passes).
 
@@ -64,6 +64,13 @@ rf-mcp needs Python 3.10+ and [uv](https://docs.astral.sh/uv/) 0.12 or newer (`u
 `robotcode[all]>=2.9.0.dev115` (currently a pre-release) in your project's own environment, so it sees the libraries
 and `robot.toml` your tests use. Older uv versions (0.9 is confirmed) refuse robotcode's pre-release sub-packages
 during the install unless `--prerelease=allow` is passed.
+
+rf-mcp installs the official Robot Framework skills with it: the
+[`robotframework-plugins`](https://github.com/MarketSquare/robotframework-plugins) package (currently a dev release,
+`2026.11.0.dev1` or newer). Its skills for Browser, SeleniumLibrary, RequestsLibrary, AppiumLibrary and PlatynUI
+are served over MCP, and the ones that match your project's libraries are attached to the agent's first tool result.
+To get newer skills without a new rf-mcp release, run `uv tool upgrade rf-mcp`. To pin them, run
+`uv tool install rf-mcp --with robotframework-plugins==<version>`.
 
 ### Option A: one install for all projects (recommended)
 

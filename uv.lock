@@ -2057,6 +2057,7 @@ dependencies = [
     { name = "packaging" },
     { name = "pydantic" },
     { name = "robotcode", extra = ["all"] },
+    { name = "robotframework-plugins" },
     { name = "tomlkit" },
 ]
 
@@ -2098,6 +2099,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.1" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.1.0" },
     { name = "robotcode", extras = ["all"], specifier = ">=2.9.0.dev115" },
+    { name = "robotframework-plugins", specifier = ">=2026.11.0.dev1,<2027" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11.0" },
     { name = "tomlkit", specifier = ">=0.12.0" },
 ]
@@ -2329,6 +2331,21 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d9/bb/b8309699b0c6aaf492df11085635e7afa00fd9a3f5dd54b04b804056cc31/robotframework-7.3.2.tar.gz", hash = "sha256:3bb3e299831ecb1664f3d5082f6ff9f08ba82d61a745bef2227328ef3049e93a", size = 644178, upload-time = "2025-07-04T14:35:58.422Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a0/91/f58cbb1e26119d68316bc7c306ca9b3e336d9053f432bc1876447592e4b8/robotframework-7.3.2-py3-none-any.whl", hash = "sha256:14ef2afa905285cc073df6ce06d0cd3af4a113df6f815532718079e00c98cca4", size = 795066, upload-time = "2025-07-04T14:35:54.813Z" },
+]
+
+[[package]]
+name = "robotframework-plugins"
+version = "2026.11.0.dev1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyyaml" },
+    { name = "rich" },
+    { name = "tomli", version = "2.2.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "tomli-w" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/25/e7/b5424c8315201f23d3781975489302d50f8478075dcfbd0dc6d1017b284f/robotframework_plugins-2026.11.0.dev1.tar.gz", hash = "sha256:af9086693b0de6260e06f7d18b05fab4a622f57fc8b84d41b44846dfc936d7b7", size = 283489, upload-time = "2026-11-13T14:50:32.254Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/23/0f/71c75d609d72a8e265efa1f580ada357c9790223d0a0e22b5ec614473ef3/robotframework_plugins-2026.11.0.dev1-py3-none-any.whl", hash = "sha256:1c236175d92ed763831462126e003500eca933b7566d46f33d6d22c4df4d459c", size = 405212, upload-time = "2026-11-13T14:50:30.549Z" },
 ]
 
 [[package]]

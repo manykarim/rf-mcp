@@ -171,8 +171,8 @@ name, the first one wins:
 1. project skills in `<root>/.robotframework/skills/`
 2. folders given with `--skills-dir` / `RF_MCP_SKILLS_DIR`, in order
 3. the official skills of the `robotframework-plugins` package
-   ([MarketSquare/robotframework-plugins](https://github.com/MarketSquare/robotframework-plugins)), when it is
-   installed next to rf-mcp, for example `rf-browser`, `rf-selenium` and `rf-requests`
+   ([MarketSquare/robotframework-plugins](https://github.com/MarketSquare/robotframework-plugins)), which is
+   installed with rf-mcp, for example `rf-browser`, `rf-selenium` and `rf-requests`
 4. the built-in skills `rf-robotcode` (tool routing, triage, debugging, REPL authoring, results, analysis,
    configuration), `rf-locators` (Browser, SeleniumLibrary, AppiumLibrary and PlatynUI locators, shadow DOM, iframes)
    and `rf-requests` (RequestsLibrary for REST, SOAP/XML and GraphQL)

@@ -52,7 +52,15 @@
 
 ## 9. Required dependency
 
-- [ ] 9.1 Blocked on the PyPI release of MarketSquare/robotframework-plugins#5. Add `robotframework-plugins>=2026.11,<2027` to the dependencies in `pyproject.toml`, refresh `uv.lock`, replace the fake bundle in one integration test with the real package, and update the README install notes. Verify that `uv run pytest -q` passes, and that `uv tool install .` in a clean tool environment serves `skill://rf-browser/SKILL.md`.
+- [x] 9.1 Blocked on the PyPI release of MarketSquare/robotframework-plugins#5. Add `robotframework-plugins>=2026.11,<2027` to the dependencies in `pyproject.toml`, refresh `uv.lock`, replace the fake bundle in one integration test with the real package, and update the README install notes. Verify that `uv run pytest -q` passes, and that `uv tool install .` in a clean tool environment serves `skill://rf-browser/SKILL.md`.
+  - 2026-11-13: MarketSquare/robotframework-plugins#5 and #7 are closed, and the GitHub pre-release `robotframework-plugins-v2026.11.0.dev1` carries a wheel with `bundle.CATALOG_FORMAT == 1`, `catalog()`, `skills_dirs()` and `libraries[].skills`.
+  - Against that wheel, the following all work: the official layer, the matching (each library names its own skill), the instructions (2,416 characters), the hint link, and doctor. `tests/test_official_package.py` checks this whenever the package is installed: 2 passed with the wheel, skipped without it.
+  - Still open: the PyPI upload failed ("Non-user identities cannot create new projects"; the pending trusted publisher doesn't match the project name), so the dependency and `uv.lock` can't be added yet.
+  - 2026-11-13: published to PyPI; the wheel matches the one checked above by SHA-256. Declared `robotframework-plugins>=2026.11.0.dev1,<2027`; as agreed, the dev release is the minimum version for now.
+    - `uv.lock` adds only that package.
+    - `uv run pytest`: 348 passed, with `tests/test_official_package.py` running against the real package.
+    - `uv tool install .` in a clean tool folder serves `skill://rf-browser/SKILL.md`, and `rf-mcp doctor` reports `robotframework-plugins 2026.11.0.dev1 (catalogue format 1, 9 skills)`.
+    - The README install notes and the precedence list in `docs/CONFIGURATION.md` now say the official skills come with rf-mcp.
 
 ## 10. Integration
 
