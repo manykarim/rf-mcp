@@ -64,13 +64,13 @@
 
 ## 10. Integration
 
-- [ ] 10.1 Run `uv run pytest -q` on Python 3.10 and 3.12, ruff on `src tests`, and `openspec validate library-aware-skill-retrieval --strict`. Verify that all are clean apart from the ruff findings already on `main`, and that the CI matrix passes on the PR.
+- [x] 10.1 Run `uv run pytest -q` on Python 3.10 and 3.12, ruff on `src tests`, and `openspec validate library-aware-skill-retrieval --strict`. Verify that all are clean apart from the ruff findings already on `main`, and that the CI matrix passes on the PR.
   - Local part done on 2026-11-12:
     - pytest passes on Python 3.10 (368 passed), 3.12 (368) and 3.13 (368, plus the 3 Browser cookbook suites that fail only on this machine's stale `.venv` Browser folder);
     - the cookbook passes against an interpreter with a working Browser (6 passed);
     - ruff shows only the 8 E741 findings in `tests/fixtures/ledger` that are already on `main`;
     - `openspec validate --strict` is clean.
-  - Open until the PR's CI runs.
+  - CI on #148 passed on 2026-11-13: all 15 checks (the test matrix on Linux, macOS and Windows for Python 3.10–3.12, installability, quality).
 
 ## Workflow follow-up
 
