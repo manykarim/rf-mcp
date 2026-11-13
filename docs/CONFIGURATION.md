@@ -21,6 +21,7 @@ duplicate them.
 | `--timeout` | `RF_MCP_TIMEOUT` | `60` | Seconds a session call waits before it returns `status: running` (poll with `action='wait'`). |
 | `--otel-endpoint` | `RF_MCP_OTEL_ENDPOINT`, `OTEL_EXPORTER_OTLP_ENDPOINT` | none | OTLP collector URL; see [OpenTelemetry](#opentelemetry). |
 | `--otel-service-name` | `OTEL_SERVICE_NAME` | `rf-mcp` | `service.name` of exported telemetry. |
+| | `RF_MCP_SKILL_POINTERS` | `1` | `0` turns off `project_skills` and the skill links on hints; see [Skills for the project's libraries](#skills-for-the-projects-libraries). For troubleshooting and comparisons. |
 | `-V`, `--version` | | | Print the version. |
 
 The subcommands `rf-mcp doctor`, `rf-mcp init` and `rf-mcp sync-skills` are described in
@@ -169,13 +170,21 @@ name, the first one wins:
 
 1. project skills in `<root>/.robotframework/skills/`
 2. folders given with `--skills-dir` / `RF_MCP_SKILLS_DIR`, in order
-3. the built-in skills `rf-robotcode` (tool routing, triage, debugging, REPL authoring, results, analysis,
+3. the official skills of the `robotframework-plugins` package
+   ([MarketSquare/robotframework-plugins](https://github.com/MarketSquare/robotframework-plugins)), which is
+   installed with rf-mcp, for example `rf-browser`, `rf-selenium` and `rf-requests`
+4. the built-in skills `rf-robotcode` (tool routing, triage, debugging, REPL authoring, results, analysis,
    configuration), `rf-locators` (Browser, SeleniumLibrary, AppiumLibrary and PlatynUI locators, shadow DOM, iframes)
    and `rf-requests` (RequestsLibrary for REST, SOAP/XML and GraphQL)
 
-Skill collections that work with `--skills-dir` include
-[robotcodedev/robotframework-agent-plugins](https://github.com/robotcodedev/robotframework-agent-plugins/tree/next)
-and [manykarim/robotframework-agentskills](https://github.com/manykarim/robotframework-agentskills).
+So a company that runs rf-mcp centrally overrides an official skill by putting a folder of the same name into its
+`--skills-dir`, and an official skill replaces a built-in one of the same name (`rf-requests`). rf-mcp reads the
+official package only through its public `robotframework_plugins.bundle` API; a version with a catalogue format
+rf-mcp does not support is skipped with a warning, which `rf-mcp doctor` shows too.
+
+`--skills-dir` also takes a clone or mirror of a plugin repository such as robotframework-plugins: rf-mcp serves the
+skills of every `plugins/*/skills/` folder in it and reads each `plugins/*/catalog.yaml` to match skills to the
+project's libraries.
 
 A minimal project skill:
 
@@ -191,6 +200,39 @@ description: Page objects, test data and naming rules of the shop tests. Read be
 ```
 
 `rf-mcp sync-skills` copies the active skills into an agent's skill folder for agents that read skills from disk.
+
+### Skills for the project's libraries
+
+In server mode rf-mcp lists the packages installed in the environment that runs the project's robotcode, and matches
+them against the skill catalogues: `plugins/*/catalog.yaml` in `--skills-dir` folders, the official package's
+catalogue, and a small built-in one for `rf-locators` and `rf-requests`. The first tool result of a session for a
+project root then carries up to three matches:
+
+```json
+"project_skills": [
+  {"library": "Browser", "installed": "20.1.0", "skill": "skill://rf-browser/SKILL.md", "supported": true},
+  {"library": "RequestsLibrary", "installed": "0.8.0", "skill": "skill://rf-requests/SKILL.md", "supported": false,
+   "versions": ">=0.9.7"}
+]
+```
+
+`supported` says whether the installed version is in the range the skill was written for. A library covered by a
+skills folder is not matched again by the official or built-in catalogue. Without a project environment (rf-mcp's
+own robotcode runs the tests, see [Which Python runs your tests](#which-python-runs-your-tests)) there is nothing to
+match. A company catalogue uses the same format:
+
+```yaml
+# <skills-dir>/plugins/acme/catalog.yaml, next to <skills-dir>/plugins/acme/skills/acme-robot/SKILL.md
+name: acme
+libraries:
+  - name: AcmeLibrary
+    package: acme-robot        # the distribution name on your package index
+    versions: ">=3,<4"         # optional
+    skills: [acme-robot]       # optional, see below
+```
+
+Without `skills`, the plugin's skills whose name contains the library's name (without a `Library` suffix) are
+named, for example `rf-browser` for Browser, or every skill of the plugin when none is.
 
 ## Hints
 
@@ -211,6 +253,7 @@ fix_examples = [
 ]
 relevance = 99
 applies_to = ["runtime", "static"]
+skills = ["skill://corp-auth/references/sso.md"]
 ```
 
 | field | meaning |
@@ -222,10 +265,15 @@ applies_to = ["runtime", "static"]
 | `fix_examples` | Lines the agent can copy (alias `examples`). |
 | `relevance` | Ranking against other hints, default 90 (alias `priority`). |
 | `applies_to` | `runtime` (failed runs and sessions), `static` (`rf_analyze` diagnostics) or both (default). |
+| `skills` | Optional `skill://` links to the section that explains the fix, in order of preference. The hint carries the first one the server serves for the call's root as `skill`, for example a company skill from `--skills-dir`; when none is served, the hint has no `skill`. |
 
-A file that does not parse, or a rule with an invalid regular expression, is skipped with a warning naming the
-file, line and rule id; the other rules stay active. `rf-mcp doctor` and the server instructions list skipped
-entries.
+The built-in rules link the official library skills first and the built-in ones second, for example a strict-mode
+violation links `skill://rf-browser/references/locators.md`, or `skill://rf-locators/references/browser.md` when the
+official skills are not installed.
+
+A file that does not parse, or a rule with an invalid regular expression or a `skills` entry that is not a `skill://`
+link, is skipped with a warning naming the file, line and rule id; the other rules stay active. `rf-mcp doctor` and
+the server instructions list skipped entries.
 
 ## OpenTelemetry
 
@@ -234,6 +282,8 @@ rf-mcp exports over OTLP/HTTP:
 
 - spans `rf_mcp.discover`, `rf_mcp.analyze`, `rf_mcp.doc`, `rf_mcp.run`, `rf_mcp.results`, `rf_mcp.repl`,
   `rf_mcp.debug` and `rf_mcp.diagnose`, nested under the FastMCP server spans;
-- metrics `rf_mcp.commands.total`, `rf_mcp.command.duration_ms`, `rf_mcp.hints.generated` and `rf_mcp.skills.read`.
+- metrics `rf_mcp.commands.total`, `rf_mcp.command.duration_ms`, `rf_mcp.hints.generated`, `rf_mcp.skills.read` and
+  `rf_mcp.skills.pointed` (attributes `skill` and `source`: `project_skills` or `hint`), so you can compare the skills
+  rf-mcp pointed to with the ones agents read.
 
 Without an endpoint, or without the extra installed, telemetry is off and costs nothing.

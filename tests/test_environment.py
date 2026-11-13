@@ -229,3 +229,78 @@ def test_the_default_layer_pins_every_robotcode_sub_package() -> None:
     layered = EnvironmentResolver(uv="uv", version_probe=lambda _p: None,
                                   command_probe=lambda _p: (True, "")).requirements
     assert layered == reqs
+
+
+# library-aware-skill-retrieval 4.1: the packages installed where a root's robotcode runs.
+
+
+class Distributions:
+    def __init__(self, packages: dict[str, str] | None) -> None:
+        self.packages = packages
+        self.calls: list[Path] = []
+
+    def __call__(self, interpreter: Path) -> dict[str, str] | None:
+        self.calls.append(interpreter)
+        return None if self.packages is None else dict(self.packages)
+
+
+def inventory_resolver(probes: Probes, environ: dict[str, str], dists: Distributions) -> EnvironmentResolver:
+    return EnvironmentResolver(
+        own_prefix=Path("/nonexistent/rf-mcp-tool-env"), uv="uv", pin=PIN,
+        version_probe=probes.version, command_probe=probes.command, distributions_probe=dists, environ=environ,
+    )
+
+
+def test_the_project_venvs_packages_are_listed(tmp_path: Path, empty_path) -> None:
+    python = make_venv(tmp_path / ".venv", robotcode_exe=True)
+    dists = Distributions({"robotframework-browser": "20.1.0", "robotframework_PlatynUI": "0.12.0"})
+    res = inventory_resolver(Probes({python: "2.9.0.dev186"}), empty_path, dists)
+    inventory = res.installed_distributions(tmp_path)
+    assert inventory == {"robotframework-browser": "20.1.0", "robotframework-platynui": "0.12.0"}
+    assert dists.calls == [python]
+    assert res.installed_distributions(tmp_path) == inventory and len(dists.calls) == 1  # cached
+
+
+def test_a_package_installed_later_is_listed(tmp_path: Path, empty_path) -> None:
+    python = make_venv(tmp_path / ".venv", robotcode_exe=True)
+    dists = Distributions({"robotframework-browser": "20.1.0"})
+    res = inventory_resolver(Probes({python: "2.9.0.dev186"}), empty_path, dists)
+    assert "robotframework-requests" not in (res.installed_distributions(tmp_path) or {})
+    dists.packages = {"robotframework-browser": "20.1.0", "robotframework-requests": "0.9.7"}
+    site = next(p for p in (tmp_path / ".venv").rglob("site-packages"))
+    later = site.stat().st_mtime + 10
+    os.utime(site, (later, later))
+    assert res.installed_distributions(tmp_path)["robotframework-requests"] == "0.9.7"
+
+
+def test_no_inventory_when_libraries_are_not_visible(tmp_path: Path, empty_path) -> None:
+    dists = Distributions({"robotcode": "2.9.0"})
+    res = inventory_resolver(Probes(), empty_path, dists)
+    assert res.resolve(tmp_path).source == "fallback"
+    assert res.installed_distributions(tmp_path) is None and dists.calls == []
+
+
+def test_a_failed_listing_gives_no_inventory(tmp_path: Path, empty_path) -> None:
+    python = make_venv(tmp_path / ".venv", robotcode_exe=True)
+    res = inventory_resolver(Probes({python: "2.9.0.dev186"}), empty_path, Distributions(None))
+    assert res.installed_distributions(tmp_path) is None
+
+
+def test_robotcode_on_path_lists_the_python_next_to_it(tmp_path: Path) -> None:
+    other = tmp_path / "global"
+    python = make_venv(other, robotcode_exe=True)
+    project = tmp_path / "project"
+    project.mkdir()
+    dists = Distributions({"robotframework": "7.3"})
+    res = inventory_resolver(Probes(), {"PATH": str(python.parent)}, dists)
+    assert res.installed_distributions(project) == {"robotframework": "7.3"}
+    assert dists.calls == [python]
+
+
+def test_the_real_probe_lists_this_environments_packages() -> None:
+    import sys
+
+    from robotmcp.runner.environment import probe_distributions
+
+    found = probe_distributions(Path(sys.executable))
+    assert found is not None and "robotcode" in {k.lower() for k in found}

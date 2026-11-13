@@ -44,6 +44,13 @@ def _build_rule(item: dict, idx: int) -> HintRule | None:
             msg_parts.append(str(item["suggestion"]))
 
     fix_raw = item.get("fix_examples") or item.get("examples") or []
+    skills_raw = item.get("skills") or []
+    if isinstance(skills_raw, str):
+        skills_raw = [skills_raw]
+    skills = [str(s) for s in skills_raw] if isinstance(skills_raw, list) else []
+    for uri in skills:
+        if not uri.startswith("skill://") or len(uri) <= len("skill://"):
+            raise ValueError(f"skills: {uri!r} is not a skill:// link, e.g. 'skill://acme-auth/references/tokens.md'")
     applies_raw = item.get("applies_to") or ["runtime", "static"]
     if isinstance(applies_raw, str):
         applies_raw = [applies_raw]
@@ -58,6 +65,7 @@ def _build_rule(item: dict, idx: int) -> HintRule | None:
         relevance=int(item.get("relevance") or item.get("priority") or 90),
         applies_to=[str(a) for a in applies_raw],
         library_pattern=str(item["library_pattern"]) if item.get("library_pattern") else None,
+        skills=skills,
     )
 
 
