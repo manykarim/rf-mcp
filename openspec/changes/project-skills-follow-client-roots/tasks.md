@@ -22,7 +22,8 @@
 
 ## 4. Integration
 
-- [ ] 4.1 Run `uv run pytest -q` on Python 3.10 and 3.12, ruff on `src tests`, and `openspec validate project-skills-follow-client-roots --strict`. Verify that all are clean apart from the ruff findings already on `main`, and that the CI matrix passes on the PR.
+- [x] 4.1 Run `uv run pytest -q` on Python 3.10 and 3.12, ruff on `src tests`, and `openspec validate project-skills-follow-client-roots --strict`. Verify that all are clean apart from the ruff findings already on `main`, and that the CI matrix passes on the PR.
+  - CI on #147 passed on 2026-11-13: all 17 checks, including the test matrix on Linux, macOS and Windows for Python 3.10–3.12, and both Docker images.
 - [ ] 4.2 Repeat the VS Code check from task 6.4 of `project-independent-server` with the real server. Register the branch's `rf-mcp` as a user entry in `~/.copilot/mcp-config.json`, open a project that has `.robotframework/skills/<name>/SKILL.md`, and ask the agent to list its skills, which requires the user in the VS Code GUI. Verify that the project skill is listed, then remove the entry again.
 
 ## Workflow follow-up
