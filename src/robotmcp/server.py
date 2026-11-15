@@ -119,9 +119,10 @@ def create_server(config: ServerConfig | None = None) -> FastMCP:
 
     mcp = FastMCP(name="rf-mcp", lifespan=server_lifespan)
     mcp.add_middleware(ArgumentAliases())
-    mcp.add_middleware(ClientRoots(cfg))
+    client_roots = ClientRoots(cfg)
+    mcp.add_middleware(client_roots)
     mcp.add_transform(PlainOptionalSchemas())
-    skill_summaries = mount_skills_provider(mcp, cfg)
+    skill_summaries = mount_skills_provider(mcp, cfg, client_roots=client_roots)
     mcp.instructions = build_server_instructions(
         cfg, skill_summaries, hint_load_errors=hint_engine.load_errors
     )

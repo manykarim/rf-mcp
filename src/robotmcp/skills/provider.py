@@ -7,14 +7,20 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from fastmcp import FastMCP
+from fastmcp.resources.base import Resource
+from fastmcp.resources.template import ResourceTemplate
+from fastmcp.server.dependencies import get_context
 from fastmcp.server.middleware import Middleware, MiddlewareContext
+from fastmcp.server.providers import Provider
 from fastmcp.server.transforms import ResourcesAsTools
+from fastmcp.utilities.versions import VersionSpec
 
 try:  # fastmcp moved the provider; the old path warns with FastMCPDeprecationWarning
     from fastmcp.skills.provider import SkillsDirectoryProvider
 except ImportError:  # pragma: no cover - depends on the installed fastmcp
     from fastmcp.server.providers.skills import SkillsDirectoryProvider
 
+from robotmcp.client_roots import ClientRoots
 from robotmcp.config import ServerConfig
 from robotmcp.telemetry import record_skill_read
 
@@ -69,17 +75,24 @@ def _expand_skill_root_candidates(path: Path) -> list[Path]:
 def resolve_skill_roots(
     config: ServerConfig,
     root_override: str | Path | None = None,
+    *,
+    project_roots: Sequence[Path] | None = None,
 ) -> list[Path]:
     """Resolve layered skill root directories in precedence order:
-    1. Project-local `<workspace>/.robotframework/skills/`
+    1. Project-local `<root>/.robotframework/skills/`, for each of `project_roots` in order
+       (default: the one root `config.resolve_root(root_override)`)
     2. External `--skills-dir` / `RF_MCP_SKILLS_DIR` directories
     3. Built-in `src/robotmcp/skills/builtin/`
     """
     roots: list[Path] = []
-    ws_root = config.resolve_root(root_override)
-    project_skills = ws_root / ".robotframework" / "skills"
-    if project_skills.is_dir():
-        roots.extend(_expand_skill_root_candidates(project_skills))
+    if project_roots is None:
+        project_roots = [config.resolve_root(root_override)]
+    for ws_root in project_roots:
+        project_skills = Path(ws_root) / ".robotframework" / "skills"
+        if project_skills.is_dir():
+            for expanded in _expand_skill_root_candidates(project_skills):
+                if expanded not in roots:
+                    roots.append(expanded)
 
     for ext in config.skills_dirs:
         for expanded in _expand_skill_root_candidates(ext):
@@ -168,7 +181,8 @@ _READ_ROW = (
     "| read specs, docs, robot.toml, resources, tests | rf_discover action=read, all paths/globs "
     "in one call - not one Read per file |\n"
 )
-_UI_ROW = "| write or fix UI steps (Browser, Selenium, Appium) | read skill://rf-locators/SKILL.md first |\n"
+_PROJECT_SKILLS_NOTE = "Project skills: list_resources shows them once your workspace is known."
+_UI_ROW ="| write or fix UI steps (Browser, Selenium, Appium) | read skill://rf-locators/SKILL.md first |\n"
 _READ_STEP = "Read every file you need in one rf_discover action=read call (globs work), not file by file."
 _STEPS = (
     "Start one rf_repl session and reuse it.",
@@ -196,7 +210,10 @@ def build_server_instructions(
     )
     if hint_load_errors:
         text += "\nCustom hints not loaded: " + "; ".join(hint_load_errors)[:300] + "\n"
-    catalog = ["", "## Skills (read with read_resource)", "| Skill | URI | About |", "|---|---|---|"]
+    catalog = ["", "## Skills (read with read_resource)"]
+    if mode == "server" and config.workspace_root is None and config.startup_root()[1] == "cwd":
+        catalog.append(_PROJECT_SKILLS_NOTE)  # started outside any project, e.g. VS Code user entries in the home folder
+    catalog += ["| Skill | URI | About |", "|---|---|---|"]
     for s in skills:
         desc = s["description"]
         if len(desc) > 110:
@@ -222,17 +239,71 @@ class SkillReadMetrics(Middleware):
         return await call_next(context)
 
 
+class ProjectSkillsProvider(Provider):
+    """Serve skills for the project roots of each request, so project skills follow the client's workspace.
+
+    The roots follow the tool-call rules: the pinned root, else the client's MCP roots in server mode (all of
+    them, in the client's order), else the startup root. Each distinct folder list gets its own
+    `SkillsDirectoryProvider`, whose first-name-wins rule keeps project > `--skills-dir` > built-in.
+    """
+
+    def __init__(self, config: ServerConfig, client_roots: ClientRoots | None = None) -> None:
+        super().__init__()
+        self._config = config
+        self._client_roots = client_roots
+        self._providers: dict[tuple[Path, ...], SkillsDirectoryProvider] = {}
+
+    async def _project_roots(self) -> list[Path]:
+        cfg = self._config
+        if cfg.workspace_root is not None:
+            return [cfg.workspace_root]
+        if self._client_roots is not None and cfg.resolved_mode() == "server":
+            try:
+                ctx = get_context()
+            except RuntimeError:  # no request, e.g. a listing at startup
+                ctx = None
+            if ctx is not None:
+                roots = await self._client_roots.roots_for(ctx)
+                if roots:
+                    return roots
+        return [cfg.startup_root()[0]]
+
+    async def _current(self) -> SkillsDirectoryProvider | None:
+        roots = tuple(resolve_skill_roots(self._config, project_roots=await self._project_roots()))
+        if not roots:
+            return None
+        provider = self._providers.get(roots)
+        if provider is None:
+            provider = self._providers[roots] = SkillsDirectoryProvider(roots=list(roots), reload=True)
+        return provider
+
+    async def _list_resources(self) -> Sequence[Resource]:
+        provider = await self._current()
+        return await provider.list_resources() if provider else []
+
+    async def _get_resource(self, uri: str, version: VersionSpec | None = None) -> Resource | None:
+        provider = await self._current()
+        return await provider.get_resource(uri, version) if provider else None
+
+    async def _list_resource_templates(self) -> Sequence[ResourceTemplate]:
+        provider = await self._current()
+        return await provider.list_resource_templates() if provider else []
+
+    async def _get_resource_template(self, uri: str, version: VersionSpec | None = None) -> ResourceTemplate | None:
+        provider = await self._current()
+        return await provider.get_resource_template(uri, version) if provider else None
+
+
 def mount_skills_provider(
     mcp: FastMCP,
     config: ServerConfig,
     *,
+    client_roots: ClientRoots | None = None,
     enable_resources_as_tools: bool = True,
 ) -> list[dict[str, str]]:
-    """Mount layered `SkillsDirectoryProvider` and `ResourcesAsTools` onto `mcp`."""
+    """Mount the per-request skills provider and `ResourcesAsTools` onto `mcp`; return the startup catalog."""
     roots = resolve_skill_roots(config)
-    if roots:
-        provider = SkillsDirectoryProvider(roots=roots, reload=True)
-        mcp.add_provider(provider)
+    mcp.add_provider(ProjectSkillsProvider(config, client_roots))
     mcp.add_middleware(SkillReadMetrics())
     if enable_resources_as_tools:
         mcp.add_transform(ResourcesAsTools(mcp))

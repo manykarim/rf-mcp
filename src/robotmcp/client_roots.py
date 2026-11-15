@@ -77,7 +77,7 @@ class ClientRoots(Middleware):
             and self._config.workspace_root is None
             and self._config.resolved_mode(args.get("target")) == "server"
         ):
-            root = choose_root(await self._roots(context.fastmcp_context), Path.cwd())
+            root = choose_root(await self.roots_for(context.fastmcp_context), Path.cwd())
             if root is not None:
                 args["root"] = str(root)
         return await call_next(context)
@@ -87,7 +87,8 @@ class ClientRoots(Middleware):
             self._cache.clear()
         return await call_next(context)
 
-    async def _roots(self, ctx: Any) -> list[Path]:
+    async def roots_for(self, ctx: Any) -> list[Path]:
+        """Return the client's roots for the session of `ctx`, asked once per session and cached."""
         if ctx is None or _is_modern_protocol(ctx):
             return []
         try:
