@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from robotmcp.config import ServerConfig
-from robotmcp.runner.session_runner import SessionRunner
+from robotmcp.runner.session_runner import SessionResult, SessionRunner
 
 
 def test_session_runner_client_mode_repl_and_debug_with_fallback(tmp_path: Path) -> None:
@@ -151,3 +151,41 @@ Order Total Fails
 
     # Confirm the recorded output.xml was NOT overwritten by the debug session
     assert sentinel_output.read_text(encoding="utf-8") == "<robot>recorded-run-sentinel</robot>"
+
+
+def test_configured_output_dir_follows_the_profile(tmp_path: Path) -> None:
+    from robotmcp.runner.cli_runner import configured_output_dir
+
+    assert configured_output_dir(tmp_path) is None
+    (tmp_path / "robot.toml").write_text(
+        'output-dir = "results"\n[profiles.ci]\noutput-dir = "ci-out"\n[profiles.fast]\nmode = "x"\n', encoding="utf-8"
+    )
+    assert configured_output_dir(tmp_path) == tmp_path / "results"
+    assert configured_output_dir(tmp_path, "ci") == tmp_path / "ci-out"
+    assert configured_output_dir(tmp_path, "fast") == tmp_path / "results"
+    (tmp_path / "robot.toml").write_text(
+        'default-profiles = ["ci"]\noutput-dir = "results"\n[profiles.ci]\noutput-dir = "ci-out"\n', encoding="utf-8"
+    )
+    assert configured_output_dir(tmp_path) == tmp_path / "ci-out"
+    (tmp_path / "robot.toml").write_text('output-dir = { expr = "\'out\'" }\n', encoding="utf-8")
+    assert configured_output_dir(tmp_path) is None
+
+
+def test_session_start_creates_the_output_dir_in_server_mode(tmp_path: Path, monkeypatch) -> None:
+    """Browser's `New Browser` writes playwright-log.txt to ${OUTPUT DIR}; a fresh project has no results/ yet."""
+    (tmp_path / "robot.toml").write_text('output-dir = "results"\n[profiles.ci]\noutput-dir = "ci-out"\n', encoding="utf-8")
+    runner = SessionRunner(ServerConfig(execution_mode="server", workspace_root=tmp_path))
+    stub = SessionResult(mode="server", kind="repl", action="stub", command=[])
+    monkeypatch.setattr(runner, "_execute_session_cmd", lambda *a, **k: stub)
+    runner.run_repl("send", session_id="repl-1", statement="Log    x")
+    assert not (tmp_path / "results").exists()
+    runner.run_repl("start")
+    assert (tmp_path / "results").is_dir()
+    runner.run_debug("start", by_longname=["S.T"], profile="ci")
+    assert (tmp_path / "ci-out").is_dir()
+
+    client = SessionRunner(ServerConfig(execution_mode="client", workspace_root=tmp_path / "elsewhere"))
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere" / "robot.toml").write_text('output-dir = "results"\n', encoding="utf-8")
+    client.run_repl("start")
+    assert not (tmp_path / "elsewhere" / "results").exists()  # client mode runs nothing on this machine

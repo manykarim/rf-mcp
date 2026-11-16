@@ -83,6 +83,22 @@ def configured_paths(root: Path) -> list[str]:
     return [str(p) for p in paths]
 
 
+def configured_output_dir(root: Path, profile: str | None = None) -> Path | None:
+    """Return the `output-dir` configured for robotcode in `root`, with the profile's (or default profiles') override.
+
+    Only plain strings count; a missing or computed (`{ expr = ... }`) value gives None.
+    """
+    config = _load_project_config(root)
+    names = profile.split(",") if profile else config.get("default-profiles") or []
+    output_dir = config.get("output-dir")
+    profiles = config.get("profiles") if isinstance(config.get("profiles"), dict) else {}
+    for name in [names] if isinstance(names, str) else names:
+        override = profiles.get(str(name).strip())
+        if isinstance(override, dict) and "output-dir" in override:
+            output_dir = override["output-dir"]
+    return root / output_dir if isinstance(output_dir, str) and output_dir.strip() else None
+
+
 def _has_configured_paths(root: Path) -> bool:
     """Return True if robot.toml, .robot.toml, or pyproject.toml in `root` defines robotcode `paths`."""
     return bool(configured_paths(root))
