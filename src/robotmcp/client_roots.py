@@ -55,9 +55,28 @@ def choose_root(roots: list[Path], cwd: Path) -> Path | None:
     )
 
 
+PROCESS_KEY = "process"
+
+
 def _is_modern_protocol(ctx: Any) -> bool:
     check = getattr(ctx, "_is_modern_protocol", None)
     return bool(check()) if callable(check) else False
+
+
+def session_key(ctx: Any) -> str:
+    """A stable key for the client session of `ctx`: its `session_id` on the handshake-era protocol.
+
+    `ctx.session` is a new object on every call, so `id(ctx.session)` cannot key anything. New-protocol calls are
+    stateless and share one key for the process.
+    """
+    if ctx is None:
+        return PROCESS_KEY
+    try:
+        if _is_modern_protocol(ctx):
+            return PROCESS_KEY
+        return str(ctx.session_id or PROCESS_KEY)
+    except Exception:
+        return PROCESS_KEY
 
 
 class ClientRoots(Middleware):
@@ -65,7 +84,7 @@ class ClientRoots(Middleware):
 
     def __init__(self, config: ServerConfig) -> None:
         self._config = config
-        self._cache: dict[int, list[Path]] = {}
+        self._cache: dict[str, list[Path]] = {}
 
     async def on_call_tool(self, context: MiddlewareContext, call_next) -> Any:
         name = getattr(context.message, "name", "")
@@ -95,7 +114,7 @@ class ClientRoots(Middleware):
             session = ctx.session
         except Exception:
             return []
-        key = id(session)
+        key = session_key(ctx)
         if key in self._cache:
             return self._cache[key]
         roots: list[Path] = []

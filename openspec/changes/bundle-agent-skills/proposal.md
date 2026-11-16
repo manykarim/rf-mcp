@@ -6,6 +6,11 @@
 > therefore not worth building. The one concrete defect found — the browser skill's wrong iframe combinator
 > — is handed off to the rf-agentskills project in `docs/rf-agentskills-browser-skill-iframe-fix.md`.
 > Kept for the record; not archived-as-done.
+>
+> **SUPERSEDED (2026-11-16)** by `library-aware-skill-retrieval` (#148, archived in #150). rf-mcp now depends on
+> the official `robotframework-plugins` package (MarketSquare/robotframework-plugins), serves its skills as a
+> layer between `--skills-dir` and the built-in skills, and points agents to the ones matching their project's
+> libraries in the first tool result instead of bundling or copying a skill set.
 
 ## Why
 

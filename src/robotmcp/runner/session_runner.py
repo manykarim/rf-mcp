@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Callable, Literal, Sequence
 
@@ -13,11 +14,14 @@ from robotmcp.hints import Hint, HintContext, HintEngine
 from robotmcp.runner.cli_runner import (
     CliRunner,
     _longname_flag,
+    configured_output_dir,
     truncate_text,
 )
 from robotmcp.runner.environment import missing_robotcode_instruction
 from robotmcp.runner.process import run_process
 from robotmcp.runner.shell_escape import build_agent_env, format_cli_command
+
+logger = logging.getLogger(__name__)
 
 _BARE_DEBUG_DOT_COMMANDS = {
     "c",
@@ -631,6 +635,23 @@ class SessionRunner:
             instruction=instruction,
         )
 
+    def _ensure_output_dir(self, root: str | Path | None, profile: str | None, mode_override: str | None) -> None:
+        """Create the configured `output-dir` before a server-mode session starts.
+
+        `robot` creates it when it writes output.xml, but a REPL writes none and `rf_debug` runs with
+        `--output NONE`, so `${OUTPUT DIR}` may not exist: Browser's `New Browser` then fails to write
+        playwright-log.txt there.
+        """
+        if self.config.resolved_mode(mode_override) != "server":
+            return
+        output_dir = configured_output_dir(self.config.resolve_root(root), profile)
+        if output_dir is None:
+            return
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.info("could not create the output directory %s: %s", output_dir, exc)
+
     def run_repl(
         self,
         action: ReplAction = "start",
@@ -678,6 +699,8 @@ class SessionRunner:
             profile=profile,
             mode=mode_override,
         )
+        if action == "start":
+            self._ensure_output_dir(root, profile, mode_override)
         res = self._execute_session_cmd(
             args,
             kind="repl",
@@ -752,6 +775,8 @@ class SessionRunner:
             mode=mode_override,
             **run_options,
         )
+        if action == "start":
+            self._ensure_output_dir(root, profile, mode_override)
         fallback: str | None = None
         if action == "start" and self.config.resolved_mode(mode_override) == "client":
             fallback = self._build_debug_fallback(
