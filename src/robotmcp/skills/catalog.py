@@ -121,9 +121,9 @@ def skills_dir_entries(skills_dirs: Iterable[Path]) -> list[CatalogEntry]:
     return entries
 
 
-def official_entries() -> list[CatalogEntry]:
-    """Catalogues of the official package's plugins that ship skills (bundles such as rf-agentskills excluded)."""
-    official = load_official_skills()
+def official_entries(channel: str = "bundled") -> list[CatalogEntry]:
+    """Catalogues of the official plugins that ship skills (bundles such as rf-agentskills excluded), of `channel`."""
+    official = load_official_skills(channel)
     entries: list[CatalogEntry] = []
     for data in official.catalog:
         name = str(data.get("name", ""))
@@ -141,7 +141,7 @@ def builtin_entries(path: Path = BUILTIN_CATALOG) -> list[CatalogEntry]:
 
 def catalog_entries(config: ServerConfig) -> list[CatalogEntry]:
     """Every catalogue, in precedence order: `--skills-dir`, official, built-in."""
-    return [*skills_dir_entries(config.skills_dirs), *official_entries(), *builtin_entries()]
+    return [*skills_dir_entries(config.skills_dirs), *official_entries(config.official_skills), *builtin_entries()]
 
 
 def _supported(installed: str, versions: str) -> bool:

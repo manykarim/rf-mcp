@@ -317,8 +317,13 @@ async def test_an_unsupported_catalogue_format_is_skipped(outside: Path, tmp_pat
 def test_doctor_reports_the_official_package(outside: Path, fake_bundle, capsys) -> None:
     from robotmcp.onboarding.cli import run_doctor
 
-    report = run_doctor(root=outside / "home")
-    assert report["official_skills"] == {"version": "2026.11.0", "catalog_format": 1, "skills": 4, "warning": None}
+    report = run_doctor(root=outside / "home", official_skills="bundled")
+    assert report["official_skills"] == {
+        "version": "2026.11.0", "catalog_format": 1, "skills": 4, "warning": None,
+        # official-skills-source: the channel and what it serves
+        "channel": "bundled", "served": "bundled", "commit": None, "fetched_at": None, "path": None,
+        "fallback_reason": None,
+    }
     assert "Official Skills: robotframework-plugins 2026.11.0 (catalogue format 1, 4 skills)" in capsys.readouterr().out
 
 

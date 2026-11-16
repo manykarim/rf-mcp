@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import os
 import sys
 from pathlib import Path
 
@@ -67,3 +68,38 @@ def test_every_builtin_hint_link_resolves(real_bundle) -> None:
     for rule in BUILTIN_HINT_RULES:
         for uri in rule.skills:
             assert resolve_skill_uri(uri, served), f"{rule.id}: {uri}"
+
+
+@pytest.mark.skipif(os.environ.get("RF_MCP_LIVE_FETCH") != "1", reason="set RF_MCP_LIVE_FETCH=1 to fetch from GitHub")
+async def test_live_update_skills_then_serve_the_snapshot(
+    real_bundle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """official-skills-source 6.1: `update-skills --ref latest` against GitHub, then a server on channel `latest`."""
+    import json
+    import time
+
+    from robotmcp.entry import main
+    from robotmcp.runner.environment import EnvironmentResolver
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "cache"))  # the package's snapshot cache, not the user's
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    start = time.monotonic()
+    assert main(["update-skills", "--ref", "latest"]) == 0
+    fetched = json.loads(capsys.readouterr().out)
+    print(f"\nfetched latest at {fetched['commit']} in {time.monotonic() - start:.1f}s")
+
+    load_official_skills.cache_clear()
+    served = load_official_skills("latest")
+    assert served.commit == fetched["commit"] and served.skill_count() == fetched["skills"]
+    shop = tmp_path / "shop"
+    shop.mkdir()
+    (shop / "robot.toml").write_text("", encoding="utf-8")
+    monkeypatch.setattr(EnvironmentResolver, "installed_distributions",
+                        lambda self, root: {"robotframework-browser": "20.6.0"})
+    cfg = ServerConfig(execution_mode="server", official_skills="latest")
+    async with Client(create_server(cfg), **_LEGACY) as client:
+        text = (await client.read_resource("skill://rf-browser/SKILL.md"))[0].text
+        assert text.startswith("---")
+        res = await client.call_tool("rf_discover", {"action": "read", "paths": ["robot.toml"], "root": str(shop)})
+    assert res.structured_content["project_skills"][0]["skill"] == "skill://rf-browser/SKILL.md"
+    assert any(served.path in root.parents for root in resolve_skill_roots(cfg))

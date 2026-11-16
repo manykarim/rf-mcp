@@ -150,3 +150,29 @@ def test_no_marker_means_the_working_directory_itself(tmp_path: Path, monkeypatc
     monkeypatch.setattr("robotmcp.config._has_marker", lambda directory, marker: False)
     monkeypatch.chdir(start)
     assert ServerConfig().startup_root() == (start.resolve(), "cwd")
+
+
+# --- official-skills-source: the official skills channel -------------------------------------
+
+
+def test_official_skills_channel_defaults_to_bundled() -> None:
+    cfg = ServerConfig.from_env_and_args(argv=[], env={})
+    assert cfg.official_skills == "bundled"
+    assert cfg.official_skills_refresh_hours == 24
+
+
+def test_official_skills_channel_from_the_environment() -> None:
+    assert ServerConfig.from_env_and_args(argv=[], env={"RF_MCP_OFFICIAL_SKILLS": "latest"}).official_skills == "latest"
+
+
+def test_official_skills_option_overrides_the_environment() -> None:
+    cfg = ServerConfig.from_env_and_args(["--official-skills", "bundled"], env={"RF_MCP_OFFICIAL_SKILLS": "latest"})
+    assert cfg.official_skills == "bundled"
+
+
+@pytest.mark.parametrize(("raw", "hours"), [("0", 0), ("6", 6), ("1.5", 1.5), ("", 24), ("soon", 24), ("-3", 24)])
+def test_official_skills_refresh_interval(raw: str, hours: float, caplog: pytest.LogCaptureFixture) -> None:
+    cfg = ServerConfig.from_env_and_args(argv=[], env={"RF_MCP_OFFICIAL_SKILLS_REFRESH": raw})
+    assert cfg.official_skills_refresh_hours == hours
+    if raw in ("soon", "-3"):
+        assert "RF_MCP_OFFICIAL_SKILLS_REFRESH" in caplog.text

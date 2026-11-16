@@ -12,6 +12,8 @@ duplicate them.
 | `-r`, `--root` | `RF_MCP_ROOT` | not pinned | Pins the project root (the folder with `robot.toml`) for every call that passes no `root`; see [How the project root is found](#how-the-project-root-is-found). |
 | `-p`, `--profile` | `RF_MCP_PROFILE` | none | Default `robot.toml` profile (`-p`). |
 | `--skills-dir` (repeatable) | `RF_MCP_SKILLS_DIR` (`;` or the OS path separator) | none | Extra skill folders; see [Skills](#skills). |
+| `--official-skills` | `RF_MCP_OFFICIAL_SKILLS` | `bundled` | Where the official skills come from: `bundled` (the installed `robotframework-plugins`) or a branch, tag or commit of MarketSquare/robotframework-plugins; see [Newer official skills](#newer-official-skills). |
+| | `RF_MCP_OFFICIAL_SKILLS_REFRESH` | `24` | Hours between background fetches of a branch or tag channel; `0` turns them off. |
 | `--hints-file` | `RF_MCP_HINTS_FILE` | `<root>/.robotframework/hints.toml` | Custom recovery hints; see [Hints](#hints). |
 | `--shell {powershell,bash}` | `RF_MCP_SHELL` | PowerShell on Windows, bash elsewhere | Syntax of client-mode commands. |
 | `--transport {stdio,http,sse}` | `RF_MCP_TRANSPORT` | `stdio` | MCP transport. `http` is streamable HTTP at `/mcp`. |
@@ -25,7 +27,7 @@ duplicate them.
 | `-V`, `--version` | | | Print the version. |
 
 The subcommands `rf-mcp doctor`, `rf-mcp init` and `rf-mcp sync-skills` are described in
-[GETTING_STARTED.md](GETTING_STARTED.md). `python -m robotmcp` is the same as `rf-mcp`.
+[GETTING_STARTED.md](GETTING_STARTED.md), `rf-mcp update-skills` in [Newer official skills](#newer-official-skills). `python -m robotmcp` is the same as `rf-mcp`.
 
 The server sets `PYTHONUTF8=1`, `PYTHONIOENCODING=utf-8` and `ROBOTCODE_FORCE_AI_AGENT=1` for every robotcode
 process, and client-mode commands set them too.
@@ -203,6 +205,55 @@ description: Page objects, test data and naming rules of the shop tests. Read be
 ```
 
 `rf-mcp sync-skills` copies the active skills into an agent's skill folder for agents that read skills from disk.
+
+### Newer official skills
+
+The official skills change faster than `robotframework-plugins` is released to PyPI. By default rf-mcp serves the
+content of the installed package (`bundled`): it works offline and gives the same skills on every machine with the
+same versions. To serve a newer state of the
+[repository](https://github.com/MarketSquare/robotframework-plugins) instead, set a channel:
+
+| channel | content |
+| --- | --- |
+| `bundled` (default) | the installed `robotframework-plugins` package |
+| `stable` | the latest released plugins; the branch appears with the first plugin release |
+| `latest`, `main` | the newest merged, not yet released content |
+| a tag, for example `rf-web--v1.2.0` | that release |
+| a full commit SHA | that commit; never refreshed |
+
+```bash
+rf-mcp init --scope user --agent all --official-skills latest --write   # writes RF_MCP_OFFICIAL_SKILLS=latest
+rf-mcp update-skills --ref latest                                         # fetch it now
+```
+
+rf-mcp never uses the network while starting. It serves the snapshot it last fetched for the channel, or the
+installed package's skills while there is none yet. `rf-mcp doctor` says which, with the commit and fetch time. In
+the background it fetches a branch or tag again once every `RF_MCP_OFFICIAL_SKILLS_REFRESH` hours (24 by default),
+and serves the new snapshot from the next start, so a session never sees its skills change. A long-running HTTP
+server picks it up when it is restarted. When GitHub cannot be reached, the server keeps what it has and logs the
+failure once.
+
+The download goes through the package's own `bundle.fetch()`: it asks `api.github.com` for the commit and loads the
+commit's archive from `codeload.github.com`. Snapshots are kept per commit in the package's cache
+(`%LOCALAPPDATA%\robotframework-plugins\snapshots`, or `~/.cache/robotframework-plugins/snapshots`, about 1 MB
+each), and rf-mcp records which commit it fetched for each channel in `rf-mcp/official-skills.json` next to it.
+Behind a proxy, set `HTTPS_PROXY`. A proxy that re-signs TLS with its own certificate authority needs
+`SSL_CERT_FILE` pointing to a bundle that contains it.
+
+For a machine without internet access, or a Docker image, fetch the snapshot where the network is available and keep
+it with the image:
+
+```bash
+rf-mcp update-skills --ref latest            # in the image build, then run the server with RF_MCP_OFFICIAL_SKILLS=latest
+RF_MCP_OFFICIAL_SKILLS_REFRESH=0 rf-mcp      # never try to refresh it
+```
+
+`update-skills` prints the commit and folder it stored and exits 1 when the fetch fails. Without `--ref` it fetches
+the channel set in `RF_MCP_OFFICIAL_SKILLS`.
+
+`latest` and `main` have been reviewed but not released. Skills are instructions to the agent, so a team that wants
+only released content stays on `bundled` or uses `stable`. A clone of the repository as `--skills-dir` (see
+[Skills](#skills)) is the other way to follow it, updated with `git pull` instead of by rf-mcp.
 
 ### Skills for the project's libraries
 

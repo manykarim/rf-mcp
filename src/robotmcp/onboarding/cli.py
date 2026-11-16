@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from robotmcp.config import ServerConfig
 from robotmcp.onboarding.agent_config import detect_install_kind, generate_agent_mcp_configs, init_exit_code
@@ -17,7 +18,7 @@ from robotmcp.hints import load_custom_rules_with_errors
 from robotmcp.runner.cli_runner import resolve_robotcode_executable
 from robotmcp.runner.environment import EnvironmentResolver
 from robotmcp.runner.shell_escape import build_agent_env
-from robotmcp.skills.official import load_official_skills
+from robotmcp.skills.official import BUNDLED, fetch_and_record, load_official_skills
 from robotmcp.skills.provider import discover_skill_summaries, resolve_skill_roots
 
 AGENT_SKILL_TARGETS: dict[str, str] = {
@@ -153,11 +154,13 @@ def run_doctor(
     skills_dirs: Sequence[Path] | None = None,
     as_json: bool = False,
     resolver: EnvironmentResolver | None = None,
+    official_skills: str | None = None,
 ) -> dict[str, Any]:
     """Run `rf-mcp doctor`: the root and environment a call would get, robotcode, skills and hints."""
     cfg = ServerConfig(
         workspace_root=root.expanduser().resolve() if root else None,
         skills_dirs=list(skills_dirs or []),
+        official_skills=(official_skills or os.environ.get("RF_MCP_OFFICIAL_SKILLS") or BUNDLED).strip() or BUNDLED,
     )
     ws_root, root_source = cfg.startup_root()
     resolver = resolver or EnvironmentResolver()
@@ -165,7 +168,7 @@ def run_doctor(
     rc_info = _check_robotcode_status(ws_root, list(env.command_prefix))
     skill_roots = resolve_skill_roots(cfg)
     skills = discover_skill_summaries(skill_roots)
-    official = load_official_skills()
+    official = load_official_skills(cfg.official_skills)  # reads the state file, never the network
     hints_path = cfg.resolve_hints_file()
     hint_errors = load_custom_rules_with_errors(hints_path)[1] if hints_path else []
     uv = _uv_info(resolver)
@@ -196,9 +199,15 @@ def run_doctor(
         "robotcode": rc_info,
         "skills": skills,
         "official_skills": {
+            "channel": official.channel,
+            "served": "snapshot" if official.from_snapshot else "bundled",
             "version": official.version,
             "catalog_format": official.catalog_format,
             "skills": official.skill_count(),
+            "commit": official.commit,
+            "fetched_at": official.fetched_at,
+            "path": str(official.path) if official.path else None,
+            "fallback_reason": official.fallback_reason,
             "warning": official.warning,
         } if official.installed else None,
         "hints_file": str(hints_path) if hints_path else None,
@@ -230,11 +239,21 @@ def run_doctor(
         if rc_info["install_hint"] and env.libraries_visible:
             print(f"Install Hint   : {rc_info['install_hint']}")
         print(f"Active Skills  : {', '.join(s['name'] for s in skills) or 'none'}")
-        if official.installed:
+        if official.installed and official.from_snapshot:
+            print(
+                f"Official Skills: snapshot of {official.channel!r} at {(official.commit or '')[:12]} "
+                f"(fetched {official.fetched_at or '?'}, {official.skill_count()} skills)"
+            )
+            print(f"  Folder       : {official.path}")
+            print(f"  Fallback     : robotframework-plugins {official.version or '?'} (catalogue format "
+                  f"{official.catalog_format})")
+        elif official.installed:
             print(
                 f"Official Skills: robotframework-plugins {official.version or '?'} "
                 f"(catalogue format {official.catalog_format}, {official.skill_count()} skills)"
             )
+            if official.channel != BUNDLED:
+                print(f"  Channel      : {official.channel} (no usable snapshot: {official.fallback_reason})")
             if official.warning:
                 print(f"  Warning      : {official.warning}")
         else:
@@ -315,6 +334,26 @@ def _tree_snapshot(directory: Path) -> dict[str, bytes]:
     }
 
 
+def update_skills(ref: str | None, environ: Mapping[str, str] | None = None) -> int:
+    """`rf-mcp update-skills`: fetch `ref` (else the configured channel), record it, print what was stored."""
+    channel = (ref or (os.environ if environ is None else environ).get("RF_MCP_OFFICIAL_SKILLS") or "").strip()
+    if not channel or channel == BUNDLED:
+        print(
+            "No ref to fetch: the official skills channel is 'bundled'. Pass --ref (for example --ref latest) "
+            "or set RF_MCP_OFFICIAL_SKILLS.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        snap, entry = fetch_and_record(channel)
+    except Exception as exc:  # FetchError, or the package missing
+        print(f"Could not fetch the official skills at {channel!r}: {exc}", file=sys.stderr)
+        return 1
+    skills = sum(1 for d in snap.skills_dirs().values() for s in Path(d).iterdir() if (s / "SKILL.md").is_file())
+    print(json.dumps({"ref": channel, "commit": entry["commit"], "path": entry["path"], "skills": skills}, indent=2))
+    return 0
+
+
 def run_onboarding_cli(argv: Sequence[str]) -> int:
     """Dispatch `rf-mcp {doctor|init|sync-skills}` subcommands."""
     parser = argparse.ArgumentParser(prog="rf-mcp")
@@ -328,6 +367,9 @@ def run_onboarding_cli(argv: Sequence[str]) -> int:
         "--skills-dir", action="append", dest="skills_dirs", default=None
     )
     doc_p.add_argument("--json", action="store_true", help="Output JSON report.")
+    doc_p.add_argument(
+        "--official-skills", default=None, help="Official skills channel to report (default: RF_MCP_OFFICIAL_SKILLS)."
+    )
 
     init_p = subparsers.add_parser(
         "init",
@@ -350,6 +392,12 @@ def run_onboarding_cli(argv: Sequence[str]) -> int:
     )
     init_p.add_argument(
         "--write", action="store_true", help="Apply the entries (default: print what would change)."
+    )
+    init_p.add_argument(
+        "--official-skills",
+        default=None,
+        help="Set RF_MCP_OFFICIAL_SKILLS in the entries: 'bundled' or a ref of MarketSquare/robotframework-plugins "
+        "(stable, latest, main, a tag or a commit).",
     )
 
     sync_p = subparsers.add_parser(
@@ -374,13 +422,28 @@ def run_onboarding_cli(argv: Sequence[str]) -> int:
         help="Overwrite existing skill folders whose content differs.",
     )
 
+    update_p = subparsers.add_parser(
+        "update-skills",
+        help="Fetch the official skills at a ref of MarketSquare/robotframework-plugins and serve them from the "
+        "next start (for CI, Docker images and offline machines).",
+    )
+    update_p.add_argument(
+        "--ref",
+        default=None,
+        help="Branch, tag or commit to fetch (default: RF_MCP_OFFICIAL_SKILLS).",
+    )
+
     ns = parser.parse_args(list(argv))
+    if ns.subcommand == "update-skills":
+        return update_skills(ns.ref)
+
     ws_root = Path(ns.root).expanduser().resolve() if ns.root else Path.cwd().resolve()
 
     if ns.subcommand == "doctor":
         s_dirs = [Path(p) for p in (ns.skills_dirs or [])]
         # Without -r, doctor finds the root the way the server does (working directory walked up).
-        rep = run_doctor(root=Path(ns.root) if ns.root else None, skills_dirs=s_dirs, as_json=ns.json)
+        rep = run_doctor(root=Path(ns.root) if ns.root else None, skills_dirs=s_dirs, as_json=ns.json,
+                         official_skills=ns.official_skills)
         return 0 if rep["ok"] else 1
 
     if ns.subcommand == "init":
@@ -391,6 +454,7 @@ def run_onboarding_cli(argv: Sequence[str]) -> int:
             url=ns.url,
             write_files=ns.write,
             scope=ns.scope,
+            official_skills=ns.official_skills,
         )
         print(json.dumps(configs, indent=2))
         return init_exit_code(configs)
