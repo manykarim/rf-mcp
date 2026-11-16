@@ -33,7 +33,8 @@
 
 - [x] 6.1 Add a live test, run only with `RF_MCP_LIVE_FETCH=1`: `rf-mcp update-skills --ref latest` against GitHub, then a server built with channel `latest` serves the snapshot's skills and `project_skills` names `rf-browser` for a Browser inventory. Run it once locally and record the commit and timings next to this task.
   - 2026-11-16, `tests/test_official_package.py::test_live_update_skills_then_serve_the_snapshot`: `latest` = `56547f0e5799`, fetched in 1.4 s and 1.1 s (two runs, each into a fresh cache), 9 skills; the whole test took 3.5 s and 3.2 s. The documented commands (`init --official-skills latest`, `update-skills --ref latest`, `doctor` with `RF_MCP_OFFICIAL_SKILLS=latest`, and an unknown ref, which exits 1) gave the expected output against GitHub with `LOCALAPPDATA` pointing to a scratch folder.
-- [ ] 6.2 Run `uv run pytest -q` on Python 3.10 and 3.12, ruff on `src tests` and `openspec validate official-skills-source --strict`. Verify that all are clean apart from findings already on `main`, and that the CI matrix passes on the PR.
+- [x] 6.2 Run `uv run pytest -q` on Python 3.10 and 3.12, ruff on `src tests` and `openspec validate official-skills-source --strict`. Verify that all are clean apart from findings already on `main`, and that the CI matrix passes on the PR.
+  - 2026-11-16: Python 3.10 and 3.12 (`uv run --isolated`): 396 passed, 31 skipped each, after updating `test_doctor_reports_the_official_package` for the report's new fields. ruff: only the 8 E741 findings in `tests/fixtures/ledger` already on `main`. `openspec validate --strict`: valid. CI on #152: all 17 checks passed; merged as `ec5f019`.
 
 ## Workflow follow-up
 
