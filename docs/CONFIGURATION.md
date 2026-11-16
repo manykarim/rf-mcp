@@ -107,16 +107,19 @@ and the client's `initialize` request:
 | Copilot CLI | 1.0.105 | the project | 2025-11-25 | no |
 | Antigravity (`agy`) | 1.0.0 | the plugin folder (`.agents/plugins/<name>`) for a project plugin | 2025-11-25 | yes: the project folder |
 | OpenCode | 2.2.7 | the project | 2025-11-25 | yes: the project folder |
-| Copilot in VS Code (its own agent) | 1.145.2 | the project for a workspace entry (`.vscode/mcp.json`); the user's home folder for a user entry | 2025-11-25 | yes: the workspace folder |
-| Copilot CLI chats in VS Code | 1.0.103 | the project | 2025-11-25 | no |
+| Copilot in VS Code (its own agent) | 1.145.2, 1.146.0 | the project for a workspace entry (`.vscode/mcp.json`); outside the project for a user entry | 2025-11-25 | yes: the workspace folders |
+| Copilot CLI chats in VS Code | 1.0.103, 1.0.108 | the project (the first workspace folder) | 2025-11-25 | no |
 
 All measured agents give rf-mcp's tools the right root: Claude Code, Antigravity, OpenCode and VS Code through
 their roots (and the working directory), Codex and the Copilot CLI through the working directory. VS Code was
-measured on 2026-11-12.
+measured on 2026-11-12 and, with the real server, on 2026-11-16.
 
-VS Code's own agent starts a user entry in the user's home folder. Tool calls and project skills still get the
-project through its roots; the server instructions then note that project skills are listed by
-`list_resources`, because they cannot be known at startup.
+VS Code's own agent starts a user entry outside the project: in the user's home folder with 1.145.2, in `%TEMP%`
+with 1.146.0 on Windows. Tool calls and project skills still get the project through its roots; the server
+instructions then note that project skills are listed by `list_resources`, because they cannot be known at startup.
+
+Copilot CLI chats in VS Code also start the servers of VS Code's user `mcp.json` (1.0.108). They report no roots,
+so only the first workspace folder's project skills are served; tool calls for another folder pass it as `root`.
 
 OpenCode starts MCP servers from its background service (`opencode serve --service`) and keeps them running after
 `opencode run` ends. The command is therefore looked up on the service's `PATH`, not the one of the shell that
