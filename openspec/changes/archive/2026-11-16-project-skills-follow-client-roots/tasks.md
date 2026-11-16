@@ -24,7 +24,9 @@
 
 - [x] 4.1 Run `uv run pytest -q` on Python 3.10 and 3.12, ruff on `src tests`, and `openspec validate project-skills-follow-client-roots --strict`. Verify that all are clean apart from the ruff findings already on `main`, and that the CI matrix passes on the PR.
   - CI on #147 passed on 2026-11-13: all 17 checks, including the test matrix on Linux, macOS and Windows for Python 3.10–3.12, and both Docker images.
-- [ ] 4.2 Repeat the VS Code check from task 6.4 of `project-independent-server` with the real server. Register the branch's `rf-mcp` as a user entry in `~/.copilot/mcp-config.json`, open a project that has `.robotframework/skills/<name>/SKILL.md`, and ask the agent to list its skills, which requires the user in the VS Code GUI. Verify that the project skill is listed, then remove the entry again.
+- [x] 4.2 Repeat the VS Code check from task 6.4 of `project-independent-server` with the real server. Register the branch's `rf-mcp` as a user entry in VS Code's user `mcp.json` (what `code --add-mcp` writes; `~/.copilot/mcp-config.json` belongs to the Copilot CLI), open a project that has `.robotframework/skills/<name>/SKILL.md`, and ask VS Code's own agent (Local) to list its skills, which requires the user in the VS Code GUI. Verify that the project skill is listed, then remove the entry again.
+  - Done on 2026-11-16 with VS Code 1.146.0 and Copilot Chat 0.74.0. The server ran rf-mcp 2.0.0 from `feature/library-aware-skill-retrieval` (`c31e3e4`), started by `Code.exe` in `%TEMP%`, outside the project. Opening `shop` alone listed `shop-conventions` and its `team-glossary` (MANGO-1). Opening `api` alone listed `api-conventions`, its `team-glossary` (LEMON-2) and its own `rf-requests`, which won over the official skill. The entry was removed afterwards. Two folders in one window were not checked with the Local agent; `tests/test_skills_provider.py` covers that.
+  - Copilot CLI chats in VS Code (1.0.108) also picked up the user entry. They start rf-mcp in the first workspace folder and report no roots, so only that folder's skills were listed; tool calls with an explicit `root` still worked for both folders.
 
 ## Workflow follow-up
 
