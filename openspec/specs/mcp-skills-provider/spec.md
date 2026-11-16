@@ -65,9 +65,7 @@ The built-in `rf-robotcode` skill SHALL translate every applicable practice of `
 - **THEN** every practice is either covered in rf-mcp terms or listed in the skill as intentionally not applicable (for example CLI-only install advice), and a unit test asserts the presence of the key rules
 
 ### Requirement: Layered skill roots for ecosystem plugins and project customizations
-The system SHALL serve skills from, in precedence order, (1) the project-local `<root>/.robotframework/skills/`, (2) external plugin directories configured via `--skills-dir` or `RF_MCP_SKILLS_DIR` (such as `robotcodedev/robotframework-agent-plugins` and `manykarim/robotframework-agentskills`), in the order given, and (3) the built-in `rf-mcp` skills. When two sources define a skill of the same name, the first one SHALL win. Skills SHALL be re-read on each request, so edits appear without a restart.
-
-`<root>` SHALL be resolved for each request the way a tool call's project root is resolved in server mode: the root pinned with `--root` / `RF_MCP_ROOT`; else the client's workspace folders (MCP roots) when the client reports them; else the folder the server started in, walked up to the nearest project marker. When the client reports several workspace folders, the project skills of each of them SHALL be served, in the client's order, the first folder winning for a duplicate name. In client mode, `<root>` SHALL be the pinned root or the startup folder.
+The system SHALL serve skills from, in precedence order, (1) the project-local `<root>/.robotframework/skills/`, (2) external plugin directories configured via `--skills-dir` or `RF_MCP_SKILLS_DIR`, in the order given, (3) the skills of the installed official `robotframework-plugins` package, and (4) the built-in `rf-mcp` skills. When two sources define a skill of the same name, the first one SHALL win. Skills SHALL be re-read on each request, so edits appear without a restart.
 
 #### Scenario: Project-local skill overrides or extends built-in skills without code changes
 - **WHEN** a team places `.robotframework/skills/project-conventions/SKILL.md` in the workspace
@@ -76,6 +74,21 @@ The system SHALL serve skills from, in precedence order, (1) the project-local `
 #### Scenario: Project skill wins over a built-in skill of the same name
 - **WHEN** a project defines `.robotframework/skills/rf-locators/SKILL.md`
 - **THEN** reading `skill://rf-locators/SKILL.md` returns the project's file, not the built-in one
+
+#### Scenario: Official skills are served when the package is installed
+- **WHEN** `robotframework-plugins` with a supported catalogue format is installed next to `rf-mcp`
+- **THEN** `list_resources` includes its skills, for example `skill://rf-browser/SKILL.md`, without any `--skills-dir` configuration
+
+#### Scenario: Official skill wins over a built-in skill of the same name
+- **WHEN** the official package bundles a skill named `rf-requests` and `rf-mcp` has a built-in skill of the same name
+- **THEN** reading `skill://rf-requests/SKILL.md` returns the official skill
+
+#### Scenario: Company skills folder wins over an official skill
+- **WHEN** `--skills-dir /opt/acme-skills` holds `rf-browser/SKILL.md` and the official package is installed
+- **THEN** reading `skill://rf-browser/SKILL.md` returns the company's file
+
+### Requirement: Project skills follow the request's project root
+The `<root>` of project skills SHALL be resolved per request like a tool call's root in server mode: the pinned root (`--root`, `RF_MCP_ROOT`); else the client's workspace folders (MCP roots); else the startup folder, walked up to the nearest project marker. With several workspace folders, each folder's project skills SHALL be served in the client's order, the first folder winning for a duplicate name. In client mode, `<root>` SHALL be the pinned root or the startup folder.
 
 #### Scenario: Server started outside the project
 - **WHEN** an agent starts `rf-mcp` in the user's home folder, reports the workspace folder `/work/shop` as its only MCP root, and `/work/shop/.robotframework/skills/shop-conventions/SKILL.md` exists
@@ -92,6 +105,13 @@ The system SHALL serve skills from, in precedence order, (1) the project-local `
 #### Scenario: Workspace folders change
 - **WHEN** the client sends `notifications/roots/list_changed` after its workspace folders changed
 - **THEN** the next skill listing uses the new folders
+
+### Requirement: Official skills package is read through its public API
+The official package SHALL be used only through its public skills API at a catalogue format rf-mcp supports; an installed package with an unsupported format SHALL be skipped with a warning in the log and in `rf-mcp doctor`, and the server SHALL start without it.
+
+#### Scenario: Unsupported catalogue format
+- **WHEN** the installed `robotframework-plugins` reports a catalogue format `rf-mcp` does not support
+- **THEN** the server starts, serves no official skills, logs a warning naming the installed and supported formats, and `rf-mcp doctor` reports the same
 
 ### Requirement: Multi-agent CLI onboarding and skill synchronization
 The system SHALL provide CLI subcommands (`rf-mcp init`, `rf-mcp sync-skills`, `rf-mcp doctor`) that configure MCP server entries and optionally materialize skills into local agent directories for Claude Code, OpenAI Codex, Google Antigravity (`agy`), GitHub Copilot, and OpenCode.
@@ -177,3 +197,21 @@ When the server starts in server mode with no pinned root and the folder it star
 #### Scenario: Started in a project
 - **WHEN** `rf-mcp` starts in a folder that contains `robot.toml`
 - **THEN** the `instructions` list that project's skills in the skill catalog and carry no such note
+
+### Requirement: Instructions translate official skill commands to rf-mcp tools
+When official skills are served, the server `instructions` SHALL state that those skills describe `robotcode` commands and SHALL map each to its rf-mcp tool: `robotcode repl` to `rf_repl`, `robot` to `rf_run`, `discover` to `rf_discover`, `analyze` to `rf_analyze`, `results` to `rf_results`, `doc` and `libdoc` to `rf_doc`, and `debug` to `rf_debug`. The instructions SHALL stay under 2,500 characters.
+
+#### Scenario: Official skills served
+- **WHEN** `robotframework-plugins` is installed and a client reads the server `instructions`
+- **THEN** they contain the command-to-tool mapping and are at most 2,500 characters long
+
+#### Scenario: No official skills
+- **WHEN** `robotframework-plugins` is not installed
+- **THEN** the `instructions` carry no command-to-tool mapping
+
+### Requirement: Official skills take one line in the instructions catalogue
+The skill catalogue in the server `instructions` SHALL list project skills, `--skills-dir` skills and built-in skills one row each, and SHALL summarise the official skills in one line that points to `list_resources` and says that the skills matching the project's libraries are attached to the first tool result. The built-in `rf-robotcode` row SHALL always fit.
+
+#### Scenario: Catalogue with the official package
+- **WHEN** `robotframework-plugins` bundling nine skills is installed and a client reads the server `instructions`
+- **THEN** the catalogue holds a row for `skill://rf-robotcode/SKILL.md` and one line for the official skills, not a row for each of them
