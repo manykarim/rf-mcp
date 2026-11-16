@@ -15,6 +15,7 @@ least `MIN_ROBOTCODE`; otherwise rf-mcp's robotcode version is layered onto its 
 from __future__ import annotations
 
 import importlib.metadata
+import json
 import logging
 import os
 import shutil
@@ -26,6 +27,7 @@ from pathlib import Path
 from typing import Callable, Literal
 
 import tomlkit
+from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 logger = logging.getLogger(__name__)
@@ -127,6 +129,29 @@ def probe_robotcode_version(interpreter: Path) -> str | None:
     return (proc.stdout.strip() or None) if proc.returncode == 0 else None
 
 
+_DISTRIBUTIONS_SCRIPT = (
+    "import importlib.metadata as m, json; "
+    "print(json.dumps({d.metadata['Name']: d.version for d in m.distributions() if d.metadata['Name']}))"
+)
+
+
+def probe_distributions(interpreter: Path) -> dict[str, str] | None:
+    """Return the distributions importable by `interpreter` as {name: version}, or None when it cannot tell."""
+    try:
+        proc = subprocess.run(
+            [str(interpreter), "-c", _DISTRIBUTIONS_SCRIPT],
+            capture_output=True, text=True, timeout=VERSION_PROBE_TIMEOUT_SECONDS, stdin=subprocess.DEVNULL,
+        )
+        data = json.loads(proc.stdout) if proc.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        logger.info("Listing the packages of %s failed: %s", interpreter, exc)
+        return None
+    if not isinstance(data, dict):
+        logger.info("Listing the packages of %s failed (exit %s): %s", interpreter, proc.returncode, proc.stderr[-300:])
+        return None
+    return {str(k): str(v) for k, v in data.items()}
+
+
 def probe_command(prefix: tuple[str, ...]) -> tuple[bool, str]:
     """Run `<prefix> --version` and return (ok, output). Warms uv's cache for a layered prefix."""
     try:
@@ -158,6 +183,7 @@ class EnvironmentResolver:
         pin: str | None = None,
         version_probe: Callable[[Path], str | None] = probe_robotcode_version,
         command_probe: Callable[[tuple[str, ...]], tuple[bool, str]] = probe_command,
+        distributions_probe: Callable[[Path], dict[str, str] | None] = probe_distributions,
         environ: dict[str, str] | None = None,
     ) -> None:
         self.own_prefix = (own_prefix or Path(sys.prefix)).resolve()
@@ -168,6 +194,8 @@ class EnvironmentResolver:
         self._command_probe = command_probe
         self._environ = environ
         self._cache: dict[Path, tuple[tuple, ProjectEnvironment]] = {}
+        self._distributions_probe = distributions_probe
+        self._distributions: dict[Path, tuple[tuple, dict[str, str] | None]] = {}
         self.last_layer_seconds: float | None = None
 
     @property
@@ -212,6 +240,25 @@ class EnvironmentResolver:
         env = self._resolve(root)
         self._cache[root] = (self._fingerprint(root, env), env)
         return env
+
+    def installed_distributions(self, root: Path) -> dict[str, str] | None:
+        """The packages installed where the root's robotcode runs, keyed by canonical name; None when not visible.
+
+        Cached like `resolve`, so installing a package into the project's environment refreshes it.
+        """
+        root = root.resolve()
+        env = self.resolve(root)
+        key = self._fingerprint(root, env)
+        cached = self._distributions.get(root)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        result: dict[str, str] | None = None
+        if env.libraries_visible:
+            python = env.interpreter or _executable_next_to(Path(env.command_prefix[0]), "python")
+            found = self._distributions_probe(python) if python is not None else None
+            result = {canonicalize_name(n): v for n, v in found.items()} if found is not None else None
+        self._distributions[root] = (key, result)
+        return result
 
     # --- resolution ---------------------------------------------------------------------------
 

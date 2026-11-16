@@ -267,3 +267,97 @@ def test_instructions_point_to_project_skills_when_started_outside_a_project(out
     assert note not in in_project
     assert "skill://shop-conventions/SKILL.md" in in_project
     assert note not in (_server(workspace_root=outside / "home").instructions or "")
+
+
+# library-aware-skill-retrieval: the official robotframework-plugins skills as a layer (fake package in conftest).
+
+
+async def test_official_skills_are_served_when_the_package_is_installed(outside: Path, fake_bundle) -> None:
+    async with Client(_server(), **_LEGACY) as client:
+        uris = await _skill_uris(client)
+        assert {"skill://rf-browser/SKILL.md", "skill://rf-selenium/SKILL.md", "skill://rf-language/SKILL.md"} <= uris
+        assert "skill://rf-robotcode/SKILL.md" in uris
+        assert "From rf-web." in await _read(client, "skill://rf-browser/SKILL.md")
+
+
+async def test_an_official_skill_wins_over_the_builtin_of_the_same_name(outside: Path, fake_bundle) -> None:
+    assert (BUILTIN_SKILLS_ROOT / "rf-requests" / "SKILL.md").is_file()
+    async with Client(_server(), **_LEGACY) as client:
+        assert "From rf-api." in await _read(client, "skill://rf-requests/SKILL.md")
+
+
+async def test_a_company_skills_folder_wins_over_an_official_skill(outside: Path, fake_bundle) -> None:
+    from tests.conftest import make_skill
+
+    company = outside / "acme-skills"
+    make_skill(company, "rf-browser", body="Company rules.")
+    async with Client(_server(skills_dirs=[company]), **_LEGACY) as client:
+        assert "Company rules." in await _read(client, "skill://rf-browser/SKILL.md")
+
+
+async def test_an_unsupported_catalogue_format_is_skipped(outside: Path, tmp_path: Path, monkeypatch, caplog) -> None:
+    import logging
+
+    from tests.conftest import install_fake_bundle
+    from robotmcp.onboarding.cli import run_doctor
+
+    install_fake_bundle(monkeypatch, tmp_path / "official", catalog_format=2)
+    with caplog.at_level(logging.WARNING):
+        server = _server()
+    assert "catalogue format 2" in caplog.text and "supports 1" in caplog.text
+    async with Client(server, **_LEGACY) as client:
+        uris = await _skill_uris(client)
+        assert "skill://rf-browser/SKILL.md" not in uris
+        assert "skill://rf-robotcode/SKILL.md" in uris
+    report = run_doctor(root=outside / "home", as_json=True)
+    assert report["official_skills"]["catalog_format"] == 2
+    assert "supports 1" in report["official_skills"]["warning"]
+
+
+def test_doctor_reports_the_official_package(outside: Path, fake_bundle, capsys) -> None:
+    from robotmcp.onboarding.cli import run_doctor
+
+    report = run_doctor(root=outside / "home")
+    assert report["official_skills"] == {"version": "2026.11.0", "catalog_format": 1, "skills": 4, "warning": None}
+    assert "Official Skills: robotframework-plugins 2026.11.0 (catalogue format 1, 4 skills)" in capsys.readouterr().out
+
+
+def test_doctor_without_the_official_package(outside: Path, capsys) -> None:
+    from robotmcp.onboarding.cli import run_doctor
+
+    assert run_doctor(root=outside / "home")["official_skills"] is None
+    assert "Official Skills: robotframework-plugins not installed" in capsys.readouterr().out
+
+
+# library-aware-skill-retrieval 7.1: the instructions with official skills.
+
+_MAPPING = "robotcode repl = rf_repl"
+_NINE = {
+    "rf-core": {"skills": {"rf-language": (), "rf-python-library": (), "rf-setup": ()}, "libraries": []},
+    "rf-web": {"skills": {"rf-browser": (), "rf-selenium": ()}, "libraries": []},
+    "rf-api": {"skills": {"rf-requests": (), "rf-restinstance": ()}, "libraries": []},
+    "rf-mobile": {"skills": {"rf-appium": ()}, "libraries": []},
+    "rf-desktop": {"skills": {"rf-platynui": ()}, "libraries": []},
+}
+
+
+def test_instructions_with_official_skills(outside: Path, tmp_path: Path, monkeypatch) -> None:
+    from tests.conftest import install_fake_bundle
+
+    install_fake_bundle(monkeypatch, tmp_path / "official", plugins=_NINE)
+    shop = _skill_project(outside / "shop", "shop-conventions", "shop-data")
+    monkeypatch.chdir(shop)
+    text = _server().instructions or ""
+    assert len(text) <= 2500
+    assert _MAPPING in text and "rf_debug" in text
+    assert "Official library skills (9, robotframework-plugins): list_resources" in text
+    assert "| rf-robotcode | skill://rf-robotcode/SKILL.md |" in text
+    assert "skill://shop-conventions/SKILL.md" in text and "skill://shop-data/SKILL.md" in text
+    assert "skill://rf-browser/SKILL.md" not in text  # one line, not a row each
+    assert "skill://rf-requests/SKILL.md" not in text  # the official rf-requests shadows the built-in row too
+
+
+def test_instructions_without_official_skills(outside: Path) -> None:
+    text = _server().instructions or ""
+    assert _MAPPING not in text and "Official library skills" not in text
+    assert "| rf-requests | skill://rf-requests/SKILL.md |" in text

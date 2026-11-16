@@ -22,6 +22,7 @@ except ImportError:  # pragma: no cover - depends on the installed fastmcp
 
 from robotmcp.client_roots import ClientRoots
 from robotmcp.config import ServerConfig
+from robotmcp.skills.official import load_official_skills
 from robotmcp.telemetry import record_skill_read
 
 BUILTIN_SKILLS_ROOT = Path(__file__).resolve().parent / "builtin"
@@ -82,7 +83,8 @@ def resolve_skill_roots(
     1. Project-local `<root>/.robotframework/skills/`, for each of `project_roots` in order
        (default: the one root `config.resolve_root(root_override)`)
     2. External `--skills-dir` / `RF_MCP_SKILLS_DIR` directories
-    3. Built-in `src/robotmcp/skills/builtin/`
+    3. The skills of the official `robotframework-plugins` package, when installed
+    4. Built-in `src/robotmcp/skills/builtin/`
     """
     roots: list[Path] = []
     if project_roots is None:
@@ -99,10 +101,25 @@ def resolve_skill_roots(
             if expanded not in roots:
                 roots.append(expanded)
 
+    for official in load_official_skills().skills_dirs.values():
+        if official not in roots:
+            roots.append(official)
+
     if BUILTIN_SKILLS_ROOT.is_dir() and BUILTIN_SKILLS_ROOT not in roots:
         roots.append(BUILTIN_SKILLS_ROOT)
 
     return roots
+
+
+def served_skills(roots: Sequence[Path]) -> dict[str, Path]:
+    """Map each served skill name to its folder, the first root winning, as `SkillsDirectoryProvider` serves them."""
+    served: dict[str, Path] = {}
+    for root in roots:
+        if root.is_dir():
+            for skill_dir in sorted(root.iterdir()):
+                if (skill_dir / "SKILL.md").is_file():
+                    served.setdefault(skill_dir.name, skill_dir)
+    return served
 
 
 def _parse_frontmatter(md_text: str, default_name: str) -> tuple[str, str]:
@@ -182,6 +199,15 @@ _READ_ROW = (
     "in one call - not one Read per file |\n"
 )
 _PROJECT_SKILLS_NOTE = "Project skills: list_resources shows them once your workspace is known."
+_OFFICIAL_COMMANDS = (
+    "Official skills (robotframework-plugins) show robotcode commands; run them through rf-mcp: robotcode repl = "
+    "rf_repl, robot = rf_run, discover = rf_discover, analyze = rf_analyze, results = rf_results, doc/libdoc = "
+    "rf_doc, debug = rf_debug."
+)
+_OFFICIAL_CATALOG = (
+    "Official library skills ({count}, robotframework-plugins): list_resources; the ones matching your project's "
+    "libraries come with your first tool result as project_skills."
+)
 _UI_ROW ="| write or fix UI steps (Browser, Selenium, Appium) | read skill://rf-locators/SKILL.md first |\n"
 _READ_STEP = "Read every file you need in one rf_discover action=read call (globs work), not file by file."
 _STEPS = (
@@ -210,11 +236,19 @@ def build_server_instructions(
     )
     if hint_load_errors:
         text += "\nCustom hints not loaded: " + "; ".join(hint_load_errors)[:300] + "\n"
+    official_roots = set(load_official_skills().skills_dirs.values())
+    official = [s for s in skills if s.get("path") and Path(s["path"]).parent in official_roots]
+    if official:
+        text += "\n" + _OFFICIAL_COMMANDS + "\n"
     catalog = ["", "## Skills (read with read_resource)"]
     if mode == "server" and config.workspace_root is None and config.startup_root()[1] == "cwd":
         catalog.append(_PROJECT_SKILLS_NOTE)  # started outside any project, e.g. VS Code user entries in the home folder
+    if official:
+        catalog.append(_OFFICIAL_CATALOG.format(count=len(official)))
     catalog += ["| Skill | URI | About |", "|---|---|---|"]
-    for s in skills:
+    rows = [s for s in skills if s not in official]
+    rows.sort(key=lambda s: s["name"] != "rf-robotcode")  # how to use the tools: never cut off by the length limit
+    for s in rows:
         desc = s["description"]
         if len(desc) > 110:
             desc = desc[:107].rstrip() + "..."

@@ -1,0 +1,21 @@
+# Libraries the built-in skills cover, in the shape of robotframework-plugins' catalog.yaml.
+# rf-mcp matches these against a project's installed packages when no skills folder or official
+# plugin covers the library (see robotmcp/skills/catalog.py).
+plugins:
+  - name: rf-mcp
+    libraries:
+      - name: Browser
+        package: robotframework-browser
+        skills: [rf-locators]
+      - name: SeleniumLibrary
+        package: robotframework-seleniumlibrary
+        skills: [rf-locators]
+      - name: AppiumLibrary
+        package: robotframework-appiumlibrary
+        skills: [rf-locators]
+      - name: PlatynUI
+        package: robotframework-PlatynUI
+        skills: [rf-locators]
+      - name: RequestsLibrary
+        package: robotframework-requests
+        skills: [rf-requests]

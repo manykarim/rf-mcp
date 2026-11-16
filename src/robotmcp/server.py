@@ -32,6 +32,7 @@ from robotmcp.runner.cli_runner import (
     run_outcome,
 )
 from robotmcp.skills import build_server_instructions, mount_skills_provider
+from robotmcp.skills.pointers import SkillPointers
 from robotmcp.telemetry import record_operation
 
 # Shared parameter types: every tool uses the same names for the same things.
@@ -121,6 +122,7 @@ def create_server(config: ServerConfig | None = None) -> FastMCP:
     mcp.add_middleware(ArgumentAliases())
     client_roots = ClientRoots(cfg)
     mcp.add_middleware(client_roots)
+    mcp.add_middleware(SkillPointers(cfg, cli_runner.environments))  # after ClientRoots: needs the call's root
     mcp.add_transform(PlainOptionalSchemas())
     skill_summaries = mount_skills_provider(mcp, cfg, client_roots=client_roots)
     mcp.instructions = build_server_instructions(

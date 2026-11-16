@@ -68,6 +68,8 @@ class ServerConfig(BaseModel):
     session_idle_timeout_minutes: int = 15
     session_command_timeout_seconds: int = 60
     max_output_chars: int = 20000
+    # RF_MCP_SKILL_POINTERS=0: no project_skills on first results and no skill links on hints (for comparisons).
+    skill_pointers: bool = True
 
     def resolved_mode(self, override: str | None = None) -> ResolvedMode:
         """Resolve effective execution mode ('server' or 'client')."""
@@ -290,4 +292,5 @@ class ServerConfig(BaseModel):
             port=port,
             session_idle_timeout_minutes=int(idle_raw),
             session_command_timeout_seconds=int(timeout_raw),
+            skill_pointers=environ.get("RF_MCP_SKILL_POINTERS", "1").strip().lower() not in ("0", "false", "no", "off"),
         )

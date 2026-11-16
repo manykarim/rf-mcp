@@ -17,6 +17,7 @@ from robotmcp.hints import load_custom_rules_with_errors
 from robotmcp.runner.cli_runner import resolve_robotcode_executable
 from robotmcp.runner.environment import EnvironmentResolver
 from robotmcp.runner.shell_escape import build_agent_env
+from robotmcp.skills.official import load_official_skills
 from robotmcp.skills.provider import discover_skill_summaries, resolve_skill_roots
 
 AGENT_SKILL_TARGETS: dict[str, str] = {
@@ -164,6 +165,7 @@ def run_doctor(
     rc_info = _check_robotcode_status(ws_root, list(env.command_prefix))
     skill_roots = resolve_skill_roots(cfg)
     skills = discover_skill_summaries(skill_roots)
+    official = load_official_skills()
     hints_path = cfg.resolve_hints_file()
     hint_errors = load_custom_rules_with_errors(hints_path)[1] if hints_path else []
     uv = _uv_info(resolver)
@@ -193,6 +195,12 @@ def run_doctor(
         "uv": uv,
         "robotcode": rc_info,
         "skills": skills,
+        "official_skills": {
+            "version": official.version,
+            "catalog_format": official.catalog_format,
+            "skills": official.skill_count(),
+            "warning": official.warning,
+        } if official.installed else None,
         "hints_file": str(hints_path) if hints_path else None,
         "hints_status": "not present" if not hints_path else ("errors" if hint_errors else "ok"),
         "hints_errors": hint_errors,
@@ -222,6 +230,15 @@ def run_doctor(
         if rc_info["install_hint"] and env.libraries_visible:
             print(f"Install Hint   : {rc_info['install_hint']}")
         print(f"Active Skills  : {', '.join(s['name'] for s in skills) or 'none'}")
+        if official.installed:
+            print(
+                f"Official Skills: robotframework-plugins {official.version or '?'} "
+                f"(catalogue format {official.catalog_format}, {official.skill_count()} skills)"
+            )
+            if official.warning:
+                print(f"  Warning      : {official.warning}")
+        else:
+            print("Official Skills: robotframework-plugins not installed")
         print(f"Custom Hints   : {report['hints_file'] or 'none (using built-in rules)'} [{report['hints_status']}]")
         for err in hint_errors:
             print(f"  Hint Error   : {err}")

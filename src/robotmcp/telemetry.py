@@ -21,6 +21,7 @@ class _Instruments:
     command_duration_ms: Any
     hints_generated: Any
     skills_read: Any
+    skills_pointed: Any
 
 
 _instruments_cache: dict[int, _Instruments] = {}
@@ -50,6 +51,10 @@ def _get_instruments() -> _Instruments:
         skills_read=meter.create_counter(
             "rf_mcp.skills.read",
             description="Total skill resources read via rf-mcp",
+        ),
+        skills_pointed=meter.create_counter(
+            "rf_mcp.skills.pointed",
+            description="Total skill pointers given to agents (project_skills on a first result, or a hint's skill)",
         ),
     )
     _instruments_cache[key] = inst
@@ -163,6 +168,11 @@ def record_skill_read(skill_name: str) -> None:
     inst.skills_read.add(1, {"skill": skill_name})
     with get_tracer().start_as_current_span("rf_mcp.skill.read") as span:
         span.set_attribute("rf_mcp.skill", skill_name)
+
+
+def record_skill_pointed(skill_name: str, source: str) -> None:
+    """Count a skill pointer given to an agent; `source` is `project_skills` or `hint`."""
+    _get_instruments().skills_pointed.add(1, {"skill": skill_name, "source": source})
 
 
 def configure_otel(
