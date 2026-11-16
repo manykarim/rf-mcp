@@ -101,7 +101,7 @@ def resolve_skill_roots(
             if expanded not in roots:
                 roots.append(expanded)
 
-    for official in load_official_skills().skills_dirs.values():
+    for official in load_official_skills(config.official_skills).skills_dirs.values():
         if official not in roots:
             roots.append(official)
 
@@ -236,7 +236,7 @@ def build_server_instructions(
     )
     if hint_load_errors:
         text += "\nCustom hints not loaded: " + "; ".join(hint_load_errors)[:300] + "\n"
-    official_roots = set(load_official_skills().skills_dirs.values())
+    official_roots = set(load_official_skills(config.official_skills).skills_dirs.values())
     official = [s for s in skills if s.get("path") and Path(s["path"]).parent in official_roots]
     if official:
         text += "\n" + _OFFICIAL_COMMANDS + "\n"

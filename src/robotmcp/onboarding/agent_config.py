@@ -14,7 +14,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Literal, Sequence
+from typing import Any, Callable, Literal, Mapping, Sequence
 
 import tomlkit
 
@@ -186,7 +186,9 @@ def _merge_json(target: Target, path: Path, map_key: str, entry: dict[str, Any])
     target.content = json.dumps(data, indent=2) + "\n"
 
 
-def _merge_codex_toml(target: Target, path: Path, command: str, args: list[str], url: str | None) -> None:
+def _merge_codex_toml(
+    target: Target, path: Path, command: str, args: list[str], url: str | None, env: Mapping[str, str]
+) -> None:
     target.path = path
     try:
         doc = tomlkit.parse(path.read_text(encoding="utf-8")) if path.exists() else tomlkit.document()
@@ -205,10 +207,10 @@ def _merge_codex_toml(target: Target, path: Path, command: str, args: list[str],
         table["args"] = [a.replace("\\", "/") for a in args]
         for line in CODEX_NOTES:
             table.add(tomlkit.comment(line))
-        env = tomlkit.table()
-        for key, value in DEFAULT_ENV.items():
-            env[key] = value
-        table["env"] = env
+        table_env = tomlkit.table()
+        for key, value in env.items():
+            table_env[key] = value
+        table["env"] = table_env
     servers[SERVER_NAME] = table
     target.content = tomlkit.dumps(doc)
 
@@ -216,20 +218,23 @@ def _merge_codex_toml(target: Target, path: Path, command: str, args: list[str],
 # --- per-agent entries --------------------------------------------------------------------------
 
 
-def _stdio_entry(command: str, args: list[str], **extra: Any) -> dict[str, Any]:
-    return {**extra, "command": command, "args": args, "env": dict(DEFAULT_ENV)}
+def _stdio_entry(command: str, args: list[str], env: Mapping[str, str], **extra: Any) -> dict[str, Any]:
+    return {**extra, "command": command, "args": args, "env": dict(env)}
 
 
-def project_targets(agent: str, ws_root: Path, command: str, args: list[str], url: str | None) -> list[Target]:
+def project_targets(
+    agent: str, ws_root: Path, command: str, args: list[str], url: str | None,
+    env: Mapping[str, str] = DEFAULT_ENV,
+) -> list[Target]:
     t = Target(agent)
     entry: dict[str, Any]
     if agent == "claude":
-        entry = {"type": "http", "url": url} if url else _stdio_entry(command, args, type="stdio")
+        entry = {"type": "http", "url": url} if url else _stdio_entry(command, args, env, type="stdio")
         _merge_json(t, ws_root / ".mcp.json", "mcpServers", entry)
     elif agent == "codex":
-        _merge_codex_toml(t, ws_root / ".codex" / "config.toml", command, args, url)
+        _merge_codex_toml(t, ws_root / ".codex" / "config.toml", command, args, url, env)
     elif agent == "agy":
-        entry = {"url": url} if url else _stdio_entry(command, args)
+        entry = {"url": url} if url else _stdio_entry(command, args, env)
         _merge_json(t, ws_root / ".gemini" / "settings.json", "mcpServers", entry)
         plugin_dir = ws_root / ".agents" / "plugins" / SERVER_NAME
         t.extra_files = {
@@ -237,17 +242,19 @@ def project_targets(agent: str, ws_root: Path, command: str, args: list[str], ur
             plugin_dir / "mcp_config.json": json.dumps({"mcpServers": {SERVER_NAME: entry}}, indent=2) + "\n",
         }
     elif agent == "copilot":
-        entry = {"type": "http", "url": url} if url else _stdio_entry(command, args, type="stdio")
+        entry = {"type": "http", "url": url} if url else _stdio_entry(command, args, env, type="stdio")
         _merge_json(t, ws_root / ".vscode" / "mcp.json", "servers", entry)
     elif agent == "opencode":
         entry = ({"type": "remote", "url": url} if url
-                 else {"type": "local", "command": [command, *args], "environment": dict(DEFAULT_ENV)})
+                 else {"type": "local", "command": [command, *args], "environment": dict(env)})
         _merge_json(t, ws_root / "opencode.json", "mcp", entry)
     return [t]
 
 
-def user_targets(agent: str, command: str, args: list[str], url: str | None) -> list[Target]:
-    env_flags = [f"{k}={v}" for k, v in DEFAULT_ENV.items()]
+def user_targets(
+    agent: str, command: str, args: list[str], url: str | None, env: Mapping[str, str] = DEFAULT_ENV
+) -> list[Target]:
+    env_flags = [f"{k}={v}" for k, v in env.items()]
     if agent == "claude":
         cmd = (["claude", "mcp", "add", "--scope", "user", "--transport", "http", SERVER_NAME, url] if url else
                # The name goes before -e: claude's -e takes several values and would swallow it.
@@ -264,7 +271,7 @@ def user_targets(agent: str, command: str, args: list[str], url: str | None) -> 
         return [Target("agy", command=cmd)]
     if agent == "copilot":
         vscode: dict[str, Any] = {"name": SERVER_NAME, "type": "http", "url": url} if url else {
-            "name": SERVER_NAME, "type": "stdio", "command": command, "args": args, "env": dict(DEFAULT_ENV)}
+            "name": SERVER_NAME, "type": "stdio", "command": command, "args": args, "env": dict(env)}
         cli = (["copilot", "mcp", "add", "--transport", "http", SERVER_NAME, url] if url else
                ["copilot", "mcp", "add", *[x for f in env_flags for x in ("--env", f)], SERVER_NAME, "--", command,
                 *args])
@@ -318,21 +325,24 @@ def generate_agent_mcp_configs(
     scope: Scope = "project",
     install_kind: InstallKind | None = None,
     run: Runner = _run,
+    official_skills: str | None = None,
 ) -> dict[str, Any]:
     """Build (and with `write_files` apply) the rf-mcp entry for each selected agent.
 
     `mode` is kept for compatibility: the entry carries no `--mode`, the server defaults to `auto`.
+    `official_skills` adds `RF_MCP_OFFICIAL_SKILLS` to the environment of every stdio entry.
     """
     del mode
     ws_root = (root or Path.cwd()).expanduser().resolve()
     kind = install_kind or detect_install_kind(ws_root)
     command, args = server_command(ws_root, scope, kind)
     selected = list(AGENTS) if agent == "all" else [agent]
+    env = {**DEFAULT_ENV, **({"RF_MCP_OFFICIAL_SKILLS": official_skills} if official_skills else {})}
 
     report: dict[str, Any] = {}
     for name in selected:
-        targets = (project_targets(name, ws_root, command, args, url) if scope == "project"
-                   else user_targets(name, command, args, url))
+        targets = (project_targets(name, ws_root, command, args, url, env) if scope == "project"
+                   else user_targets(name, command, args, url, env))
         for t in targets:
             if write_files and t.status == "preview":
                 if t.command is not None:

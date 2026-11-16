@@ -70,7 +70,10 @@ rf-mcp installs the official Robot Framework skills with it: the
 `2026.11.0.dev1` or newer). Its skills for Browser, SeleniumLibrary, RequestsLibrary, AppiumLibrary and PlatynUI
 are served over MCP, and the ones that match your project's libraries are attached to the agent's first tool result.
 To get newer skills without a new rf-mcp release, run `uv tool upgrade rf-mcp`. To pin them, run
-`uv tool install rf-mcp --with robotframework-plugins==<version>`.
+`uv tool install rf-mcp --with robotframework-plugins==<version>`. To follow the repository between releases, set a
+channel such as `latest` with `rf-mcp init --official-skills latest` and fetch it with
+`rf-mcp update-skills --ref latest` (`RF_MCP_OFFICIAL_SKILLS`; see
+[Newer official skills](docs/CONFIGURATION.md#newer-official-skills)).
 
 ### Option A: one install for all projects (recommended)
 

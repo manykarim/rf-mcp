@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import shutil
 import sys
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
+
+logger = logging.getLogger(__name__)
 
 ExecutionMode = Literal["server", "client", "auto"]
 ResolvedMode = Literal["server", "client"]
@@ -70,6 +73,11 @@ class ServerConfig(BaseModel):
     max_output_chars: int = 20000
     # RF_MCP_SKILL_POINTERS=0: no project_skills on first results and no skill links on hints (for comparisons).
     skill_pointers: bool = True
+    # Where the official skills come from: `bundled` (the robotframework-plugins package) or a ref of
+    # MarketSquare/robotframework-plugins (branch, tag or commit SHA) whose fetched snapshot is served.
+    official_skills: str = "bundled"
+    # Hours between background fetches of a ref channel; 0 turns the background refresh off.
+    official_skills_refresh_hours: float = 24.0
 
     def resolved_mode(self, override: str | None = None) -> ResolvedMode:
         """Resolve effective execution mode ('server' or 'client')."""
@@ -149,6 +157,12 @@ class ServerConfig(BaseModel):
             dest="skills_dirs",
             default=None,
             help="Additional skill directory path (can be specified multiple times).",
+        )
+        parser.add_argument(
+            "--official-skills",
+            default=None,
+            help="Official skills: 'bundled' (default) or a ref of MarketSquare/robotframework-plugins "
+            "(stable, latest, main, a tag or a commit) whose fetched snapshot is served.",
         )
         parser.add_argument(
             "--hints-file",
@@ -293,4 +307,20 @@ class ServerConfig(BaseModel):
             session_idle_timeout_minutes=int(idle_raw),
             session_command_timeout_seconds=int(timeout_raw),
             skill_pointers=environ.get("RF_MCP_SKILL_POINTERS", "1").strip().lower() not in ("0", "false", "no", "off"),
+            official_skills=(ns.official_skills or environ.get("RF_MCP_OFFICIAL_SKILLS") or "bundled").strip() or "bundled",
+            official_skills_refresh_hours=_refresh_hours(environ.get("RF_MCP_OFFICIAL_SKILLS_REFRESH")),
         )
+
+
+def _refresh_hours(raw: str | None, default: float = 24.0) -> float:
+    """`RF_MCP_OFFICIAL_SKILLS_REFRESH` in hours; a missing, negative or unparsable value gives the default."""
+    if raw is None or not raw.strip():
+        return default
+    try:
+        hours = float(raw)
+    except ValueError:
+        hours = -1.0
+    if hours < 0:
+        logger.warning("RF_MCP_OFFICIAL_SKILLS_REFRESH=%r is not a number of hours; using %g", raw, default)
+        return default
+    return hours

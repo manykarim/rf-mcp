@@ -8,9 +8,10 @@ from typing import Sequence
 from robotmcp.config import ServerConfig
 from robotmcp.onboarding.cli import run_onboarding_cli
 from robotmcp.server import create_server
+from robotmcp.skills.official import start_background_refresh
 from robotmcp.telemetry import configure_otel
 
-ONBOARDING_SUBCOMMANDS = {"doctor", "init", "sync-skills"}
+ONBOARDING_SUBCOMMANDS = {"doctor", "init", "sync-skills", "update-skills"}
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -26,6 +27,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         service_name=config.otel_service_name,
     )
     server = create_server(config)
+    # A ref channel is fetched in the background when due; the snapshot is served from the next start.
+    start_background_refresh(config.official_skills, config.official_skills_refresh_hours)
 
     if config.transport == "stdio":
         server.run(transport="stdio", show_banner=False)
