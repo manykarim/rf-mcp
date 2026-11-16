@@ -15,6 +15,7 @@ import anyio
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools.base import ToolResult
 
+from robotmcp.client_roots import session_key
 from robotmcp.config import ServerConfig
 from robotmcp.runner.environment import EnvironmentResolver
 from robotmcp.skills.catalog import catalog_entries, match
@@ -24,20 +25,6 @@ from robotmcp.telemetry import record_skill_pointed
 logger = logging.getLogger(__name__)
 
 MAX_PROJECT_SKILLS = 3
-_PROCESS = "process"  # sessions of the stateless (2026-07-28) protocol cannot be told apart: one key per server
-
-
-def _session_key(context: MiddlewareContext) -> str:
-    ctx = context.fastmcp_context
-    if ctx is None:
-        return _PROCESS
-    try:
-        modern = getattr(ctx, "_is_modern_protocol", None)
-        if callable(modern) and modern():
-            return _PROCESS
-        return str(ctx.session_id or _PROCESS)
-    except Exception:
-        return _PROCESS
 
 
 def resolve_skill_uri(uri: str, served: dict[str, Path]) -> bool:
@@ -85,7 +72,7 @@ class SkillPointers(Middleware):
         except Exception:
             return await call_next(context)
 
-        key = (_session_key(context), root)
+        key = (session_key(context.fastmcp_context), root)
         first = self._config.skill_pointers and mode == "server" and key not in self._seen
         if first:
             self._seen.add(key)

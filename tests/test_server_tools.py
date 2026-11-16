@@ -214,6 +214,26 @@ async def test_client_mode_never_injects_a_server_side_root(projects: dict[str, 
         assert "-r" not in res.data["command"]
 
 
+async def test_the_roots_are_asked_once_per_session(projects: dict[str, Path]) -> None:
+    asked: list[str] = []
+
+    async def roots(_context) -> list[str]:
+        asked.append("roots/list")
+        return [projects["api"].as_uri()]
+
+    server = _unpinned_server()
+    async with Client(server, roots=roots, **_LEGACY) as client:
+        for _ in range(3):
+            assert await _which(client) == "api"
+        assert len(asked) == 1
+        await client.send_roots_list_changed()
+        assert await _which(client) == "api"
+        assert len(asked) == 2
+    async with Client(server, roots=roots, **_LEGACY) as client:  # a new session asks again
+        assert await _which(client) == "api"
+        assert len(asked) == 3
+
+
 def test_only_file_uris_become_roots(tmp_path: Path) -> None:
     assert file_uri_to_path(tmp_path.as_uri()) == tmp_path
     assert file_uri_to_path("https://example.com/repo") is None
