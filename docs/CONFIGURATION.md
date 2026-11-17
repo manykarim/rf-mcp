@@ -237,8 +237,19 @@ The download goes through the package's own `bundle.fetch()`: it asks `api.githu
 commit's archive from `codeload.github.com`. Snapshots are kept per commit in the package's cache
 (`%LOCALAPPDATA%\robotframework-plugins\snapshots`, or `~/.cache/robotframework-plugins/snapshots`, about 1 MB
 each), and rf-mcp records which commit it fetched for each channel in `rf-mcp/official-skills.json` next to it.
-Behind a proxy, set `HTTPS_PROXY`. A proxy that re-signs TLS with its own certificate authority needs
-`SSL_CERT_FILE` pointing to a bundle that contains it.
+
+In a company network, the package reads these variables from the server's environment (put them in the agent's
+`env` block next to `RF_MCP_OFFICIAL_SKILLS`):
+
+| variable | use |
+| --- | --- |
+| `ROBOTFRAMEWORK_PLUGINS_SOURCE` | a GitHub-compatible API to fetch from instead of github.com: GitHub Enterprise (`https://ghe.example.com/api/v3`) or an artifact manager's GitHub remote |
+| `ROBOTFRAMEWORK_PLUGINS_TOKEN` | a token for that source; with github.com, `GITHUB_TOKEN` also works. Without one GitHub allows 60 API calls an hour per IP address, shared by everyone behind the same company address |
+| `HTTPS_PROXY`, `NO_PROXY` | the proxy |
+| `SSL_CERT_FILE` | a CA bundle that contains the company CA, for a proxy that re-signs TLS |
+
+The token goes only to the source's own host, never through a redirect or over plain HTTP. These settings need a
+`robotframework-plugins` release newer than 2026.11.0.dev1; with dev1, `fetch()` only reaches github.com.
 
 For a machine without internet access, or a Docker image, fetch the snapshot where the network is available and keep
 it with the image:

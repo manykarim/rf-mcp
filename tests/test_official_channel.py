@@ -328,6 +328,20 @@ def test_update_skills_seeds_a_snapshot_for_the_next_start(fake_bundle, remote: 
     assert remote.calls == calls
 
 
+def test_the_snapshots_own_catalogue_format_is_recorded(fake_bundle, remote: FakeRemote) -> None:
+    remote.publish("latest", sha(22), SNAPSHOT_PLUGINS)
+    _, entry = official.fetch_and_record("latest")
+    assert entry["catalog_format"] == 1  # 2026.11.0.dev1: the snapshot doesn't say, the package does
+
+    remote.publish("latest", sha(23), SNAPSHOT_PLUGINS)
+    remote.snapshot_format = 2  # a newer package builds snapshots in a format this rf-mcp doesn't read
+    _, entry = official.fetch_and_record("latest")
+    assert entry["catalog_format"] == 2
+    official.load_official_skills.cache_clear()
+    served = load_official_skills("latest")
+    assert not served.from_snapshot and "catalogue format 2" in served.fallback_reason
+
+
 def test_update_skills_uses_the_configured_channel(fake_bundle, remote: FakeRemote, monkeypatch, capsys) -> None:
     from robotmcp.entry import main
 

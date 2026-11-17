@@ -68,6 +68,8 @@ class FakeSnapshot:
     ref: str
     commit: str
     path: Path
+    #: None as from robotframework-plugins 2026.11.0.dev1, which didn't record it (upstream #23).
+    catalog_format: Any = None
 
     def catalog(self) -> list[dict[str, Any]]:
         return list(json.loads((self.path / "catalog.json").read_text(encoding="utf-8"))["plugins"])
@@ -89,6 +91,8 @@ class FakeRemote:
         self.refs: dict[str, tuple[str, dict[str, dict[str, Any]]]] = {}
         self.failing: set[str] = set()
         self.calls: list[str] = []
+        #: What fetched snapshots report as `catalog_format`.
+        self.snapshot_format: Any = None
 
     def publish(self, ref: str, commit: str, plugins: dict[str, dict[str, Any]] | None = None) -> str:
         self.refs[ref] = (commit, OFFICIAL_PLUGINS if plugins is None else plugins)
@@ -111,7 +115,7 @@ class FakeRemote:
         if not (folder / "catalog.json").is_file():
             _, catalog = write_plugins(folder, plugins)
             (folder / "catalog.json").write_text(json.dumps({"plugins": catalog}), encoding="utf-8")
-        return FakeSnapshot(ref=ref, commit=commit, path=folder.resolve())
+        return FakeSnapshot(ref=ref, commit=commit, path=folder.resolve(), catalog_format=self.snapshot_format)
 
 
 def sha(n: int) -> str:
