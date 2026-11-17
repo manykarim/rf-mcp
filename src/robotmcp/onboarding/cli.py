@@ -339,7 +339,7 @@ def update_skills(ref: str | None, environ: Mapping[str, str] | None = None) -> 
     channel = (ref or (os.environ if environ is None else environ).get("RF_MCP_OFFICIAL_SKILLS") or "").strip()
     if not channel or channel == BUNDLED:
         print(
-            "No ref to fetch: the official skills channel is 'bundled'. Pass --ref (for example --ref latest) "
+            "No ref to fetch: the official skills channel is 'bundled'. Pass --ref (for example --ref stable) "
             "or set RF_MCP_OFFICIAL_SKILLS.",
             file=sys.stderr,
         )

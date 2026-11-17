@@ -216,14 +216,15 @@ same versions. To serve a newer state of the
 | channel | content |
 | --- | --- |
 | `bundled` (default) | the installed `robotframework-plugins` package |
-| `stable` | the latest released plugins; the branch appears with the first plugin release |
-| `latest`, `main` | the newest merged, not yet released content |
+| `stable` | the latest released plugins |
+| `latest` | moves with `stable` on every plugin release |
+| `main` | everything merged: reviewed and checked by CI, but not released |
 | a tag, for example `rf-web--v1.2.0` | that release |
 | a full commit SHA | that commit; never refreshed |
 
 ```bash
-rf-mcp init --scope user --agent all --official-skills latest --write   # writes RF_MCP_OFFICIAL_SKILLS=latest
-rf-mcp update-skills --ref latest                                         # fetch it now
+rf-mcp init --scope user --agent all --official-skills stable --write   # writes RF_MCP_OFFICIAL_SKILLS=stable
+rf-mcp update-skills --ref stable                                         # fetch it now
 ```
 
 rf-mcp never uses the network while starting. It serves the snapshot it last fetched for the channel, or the
@@ -255,15 +256,15 @@ For a machine without internet access, or a Docker image, fetch the snapshot whe
 it with the image:
 
 ```bash
-rf-mcp update-skills --ref latest            # in the image build, then run the server with RF_MCP_OFFICIAL_SKILLS=latest
+rf-mcp update-skills --ref stable            # in the image build, then run the server with RF_MCP_OFFICIAL_SKILLS=stable
 RF_MCP_OFFICIAL_SKILLS_REFRESH=0 rf-mcp      # never try to refresh it
 ```
 
 `update-skills` prints the commit and folder it stored and exits 1 when the fetch fails. Without `--ref` it fetches
 the channel set in `RF_MCP_OFFICIAL_SKILLS`.
 
-`latest` and `main` have been reviewed but not released. Skills are instructions to the agent, so a team that wants
-only released content stays on `bundled` or uses `stable`. A clone of the repository as `--skills-dir` (see
+`main` has been reviewed but not released. Skills are instructions to the agent, so a team that wants only released
+content stays on `bundled` or uses `stable`. A clone of the repository as `--skills-dir` (see
 [Skills](#skills)) is the other way to follow it, updated with `git pull` instead of by rf-mcp.
 
 ### Skills for the project's libraries

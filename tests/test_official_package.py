@@ -71,10 +71,11 @@ def test_every_builtin_hint_link_resolves(real_bundle) -> None:
 
 
 @pytest.mark.skipif(os.environ.get("RF_MCP_LIVE_FETCH") != "1", reason="set RF_MCP_LIVE_FETCH=1 to fetch from GitHub")
+@pytest.mark.parametrize("ref", ["latest", "stable"])
 async def test_live_update_skills_then_serve_the_snapshot(
-    real_bundle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    real_bundle, ref: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
-    """official-skills-source 6.1: `update-skills --ref latest` against GitHub, then a server on channel `latest`."""
+    """official-skills-source 6.1: `update-skills --ref <ref>` against GitHub, then a server on that channel."""
     import json
     import time
 
@@ -84,19 +85,19 @@ async def test_live_update_skills_then_serve_the_snapshot(
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "cache"))  # the package's snapshot cache, not the user's
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     start = time.monotonic()
-    assert main(["update-skills", "--ref", "latest"]) == 0
+    assert main(["update-skills", "--ref", ref]) == 0
     fetched = json.loads(capsys.readouterr().out)
-    print(f"\nfetched latest at {fetched['commit']} in {time.monotonic() - start:.1f}s")
+    print(f"\nfetched {ref} at {fetched['commit']} in {time.monotonic() - start:.1f}s")
 
     load_official_skills.cache_clear()
-    served = load_official_skills("latest")
+    served = load_official_skills(ref)
     assert served.commit == fetched["commit"] and served.skill_count() == fetched["skills"]
     shop = tmp_path / "shop"
     shop.mkdir()
     (shop / "robot.toml").write_text("", encoding="utf-8")
     monkeypatch.setattr(EnvironmentResolver, "installed_distributions",
                         lambda self, root: {"robotframework-browser": "20.6.0"})
-    cfg = ServerConfig(execution_mode="server", official_skills="latest")
+    cfg = ServerConfig(execution_mode="server", official_skills=ref)
     async with Client(create_server(cfg), **_LEGACY) as client:
         text = (await client.read_resource("skill://rf-browser/SKILL.md"))[0].text
         assert text.startswith("---")
