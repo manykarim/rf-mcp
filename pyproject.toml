@@ -12,7 +12,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "fastmcp>=3.0,<5",
-    "robotcode[all]>=2.9.0.dev115",
+    "robotcode[all]>=2.9.0.dev186",
     "pydantic>=2.0.0",
     "tomlkit>=0.12.0",
     "packaging>=23.0",
