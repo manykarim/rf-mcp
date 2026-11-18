@@ -251,8 +251,7 @@ In a company network, the package reads these variables from the server's enviro
 | `HTTPS_PROXY`, `NO_PROXY` | the proxy |
 | `SSL_CERT_FILE` | a CA bundle that contains the company CA, for a proxy that re-signs TLS |
 
-The token goes only to the source's own host, never through a redirect or over plain HTTP. These settings need a
-`robotframework-plugins` release newer than 2026.11.0.dev1; with dev1, `fetch()` only reaches github.com.
+The token goes only to the source's own host, never through a redirect or over plain HTTP.
 
 For a machine without internet access, or a Docker image, fetch the snapshot where the network is available and keep
 it with the image:
