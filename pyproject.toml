@@ -11,7 +11,7 @@ license = { text = "Apache-2.0" }
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "fastmcp>=3.0,<5",
+    "fastmcp>=4.1.8,<5",
     "robotcode[all]>=2.9.0.dev115",
     "pydantic>=2.0.0",
     "tomlkit>=0.12.0",
