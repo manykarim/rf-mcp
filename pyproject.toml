@@ -22,13 +22,13 @@ dependencies = [
 
 [project.optional-dependencies]
 otel = [
-    "opentelemetry-sdk>=1.25.0",
+    "opentelemetry-sdk>=1.45.2",
     "opentelemetry-exporter-otlp>=1.25.0",
 ]
 dev = [
     "pytest>=8.4.1",
     "pytest-asyncio>=1.1.0",
-    "opentelemetry-sdk>=1.25.0",
+    "opentelemetry-sdk>=1.45.2",
     "opentelemetry-exporter-otlp>=1.25.0",
     "ruff>=0.11.0",
     "mypy>=1.10.0",
@@ -66,7 +66,7 @@ exclude = [
 dev = [
     "pytest>=8.4.1",
     "pytest-asyncio>=1.1.0",
-    "opentelemetry-sdk>=1.25.0",
+    "opentelemetry-sdk>=1.45.2",
     "opentelemetry-exporter-otlp>=1.25.0",
     "coverage[toml]>=7.6.0",
     "ruff>=0.11.0",
