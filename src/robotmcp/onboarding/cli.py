@@ -339,7 +339,7 @@ def update_skills(ref: str | None, environ: Mapping[str, str] | None = None) -> 
     channel = (ref or (os.environ if environ is None else environ).get("RF_MCP_OFFICIAL_SKILLS") or "").strip()
     if not channel or channel == BUNDLED:
         print(
-            "No ref to fetch: the official skills channel is 'bundled'. Pass --ref (for example --ref latest) "
+            "No ref to fetch: the official skills channel is 'bundled'. Pass --ref (for example --ref stable) "
             "or set RF_MCP_OFFICIAL_SKILLS.",
             file=sys.stderr,
         )
@@ -397,7 +397,7 @@ def run_onboarding_cli(argv: Sequence[str]) -> int:
         "--official-skills",
         default=None,
         help="Set RF_MCP_OFFICIAL_SKILLS in the entries: 'bundled' or a ref of MarketSquare/robotframework-plugins "
-        "(stable, latest, main, a tag or a commit).",
+        "(stable, main, a tag or a commit).",
     )
 
     sync_p = subparsers.add_parser(

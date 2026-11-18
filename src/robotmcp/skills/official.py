@@ -230,7 +230,11 @@ def fetch_and_record(ref: str, *, timeout: float = 30.0) -> tuple[Any, dict[str,
         raise RuntimeError("robotframework-plugins is not installed")
     snap = bundle.fetch(ref, timeout=timeout)
     version = getattr(sys.modules.get("robotframework_plugins"), "__version__", None)
-    entry = record_fetch(ref, snap, catalog_format=getattr(bundle, "CATALOG_FORMAT", None), package_version=version)
+    # The snapshot's own format (upstream #23); robotframework-plugins 2026.11.0.dev1 doesn't record it.
+    fmt = getattr(snap, "catalog_format", None)
+    if fmt is None:
+        fmt = getattr(bundle, "CATALOG_FORMAT", None)
+    entry = record_fetch(ref, snap, catalog_format=fmt, package_version=version)
     return snap, entry
 
 

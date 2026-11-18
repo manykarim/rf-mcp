@@ -17,7 +17,7 @@ dependencies = [
     "tomlkit>=0.12.0",
     "packaging>=23.0",
     # The official Robot Framework skills (MarketSquare/robotframework-plugins), read through its bundle API.
-    "robotframework-plugins>=2026.11.0.dev1,<2027",
+    "robotframework-plugins>=5.0",
 ]
 
 [project.optional-dependencies]

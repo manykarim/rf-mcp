@@ -2099,7 +2099,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.1" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.1.0" },
     { name = "robotcode", extras = ["all"], specifier = ">=2.9.0.dev115" },
-    { name = "robotframework-plugins", specifier = ">=2026.11.0.dev1,<2027" },
+    { name = "robotframework-plugins", specifier = ">=5.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11.0" },
     { name = "tomlkit", specifier = ">=0.12.0" },
 ]
@@ -2335,7 +2335,7 @@ wheels = [
 
 [[package]]
 name = "robotframework-plugins"
-version = "2026.11.0.dev1"
+version = "5.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyyaml" },
@@ -2343,9 +2343,9 @@ dependencies = [
     { name = "tomli", version = "2.2.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "tomli-w" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/25/e7/b5424c8315201f23d3781975489302d50f8478075dcfbd0dc6d1017b284f/robotframework_plugins-2026.11.0.dev1.tar.gz", hash = "sha256:af9086693b0de6260e06f7d18b05fab4a622f57fc8b84d41b44846dfc936d7b7", size = 283489, upload-time = "2026-11-13T14:50:32.254Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/88/86/df61a9af52317e9abdf410806e7a86b8ca6543d580191a7241ef91539f4a/robotframework_plugins-5.0.0.tar.gz", hash = "sha256:cae4a04333d7715a560dc1d6ebec8babfead46b769bb21dc70af04a538d4ae0c", size = 283136, upload-time = "2026-11-18T11:31:43.946Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/23/0f/71c75d609d72a8e265efa1f580ada357c9790223d0a0e22b5ec614473ef3/robotframework_plugins-2026.11.0.dev1-py3-none-any.whl", hash = "sha256:1c236175d92ed763831462126e003500eca933b7566d46f33d6d22c4df4d459c", size = 405212, upload-time = "2026-11-13T14:50:30.549Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/81/b98c3ed3dc8daf4d8df2c0b74278d540bfaaef2bd23189ed8852dc20bb2a/robotframework_plugins-5.0.0-py3-none-any.whl", hash = "sha256:6cb931d1f6b63ab04a933c8dcccb531b5c4ed7aaffbd6893c770d88882b25a2a", size = 403215, upload-time = "2026-11-18T11:31:42.171Z" },
 ]
 
 [[package]]
