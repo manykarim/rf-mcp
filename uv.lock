@@ -2099,7 +2099,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.1" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.1.0" },
     { name = "robotcode", extras = ["all"], specifier = ">=2.9.0.dev115" },
-    { name = "robotframework-plugins", specifier = ">=5.0.0,<6" },
+    { name = "robotframework-plugins", specifier = ">=5.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11.0" },
     { name = "tomlkit", specifier = ">=0.12.0" },
 ]
