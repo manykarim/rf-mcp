@@ -71,7 +71,7 @@ def test_every_builtin_hint_link_resolves(real_bundle) -> None:
 
 
 @pytest.mark.skipif(os.environ.get("RF_MCP_LIVE_FETCH") != "1", reason="set RF_MCP_LIVE_FETCH=1 to fetch from GitHub")
-@pytest.mark.parametrize("ref", ["latest", "stable"])
+@pytest.mark.parametrize("ref", ["stable", "main"])
 async def test_live_update_skills_then_serve_the_snapshot(
     real_bundle, ref: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:

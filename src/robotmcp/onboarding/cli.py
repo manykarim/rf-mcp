@@ -397,7 +397,7 @@ def run_onboarding_cli(argv: Sequence[str]) -> int:
         "--official-skills",
         default=None,
         help="Set RF_MCP_OFFICIAL_SKILLS in the entries: 'bundled' or a ref of MarketSquare/robotframework-plugins "
-        "(stable, latest, main, a tag or a commit).",
+        "(stable, main, a tag or a commit).",
     )
 
     sync_p = subparsers.add_parser(

@@ -216,11 +216,13 @@ same versions. To serve a newer state of the
 | channel | content |
 | --- | --- |
 | `bundled` (default) | the installed `robotframework-plugins` package |
-| `stable` | the latest released plugins |
-| `latest` | moves with `stable` on every plugin release |
+| `stable` | the latest release; every release moves it |
 | `main` | everything merged: reviewed and checked by CI, but not released |
-| a tag, for example `rf-web--v1.2.0` | that release |
+| a release tag, for example `v5.0.0` | that release |
 | a full commit SHA | that commit; never refreshed |
+
+The repository removes its `latest` branch. A server whose channel is still `latest` keeps serving the snapshot it
+has and logs the failed refresh; set the channel to `stable` instead.
 
 ```bash
 rf-mcp init --scope user --agent all --official-skills stable --write   # writes RF_MCP_OFFICIAL_SKILLS=stable

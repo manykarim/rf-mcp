@@ -162,7 +162,7 @@ class ServerConfig(BaseModel):
             "--official-skills",
             default=None,
             help="Official skills: 'bundled' (default) or a ref of MarketSquare/robotframework-plugins "
-            "(stable, latest, main, a tag or a commit) whose fetched snapshot is served.",
+            "(stable, main, a tag or a commit) whose fetched snapshot is served.",
         )
         parser.add_argument(
             "--hints-file",

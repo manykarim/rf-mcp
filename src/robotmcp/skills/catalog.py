@@ -122,7 +122,7 @@ def skills_dir_entries(skills_dirs: Iterable[Path]) -> list[CatalogEntry]:
 
 
 def official_entries(channel: str = "bundled") -> list[CatalogEntry]:
-    """Catalogues of the official plugins that ship skills (bundles such as rf-agentskills excluded), of `channel`."""
+    """Catalogues of the official plugins that ship skills (plugins marked `bundle` excluded), of `channel`."""
     official = load_official_skills(channel)
     entries: list[CatalogEntry] = []
     for data in official.catalog:

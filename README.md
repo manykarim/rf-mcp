@@ -127,8 +127,7 @@ rf-mcp --mode server --transport http --host 0.0.0.0 --port 8000 -r /workspace
 
 # Mode 3: Zero-Daemon Remote MCP Server (synthesizes client-side robotcode commands)
 rf-mcp --mode client --transport http --host 0.0.0.0 --port 8000 \
-  --skills-dir /opt/robotframework-agent-plugins \
-  --skills-dir /opt/robotframework-agentskills
+  --skills-dir /opt/robotframework-plugins   # optional: a clone of MarketSquare/robotframework-plugins
 ```
 
 ### Docker
