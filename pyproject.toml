@@ -31,7 +31,7 @@ dev = [
     "opentelemetry-sdk>=1.25.0",
     "opentelemetry-exporter-otlp>=1.25.0",
     "ruff>=0.11.0",
-    "mypy>=1.10.0",
+    "mypy>=2.4.1",
 ]
 
 [project.urls]
@@ -70,7 +70,7 @@ dev = [
     "opentelemetry-exporter-otlp>=1.25.0",
     "coverage[toml]>=7.6.0",
     "ruff>=0.11.0",
-    "mypy>=1.10.0",
+    "mypy>=2.4.1",
 ]
 
 [tool.ruff]
