@@ -464,7 +464,7 @@ def create_server(config: ServerConfig | None = None) -> FastMCP:
     def rf_repl(
         action: Annotated[
             tolerant_literal(ReplAction),
-            Field(description="start, send, wait, status, result, interrupt, restart (reload edited libraries), list, save, stop."),
+            Field(description="start, send, wait, status, result, interrupt, list, save, stop. Edited libraries and resources load after stop and a new start."),
         ] = "start",
         session_id: SessionId = None,
         statement: Annotated[
@@ -532,7 +532,7 @@ def create_server(config: ServerConfig | None = None) -> FastMCP:
     def rf_debug(
         action: Annotated[
             tolerant_literal(DebugAction),
-            Field(description="start, send, wait, status, result, interrupt, restart, list, stop."),
+            Field(description="start, send, wait, status, result, interrupt, list, stop. Edited libraries and resources load after stop and a new start."),
         ] = "start",
         session_id: SessionId = None,
         command: Annotated[

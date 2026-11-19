@@ -31,7 +31,7 @@ AGENT_SKILL_TARGETS: dict[str, str] = {
 
 
 REQUIRED_COMMANDS = ("discover", "analyze", "doc", "robot", "results", "session", "repl", "robot-debug", "rebot", "profiles", "config")
-REQUIRED_SESSION_COMMANDS = ("start", "send", "wait", "status", "result", "interrupt", "restart", "list", "stop")
+REQUIRED_SESSION_COMMANDS = ("start", "send", "wait", "status", "result", "interrupt", "list", "stop")
 INSTALL_HINT = 'uv add --dev "robotcode[all]>=2.9.0.dev115"'
 
 

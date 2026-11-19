@@ -95,7 +95,6 @@ ReplAction = Literal[
     "status",
     "result",
     "interrupt",
-    "restart",
     "list",
     "save",
     "stop",
@@ -108,7 +107,6 @@ DebugAction = Literal[
     "status",
     "result",
     "interrupt",
-    "restart",
     "list",
     "stop",
 ]
@@ -234,7 +232,7 @@ class SessionRunner:
         timeout: int,
         stop_scope: str,
     ) -> list[str]:
-        if action in ("wait", "restart"):
+        if action == "wait":
             if not session_id:
                 raise ValueError(f"`session_id` is required for action='{action}'.")
             args.extend([action, "--timeout", str(timeout), session_id])

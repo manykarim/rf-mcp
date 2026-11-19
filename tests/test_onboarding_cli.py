@@ -106,7 +106,8 @@ def test_doctor_reports_subcommands_and_hints_status(tmp_path: Path) -> None:
     report = run_doctor(root=tmp_path, as_json=True)
     assert report["robotcode"]["commands"]["rebot"] is True
     assert all(report["robotcode"]["session_commands"].values())
-    assert set(report["robotcode"]["session_commands"]) >= {"start", "send", "stop", "restart"}
+    assert set(report["robotcode"]["session_commands"]) >= {"start", "send", "wait", "stop"}
+    assert "restart" not in report["robotcode"]["session_commands"]
     assert report["hints_status"] == "not present"
 
     hints = tmp_path / ".robotframework" / "hints.toml"

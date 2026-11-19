@@ -41,7 +41,7 @@ def test_session_runner_client_mode_repl_and_debug_with_fallback(tmp_path: Path)
     assert "escape" in (start_dbg.instruction or "")
 
 
-def test_session_runner_live_repl_multi_turn_restart_and_save(tmp_path: Path) -> None:
+def test_session_runner_live_repl_multi_turn_save_and_reload(tmp_path: Path) -> None:
     cfg = ServerConfig(execution_mode="server", workspace_root=tmp_path)
     runner = SessionRunner(cfg)
 
@@ -51,6 +51,7 @@ def test_session_runner_live_repl_multi_turn_restart_and_save(tmp_path: Path) ->
     assert start_res.session_id is not None
     assert start_res.session_id.startswith("repl-")
     sid = start_res.session_id
+    current = sid
 
     try:
         # Turn 1: Import Collections and create a list
@@ -101,13 +102,21 @@ def test_session_runner_live_repl_multi_turn_restart_and_save(tmp_path: Path) ->
         assert lst.sessions is not None
         assert any(s.get("id") == sid for s in lst.sessions)
 
-        # Restart session (keeps same ID in a fresh OS process)
-        rst = runner.run_repl("restart", session_id=sid)
-        assert rst.exit_code == 0
-        assert rst.session_id == sid
+        # Reload: stop and start a new session (robotcode 2.9.0.dev214 removed `session restart`)
+        assert runner.run_repl("stop", session_id=sid).exit_code == 0
+        current = None
+        fresh = runner.run_repl("start")
+        assert fresh.exit_code == 0
+        assert fresh.session_id is not None and fresh.session_id != sid
+        current = fresh.session_id
+        ids = [s.get("id") for s in runner.run_repl("list").sessions or []]
+        assert sid not in ids and current in ids
+        gone = runner.run_repl("send", session_id=current, statement="Log    ${items}[1]")
+        assert gone.status == "failed", gone.output
     finally:
-        stop_res = runner.run_repl("stop", session_id=sid)
-        assert stop_res.exit_code == 0
+        if current:
+            stop_res = runner.run_repl("stop", session_id=current)
+            assert stop_res.exit_code == 0
 
 
 def test_session_runner_live_debug_preserves_output_xml(tmp_path: Path) -> None:
