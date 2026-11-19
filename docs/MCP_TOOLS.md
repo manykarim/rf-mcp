@@ -147,7 +147,7 @@ Annotations: destructive, open world.
 
 | parameter | type | default | description |
 | --- | --- | --- | --- |
-| `action` | `start` \| `send` \| `wait` \| `status` \| `result` \| `interrupt` \| `restart` \| `list` \| `save` \| `stop` | `start` | start, send, wait, status, result, interrupt, restart (reload edited libraries), list, save, stop. |
+| `action` | `start` \| `send` \| `wait` \| `status` \| `result` \| `interrupt` \| `list` \| `save` \| `stop` | `start` | start, send, wait, status, result, interrupt, list, save, stop. Edited libraries and resources load after stop and a new start. |
 | `session_id` | string |  | Session id returned by action='start'. |
 | `statement` | string |  | action='send': one or more lines of Robot Framework steps, a FOR/IF/TRY block, or a dot command (.kw, .doc, .vars --user, .imports). |
 | `save_path` | string |  | action='save': .robot file to write. |
@@ -172,7 +172,7 @@ Annotations: open world.
 
 | parameter | type | default | description |
 | --- | --- | --- | --- |
-| `action` | `start` \| `send` \| `wait` \| `status` \| `result` \| `interrupt` \| `restart` \| `list` \| `stop` | `start` | start, send, wait, status, result, interrupt, restart, list, stop. |
+| `action` | `start` \| `send` \| `wait` \| `status` \| `result` \| `interrupt` \| `list` \| `stop` | `start` | start, send, wait, status, result, interrupt, list, stop. Edited libraries and resources load after stop and a new start. |
 | `session_id` | string |  | Session id returned by action='start'. |
 | `command` | string |  | action='send': keywords to run in the paused frame and/or debugger commands (.where, .list, .vars --user, .c, .n, .s, .abort), one per line; several lines per send run in order. |
 | `by_longname` | list of string |  | Exact test/suite longnames from rf_discover, e.g. ['Tests.Login.Valid Login']. |

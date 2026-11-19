@@ -327,3 +327,30 @@ def test_flatten_optional_unwraps_the_python_310_double_optional() -> None:
         "default": None,
     }
     assert schema["properties"]["tags"] == plain
+
+
+# --- remove-session-restart: sessions are reloaded by stop and start -----------------------
+
+
+@pytest.mark.parametrize("tool", ["rf_repl", "rf_debug"])
+async def test_restart_action_is_rejected_and_runs_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool: str
+) -> None:
+    from robotmcp.runner import session_runner as sr
+
+    calls: list[object] = []
+    monkeypatch.setattr(sr, "run_process", lambda *a, **k: calls.append(a))
+    async with Client(_server(tmp_path, "server")) as client:
+        with pytest.raises(ToolError) as err:
+            await client.call_tool(tool, {"action": "restart", "session_id": "repl-1"})
+        assert calls == []  # leaving the client stops the project's sessions; that call doesn't count
+    assert "stop" in str(err.value) and "start" in str(err.value)
+
+
+@pytest.mark.parametrize("tool", ["rf_repl", "rf_debug"])
+async def test_action_description_teaches_reload_by_stop_and_start(tmp_path: Path, tool: str) -> None:
+    async with Client(_server(tmp_path)) as client:
+        spec = next(t for t in await client.list_tools() if t.name == tool)
+    action = _field(spec, "input_schema", "inputSchema")["properties"]["action"]
+    assert "restart" not in json.dumps(action)
+    assert "after stop and a new start" in action["description"]

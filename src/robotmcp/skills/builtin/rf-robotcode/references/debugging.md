@@ -38,6 +38,6 @@ A fix tried at the prompt is gone when the run ends. Write it into the `.robot` 
 
 - `action="status"` says whether the run is running, waiting at the prompt, or ended; `action="result"` gives its exit code.
 - A long step returns `status="running"` after `timeout_seconds`; continue with `action="wait"` or stop it with `action="interrupt"`.
-- `action="restart"` reruns with the same breakpoints and picks up edited Python libraries and resource files.
+- A session loads Python libraries and resource files once. After editing them, `stop` the session and `start` a new one with the same options; breakpoints added with `.break` are not kept.
 - A debug session stays open after its run ends; idle sessions end after 15 minutes. Stop it with `action="stop"`, or tell the user it is still open.
 - Client mode: if the agent shell kills background processes, the next call says `No session '<id>' is open`. Run the one-shot `fallback_command` once and report only what its output shows - never try to escape or reconfigure the sandbox, and never claim values you did not see.

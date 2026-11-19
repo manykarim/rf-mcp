@@ -32,7 +32,7 @@ Source: `robotframework-agent-plugins@next`, `plugins/robotcode/skills/robotcode
 | P26 | prompt fixes are ephemeral; write them back | debugging.md |
 | P27 | sessions when the shell cannot write to a process | not applicable as written: `rf_repl` / `rf_debug` manage `robotcode session` and quote inputs; client mode returns ready-quoted commands |
 | P28 | one whole input per send | superseded: a send may hold several lines that run in order and stop at the first failure (contract test `test_contract_multi_line_send_runs_in_order_and_stops_at_first_failure`); blocks still go into one send - repl-authoring.md |
-| P29 | send exit codes, status/result/interrupt/restart | debugging.md (Sessions); `status`, `run_exit_code` fields |
+| P29 | send exit codes, status/result/interrupt | debugging.md (Sessions); `status`, `run_exit_code` fields; edited code loads after `stop` and a new `start` |
 | P30 | reuse sessions, idle timeout, stop or announce | SKILL.md rule 6, debugging.md (Sessions) |
 | P31 | per-command sandbox: no escapes, no unseen claims | debugging.md (Sessions, client mode) |
 | P32 | REPL input is not a .robot file; imports are keywords; `${_}` | repl-authoring.md (Input rules) |

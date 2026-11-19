@@ -24,7 +24,7 @@ Use `rf_repl` when no existing test is involved: trying a library, mapping a pag
 | `.save [-t "Name"] [-a] [--keep-failed] file.robot` | write the session as a test (`rf_repl action="save"`) |
 | `.debug on`, `.break <Keyword>` | debug a keyword inside the REPL: then run it and use `.where` |
 
-Start options (`action="start"`): `variables` (`-v`), `variable_files` (`-V`), `source` (load a `.robot` / `.resource` file's imports and keywords). `action="restart"` reloads edited Python libraries and resources in a fresh process under the same session id.
+Start options (`action="start"`): `variables` (`-v`), `variable_files` (`-V`), `source` (load a `.robot` / `.resource` file's imports and keywords). A session loads Python libraries and resource files once. After editing them, `stop` the session and `start` a new one with the same options.
 
 ## Exploring a page or API
 
