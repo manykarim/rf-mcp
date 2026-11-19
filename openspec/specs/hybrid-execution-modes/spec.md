@@ -152,7 +152,7 @@ When the system runs a call with rf-mcp's own `robotcode` for a root that is not
 - **THEN** analysis runs with rf-mcp's own robotcode, and the result says that project libraries are not visible and names `rf-mcp doctor`
 
 ### Requirement: Sessions work in a layered environment
-REPL and debug sessions SHALL work when robotcode is layered onto a project interpreter: a session started by one call SHALL accept `send`, `status`, `result`, `interrupt`, `restart` and `stop` from later calls, each of which runs as its own process.
+REPL and debug sessions SHALL work when robotcode is layered onto a project interpreter: a session started by one call SHALL accept `send`, `status`, `result`, `interrupt` and `stop` from later calls, each of which runs as its own process.
 
 #### Scenario: REPL across separate calls
 - **WHEN** a global rf-mcp starts `rf_repl` for a root whose `.venv` holds RequestsLibrary but no robotcode, then sends `Import Library    RequestsLibrary` and `${r}=    Evaluate    6*7`, then stops the session
