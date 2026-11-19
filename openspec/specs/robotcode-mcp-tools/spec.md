@@ -137,7 +137,7 @@ The system SHALL expose an `rf_results` tool that queries `output.xml` or `outpu
 - **THEN** the system runs `robotcode -f json results diff baseline/output.xml --only new-failures` using the dedicated `baseline` parameter (not the generic `paths` list)
 
 ### Requirement: Stateful multi-turn REPL exploration and suite export via robotcode session
-The system SHALL expose an `rf_repl` tool (`start`, `send`, `wait`, `status`, `interrupt`, `restart`, `list`, `save`, `stop`) backed by `robotcode -f json session` (`session start repl`, `session send`, `session wait`, `session status`, `session interrupt`, `session restart`, `session list`, `session stop`) that maintains live library instances, variables (`${_}`), and imports across turns and exports runnable `.robot` files via `.save`.
+The system SHALL expose an `rf_repl` tool (`start`, `send`, `wait`, `status`, `interrupt`, `list`, `save`, `stop`) backed by `robotcode -f json session` (`session start repl`, `session send`, `session wait`, `session status`, `session interrupt`, `session list`, `session stop`) that maintains live library instances, variables (`${_}`), and imports across turns and exports runnable `.robot` files via `.save`.
 
 #### Scenario: Execute keywords across turns and export runnable suite
 - **WHEN** an agent starts an `rf_repl` session (`robotcode -r <root> -f json session start repl`), sends `Import Library    Collections` and `${items}=    Create List    a    b` via `session send`, and calls `save` with `test_name="Verify List"` and `path="tests/list.robot"`
@@ -148,8 +148,8 @@ The system SHALL expose an `rf_repl` tool (`start`, `send`, `wait`, `status`, `i
 - **THEN** the system sends `.save --keep-failed [-t "Name"] <path>` so failed statements are kept (commented) in the exported file
 
 #### Scenario: Hot-reload modified Python library in REPL session via restart
-- **WHEN** an agent edits a project Python library or `.resource` file during an open `rf_repl` session and calls `rf_repl` with `action="restart"` and the `session_id`
-- **THEN** the system invokes `robotcode -f json session restart <session_id>`, starting a fresh OS process under the same `session_id` and initial start options so the updated code is loaded
+- **WHEN** an agent edits a project Python library or `.resource` file during an open `rf_repl` session, calls `rf_repl` with `action="stop"` and the `session_id`, then calls `action="start"` with the same start options
+- **THEN** the new session loads the edited code, and its `session_id` is the one the agent uses from then on; this stop and start replaces the `restart` action, because robotcode 2.9.0.dev214 removed `session restart`
 
 #### Scenario: Capture native ARIA snapshot in REPL
 - **WHEN** an agent sends `Get Aria Snapshot    css=body` inside an `rf_repl` session with `Browser` imported
@@ -164,7 +164,7 @@ The system SHALL expose an `rf_repl` tool (`start`, `send`, `wait`, `status`, `i
 - **THEN** the `rf_repl` description says that several lines run in one send and stop at the first failure, that FOR/IF/TRY blocks go in one send, and names the inspection inputs `Get Aria Snapshot`, `.kw <text>`, `.doc`, `.vars --user` and `.imports` (2026-11-05 guidance-only experiment: Haiku T1 went from 79 single-line sends / 125 turns / $0.56 to 10 sends / 50 turns / $0.19)
 
 ### Requirement: Stateful multi-turn live test debugging via robotcode session debug
-The system SHALL expose an `rf_debug` tool (`start`, `send`, `wait`, `status`, `result`, `interrupt`, `restart`, `list`, `stop`) backed by `robotcode -f json session` (`session start debug`, `session send`, `session wait`, `session interrupt`, `session restart`, `session stop`) that pauses on uncaught failures or breakpoints, defaults to `--output NONE --log NONE --report NONE`, and supports stack/variable inspection, stepping, and live keyword evaluation.
+The system SHALL expose an `rf_debug` tool (`start`, `send`, `wait`, `status`, `result`, `interrupt`, `list`, `stop`) backed by `robotcode -f json session` (`session start debug`, `session send`, `session wait`, `session interrupt`, `session stop`) that pauses on uncaught failures or breakpoints, defaults to `--output NONE --log NONE --report NONE`, and supports stack/variable inspection, stepping, and live keyword evaluation.
 
 #### Scenario: Pause on uncaught test failure and evaluate fix in paused frame without overwriting output.xml
 - **WHEN** an agent starts `rf_debug` targeting a failing test with `by_longname=["MyProject.Auth.Valid Login"]` and sends `.where`, `.vars --user`, and a candidate keyword at the stop
@@ -188,3 +188,18 @@ Log    ${y}
 #### Scenario: Wait on or interrupt a long-running debug or REPL turn
 - **WHEN** a `send` or `start` action exceeds `--timeout` and `robotcode session` returns exit code `124` (`status="running"`)
 - **THEN** the agent can call `rf_debug` or `rf_repl` with `action="wait"` (`robotcode -f json session wait <id>`) to collect the remaining output or `action="interrupt"` (`robotcode session interrupt <id>`) to pause/cancel execution
+
+### Requirement: Sessions are reloaded by stop and start
+`rf_repl` and `rf_debug` SHALL NOT offer a `restart` action, and SHALL NOT run `robotcode session restart`, which robotcode 2.9.0.dev214 removed. Their `action` descriptions and the `rf-robotcode` skill SHALL say that a session loads Python libraries and resource files once, and that edits take effect after `stop` and a new `start` with the same options. `rf-mcp doctor` SHALL NOT require a `session restart` subcommand.
+
+#### Scenario: Action descriptions teach reloading
+- **WHEN** a client lists tools
+- **THEN** the `rf_repl` and `rf_debug` `action` descriptions list no `restart`, and say that edited libraries and resources take effect after `stop` and `start`
+
+#### Scenario: A restart call is rejected
+- **WHEN** an agent calls `rf_repl` or `rf_debug` with `action="restart"`
+- **THEN** the call fails argument validation, the error lists the valid actions, and no `robotcode` command runs
+
+#### Scenario: doctor accepts robotcode without session restart
+- **WHEN** a user runs `rf-mcp doctor` with robotcode 2.9.0.dev214, whose `session` command has no `restart` subcommand
+- **THEN** the report says robotcode meets the minimum version, and `restart` is not listed as a missing session subcommand
